@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v1.2.3 or v1.2.3-beta.1)'
+        required: true
+        type: string
+
+env:
+  REGISTRY: higress-registry.cn-hangzhou.cr.aliyuncs.com
+  REPO: agentteams
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.ref_name }}"
+          fi
+          # Validate stable or pre-release SemVer format.
+          if ! echo "${VERSION}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "ERROR: invalid version format: ${VERSION}"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "${VERSION}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${VERSION}" || echo "Tag already exists, skipping"
+          git push origin "${VERSION}" || echo "Tag already pushed, skipping"
+
+      - name: Build release body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          REGISTRY="${{ env.REGISTRY }}"
+          REPO="${{ env.REPO }}"
+          REPOSITORY="${{ github.repository }}"
+
+          # Extract entries below the first --- separator
+          if [ -s changelog/current.md ]; then
+            changelog=$(awk '/^---$/{found=1; next} found{print}' changelog/current.md)
+          else
+            changelog="_No changelog entries recorded._"
+          fi
+
+          # Generate auto release notes (PR list + contributors) via GitHub API
+          auto_notes=$(gh api "repos/${REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${VERSION}" \
+            --jq '.body' 2>/dev/null || echo "")
+
+          if [[ "${VERSION}" == *-* ]]; then
+            STABLE_VERSION=$(gh api "repos/${REPOSITORY}/releases/latest" --jq '.tag_name')
+          else
+            STABLE_VERSION="${VERSION}"
+          fi
+
+          cat > /tmp/quick-start.md << EOF
+          ## Quick Start
+
+          ### Latest stable (\`${STABLE_VERSION}\`)
+
+          #### macOS / Linux
+
+          \`\`\`bash
+          bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/agentteams-install.sh)
+          \`\`\`
+
+          #### Windows (PowerShell 7+)
+
+          \`\`\`powershell
+          Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${STABLE_VERSION}/install/agentteams-install.ps1')
+          \`\`\`
+          EOF
+
+          if [[ "${VERSION}" == *-* ]]; then
+            cat >> /tmp/quick-start.md << EOF
+
+          ### Beta preview (\`${VERSION}\`, explicit opt-in)
+
+          #### macOS / Linux
+
+          \`\`\`bash
+          AGENTTEAMS_VERSION=${VERSION} bash <(curl -fsSL https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/agentteams-install.sh)
+          \`\`\`
+
+          #### Windows (PowerShell 7+)
+
+          \`\`\`powershell
+          \$env:AGENTTEAMS_VERSION='${VERSION}'; Set-ExecutionPolicy Bypass -Scope Process -Force; \$wc=New-Object Net.WebClient; \$wc.Encoding=[Text.Encoding]::UTF8; iex \$wc.DownloadString('https://raw.githubusercontent.com/${REPOSITORY}/${VERSION}/install/agentteams-install.ps1')
+          \`\`\`
+          EOF
+          fi
+
+          quick_start=$(cat /tmp/quick-start.md)
+
+          cat > /tmp/release-body.md << EOF
+          ## Highlights
+
+          ${changelog}
+
+          ---
+
+          ## Docker Images
+
+          Multi-architecture images (amd64 + arm64):
+
+          \`\`\`bash
+          # Embedded all-in-one (infra + controller; pulled by the installer)
+          docker pull ${REGISTRY}/${REPO}/agentteams-embedded:${VERSION}
+
+          # Manager (lightweight; spawned by the embedded controller)
+          docker pull ${REGISTRY}/${REPO}/agentteams-manager:${VERSION}
+
+          # Worker
+          docker pull ${REGISTRY}/${REPO}/agentteams-worker:${VERSION}
+
+          # Controller (used standalone in k8s; bundled inside agentteams-embedded for docker installs)
+          docker pull ${REGISTRY}/${REPO}/agentteams-controller:${VERSION}
+          \`\`\`
+
+          ---
+
+          ${quick_start}
+
+          ---
+
+          ## Documentation
+
+          For more details, see the [installation guide](https://github.com/${REPOSITORY}/blob/main/install/README.md).
+
+          ---
+
+          ${auto_notes}
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          body_path: /tmp/release-body.md
+          prerelease: ${{ steps.version.outputs.prerelease }}
+
+      - name: Archive changelog and reset
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Rename current.md → vX.Y.Z.md and update title
+          cp changelog/current.md "changelog/${VERSION}.md"
+          sed -i "s/^# Changelog (Unreleased)/# Changelog ${VERSION}/" "changelog/${VERSION}.md"
+          cat > changelog/current.md << 'EOF'
+          # Changelog (Unreleased)
+
+          Record image-affecting changes to `manager/`, `worker/`, `openclaw-base/` here before the next release.
+
+          ---
+
+          EOF
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/archive-changelog-${{ steps.version.outputs.version }}
+          base: main
+          commit-message: "chore: archive changelog for ${{ steps.version.outputs.version }}"
+          title: "chore: archive changelog for ${{ steps.version.outputs.version }}"
+          body: "Automated PR to archive `changelog/current.md` → `changelog/${{ steps.version.outputs.version }}.md` and reset for next release."
+          labels: changelog

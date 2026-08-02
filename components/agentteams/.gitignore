@@ -1,0 +1,57 @@
+# Environment and secrets
+agentteams-manager.env
+*.env
+
+# Replay logs (contain conversation data, may include secrets)
+logs/
+
+# Debug log exports
+debug-log/
+
+# IDE / Kiro workspace files
+.kiro/
+.idea/
+
+# Claude Code IDE
+.claude/
+CLAUDE.md
+
+# OS files
+.DS_Store
+
+# Design docs
+design/
+poc-verification/
+tests/output/
+
+# Python (copaw)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+manager/copaw-agent/
+# Node.js
+node_modules/
+package.json
+pnpm-lock.yaml
+.cursor/
+
+# Compiled binaries (build outputs of `make build` in agentteams-controller/);
+# the multi-stage Dockerfiles build from source, so never commit these.
+agentteams-controller/controller
+agentteams-controller/agt
+agentteams-controller/bin/
+
+# Build-time agent templates (copied from manager/agent/ during docker build)
+agentteams-controller/agent/
+
+# Helm dependency artifacts
+helm/agentteams/charts/*.tgz
+
+# GitNexus
+.gitnexus/
