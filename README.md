@@ -34,6 +34,10 @@ uv run pytest
 
 ## Team entry points
 
+- Documentation index: `docs/README.md`
+- Parallel work plan: `docs/development/parallel-work-plan.md`
+- Public contracts: `docs/contracts/public-contracts-v0.1.md`
+
 - Module owners and responsibilities: `docs/architecture/module-map.md`
 - Dependency rules: `docs/architecture/dependency-rules.md`
 - Database setup: `docs/database.md`
