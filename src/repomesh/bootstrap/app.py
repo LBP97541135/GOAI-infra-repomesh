@@ -4,7 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from repomesh.api.router import api_router
-from repomesh.bootstrap.container import ApplicationContainer
+from repomesh.bootstrap.container import ApplicationContainer, AsyncCloseable
+from repomesh.integrations.agentteams import (
+    AgentTeamsControlPlaneClient,
+    AgentTeamsMatrixClient,
+)
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
 from repomesh.modules.repository_intelligence.infrastructure import PostgresRepositoryCatalog
 from repomesh.persistence import Database
@@ -17,17 +21,37 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await application.state.container.database.dispose()
+        await application.state.container.close()
 
 
 def build_default_container() -> ApplicationContainer:
     settings = get_settings()
     database = Database(settings.database_url)
+    control_plane = AgentTeamsControlPlaneClient(
+        settings.agentteams_controller_url,
+        token=settings.agentteams_controller_token,
+    )
+    messenger = (
+        AgentTeamsMatrixClient(
+            settings.agentteams_matrix_url,
+            settings.agentteams_matrix_access_token,
+        )
+        if settings.agentteams_matrix_access_token
+        else None
+    )
+    resources: tuple[AsyncCloseable, ...] = (
+        (control_plane, messenger) if messenger is not None else (control_plane,)
+    )
     return ApplicationContainer(
         database=database,
         repository_catalog=PostgresRepositoryCatalog(database),
         outbox_store=OutboxStore(database),
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),
+        agent_team_control_plane=control_plane,
+        agent_team_messenger=messenger,
+        agentteams_probe=control_plane,
+        agentteams_required=settings.agentteams_required,
+        external_resources=resources,
     )
 
 

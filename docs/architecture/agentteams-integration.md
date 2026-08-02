@@ -77,6 +77,16 @@ resource creation. RepoMesh therefore implements create as:
 Worker `ensure-ready` and `sleep` are convergent lifecycle operations. Matrix task delivery is
 idempotent through the transaction id.
 
+## Runtime Configuration
+
+The composition root always creates the Controller client. It creates the Matrix messenger only
+when REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN is configured; an absent token means task dispatch is
+unavailable rather than anonymously attempted.
+
+REPOMESH_AGENTTEAMS_REQUIRED defaults to false for isolated RepoMesh development. The full-platform
+Compose profile sets it to true, so readiness requires both PostgreSQL and the AgentTeams
+Controller. Liveness remains process-only.
+
 ## Current Completion Boundary
 
 Implemented and contract-tested:
@@ -85,7 +95,8 @@ Implemented and contract-tested:
 - typed Manager, Worker and Team projections;
 - health/version, ensure Manager/Worker/Team and Worker lifecycle calls;
 - bearer authentication and external error mapping;
-- idempotent Matrix task delivery.
+- idempotent Matrix task delivery;
+- composition-root wiring, client shutdown, and optional/required readiness modes.
 
 Still required for an end-to-end demo:
 
