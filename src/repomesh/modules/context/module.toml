@@ -1,5 +1,5 @@
 name = "context"
 owner = "orchestration"
-status = "planned"
+status = "active"
 schema = "context"
 responsibilities = ["context objects", "visibility policy", "context bundles", "context workspaces"]

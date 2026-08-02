@@ -5,6 +5,16 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from repomesh.modules.context.infrastructure.models import (
+    ContextAccessEventRecord,
+    ContextBundleItemRecord,
+    ContextBundleRecord,
+    ContextDeltaItemRecord,
+    ContextDeltaRecord,
+    ContextObjectRecord,
+    ContextObjectVersionRecord,
+    ContextRelationRecord,
+)
 from repomesh.modules.repository_intelligence.infrastructure.models import RepositoryRecord
 from repomesh.persistence.base import Base
 from repomesh.persistence.models import (
@@ -17,6 +27,14 @@ from repomesh.persistence.models import (
 from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
+    ContextObjectRecord,
+    ContextObjectVersionRecord,
+    ContextRelationRecord,
+    ContextBundleRecord,
+    ContextBundleItemRecord,
+    ContextDeltaRecord,
+    ContextDeltaItemRecord,
+    ContextAccessEventRecord,
     RepositoryRecord,
     StateEventRecord,
     AuditEventRecord,

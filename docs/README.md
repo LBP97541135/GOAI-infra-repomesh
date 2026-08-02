@@ -12,6 +12,7 @@
 - [模块与 Owner](architecture/module-map.md)
 - [依赖规则](architecture/dependency-rules.md)
 - [数据库所有权](architecture/database-ownership.md)
+- [上下文管理](architecture/context-management.md)
 - [独立 RepoMesh Core ADR](adr/0001-independent-repomesh-core.md)
 
 ## 数据与运行
