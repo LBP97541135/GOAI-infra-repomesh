@@ -1,0 +1,5 @@
+name = "specification"
+owner = "project-planning"
+status = "planned"
+schema = "specification"
+responsibilities = ["engineering specifications", "cross-repository contracts", "decision records"]

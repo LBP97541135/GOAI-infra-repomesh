@@ -1,44 +1,43 @@
 # RepoMesh
 
-RepoMesh is an observable orchestration layer for multi-repository coding work. It owns
-projects, repository intelligence, specifications, tasks, context, validation, change sets,
-and audit history. AgentTeams owns agent teams, workers, managers, and message transport.
+RepoMesh is an observable control plane for multi-repository coding-agent delivery. RepoMesh owns
+projects, specifications, tasks, context, validation, change sets, recovery, and audit history.
+AgentTeams owns agent teams, managers, workers, skills, and message transport.
 
-This repository is intentionally independent from AgentTeams. Integration happens through
-the `repomesh.integrations.agentteams` adapter so either project can evolve independently.
+## Current milestone
 
-## Current vertical slice
+The repository contains the Milestone 0 team-development foundation:
 
-- FastAPI service with liveness and readiness endpoints.
-- Repository registry and evidence-based PRD-to-repository discovery.
-- Coding-agent port plus a deterministic mock adapter.
-- AgentTeams HTTP client boundary.
-- PostgreSQL development service and CI checks.
-
-State is in memory in this first slice. The application ports are already separated so a
-PostgreSQL implementation can replace it without changing the API or domain model.
+- A composition root that wires modules to replaceable adapters.
+- Thirteen business modules with machine-readable owners and boundaries.
+- A working Repository Intelligence vertical slice.
+- A provider-neutral Agent Runtime port and seven-scenario mock adapter.
+- Module-local API routers aggregated by a behavior-free top-level router.
+- CODEOWNERS, a pull-request checklist, adapter contract tests, and architecture tests.
+- PostgreSQL development infrastructure; business persistence is the next milestone.
 
 ## Run locally
 
 ```powershell
-uv venv
-uv pip install -e ".[dev]"
+uv sync --extra dev
 uv run uvicorn repomesh.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs`. Useful endpoints:
+Open `http://127.0.0.1:8000/docs`. Run all checks with:
 
-- `GET /health/live`
-- `GET /health/ready`
-- `POST /api/v1/repositories`
-- `POST /api/v1/discovery`
-- `POST /api/v1/coding-runs/mock`
+```powershell
+uv run ruff check .
+uv run pytest
+```
 
-Run checks with `uv run ruff check .` and `uv run pytest`.
+## Team entry points
 
-## Architecture rule
+- Module owners and responsibilities: `docs/architecture/module-map.md`
+- Dependency rules: `docs/architecture/dependency-rules.md`
+- Database ownership: `docs/architecture/database-ownership.md`
+- Team workflow: `docs/architecture/team-development.md`
+- Architecture decision: `docs/adr/0001-independent-repomesh-core.md`
 
-Modules may import `repomesh.shared`, but must not import another module's infrastructure.
-Cross-module interaction goes through application ports or domain events. External systems
-are adapters under `repomesh.integrations` or a module's `infrastructure` package.
-
+Each module owns its schema and implementation. Consumers may import only the producer's
+`contracts` module. External systems are adapters under `repomesh.integrations`, and concrete
+implementations are selected only in `repomesh.bootstrap`.

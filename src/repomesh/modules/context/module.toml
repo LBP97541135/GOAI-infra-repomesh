@@ -1,0 +1,5 @@
+name = "context"
+owner = "orchestration"
+status = "planned"
+schema = "context"
+responsibilities = ["context objects", "visibility policy", "context bundles", "context workspaces"]

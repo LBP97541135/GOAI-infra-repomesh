@@ -22,4 +22,12 @@
 - Repository intelligence: `modules/repository_intelligence`.
 - Runtime integrations: `modules/runtime` and `integrations`.
 - API: `api`, depending only on application-facing contracts.
+## Module changes
 
+- Read the target module's `README.md` and `module.toml` before editing it.
+- Prefer one owning module per pull request.
+- Cross-module imports may target only `repomesh.modules.<producer>.contracts`.
+- Business modules must not import `repomesh.bootstrap` or concrete integrations.
+- Wire adapters only in the composition root after adding port contract tests.
+- Update `docs/architecture/module-map.md` when ownership or responsibility changes.
+- Never query or write another module's PostgreSQL schema directly.

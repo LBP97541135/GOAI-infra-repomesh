@@ -1,0 +1,5 @@
+name = "project"
+owner = "project-planning"
+status = "planned"
+schema = "project"
+responsibilities = ["project lifecycle", "project repositories", "memberships", "workstreams"]

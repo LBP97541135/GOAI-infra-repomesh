@@ -1,0 +1,5 @@
+name = "collaboration"
+owner = "orchestration"
+status = "planned"
+schema = "collaboration"
+responsibilities = ["question routing", "manager answers", "published findings", "collaboration records"]

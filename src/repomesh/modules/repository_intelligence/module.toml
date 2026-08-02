@@ -1,0 +1,5 @@
+name = "repository_intelligence"
+owner = "repository-intelligence"
+status = "active"
+schema = "repository_intelligence"
+responsibilities = ["repository registry", "versioned profiles", "dependency graph", "repository discovery"]

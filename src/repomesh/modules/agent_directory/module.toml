@@ -1,0 +1,5 @@
+name = "agent_directory"
+owner = "agent-platform"
+status = "planned"
+schema = "agent_directory"
+responsibilities = ["agent profiles", "manager bindings", "resource bindings", "adapter registrations"]

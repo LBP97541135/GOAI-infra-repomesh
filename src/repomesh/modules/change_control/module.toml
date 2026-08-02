@@ -1,0 +1,5 @@
+name = "change_control"
+owner = "project-planning"
+status = "planned"
+schema = "change_control"
+responsibilities = ["change requests", "impact assessment", "approve reject and replan decisions"]

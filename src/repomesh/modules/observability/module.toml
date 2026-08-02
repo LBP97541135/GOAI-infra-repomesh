@@ -1,0 +1,5 @@
+name = "observability"
+owner = "platform"
+status = "planned"
+schema = "observability"
+responsibilities = ["audit log", "trace hierarchy", "runtime metrics", "cost and evidence timeline"]

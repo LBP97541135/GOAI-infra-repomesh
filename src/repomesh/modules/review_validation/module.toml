@@ -1,0 +1,5 @@
+name = "review_validation"
+owner = "quality-delivery"
+status = "planned"
+schema = "review_validation"
+responsibilities = ["candidate review", "test plans", "four-level validation", "validation evidence"]

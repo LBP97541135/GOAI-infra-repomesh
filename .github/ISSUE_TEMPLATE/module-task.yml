@@ -1,0 +1,51 @@
+name: Module task
+description: Assign implementation work to one RepoMesh module
+title: "[module] "
+labels: ["module-task"]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: Owning module
+      options:
+        - agent_directory
+        - repository_intelligence
+        - project
+        - specification
+        - task_orchestration
+        - context
+        - agent_runtime
+        - collaboration
+        - review_validation
+        - change_control
+        - delivery
+        - observability
+        - identity_access
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observable behavior
+      description: Describe inputs, outputs, failure behavior, and user-visible evidence.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract impact
+      description: List public commands, queries, events, or state that change.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance checks
+      description: Provide executable or objectively verifiable acceptance criteria.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and rollout
+      description: Identify producer/consumer modules, migrations, compatibility, and rollback.

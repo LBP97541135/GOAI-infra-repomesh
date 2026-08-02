@@ -2,11 +2,11 @@ from uuid import uuid4
 
 import pytest
 
+from repomesh.integrations.coding_agents.mock import MockCodingAgent
+from repomesh.modules.agent_runtime.ports import CodingRunRequest, RunStatus
+from repomesh.modules.repository_intelligence.application import RepositoryDiscoveryService
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
-from repomesh.modules.repository_intelligence.in_memory import InMemoryRepositoryCatalog
-from repomesh.modules.repository_intelligence.service import RepositoryDiscoveryService
-from repomesh.modules.runtime.mock import MockCodingAgent
-from repomesh.modules.runtime.ports import CodingRunRequest, RunStatus
+from repomesh.modules.repository_intelligence.infrastructure import InMemoryRepositoryCatalog
 
 
 @pytest.mark.asyncio
@@ -49,4 +49,3 @@ async def test_mock_coding_agent_is_deterministic() -> None:
 
     assert result.status is RunStatus.SUCCEEDED
     assert result.changed_files == ("README.md",)
-

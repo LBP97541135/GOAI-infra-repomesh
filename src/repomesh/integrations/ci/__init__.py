@@ -1,0 +1,1 @@
+"""Continuous-integration provider adapters."""

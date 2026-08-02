@@ -1,0 +1,5 @@
+name = "delivery"
+owner = "quality-delivery"
+status = "planned"
+schema = "delivery"
+responsibilities = ["change sets", "pull request coordination", "merge plans", "rollback records"]

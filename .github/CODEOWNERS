@@ -1,0 +1,14 @@
+# Personal-repository fallback owner. Replace with organization teams as they are created.
+* @LBP97541135
+
+/src/repomesh/modules/repository_intelligence/ @LBP97541135
+/src/repomesh/modules/project/ @LBP97541135
+/src/repomesh/modules/specification/ @LBP97541135
+/src/repomesh/modules/task_orchestration/ @LBP97541135
+/src/repomesh/modules/context/ @LBP97541135
+/src/repomesh/modules/agent_runtime/ @LBP97541135
+/src/repomesh/integrations/agentteams/ @LBP97541135
+/src/repomesh/modules/review_validation/ @LBP97541135
+/src/repomesh/modules/delivery/ @LBP97541135
+/src/repomesh/shared/ @LBP97541135
+/tests/architecture/ @LBP97541135

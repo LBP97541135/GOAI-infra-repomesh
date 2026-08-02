@@ -1,0 +1,5 @@
+name = "identity_access"
+owner = "platform"
+status = "planned"
+schema = "identity_access"
+responsibilities = ["organizations and users", "authorization policy", "credential references", "action enforcement"]
