@@ -52,6 +52,7 @@ uv run pytest
 ## Team entry points
 
 - Documentation index: `docs/README.md`
+- Team handoff and next development: `docs/development/team-handoff.md`
 - Parallel work plan: `docs/development/parallel-work-plan.md`
 - Public contracts: `docs/contracts/public-contracts-v0.1.md`
 

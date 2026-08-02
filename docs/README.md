@@ -2,6 +2,7 @@
 
 ## 团队开工
 
+- [团队交接与后续开发总览](development/team-handoff.md)
 - [并行开发任务分工](development/parallel-work-plan.md)
 - [公共契约 v0.1](contracts/public-contracts-v0.1.md)
 - [开发流程](development.md)
