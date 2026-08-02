@@ -2,7 +2,8 @@
 
 ## Boundaries
 
-- Keep this repository independent from AgentTeams; integrate through adapters and contracts.
+- Treat AgentTeams as a first-party runtime component while preserving process, data, and
+  contract boundaries.
 - Domain code must not depend on FastAPI, HTTP clients, databases, or vendor SDKs.
 - Application services depend on ports. Infrastructure implements those ports.
 - Do not use AgentTeams or Matrix messages as RepoMesh's source of truth.
@@ -20,8 +21,9 @@
 
 - Platform: `shared`, configuration, persistence, observability.
 - Repository intelligence: `modules/repository_intelligence`.
-- Runtime integrations: `modules/runtime` and `integrations`.
+- Runtime integrations: `modules/agent_runtime`, `repomesh_runner`, and `integrations`.
 - API: `api`, depending only on application-facing contracts.
+
 ## Module changes
 
 - Read the target module's `README.md` and `module.toml` before editing it.
@@ -34,9 +36,12 @@
 
 ## Embedded components
 
-- AgentTeams source lives under `components/agentteams` and is imported with git subtree.
+- AgentTeams is first-party product source under `components/agentteams` and is maintained
+  with git subtree.
 - Read `components/agentteams/AGENTS.md` before changing any upstream-owned source.
 - RepoMesh business modules must not import AgentTeams Go internals or component files.
 - Keep HTTP, Matrix, Worker runtime, and plugin contracts as the integration boundary.
-- Update AgentTeams only from an exact reviewed tag or commit and record both provenance files.
-- Prefer RepoMesh adapters or a new Worker runtime over patches to the AgentTeams controller.
+- Record exact product-fork and official-upstream commits for every AgentTeams update.
+- Define or update `contracts/runtime` before a cross-plane change.
+- Prefer a RepoMesh Runner or existing extension point; patch the Controller when reconciliation
+  or enforcement belongs in Go.

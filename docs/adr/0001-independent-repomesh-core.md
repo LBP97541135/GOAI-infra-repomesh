@@ -1,7 +1,10 @@
 # ADR 0001: Keep RepoMesh independent from AgentTeams
 
-- Status: Accepted
+- Status: Superseded in part by ADR 0002
 - Date: 2026-08-02
+
+ADR 0002 replaces the external-dependency decision with first-party source and release ownership.
+This ADR still governs RepoMesh business-state independence and adapter-based runtime boundaries.
 
 ## Context
 

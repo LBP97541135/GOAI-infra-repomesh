@@ -2,9 +2,9 @@
 
 ## Decision
 
-AgentTeams source is shipped in the RepoMesh repository so one checkout contains the complete
-product and can build a unified deployment. This is a source and delivery integration, not an
-in-process merge.
+AgentTeams is a first-party RepoMesh runtime component. One checkout contains the complete product,
+and one release owns its source, images, deployment, and compatibility. It remains a separate Go
+control-plane process rather than an in-process Python dependency.
 
 - RepoMesh remains the Python business control plane and source of truth for projects, specs,
   tasks, context, validation, delivery, recovery, and audit.
@@ -51,14 +51,17 @@ Never update from a floating `main` or `latest` reference in a release branch.
 
 ## Local Changes
 
-Prefer these extension points in order:
+Use these ownership rules:
 
-1. RepoMesh Adapter or application service outside the subtree.
-2. A new AgentTeams Worker runtime or plugin with a narrow contract.
-3. A focused Controller patch only when the public extension points cannot satisfy the requirement.
+1. Change `contracts/runtime` first for behavior crossing a process boundary.
+2. Put coding execution in RepoMesh Runner and product behavior in RepoMesh modules.
+3. Reuse an AgentTeams runtime or plugin when it owns the required behavior.
+4. Change the Go Controller when desired-state reconciliation, lifecycle, or enforcement belongs
+   in the runtime control plane.
 
-Local patches inside `components/agentteams` require an issue describing why an upstream adapter,
-plugin, or contribution is insufficient. Keep patches small enough to rebase during subtree pulls.
+Before the first local Controller patch, create a RepoMesh product fork of AgentTeams. Keep the
+official repository as upstream, import exact reviewed product-fork commits, and record both fork
+and upstream revisions. Keep patches focused enough to review during upstream merges.
 
 ## Build And Run
 

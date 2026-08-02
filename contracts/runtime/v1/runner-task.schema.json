@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/runtime/v1/runner-task.schema.json",
+  "title": "RepoMesh Runner Task v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "organizationId",
+    "projectId",
+    "taskId",
+    "runId",
+    "correlationId",
+    "attempt",
+    "adapterId",
+    "instruction",
+    "repository",
+    "contextBundle",
+    "permissions",
+    "idempotencyKey",
+    "issuedAt"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "runtime.v1"},
+    "organizationId": {"type": "string", "format": "uuid"},
+    "projectId": {"type": "string", "format": "uuid"},
+    "taskId": {"type": "string", "format": "uuid"},
+    "runId": {"type": "string", "format": "uuid"},
+    "correlationId": {"type": "string", "format": "uuid"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "adapterId": {"type": "string", "minLength": 1, "maxLength": 100},
+    "instruction": {"type": "string", "minLength": 1, "maxLength": 20000},
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositoryId", "url", "baseRevision"],
+      "properties": {
+        "repositoryId": {"type": "string", "format": "uuid"},
+        "url": {"type": "string", "format": "uri"},
+        "baseRevision": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
+    "contextBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundleId", "version", "manifestUri", "contentHash"],
+      "properties": {
+        "bundleId": {"type": "string", "format": "uuid"},
+        "version": {"type": "integer", "minimum": 1},
+        "manifestUri": {"type": "string", "format": "uri"},
+        "contentHash": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "allowedTools", "disallowedTools", "networkTargets"],
+      "properties": {
+        "mode": {
+          "enum": ["default", "accept_edits", "auto", "bypass_permissions"]
+        },
+        "allowedTools": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "disallowedTools": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "networkTargets": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "resumeSessionId": {"type": ["string", "null"], "maxLength": 500},
+    "credentialRefs": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1, "maxLength": 300},
+      "uniqueItems": true
+    },
+    "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 200},
+    "issuedAt": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

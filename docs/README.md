@@ -14,7 +14,9 @@
 - [数据库所有权](architecture/database-ownership.md)
 - [上下文管理](architecture/context-management.md)
 - [AgentTeams 单仓库集成](architecture/agentteams-monorepo.md)
+- [Runtime planes](architecture/runtime-planes.md)
 - [独立 RepoMesh Core ADR](adr/0001-independent-repomesh-core.md)
+- [First-party AgentTeams Runtime ADR](adr/0002-first-party-agentteams-runtime.md)
 
 ## 数据与运行
 

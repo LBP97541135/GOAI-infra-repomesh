@@ -1,0 +1,216 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from typing import Any
+from uuid import UUID
+
+RUNTIME_SCHEMA_VERSION = "runtime.v1"
+
+
+class RunnerPermissionMode(StrEnum):
+    DEFAULT = "default"
+    ACCEPT_EDITS = "accept_edits"
+    AUTO = "auto"
+    BYPASS_PERMISSIONS = "bypass_permissions"
+
+
+class RunnerResultStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    INPUT_REQUIRED = "input_required"
+
+
+class RunnerEventType(StrEnum):
+    ACCEPTED = "runner.accepted"
+    SESSION_STARTED = "runner.session_started"
+    PROGRESS = "runner.progress"
+    TEST_COMPLETED = "runner.test_completed"
+    INPUT_REQUIRED = "runner.input_required"
+    COMPLETED = "runner.completed"
+    FAILED = "runner.failed"
+    INTERRUPTED = "runner.interrupted"
+
+
+def _validate_sha256(value: str) -> None:
+    prefix, separator, digest = value.partition(":")
+    if prefix != "sha256" or separator != ":" or len(digest) != 64:
+        raise ValueError("content_hash must be a sha256 reference")
+    if any(character not in "0123456789abcdef" for character in digest):
+        raise ValueError("content_hash must use lowercase hexadecimal")
+
+
+def _validate_unique_strings(name: str, values: tuple[str, ...]) -> None:
+    if any(not value.strip() for value in values):
+        raise ValueError(f"{name} cannot contain empty values")
+    if len(set(values)) != len(values):
+        raise ValueError(f"{name} must contain unique values")
+
+
+def _validate_timezone(name: str, value: datetime) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must include a timezone")
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryCheckout:
+    repository_id: UUID
+    url: str
+    base_revision: str
+
+    def __post_init__(self) -> None:
+        if not self.url.strip():
+            raise ValueError("repository url is required")
+        if not self.base_revision.strip():
+            raise ValueError("base_revision is required")
+
+
+@dataclass(frozen=True, slots=True)
+class ContextBundleRef:
+    bundle_id: UUID
+    version: int
+    manifest_uri: str
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        if self.version < 1:
+            raise ValueError("context bundle version must be positive")
+        if not self.manifest_uri.strip():
+            raise ValueError("context bundle manifest_uri is required")
+        _validate_sha256(self.content_hash)
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerPermissions:
+    mode: RunnerPermissionMode = RunnerPermissionMode.DEFAULT
+    allowed_tools: tuple[str, ...] = ()
+    disallowed_tools: tuple[str, ...] = ()
+    network_targets: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_unique_strings("allowed_tools", self.allowed_tools)
+        _validate_unique_strings("disallowed_tools", self.disallowed_tools)
+        _validate_unique_strings("network_targets", self.network_targets)
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerTask:
+    organization_id: UUID
+    project_id: UUID
+    task_id: UUID
+    run_id: UUID
+    correlation_id: UUID
+    attempt: int
+    adapter_id: str
+    instruction: str
+    repository: RepositoryCheckout
+    context_bundle: ContextBundleRef
+    permissions: RunnerPermissions
+    idempotency_key: str
+    issued_at: datetime
+    resume_session_id: str | None = None
+    credential_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.attempt < 1:
+            raise ValueError("attempt must be positive")
+        if not self.adapter_id.strip():
+            raise ValueError("adapter_id is required")
+        if not self.instruction.strip():
+            raise ValueError("instruction is required")
+        if not self.idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
+        _validate_timezone("issued_at", self.issued_at)
+        _validate_unique_strings("credential_refs", self.credential_refs)
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": RUNTIME_SCHEMA_VERSION,
+            "organizationId": str(self.organization_id),
+            "projectId": str(self.project_id),
+            "taskId": str(self.task_id),
+            "runId": str(self.run_id),
+            "correlationId": str(self.correlation_id),
+            "attempt": self.attempt,
+            "adapterId": self.adapter_id,
+            "instruction": self.instruction,
+            "repository": {
+                "repositoryId": str(self.repository.repository_id),
+                "url": self.repository.url,
+                "baseRevision": self.repository.base_revision,
+            },
+            "contextBundle": {
+                "bundleId": str(self.context_bundle.bundle_id),
+                "version": self.context_bundle.version,
+                "manifestUri": self.context_bundle.manifest_uri,
+                "contentHash": self.context_bundle.content_hash,
+            },
+            "permissions": {
+                "mode": self.permissions.mode.value,
+                "allowedTools": list(self.permissions.allowed_tools),
+                "disallowedTools": list(self.permissions.disallowed_tools),
+                "networkTargets": list(self.permissions.network_targets),
+            },
+            "resumeSessionId": self.resume_session_id,
+            "credentialRefs": list(self.credential_refs),
+            "idempotencyKey": self.idempotency_key,
+            "issuedAt": self.issued_at.isoformat(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactRef:
+    kind: str
+    uri: str
+    content_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.kind.strip() or not self.uri.strip():
+            raise ValueError("artifact kind and uri are required")
+        _validate_sha256(self.content_hash)
+
+    def to_wire(self) -> dict[str, str]:
+        return {"kind": self.kind, "uri": self.uri, "contentHash": self.content_hash}
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerExecutionResult:
+    status: RunnerResultStatus
+    summary: str
+    native_session_id: str | None = None
+    artifacts: tuple[ArtifactRef, ...] = ()
+    test_command: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerEvent:
+    event_id: UUID
+    event_type: RunnerEventType
+    task: RunnerTask
+    sequence: int
+    occurred_at: datetime
+    payload: Mapping[str, Any]
+    native_session_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.sequence < 1:
+            raise ValueError("event sequence must be positive")
+        _validate_timezone("occurred_at", self.occurred_at)
+
+    def to_wire(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": RUNTIME_SCHEMA_VERSION,
+            "eventId": str(self.event_id),
+            "eventType": self.event_type.value,
+            "organizationId": str(self.task.organization_id),
+            "projectId": str(self.task.project_id),
+            "taskId": str(self.task.task_id),
+            "runId": str(self.task.run_id),
+            "correlationId": str(self.task.correlation_id),
+            "attempt": self.task.attempt,
+            "sequence": self.sequence,
+            "occurredAt": self.occurred_at.isoformat(),
+            "nativeSessionId": self.native_session_id,
+            "payload": dict(self.payload),
+        }

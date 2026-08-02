@@ -18,6 +18,7 @@ AgentTeams and Coding Agent adapters are different layers:
 | --- | --- |
 | RepoMesh | projects, repository scope, specifications, tasks, evidence, validation, delivery |
 | AgentTeams | Manager/Worker/Team runtime projections, rooms, collaboration and human intervention |
+| RepoMesh Runner | coding CLI process, native session, tests, execution artifacts and runtime events |
 | Coding Agent Adapter | Claude Code, Codex, Cursor and other CLI-specific launch/session behavior |
 
 AgentTeams messages and resources are runtime projections. RepoMesh IDs and database records

@@ -20,11 +20,12 @@ into an organization.
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
 
-## External integration ownership
+## Runtime component and integration ownership
 
-| Integration | Owner | Boundary |
+| Component / Integration | Owner | Boundary |
 | --- | --- | --- |
-| AgentTeams | runtime-integrations | teams, managers, workers, skills, runtime events |
+| AgentTeams | runtime-integrations | first-party Go runtime resources, reconciliation, Matrix and Worker lifecycle |
+| RepoMesh Runner | runtime-integrations | first-party Python coding execution, native sessions and runtime events |
 | Coding agents | runtime-integrations | provider CLI and native session differences |
 | Workspace | runtime-integrations | worktree isolation and recovery |
 | SCM | quality-delivery | GitHub/GitLab repository and PR operations |

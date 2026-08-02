@@ -1,14 +1,23 @@
 # Product Components
 
-This directory contains product components that are developed and released from the RepoMesh
-monorepo but keep their own runtime and language boundaries.
+This directory contains first-party product components that are developed and released from the
+RepoMesh monorepo while keeping explicit runtime and language boundaries.
 
-## AgentTeams
+## AgentTeams Runtime Control Plane
 
-`components/agentteams` is imported from `agentscope-ai/AgentTeams` with `git subtree`. It provides
-the Go control plane, Manager/Worker/Team resources, Matrix collaboration, managed MinIO, gateway,
-and Worker container lifecycle.
+`components/agentteams` contains the Go Controller and the Manager/Worker runtime sources imported
+with Git subtree. RepoMesh owns the product build and may extend this component through the Runtime
+contract. Official upstream provenance and license notices remain preserved.
 
-RepoMesh business modules must not import AgentTeams source code. They depend on provider-neutral
-ports, while `repomesh.integrations.agentteams` talks to the embedded component over its HTTP and
-Matrix APIs. See `docs/architecture/agentteams-monorepo.md` for provenance and update commands.
+AgentTeams owns Manager/Worker/Team/Human reconciliation, Matrix collaboration, managed object
+storage and gateway integration, and Worker container lifecycle. It does not own RepoMesh project,
+task, context, validation, or delivery state.
+
+## RepoMesh Runner Execution Plane
+
+`components/repomesh-runner` describes the Python execution component whose implementation lives in
+`src/repomesh_runner`. A Runner executes immutable Runtime v1 coding tasks inside an
+AgentTeams-managed Worker and returns ordered events and artifact references.
+
+Both components communicate with the RepoMesh product control plane through
+`contracts/runtime/v1`. No component imports another component's internal implementation.

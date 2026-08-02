@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/runtime/v1/runtime-metadata.schema.json",
+  "title": "RepoMesh Runtime Metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "organizationId",
+    "projectId",
+    "correlationId"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "runtime.v1"},
+    "organizationId": {"type": "string", "format": "uuid"},
+    "projectId": {"type": "string", "format": "uuid"},
+    "taskId": {"type": ["string", "null"], "format": "uuid"},
+    "runId": {"type": ["string", "null"], "format": "uuid"},
+    "correlationId": {"type": "string", "format": "uuid"},
+    "labels": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "maxLength": 200}
+    }
+  }
+}

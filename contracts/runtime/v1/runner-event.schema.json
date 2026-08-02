@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/runtime/v1/runner-event.schema.json",
+  "title": "RepoMesh Runner Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "eventType",
+    "organizationId",
+    "projectId",
+    "taskId",
+    "runId",
+    "correlationId",
+    "attempt",
+    "sequence",
+    "occurredAt",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "runtime.v1"},
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {
+      "enum": [
+        "runner.accepted",
+        "runner.session_started",
+        "runner.progress",
+        "runner.test_completed",
+        "runner.input_required",
+        "runner.completed",
+        "runner.failed",
+        "runner.interrupted"
+      ]
+    },
+    "organizationId": {"type": "string", "format": "uuid"},
+    "projectId": {"type": "string", "format": "uuid"},
+    "taskId": {"type": "string", "format": "uuid"},
+    "runId": {"type": "string", "format": "uuid"},
+    "correlationId": {"type": "string", "format": "uuid"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "nativeSessionId": {"type": ["string", "null"], "maxLength": 500},
+    "payload": {"type": "object"}
+  }
+}

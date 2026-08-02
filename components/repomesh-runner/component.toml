@@ -1,0 +1,17 @@
+name = "repomesh-runner"
+owner = "runtime-integrations"
+status = "foundation"
+language = "python"
+source = "../../src/repomesh_runner"
+contract = "../../contracts/runtime/v1"
+responsibilities = [
+  "coding task execution",
+  "native coding-agent sessions",
+  "test and correction loop",
+  "runtime event publication",
+]
+not_responsible_for = [
+  "project or task business state",
+  "AgentTeams resource reconciliation",
+  "delivery approval or remote merge",
+]
