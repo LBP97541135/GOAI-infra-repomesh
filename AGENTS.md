@@ -31,3 +31,12 @@
 - Wire adapters only in the composition root after adding port contract tests.
 - Update `docs/architecture/module-map.md` when ownership or responsibility changes.
 - Never query or write another module's PostgreSQL schema directly.
+
+## Embedded components
+
+- AgentTeams source lives under `components/agentteams` and is imported with git subtree.
+- Read `components/agentteams/AGENTS.md` before changing any upstream-owned source.
+- RepoMesh business modules must not import AgentTeams Go internals or component files.
+- Keep HTTP, Matrix, Worker runtime, and plugin contracts as the integration boundary.
+- Update AgentTeams only from an exact reviewed tag or commit and record both provenance files.
+- Prefer RepoMesh adapters or a new Worker runtime over patches to the AgentTeams controller.

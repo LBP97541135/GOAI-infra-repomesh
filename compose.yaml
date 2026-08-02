@@ -15,6 +15,43 @@ services:
     volumes:
       - repomesh-postgres:/var/lib/postgresql/data
 
+  api:
+    profiles: ["platform"]
+    build:
+      context: .
+    environment:
+      REPOMESH_ENVIRONMENT: development
+      REPOMESH_LOG_LEVEL: INFO
+      REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@postgres:5432/repomesh
+      REPOMESH_AGENTTEAMS_CONTROLLER_URL: http://agentteams-controller:8090
+      REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN: ${REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN:-}
+      REPOMESH_AGENTTEAMS_MATRIX_URL: http://agentteams-controller:6167
+      REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN: ${REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - agentteams
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
 volumes:
   repomesh-postgres:
+
+networks:
+  agentteams:
+    external: true
+    name: agentteams-net
 

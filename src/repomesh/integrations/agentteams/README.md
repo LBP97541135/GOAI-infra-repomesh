@@ -1,7 +1,9 @@
 # AgentTeams integration boundary
 
 RepoMesh targets AgentTeams v1.2.0 at commit
-`2ea027403398dfa06f3fc86445042d59f4684d71`. It does not fork or embed AgentTeams.
+`793db242257a569d911b1aa59c1cd554af78511f`. The complete upstream source is embedded at
+`components/agentteams` through a pinned git subtree. The Python integration still treats
+AgentTeams as an independent runtime control plane.
 
 `control_plane.py` maps RepoMesh runtime projections to the real AgentTeams Controller API:
 Managers, independent Workers, Teams that reference `workerMembers`, and convergent Worker

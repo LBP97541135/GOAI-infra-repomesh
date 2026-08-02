@@ -6,12 +6,14 @@ AgentTeams owns agent teams, managers, workers, skills, and message transport.
 
 ## Current milestone
 
-The repository contains the Milestone 0 team foundation and Milestone 1 database foundation:
+The repository contains the team, persistence, runtime integration, and Context foundations:
 
 - A composition root that wires modules to replaceable adapters.
 - Thirteen business modules with machine-readable owners and boundaries.
 - A working Repository Intelligence vertical slice.
-- A provider-neutral Agent Runtime port and seven-scenario mock adapter.
+- A provider-neutral Agent Runtime port, 23 CLI adapters, and a seven-scenario mock adapter.
+- AgentTeams v1.2.0 source embedded as a pinned subtree under components/agentteams.
+- Versioned Context objects, permission intersection, immutable bundles, deltas, and access audit.
 - Module-local API routers aggregated by a behavior-free top-level router.
 - CODEOWNERS, a pull-request checklist, adapter contract tests, and architecture tests.
 - PostgreSQL persistence, Alembic migrations, transactional events, audit, outbox, and readiness.
@@ -25,7 +27,20 @@ uv run alembic upgrade head
 uv run uvicorn repomesh.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000/docs`. Run all checks with:
+Open `http://127.0.0.1:8000/docs`. For the full local platform, use Docker and PowerShell 7+
+to install AgentTeams from the checked-in installer and start the containerized RepoMesh API:
+
+~~~powershell
+.\scripts\start-platform.ps1 -InstallAgentTeams
+~~~
+
+On Linux:
+
+~~~bash
+./scripts/start-platform.sh --install-agentteams
+~~~
+
+Run all checks with:
 
 ```powershell
 uv run ruff check .

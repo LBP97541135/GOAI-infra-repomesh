@@ -3,8 +3,8 @@
 ## Pinned Upstream Contract
 
 RepoMesh targets
-[`agentscope-ai/AgentTeams` v1.2.0](https://github.com/agentscope-ai/AgentTeams/tree/2ea027403398dfa06f3fc86445042d59f4684d71)
-at commit `2ea027403398dfa06f3fc86445042d59f4684d71` under Apache-2.0.
+[`agentscope-ai/AgentTeams` v1.2.0](https://github.com/agentscope-ai/AgentTeams/tree/793db242257a569d911b1aa59c1cd554af78511f)
+at commit `793db242257a569d911b1aa59c1cd554af78511f` under Apache-2.0.
 
 This pin matters because v1.2 finalized the Team and Worker contract: Workers are independent
 resources and a Team references them through `workerMembers`. RepoMesh must not send the former

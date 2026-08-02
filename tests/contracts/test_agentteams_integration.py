@@ -266,4 +266,4 @@ async def test_matrix_task_uses_transaction_id_as_idempotency_key() -> None:
 
 def test_upstream_pin_matches_repository_contract() -> None:
     assert AGENTTEAMS_VERSION == "v1.2.0"
-    assert AGENTTEAMS_COMMIT == "2ea027403398dfa06f3fc86445042d59f4684d71"
+    assert AGENTTEAMS_COMMIT == "793db242257a569d911b1aa59c1cd554af78511f"

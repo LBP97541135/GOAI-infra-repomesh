@@ -16,7 +16,7 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
 )
 
 AGENTTEAMS_VERSION = "v1.2.0"
-AGENTTEAMS_COMMIT = "2ea027403398dfa06f3fc86445042d59f4684d71"
+AGENTTEAMS_COMMIT = "793db242257a569d911b1aa59c1cd554af78511f"
 _RESOURCE_NAME = re.compile(r"^[a-z0-9](?:[-a-z0-9]{0,251}[a-z0-9])?$")
 
 
