@@ -1,16 +1,17 @@
 from fastapi.testclient import TestClient
 
-from repomesh.main import create_app
+from repomesh.bootstrap import create_app
+from repomesh.bootstrap.container import ApplicationContainer
 
 
-def test_health() -> None:
-    with TestClient(create_app()) as client:
+def test_health(application_container: ApplicationContainer) -> None:
+    with TestClient(create_app(application_container)) as client:
         assert client.get("/health/live").json() == {"status": "ok"}
         assert client.get("/health/ready").json() == {"status": "ready"}
 
 
-def test_register_and_discover_repository() -> None:
-    with TestClient(create_app()) as client:
+def test_register_and_discover_repository(application_container: ApplicationContainer) -> None:
+    with TestClient(create_app(application_container)) as client:
         created = client.post(
             "/api/v1/repositories",
             json={

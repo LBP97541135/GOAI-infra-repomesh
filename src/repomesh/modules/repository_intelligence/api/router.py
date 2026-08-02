@@ -2,7 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
 
-from repomesh.modules.repository_intelligence.application import RepositoryDiscoveryService
+from repomesh.modules.repository_intelligence.application import (
+    RegisterRepository,
+    RepositoryDiscoveryService,
+)
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
@@ -29,7 +32,7 @@ async def register_repository(
         topics=tuple(body.topics),
         languages=tuple(body.languages),
     )
-    await catalog.add(profile)
+    await RegisterRepository(catalog).execute(profile)
     return profile
 
 

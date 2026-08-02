@@ -15,12 +15,11 @@ Every pull request should state:
 
 ## Near-term milestones
 
-1. Replace the in-memory catalog with PostgreSQL and add migrations.
-2. Implement GitHub repository ingestion and profile freshness tracking.
-3. Add Project, EngineeringSpec, Task, ContextSnapshot, Validation, and ChangeSet modules.
-4. Pin an AgentTeams release and build resource mapping plus contract tests.
-5. Add one real coding-agent adapter and sandboxed execution.
-6. Build audit timelines, checkpoints, retry policies, and rollback workflows.
+1. Implement GitHub repository ingestion and profile freshness tracking.
+2. Add Project, EngineeringSpec, Task, ContextSnapshot, Validation, and ChangeSet modules.
+3. Pin an AgentTeams release and build resource mapping plus contract tests.
+4. Add one real coding-agent adapter and sandboxed execution.
+5. Build audit timelines, checkpoints, retry policies, and rollback workflows.
 
 The repository-discovery heuristic is a transparent baseline, not the final ranking engine. Keep
 its evidence model when adding embeddings or LLM ranking so users can inspect why a repository

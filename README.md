@@ -6,7 +6,7 @@ AgentTeams owns agent teams, managers, workers, skills, and message transport.
 
 ## Current milestone
 
-The repository contains the Milestone 0 team-development foundation:
+The repository contains the Milestone 0 team foundation and Milestone 1 database foundation:
 
 - A composition root that wires modules to replaceable adapters.
 - Thirteen business modules with machine-readable owners and boundaries.
@@ -14,12 +14,14 @@ The repository contains the Milestone 0 team-development foundation:
 - A provider-neutral Agent Runtime port and seven-scenario mock adapter.
 - Module-local API routers aggregated by a behavior-free top-level router.
 - CODEOWNERS, a pull-request checklist, adapter contract tests, and architecture tests.
-- PostgreSQL development infrastructure; business persistence is the next milestone.
+- PostgreSQL persistence, Alembic migrations, transactional events, audit, outbox, and readiness.
 
 ## Run locally
 
 ```powershell
 uv sync --extra dev
+docker compose up -d postgres
+uv run alembic upgrade head
 uv run uvicorn repomesh.main:app --reload
 ```
 
@@ -34,6 +36,7 @@ uv run pytest
 
 - Module owners and responsibilities: `docs/architecture/module-map.md`
 - Dependency rules: `docs/architecture/dependency-rules.md`
+- Database setup: `docs/database.md`
 - Database ownership: `docs/architecture/database-ownership.md`
 - Team workflow: `docs/architecture/team-development.md`
 - Architecture decision: `docs/adr/0001-independent-repomesh-core.md`

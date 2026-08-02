@@ -1,3 +1,4 @@
 from .discovery import RepositoryDiscoveryService
+from .registration import RegisterRepository
 
-__all__ = ["RepositoryDiscoveryService"]
+__all__ = ["RegisterRepository", "RepositoryDiscoveryService"]

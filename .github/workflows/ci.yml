@@ -20,3 +20,30 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
 
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: repomesh
+          POSTGRES_USER: repomesh
+          POSTGRES_PASSWORD: repomesh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U repomesh -d repomesh"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@localhost:5432/repomesh
+      REPOMESH_TEST_POSTGRES_URL: postgresql+asyncpg://repomesh:repomesh@localhost:5432/repomesh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra dev
+      - run: uv run alembic upgrade head
+      - run: uv run pytest tests/integration -q

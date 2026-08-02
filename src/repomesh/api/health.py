@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request, status
 
 router = APIRouter(tags=["health"])
 
@@ -9,5 +9,10 @@ async def liveness() -> dict[str, str]:
 
 
 @router.get("/health/ready")
-async def readiness() -> dict[str, str]:
+async def readiness(request: Request) -> dict[str, str]:
+    if not await request.app.state.container.database.is_ready():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "not_ready", "dependency": "postgresql"},
+        )
     return {"status": "ready"}
