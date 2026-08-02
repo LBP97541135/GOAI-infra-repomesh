@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: repomesh
+      POSTGRES_USER: repomesh
+      POSTGRES_PASSWORD: repomesh
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U repomesh -d repomesh"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - repomesh-postgres:/var/lib/postgresql/data
+
+volumes:
+  repomesh-postgres:
+
