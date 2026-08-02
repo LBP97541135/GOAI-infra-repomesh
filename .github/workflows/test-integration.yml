@@ -1,0 +1,722 @@
+name: Integration Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'manager/**'
+      - 'worker/**'
+      - 'openclaw-base/**'
+      - 'agentteams-controller/**'
+      - 'tests/**'
+      - 'install/**'
+      - 'shared/**'
+      - 'copaw/**'
+      - 'hermes/**'
+      - 'Makefile'
+      - '.github/workflows/test-integration.yml'
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'manager/**'
+      - 'worker/**'
+      - 'openclaw-base/**'
+      - 'agentteams-controller/**'
+      - 'tests/**'
+      - 'install/**'
+      - 'shared/**'
+      - 'copaw/**'
+      - 'hermes/**'
+      - 'Makefile'
+  workflow_dispatch:
+    inputs:
+      test_filter:
+        description: 'Test filter pattern (e.g. "01 02 14"). Leave empty to run all non-GitHub tests.'
+        required: false
+        default: ''
+      baseline_version:
+        description: 'Re-generate baseline for a specific release version (e.g. v1.2.3). Pulls published image, runs tests, uploads baseline to that release. Leave empty to run normal integration tests.'
+        required: false
+        default: ''
+      worker_runtime:
+        description: 'Worker runtime label (informational only; the matrix always runs every entry).'
+        required: false
+        type: choice
+        options:
+          - both
+          - openclaw
+          - copaw
+          - hermes
+        default: 'both'
+      model:
+        description: 'LLM model to use'
+        required: false
+        default: 'qwen3.6-plus'
+
+permissions:
+  # Fork PRs must remain read-only; secret-dependent shards are filtered below.
+  contents: read
+  pull-requests: read
+
+env:
+  # Tests that do not require a GitHub token, split into four shards for parallel execution
+  # Shard A: LLM interaction tests (sequential dependency: 02 creates alice → 03-06 use alice)
+  # Shard B: LLM interaction tests 2 (task assignment with LLM)
+  # Shard C: Controller/CR tests (independent, no cross-test dependencies)
+  # Shard D: Controller/CR tests 2 (team project DAG)
+  SHARD_A_TESTS: "01 02 03 04 05 06"
+  SHARD_B_TESTS: "14"
+  SHARD_C_TESTS: "15 17 18 19 20 22 23 24 25 100"
+  SHARD_D_TESTS: "21"
+  NON_GITHUB_TESTS: "01 02 03 04 05 06 14 15 17 18 19 20 21 22 23 24 25 100"
+
+jobs:
+  # Step 0: Detect which paths changed so we can decide whether to rebuild
+  # the openclaw-base image (slow, ~10min) or reuse the published `:latest`.
+  # On non-PR triggers (push to main, tag, workflow_dispatch) we conservatively
+  # always rebuild so release/baseline runs validate against the current source.
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      openclaw_base: ${{ steps.decide.outputs.openclaw_base }}
+      test_matrix: ${{ steps.test-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect openclaw-base changes (PR only)
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          base: ${{ github.event.pull_request.base.sha }}
+          filters: |
+            openclaw_base:
+              - 'openclaw-base/**'
+
+      - name: Decide whether to rebuild openclaw-base
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "openclaw_base=${{ steps.filter.outputs.openclaw_base }}" >> $GITHUB_OUTPUT
+          else
+            # push to main / tag / workflow_dispatch: always rebuild
+            echo "openclaw_base=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Select integration test matrix
+        id: test-matrix
+        env:
+          UNTRUSTED_PR: ${{ github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name != github.repository || github.actor == 'dependabot[bot]') }}
+        run: |
+          MATRIX='[
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"openclaw","worker_runtime":"openclaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"controller-cr-2","filter_env":"SHARD_D_TESTS","manager_runtime":"copaw","worker_runtime":"copaw","requires_secret":false},
+            {"shard":"llm-interaction","filter_env":"SHARD_A_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"llm-interaction-2","filter_env":"SHARD_B_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":true},
+            {"shard":"controller-cr","filter_env":"SHARD_C_TESTS","manager_runtime":"copaw","worker_runtime":"hermes","requires_secret":false}
+          ]'
+          if [ "$UNTRUSTED_PR" = "true" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | select(.requires_secret == false) | del(.requires_secret)]')
+          else
+            MATRIX=$(echo "$MATRIX" | jq -c '[.[] | del(.requires_secret)]')
+          fi
+          echo "matrix={\"include\":$MATRIX}" >> "$GITHUB_OUTPUT"
+
+  # Step 1a: Build the shared base image (agentteams-controller)
+  build-base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build agentteams-controller
+        run: |
+          # Override HIGRESS_REGISTRY to the us-west mirror — the default
+          # cn-hangzhou registry is unreachable from GitHub-hosted runners
+          # (frequently times out on `docker pull`).
+          make build-agentteams-controller \
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
+
+      - name: Save image
+        run: |
+          docker save agentteams/agentteams-controller:latest | gzip > /tmp/agentteams-controller.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-controller
+          path: /tmp/agentteams-controller.tar.gz
+          retention-days: 1
+
+  # Step 1b: Build openclaw-base from this PR's source, but only when
+  # openclaw-base/** actually changed. Otherwise downstream builds reuse the
+  # published `:latest` from the registry (default Makefile behaviour).
+  build-openclaw-base:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.openclaw_base == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Free Up Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build openclaw-base (local tag)
+        run: |
+          # `make build-openclaw-base` always tags as agentteams/openclaw-base:latest
+          # (LOCAL_OPENCLAW_BASE is hardcoded in the Makefile), which is exactly
+          # what downstream build-manager/build-worker jobs consume via the
+          # OPENCLAW_BASE_IMAGE / OPENCLAW_BASE_VERSION overrides.
+          # Override HIGRESS_REGISTRY to the us-west mirror — the default
+          # cn-hangzhou registry is unreachable from GitHub-hosted runners.
+          make build-openclaw-base \
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR="
+          docker images | grep openclaw-base || true
+
+      - name: Save image
+        run: |
+          docker save agentteams/openclaw-base:latest | gzip > /tmp/agentteams-openclaw-base.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-openclaw-base
+          path: /tmp/agentteams-openclaw-base.tar.gz
+          retention-days: 1
+
+  # Step 2: Build downstream images in parallel (all depend on agentteams-controller;
+  # manager and worker additionally depend on openclaw-base when it was rebuilt).
+  build-images:
+    needs: [detect-changes, build-base, build-openclaw-base]
+    # Run even if build-openclaw-base was skipped (no openclaw-base changes).
+    if: |
+      always() &&
+      needs.build-base.result == 'success' &&
+      (needs.build-openclaw-base.result == 'success' || needs.build-openclaw-base.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [embedded, manager, manager-copaw, worker, copaw-worker, hermes-worker]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Download controller image
+        uses: actions/download-artifact@v4
+        with:
+          name: image-controller
+          path: /tmp
+
+      - name: Load controller image
+        run: gunzip -c /tmp/agentteams-controller.tar.gz | docker load
+
+      - name: Download local openclaw-base image
+        if: |
+          needs.detect-changes.outputs.openclaw_base == 'true' &&
+          (matrix.target == 'manager' || matrix.target == 'worker')
+        uses: actions/download-artifact@v4
+        with:
+          name: image-openclaw-base
+          path: /tmp
+
+      - name: Load local openclaw-base image
+        if: |
+          needs.detect-changes.outputs.openclaw_base == 'true' &&
+          (matrix.target == 'manager' || matrix.target == 'worker')
+        run: gunzip -c /tmp/agentteams-openclaw-base.tar.gz | docker load
+
+      - name: Build image
+        run: |
+          # When openclaw-base was rebuilt from this PR's source, point manager
+          # and worker builds at the local image instead of pulling :latest from
+          # the published registry. Other targets (embedded, manager-copaw,
+          # copaw-worker) do not depend on openclaw-base so the override is a
+          # no-op for them.
+          EXTRA=""
+          if [ "${{ needs.detect-changes.outputs.openclaw_base }}" = "true" ] && \
+             { [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; }; then
+            EXTRA="OPENCLAW_BASE_IMAGE=agentteams/openclaw-base OPENCLAW_BASE_VERSION=latest"
+            echo "Using locally-built openclaw-base for ${{ matrix.target }}"
+          elif [ "${{ matrix.target }}" = "manager" ] || [ "${{ matrix.target }}" = "worker" ]; then
+            # The pinned base predates the AgentTeams registry namespace. Keep
+            # using its existing location until a release seeds the new repo.
+            EXTRA="OPENCLAW_BASE_IMAGE=higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/openclaw-base OPENCLAW_BASE_VERSION=20260423-8359cbc"
+            echo "Using published migration base for ${{ matrix.target }}"
+          fi
+          # Override HIGRESS_REGISTRY to the us-west mirror — the default
+          # cn-hangzhou registry is unreachable from GitHub-hosted runners.
+          make build-${{ matrix.target }} \
+            HIGRESS_REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com \
+            DOCKER_BUILD_ARGS="--build-arg APT_MIRROR= --build-arg PIP_INDEX_URL=https://pypi.org/simple/" \
+            $EXTRA
+
+      - name: Save image
+        run: |
+          # Exclude already-uploaded base images (controller, openclaw-base) so
+          # each per-target tar only contains its own deltas.
+          docker save \
+            $(docker images --format '{{.Repository}}:{{.Tag}}' \
+              | grep -E '^agentteams/' \
+              | grep -v '<none>' \
+              | grep -v 'agentteams-controller' \
+              | grep -v 'openclaw-base') \
+            | gzip > /tmp/agentteams-${{ matrix.target }}.tar.gz
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.target }}
+          path: /tmp/agentteams-${{ matrix.target }}.tar.gz
+          retention-days: 1
+
+  # Step 3: Run test shards in parallel, each on its own runner with isolated cluster
+  integration-tests:
+    needs: [detect-changes, build-images]
+    if: always() && needs.detect-changes.result == 'success' && needs.build-images.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.detect-changes.outputs.test_matrix) }}
+
+    steps:
+      - name: Free Up Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: /tmp/images
+
+      - name: Load images
+        run: |
+          for f in /tmp/images/image-*/*.tar.gz; do
+            gunzip -c "$f" | docker load
+          done
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq curl unzip
+
+      - name: Run embedded integration tests
+        id: tests
+        env:
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+          AGENTTEAMS_LLM_PROVIDER: qwen
+          AGENTTEAMS_DEFAULT_MODEL: ${{ inputs.model || 'qwen3.6-plus' }}
+          AGENTTEAMS_MANAGER_RUNTIME: ${{ matrix.manager_runtime }}
+          # Propagate the worker runtime to worker-creating tests too. Without
+          # this the apply-zip path (test-15) silently falls back to openclaw
+          # on the copaw and hermes matrix entries because the controller's
+          # backend resolves an empty req.Runtime to RuntimeOpenClaw — which
+          # would make those dimensions run hidden openclaw workers and
+          # invalidate the parallel-runtime coverage we set up above.
+          AGENTTEAMS_DEFAULT_WORKER_RUNTIME: ${{ matrix.worker_runtime }}
+        run: |
+          FILTER="${{ github.event.inputs.test_filter }}"
+          if [ -z "$FILTER" ]; then
+            FILTER="${{ env[matrix.filter_env] }}"
+          fi
+          AGENTTEAMS_VERSION=v1.2.0-beta.1 SKIP_BUILD=1 make test-embedded \
+            TEST_FILTER="$FILTER"
+
+      # ============================================================
+      # Metrics: download latest release baseline for comparison
+      # ============================================================
+
+      - name: Download latest release baseline
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        continue-on-error: true
+        run: |
+          mkdir -p baseline-metrics
+          # Find latest release with a metrics-baseline.json asset
+          # Note: gh release list --json does not support the "assets" field,
+          # so we use the GitHub API directly.
+          LATEST=$(gh api repos/${{ github.repository }}/releases --paginate --jq \
+            '[.[] | select(.assets | map(.name) | any(. == "metrics-baseline.json"))] | .[0].tag_name' \
+            2>/dev/null || true)
+          if [ -n "$LATEST" ] && [ "$LATEST" != "null" ]; then
+            echo "Downloading baseline from release $LATEST"
+            gh release download "$LATEST" --pattern "metrics-baseline.json" --dir baseline-metrics --repo "${{ github.repository }}"
+          else
+            echo "No release baseline found"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate metrics comparison and post PR comment
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          source tests/lib/agent-metrics.sh
+
+          # Collect current summary across all tests that ran
+          FILTER="${{ github.event.inputs.test_filter }}"
+          if [ -z "$FILTER" ]; then
+            FILTER="${{ env[matrix.filter_env] }}"
+          fi
+          TEST_NAMES=$(echo "$FILTER" | tr ' ' '\n' | while read n; do
+            f=$(ls tests/output/metrics-*${n}*.json 2>/dev/null | head -1)
+            [ -n "$f" ] && basename "$f" .json | sed 's/^metrics-//'
+          done | tr '\n' ' ')
+
+          CURRENT=$(generate_metrics_summary $TEST_NAMES)
+
+          BASELINE=""
+          if [ -f "baseline-metrics/metrics-baseline.json" ]; then
+            BASELINE=$(cat baseline-metrics/metrics-baseline.json)
+          fi
+
+          COMPARISON=$(compare_metrics_with_baseline "$CURRENT" "$BASELINE")
+          REPORT=$(generate_comparison_markdown "$COMPARISON")
+
+          # Append debug log artifact link
+          ARTIFACT_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          REPORT="${REPORT}
+
+          ---
+          📦 [Download debug logs & test artifacts](${ARTIFACT_URL}#artifacts)"
+
+          mkdir -p tests/output
+          echo "$COMPARISON" > tests/output/metrics-comparison.json
+          echo "$REPORT" > tests/output/metrics-report.md
+
+          PR_NUM="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
+            --jq '.[] | select(.body | startswith("## 📊 CI Metrics Report")) | .id' | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING" -f body="$REPORT"
+          else
+            gh api --method POST "repos/$REPO/issues/$PR_NUM/comments" -f body="$REPORT"
+          fi
+
+      # ============================================================
+      # Artifacts
+      # ============================================================
+
+      - name: Export debug logs
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 scripts/export-debug-log.py --range 2h --no-redact
+          DEBUG_DIR=$(ls -td debug-log/*/ 2>/dev/null | head -1)
+          if [ -n "$DEBUG_DIR" ]; then
+            echo "Debug log exported: $DEBUG_DIR"
+          else
+            echo "No debug logs generated"
+          fi
+
+      - name: Post failure comment to PR
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' && failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUM="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          ARTIFACT_URL="https://github.com/${REPO}/actions/runs/${{ github.run_id }}"
+
+          # Collect test result summary
+          TEST_SUMMARY=""
+          if ls tests/output/result-*.txt 1>/dev/null 2>&1; then
+            TEST_SUMMARY=$(cat tests/output/result-*.txt 2>/dev/null | head -50)
+          fi
+
+          # Collect debug log tail
+          DEBUG_TAIL=""
+          DEBUG_DIR=$(ls -td debug-log/*/ 2>/dev/null | head -1)
+          if [ -n "$DEBUG_DIR" ]; then
+            # Get the last 80 lines from agent logs
+            DEBUG_TAIL=$(find "$DEBUG_DIR" -name "*.log" -exec tail -20 {} + 2>/dev/null | tail -80)
+          fi
+
+          BODY="## ❌ Integration Tests Failed (${{ matrix.shard }} / mgr=${{ matrix.manager_runtime }} / wk=${{ matrix.worker_runtime }})
+
+          **Commit:** ${{ github.event.pull_request.head.sha }}
+          **Workflow run:** [#${{ github.run_number }}](${ARTIFACT_URL})
+
+          <details>
+          <summary>Test Results</summary>
+
+          \`\`\`
+          ${TEST_SUMMARY:-No test output captured.}
+          \`\`\`
+
+          </details>
+
+          <details>
+          <summary>Debug Log (tail)</summary>
+
+          \`\`\`
+          ${DEBUG_TAIL:-No debug logs available.}
+          \`\`\`
+
+          </details>
+
+          ---
+          📦 [Download full debug logs & test artifacts](${ARTIFACT_URL}#artifacts)"
+
+          # Update or create comment
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUM/comments" \
+            --jq '.[] | select(.body | startswith("## ❌ Integration Tests Failed (${{ matrix.shard }} / mgr=${{ matrix.manager_runtime }} / wk=${{ matrix.worker_runtime }})")) | .id' | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$EXISTING" -f body="$BODY"
+          else
+            gh api --method POST "repos/$REPO/issues/$PR_NUM/comments" -f body="$BODY"
+          fi
+
+      - name: Collect test artifacts
+        if: always()
+        run: |
+          mkdir -p test-artifacts
+          [ -d "tests/output" ] && cp -r tests/output/* test-artifacts/ 2>/dev/null || true
+          [ -d "debug-log" ] && cp -r debug-log test-artifacts/debug-log 2>/dev/null || true
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-${{ matrix.shard }}-mgr-${{ matrix.manager_runtime }}-wk-${{ matrix.worker_runtime }}-${{ github.sha }}
+          path: test-artifacts/
+          retention-days: 7
+
+      # ============================================================
+      # Release baseline: generate and upload on tag push
+      # ============================================================
+
+      - name: Generate release baseline
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        run: |
+          source tests/lib/agent-metrics.sh
+          TEST_NAMES=$(echo "$NON_GITHUB_TESTS" | tr ' ' '\n' | while read n; do
+            f=$(ls tests/output/metrics-*${n}*.json 2>/dev/null | head -1)
+            [ -n "$f" ] && basename "$f" .json | sed 's/^metrics-//'
+          done | tr '\n' ' ')
+          generate_metrics_summary $TEST_NAMES > metrics-baseline.json
+          echo "Baseline generated for ${GITHUB_REF_NAME}"
+          cat metrics-baseline.json | jq '{totals: .totals, by_role: .by_role}'
+
+      - name: Upload baseline to release
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" metrics-baseline.json \
+            --repo "${{ github.repository }}" --clobber
+          echo "✅ Baseline uploaded to release ${GITHUB_REF_NAME}"
+
+      - name: Upload debug log to release
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.shard == 'llm-interaction' && matrix.manager_runtime == 'openclaw' && matrix.worker_runtime == 'openclaw' && always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -d debug-log ]; then
+            cd debug-log && zip -r ../debug-log.zip . && cd ..
+            gh release upload "${GITHUB_REF_NAME}" debug-log.zip \
+              --repo "${{ github.repository }}" --clobber
+            echo "✅ Debug log uploaded to release ${GITHUB_REF_NAME}"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: make uninstall-embedded 2>/dev/null || true && docker system prune -af || true
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "### Integration Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Shard: \`${{ matrix.shard }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: \`${{ env[matrix.filter_env] }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Manager Runtime: \`${{ matrix.manager_runtime }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Worker Runtime: \`${{ matrix.worker_runtime }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Model: \`${{ inputs.model || 'qwen3.6-plus' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Install Mode: embedded (make test-embedded)" >> $GITHUB_STEP_SUMMARY
+
+# ============================================================
+# Manual baseline re-generation for a specific release version
+# ============================================================
+
+  release-baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.baseline_version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+
+    steps:
+      - name: Resolve target version
+        id: version
+        run: |
+          echo "version=${{ inputs.baseline_version }}" >> $GITHUB_OUTPUT
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.version.outputs.version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq curl unzip
+
+      - name: Pull published images
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          # Use the us-west mirror — the cn-hangzhou registry is unreachable
+          # from GitHub-hosted runners (frequently times out on `docker pull`).
+          # Published images are auto-mirrored from cn-hangzhou to us-west-1.
+          REGISTRY=higress-registry.us-west-1.cr.aliyuncs.com/agentteams
+          docker pull ${REGISTRY}/agentteams-manager:${VERSION}
+          docker pull ${REGISTRY}/agentteams-worker:${VERSION}
+          docker pull ${REGISTRY}/agentteams-controller:${VERSION}
+          docker tag ${REGISTRY}/agentteams-manager:${VERSION} agentteams/manager:${VERSION}
+          docker tag ${REGISTRY}/agentteams-worker:${VERSION} agentteams/worker-agent:${VERSION}
+          docker tag ${REGISTRY}/agentteams-controller:${VERSION} agentteams/agentteams-controller:${VERSION}
+
+      - name: Install AgentTeams
+        env:
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          AGENTTEAMS_NON_INTERACTIVE=1 \
+          AGENTTEAMS_VERSION=$VERSION \
+          AGENTTEAMS_MOUNT_SOCKET=1 \
+          AGENTTEAMS_MATRIX_E2EE=0 \
+          AGENTTEAMS_LLM_PROVIDER=qwen \
+          AGENTTEAMS_INSTALL_MANAGER_IMAGE=agentteams/manager:${VERSION} \
+          AGENTTEAMS_INSTALL_WORKER_IMAGE=agentteams/worker-agent:${VERSION} \
+          AGENTTEAMS_INSTALL_CONTROLLER_IMAGE=agentteams/agentteams-controller:${VERSION} \
+          bash ./install/agentteams-install.sh manager
+
+      - name: Wait for Manager to be ready
+        run: |
+          for i in {1..60}; do
+            if docker exec agentteams-manager curl -sf http://127.0.0.1:8001/ >/dev/null 2>&1; then
+              if docker exec agentteams-manager curl -sf http://127.0.0.1:6167/_matrix/client/versions >/dev/null 2>&1; then
+                echo "Manager ready, waiting 60s for agent initialization..."
+                sleep 60
+                exit 0
+              fi
+            fi
+            echo "Waiting... ($i/60)"
+            sleep 5
+          done
+          exit 1
+
+      - name: Enable YOLO mode
+        run: docker exec agentteams-manager touch /root/manager-workspace/yolo-mode
+
+      - name: Run integration tests
+        env:
+          AGENTTEAMS_LLM_API_KEY: ${{ secrets.AGENTTEAMS_LLM_API_KEY }}
+        run: |
+          TEST_GATEWAY_PORT=18080 TEST_CONSOLE_PORT=18001 TEST_MANAGER_CONTAINER=agentteams-manager \
+            ./tests/run-all-tests.sh --skip-build --use-existing --test-filter "$NON_GITHUB_TESTS"
+
+      - name: Generate release baseline
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          source tests/lib/agent-metrics.sh
+          TEST_NAMES=$(echo "$NON_GITHUB_TESTS" | tr ' ' '\n' | while read n; do
+            f=$(ls tests/output/metrics-*${n}*.json 2>/dev/null | head -1)
+            [ -n "$f" ] && basename "$f" .json | sed 's/^metrics-//'
+          done | tr '\n' ' ')
+          generate_metrics_summary $TEST_NAMES > metrics-baseline.json
+          echo "Baseline generated for version ${VERSION}"
+          cat metrics-baseline.json | jq '{totals: .totals, by_role: .by_role}'
+
+      - name: Export debug logs
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 scripts/export-debug-log.py --range 2h --no-redact
+          DEBUG_DIR=$(ls -td debug-log/*/ 2>/dev/null | head -1)
+          if [ -n "$DEBUG_DIR" ]; then
+            cd debug-log && zip -r ../debug-log.zip . && cd ..
+            echo "Debug log exported: $(du -sh debug-log.zip | cut -f1)"
+          else
+            echo "No debug logs generated"
+          fi
+
+      - name: Upload baseline to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          gh release upload "${VERSION}" metrics-baseline.json \
+            --repo "${{ github.repository }}" --clobber
+          echo "✅ Baseline uploaded to release ${VERSION}"
+
+      - name: Upload debug log to release
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          if [ -f debug-log.zip ]; then
+            gh release upload "${VERSION}" debug-log.zip \
+              --repo "${{ github.repository }}" --clobber
+            echo "✅ Debug log uploaded to release ${VERSION}"
+          else
+            echo "No debug log to upload"
+          fi
+
+      - name: Cleanup
+        if: always()
+        run: make uninstall-embedded 2>/dev/null || true && docker system prune -af || true

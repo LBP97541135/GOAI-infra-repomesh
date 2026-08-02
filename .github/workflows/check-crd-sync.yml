@@ -1,0 +1,26 @@
+name: Check CRD Sync
+
+on:
+  pull_request:
+    paths:
+      - 'agentteams-controller/config/crd/**'
+      - 'helm/agentteams/crds/**'
+  workflow_dispatch: ~
+
+jobs:
+  check-crd-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify CRDs are in sync
+        run: |
+          if ! diff -r agentteams-controller/config/crd/ helm/agentteams/crds/; then
+            echo ""
+            echo "ERROR: CRD files are out of sync between agentteams-controller/config/crd/ and helm/agentteams/crds/"
+            echo "The source of truth is agentteams-controller/config/crd/."
+            echo "Run 'make sync-crds' to copy them to helm/agentteams/crds/."
+            exit 1
+          fi
+          echo "CRDs are in sync."
