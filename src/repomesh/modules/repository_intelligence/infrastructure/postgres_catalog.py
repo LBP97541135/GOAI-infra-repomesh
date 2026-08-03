@@ -1,17 +1,21 @@
 from collections.abc import Sequence
 from datetime import UTC
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
 from repomesh.persistence import Database
 from repomesh.persistence.models import AuditEventRecord, OutboxEventRecord, StateEventRecord
 from repomesh.shared.domain import DomainError
 from repomesh.shared.events import EventEnvelope
 
 from .models import RepositoryRecord
+
+#: Key under which the AutoCard is serialised inside ``metadata_payload``.
+_METADATA_AUTO_CARD_KEY = "auto_card"
 
 
 class RepositoryAlreadyExists(DomainError):
@@ -39,6 +43,7 @@ class PostgresRepositoryCatalog:
                         topics=list(profile.topics),
                         languages=list(profile.languages),
                         profiled_at=profile.profiled_at,
+                        metadata=_serialize_metadata(profile),
                     )
                 )
                 for event in events:
@@ -67,9 +72,4 @@ class PostgresRepositoryCatalog:
             description=record.description,
             topics=tuple(record.topics),
             languages=tuple(record.languages),
-            profiled_at=(
-                record.profiled_at
-                if record.profiled_at.tzinfo
-                else record.profiled_at.replace(tzinfo=UTC)
-            ),
-        )
+            auto_card=_deserialize_auto_card(record.meta

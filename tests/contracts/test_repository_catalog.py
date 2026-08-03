@@ -2,7 +2,10 @@ from uuid import uuid4
 
 import pytest
 
-from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.repository_intelligence.domain import (
+    AutoCard,
+    RepositoryProfile,
+)
 from repomesh.modules.repository_intelligence.infrastructure import InMemoryRepositoryCatalog
 
 

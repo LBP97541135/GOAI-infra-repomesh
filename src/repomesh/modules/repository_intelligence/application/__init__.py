@@ -1,4 +1,8 @@
-from .discovery import RepositoryDiscoveryService
-from .registration import RegisterRepository
-
-__all__ = ["RegisterRepository", "RepositoryDiscoveryService"]
+from .discovery import (
+    DeepSeekClient,
+    DeepSeekConfig,
+    LLMClient,
+    RepositoryDiscoveryService,
+    make_llm_client,
+)
+from .registration import Re

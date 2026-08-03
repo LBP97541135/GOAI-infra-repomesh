@@ -1,3 +1,4 @@
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -5,8 +6,9 @@ from fastapi import APIRouter, Depends, Request
 from repomesh.modules.repository_intelligence.application import (
     RegisterRepository,
     RepositoryDiscoveryService,
+    make_llm_client,
 )
-from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
 from .models import DiscoveryCandidate, DiscoveryRequest, RepositoryCreate, RepositoryView
@@ -21,6 +23,20 @@ def get_catalog(request: Request) -> RepositoryCatalog:
 CatalogDependency = Annotated[RepositoryCatalog, Depends(get_catalog)]
 
 
+def _build_auto_card(body_card) -> AutoCard | None:  # type: ignore[no-untyped-def]
+    """Convert the API-layer ``AutoCardCreate`` to a domain ``AutoCard``."""
+
+    if body_card is None:
+        return None
+    return AutoCard(
+        top_dirs=tuple(body_card.top_dirs),
+        deps=tuple(body_card.deps),
+        recent_commits=tuple(body_card.recent_commits),
+        exposed_apis=tuple(body_card.exposed_apis),
+        low_signal=body_card.low_signal,
+    )
+
+
 @router.post("/repositories", response_model=RepositoryView, status_code=201)
 async def register_repository(
     body: RepositoryCreate, catalog: CatalogDependency
@@ -31,6 +47,7 @@ async def register_repository(
         description=body.description,
         topics=tuple(body.topics),
         languages=tuple(body.languages),
+        auto_card=_build_auto_card(body.auto_card),
     )
     await RegisterRepository(catalog).execute(profile)
     return profile
@@ -45,18 +62,5 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
 async def discover_repositories(
     body: DiscoveryRequest, catalog: CatalogDependency
 ) -> list[DiscoveryCandidate]:
-    evidence = await RepositoryDiscoveryService(catalog).discover(body.requirement, body.limit)
-    candidates: list[DiscoveryCandidate] = []
-    for item in evidence:
-        profile = await catalog.get(item.repository_id)
-        if profile is not None:
-            candidates.append(
-                DiscoveryCandidate(
-                    repository_id=item.repository_id,
-                    repository_name=profile.name,
-                    score=item.score,
-                    matched_terms=item.matched_terms,
-                    rationale=item.rationale,
-                )
-            )
-    return candidates
+    # Read DeepSeek configuration from environment so the API stays stateless.
+    api_key = os.environ.get("REPOMESH_DEEP

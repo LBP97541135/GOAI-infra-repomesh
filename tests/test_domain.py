@@ -1,51 +1,55 @@
+import json
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from repomesh.integrations.coding_agents.mock import MockCodingAgent
 from repomesh.modules.agent_runtime.ports import CodingRunRequest, RunStatus
-from repomesh.modules.repository_intelligence.application import RepositoryDiscoveryService
-from repomesh.modules.repository_intelligence.domain import RepositoryProfile
-from repomesh.modules.repository_intelligence.infrastructure import InMemoryRepositoryCatalog
+from repomesh.modules.repository_intelligence.application import (
+    RepositoryDiscoveryService,
+    infer_languages,
+    infer_name,
+    scan_repo,
+)
+from repomesh.modules.repository_intelligence.domain import (
+    AutoCard,
+    RepositoryProfile,
+)
+from repomesh.modules.repository_intelligence.infrastructure import (
+    InMemoryRepositoryCatalog,
+)
+
+# ---------------------------------------------------------------------------
+# Domain model tests
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_discovery_returns_ranked_evidence() -> None:
-    catalog = InMemoryRepositoryCatalog()
-    await catalog.add(
-        RepositoryProfile(
-            name="checkout-service",
-            url="https://github.com/example/checkout",
-            description="Payment and checkout API",
-            topics=("payment", "orders"),
-            languages=("python",),
-        )
+def test_repository_profile_description_defaults_to_empty() -> None:
+    profile = RepositoryProfile(name="svc", url="https://github.com/example/svc")
+    assert profile.description == ""
+    assert profile.auto_card is None
+
+
+def test_repository_profile_with_auto_card() -> None:
+    card = AutoCard(
+        top_dirs=("src/api", "src/models"),
+        deps=("fastapi", "stripe"),
+        recent_commits=("feat: add payment endpoint",),
+        exposed_apis=("fastapi:/api/v1/charge",),
+        low_signal=False,
     )
-    await catalog.add(
-        RepositoryProfile(
-            name="marketing-site",
-            url="https://github.com/example/site",
-            description="Public website",
-            languages=("typescript",),
-        )
+    profile = RepositoryProfile(
+        name="payment-service",
+        url="https://github.com/example/payment",
+        auto_card=card,
     )
+    assert profile.auto_card is card
+    # searchable_text should incorporate auto_card fields.
+    assert "payment-service" in profile.searchable_text
+    assert "src/api" in profile.searchable_text
+    assert "stripe" in profile.searchable_text
+    assert "feat: add payment endpoint" in profile.searchable_text
 
-    results = await RepositoryDiscoveryService(catalog).discover("Add payment checkout flow")
 
-    assert len(results) == 1
-    assert results[0].matched_terms == ("checkout", "payment")
-    assert results[0].rationale
-
-
-@pytest.mark.asyncio
-async def test_mock_coding_agent_is_deterministic() -> None:
-    result = await MockCodingAgent().execute(
-        CodingRunRequest(
-            task_id=uuid4(),
-            repository_url="https://github.com/example/repo",
-            instruction="Add a health endpoint",
-        )
-    )
-
-    assert result.status is RunStatus.SUCCEEDED
-    assert result.changed_files == ("README.md",)
+def test_auto_card_defaults() -> Non
