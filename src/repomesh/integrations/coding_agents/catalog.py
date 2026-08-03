@@ -3,7 +3,20 @@ from repomesh.modules.agent_runtime.ports.agent_adapter import (
     PromptDelivery,
 )
 
-from .base import AdapterSpec, AuthProbeSpec, CliAgentAdapter, PromptStyle
+from .base import (
+    AdapterSpec,
+    AuthProbeSpec,
+    CliAgentAdapter,
+    ExecutionStatus,
+    PromptStyle,
+)
+
+# Discovery catalog, not an execution catalog. Entries were transcribed from
+# the upstream reference in AdapterSpec.source_revision and describe the
+# interactive invocation of each CLI. Unattended execution is owned by the
+# protocol drivers in `repomesh_runner`; where a verified profile exists the
+# entry is marked SUPERSEDED_BY_DRIVER and the profile wins.
+SUPERSEDED = ExecutionStatus.SUPERSEDED_BY_DRIVER
 
 CLAUDE_PERMISSIONS = {
     PermissionMode.ACCEPT_EDITS: ("--permission-mode", "acceptEdits"),
@@ -40,6 +53,7 @@ SPECS = (
         permission_arguments=CLAUDE_PERMISSIONS,
         auth=AuthProbeSpec(("auth", "status"), ("ANTHROPIC_API_KEY",)),
         restore_flag="--resume",
+        execution_status=SUPERSEDED,
     ),
     AdapterSpec(
         id="codex",
@@ -51,6 +65,7 @@ SPECS = (
         auth=AuthProbeSpec(("login", "status"), ("OPENAI_API_KEY",)),
         restore_prefix=("resume",),
         restore_flag="",
+        execution_status=SUPERSEDED,
     ),
     AdapterSpec(
         id="opencode",
@@ -116,6 +131,7 @@ SPECS = (
         prompt_style=PromptStyle.NONE,
         auth=AuthProbeSpec(environment_variables=("KIMI_API_KEY", "MOONSHOT_API_KEY")),
         restore_flag="--session",
+        execution_status=SUPERSEDED,
     ),
     AdapterSpec(
         id="droid",

@@ -52,6 +52,10 @@ class AdapterManifest:
     prompt_delivery: PromptDelivery
     capabilities: frozenset[AdapterCapability]
     source_revision: str
+    # Whether this adapter's launch shape has been validated against the real
+    # CLI, or is superseded by a verified Runner driver profile. Consumers must
+    # not treat a listed adapter as executable without checking this.
+    execution_status: str = "unverified"
 
 
 @dataclass(frozen=True, slots=True)
