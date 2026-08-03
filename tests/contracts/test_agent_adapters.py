@@ -69,6 +69,10 @@ def test_claude_launch_maps_session_permissions_model_and_prompt() -> None:
     )
     assert plan.argv == (
         "claude",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
         "--session-id",
         "11111111-1111-4111-8111-111111111111",
         "--permission-mode",
@@ -77,8 +81,29 @@ def test_claude_launch_maps_session_permissions_model_and_prompt() -> None:
         "claude-sonnet-4",
         "--append-system-prompt",
         "Follow the repository contract.",
-        "--",
         "fix the failing test",
+    )
+
+
+def test_claude_restore_delivers_feedback_to_the_existing_session() -> None:
+    plan = adapter("claude-code").build_restore(
+        request(prompt="The authoritative test still fails."),
+        AgentSessionRef(
+            "22222222-2222-4222-8222-222222222222",
+            Path("C:/work/repo"),
+        ),
+    )
+
+    assert plan is not None
+    assert plan.argv == (
+        "claude",
+        "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--resume",
+        "22222222-2222-4222-8222-222222222222",
+        "The authoritative test still fails.",
     )
 
 
@@ -138,6 +163,28 @@ async def test_probe_detects_login_state() -> None:
         spec("codex"), resolver=InstalledResolver(), runner=LoggedInRunner()
     ).probe()
     assert probe.installed is True
+    assert probe.auth_status is AuthStatus.AUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_probe_detects_claude_json_login_state_with_whitespace() -> None:
+    class InstalledResolver:
+        def resolve(self, names: tuple[str, ...]) -> str:
+            return names[0]
+
+    class LoggedInRunner:
+        async def run(
+            self, executable: str, arguments: tuple[str, ...], timeout_seconds: float
+        ) -> CommandResult:
+            assert arguments == ("auth", "status")
+            assert timeout_seconds == 10.0
+            return CommandResult(0, '{"loggedIn": true, "authMethod": "oauth_token"}')
+
+    probe = await CliAgentAdapter(
+        spec("claude-code"),
+        resolver=InstalledResolver(),
+        runner=LoggedInRunner(),
+    ).probe()
     assert probe.auth_status is AuthStatus.AUTHORIZED
 
 

@@ -37,3 +37,33 @@ Still required before an image can run:
 - native session checkpoint, interrupt, and resume storage;
 - artifact upload, test/correction loop, and runtime telemetry;
 - a container entry point and AgentTeams Worker runtime definition.
+
+## Local Claude adapter smoke test
+
+The local harness validates the Runtime v1 task, real Claude Code launch, isolated Git worktree,
+authoritative test, path policy, candidate commit, patch artifact, and ordered terminal events.
+Claude Code must already be installed and authenticated on the host.
+
+```powershell
+$env:PYTHONPATH = "src"
+python scripts/smoke_claude_adapter.py `
+  --repository C:\path\to\bug-fixture `
+  --output-dir C:\path\to\smoke-runs
+```
+
+The source repository remains on its original base commit. Each run keeps its worktree and JSONL
+evidence under a unique output directory for inspection.
+
+Use the staged recovery mode to verify two additional behaviors in one run: a Context Worker
+answers a structured Claude question from approved repository context, then the Runner feeds a
+real authoritative-test failure back into the same Claude session.
+
+```powershell
+python scripts/smoke_claude_adapter.py `
+  --repository C:\path\to\bug-fixture `
+  --output-dir C:\path\to\smoke-runs `
+  --verify-answer-and-resume
+```
+
+The run directory records each Claude attempt, each authoritative test attempt, the evidence used
+by the Worker answer, and the native Claude session ID used for every resume.

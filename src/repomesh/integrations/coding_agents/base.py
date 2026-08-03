@@ -91,6 +91,7 @@ class AdapterSpec:
     prompt_flag: str | None = None
     restore_prefix: tuple[str, ...] | None = ()
     restore_flag: str | None = None
+    restore_accepts_prompt: bool = False
     workspace_flag: str | None = None
     session_flag: str | None = None
     model_flag: str | None = None
@@ -101,6 +102,7 @@ class AdapterSpec:
     permission_arguments: Mapping[PermissionMode, tuple[str, ...]] = field(default_factory=dict)
     environment: Mapping[str, str] = field(default_factory=dict)
     auth: AuthProbeSpec = field(default_factory=AuthProbeSpec)
+    auth_timeout_seconds: float = 3.0
     source_revision: str = (
         "Untrivial-ai/agent-orchestrator@10025449557665e2474c67096dab47c32d10138f"
     )
@@ -181,7 +183,11 @@ class CliAgentAdapter:
             )
 
         try:
-            result = await self._runner.run(executable, self._spec.auth.arguments, 3.0)
+            result = await self._runner.run(
+                executable,
+                self._spec.auth.arguments,
+                self._spec.auth_timeout_seconds,
+            )
         except (OSError, TimeoutError) as error:
             return AdapterProbe(
                 self._spec.id, True, executable, AuthStatus.UNKNOWN, type(error).__name__
@@ -212,6 +218,8 @@ class CliAgentAdapter:
             arguments.extend((self._spec.restore_flag, native_id))
         else:
             arguments.append(native_id)
+        if self._spec.restore_accepts_prompt:
+            self._append_prompt(arguments, restore_request.prompt)
         return self._plan(restore_request, tuple(arguments), prompt_after_start=None)
 
     def session_info(self, metadata: Mapping[str, str]) -> AgentSessionInfo | None:
@@ -312,11 +320,12 @@ class CliAgentAdapter:
     @staticmethod
     def _auth_status(output: str, exit_code: int) -> AuthStatus:
         text = output.casefold()
+        compact_text = "".join(text.split())
         denied = ("not logged in", "logged out", "unauthorized", "not authenticated")
-        allowed = ("logged in", "authenticated", "authorized", '"loggedin":true')
+        allowed = ("logged in", "authenticated", "authorized")
         if any(marker in text for marker in denied):
             return AuthStatus.UNAUTHORIZED
-        if any(marker in text for marker in allowed):
+        if any(marker in text for marker in allowed) or '"loggedin":true' in compact_text:
             return AuthStatus.AUTHORIZED
         if exit_code != 0:
             return AuthStatus.UNAUTHORIZED
