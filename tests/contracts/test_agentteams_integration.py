@@ -267,3 +267,27 @@ async def test_matrix_task_uses_transaction_id_as_idempotency_key() -> None:
 def test_upstream_pin_matches_repository_contract() -> None:
     assert AGENTTEAMS_VERSION == "v1.2.0"
     assert AGENTTEAMS_COMMIT == "793db242257a569d911b1aa59c1cd554af78511f"
+
+
+def test_repomesh_runner_wire_value_matches_controller_and_crd() -> None:
+    """The Python enum, Go constant, and CRD enum must agree on one string.
+
+    The Go side is asserted through the vendored sources so a subtree update
+    that drops or renames the runtime fails here, not at deploy time.
+    """
+    import re
+    from pathlib import Path
+
+    wire_value = WorkerRuntime.REPOMESH_RUNNER.value
+    assert wire_value == "repomesh-runner"
+
+    controller = Path(__file__).parents[2] / "components" / "agentteams" / "agentteams-controller"
+    interface_go = (controller / "internal" / "backend" / "interface.go").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(rf'RuntimeRepomeshRunner\s*=\s*"{wire_value}"', interface_go)
+
+    crd = (controller / "config" / "crd" / "workers.agentteams.io.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert wire_value in crd
