@@ -21,11 +21,12 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from inbox_tool import InboxDeps, poll as _inbox_impl
 from message_tool import MessageToolDeps, message as _message_impl
 from roomflow_tool import RoomDescribeDeps, describe_room as _describe_room_impl
 
 
-TOOL_NAMES = ["health", "message", "roomflow", "filesync", "artifact", "projectflow", "taskflow"]
+TOOL_NAMES = ["health", "message", "inbox", "roomflow", "filesync", "artifact", "projectflow", "taskflow"]
 MESSAGE_TOOL_BLOCKED_ROLES = {"worker", "remote-member"}
 MATRIX_USER_RE = re.compile(r"@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.\-]+(?::\d+)?")
 MENTION_LOCAL_CHARS = r"a-zA-Z0-9._=+/\-"
@@ -214,6 +215,69 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "mentionSender": {
                     "type": "boolean",
                     "description": "For DingTalk requester reports, mention the original sender when session metadata has sender_staff_id.",
+                },
+            },
+            "additionalProperties": True,
+        },
+    },
+    "inbox": {
+        "description": (
+            "Read normalized inbound room events addressed to this member. "
+            "Stateless: pass the previous nextBatch as since; the caller owns "
+            "cursor durability. poll reports server-truncated rooms in gaps; "
+            "callers that must not miss events follow up with backfill. Use "
+            "for catching up on missed mentions, not as a substitute for "
+            "answering in the current conversation."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["poll", "peek", "ack", "backfill", "join", "rooms"],
+                    "description": (
+                        "poll and peek are identical server-side; ack echoes the "
+                        "caller cursor; backfill pages backwards through a gap; "
+                        "join accepts a pending room invite; rooms lists current "
+                        "membership."
+                    ),
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Opaque sync cursor from a previous nextBatch. Empty starts at now.",
+                },
+                "cursor": {
+                    "type": "string",
+                    "description": "Cursor echoed back by ack.",
+                },
+                "roomId": {
+                    "type": "string",
+                    "description": "Room to backfill or join; required for both.",
+                },
+                "from": {
+                    "type": "string",
+                    "description": "Gap prevBatch token (or previous nextFrom) to backfill from.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Per-room timeline / backfill page size (default 50, max 200).",
+                },
+                "waitMs": {
+                    "type": "integer",
+                    "description": "Long-poll window in milliseconds (0-30000, default 0).",
+                },
+                "mentionsOnly": {
+                    "type": "boolean",
+                    "description": "Keep only events mentioning this member. Default true.",
+                },
+                "rooms": {
+                    "type": "array",
+                    "description": "Optional room id allowlist.",
+                    "items": {"type": "string"},
+                },
+                "dryRun": {
+                    "type": "boolean",
+                    "description": "Return the request shape without calling Matrix.",
                 },
             },
             "additionalProperties": True,
@@ -555,6 +619,8 @@ def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, A
         payload = {"ok": True, "tool": name, "status": "ok"}
     elif name == "message":
         payload = _message(args)
+    elif name == "inbox":
+        payload = _inbox(args)
     elif name == "roomflow":
         payload = _roomflow(args)
     elif name == "filesync":
@@ -1810,6 +1876,18 @@ def _write_matrix_room_meta(room_id: str, content: dict[str, Any]) -> None:
     )
     with urllib.request.urlopen(request, timeout=10) as response:
         response.read()
+
+
+def _inbox(arguments: dict[str, Any]) -> dict[str, Any]:
+    return _inbox_impl(
+        arguments,
+        _payload(arguments),
+        InboxDeps(
+            matrix_env=_matrix_env,
+            matrix_user_id=_matrix_user_id,
+            canonical_room_id=_canonical_room_id,
+        ),
+    )
 
 
 def _roomflow(arguments: dict[str, Any]) -> dict[str, Any]:

@@ -53,6 +53,7 @@ mcp:
       tools:
         - health
         - message
+        - inbox
         - roomflow
         - filesync
         - artifact

@@ -259,7 +259,7 @@ server = manifest.fetch("mcp").fetch("servers").fetch(0)
 assert(server.fetch("id") == "teamharness", "MCP server id must be teamharness")
 assert(server.fetch("transport") == "stdio", "TeamHarness MCP must use stdio")
 assert(
-  server.fetch("tools") == %w[health message roomflow filesync artifact projectflow taskflow],
+  server.fetch("tools") == %w[health message inbox roomflow filesync artifact projectflow taskflow],
   "unexpected MCP tools: #{server.fetch("tools").inspect}"
 )
 
