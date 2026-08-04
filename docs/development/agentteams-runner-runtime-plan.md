@@ -77,7 +77,8 @@ Runner 的超时治理归自身 idle watchdog 与 Task Orchestration，与 Contr
 
 ## 4. repomesh-runner Worker Runtime 契约（草案 v0）
 
-冻结位置：`contracts/runtime/v1`（阶段 1 完成时迁入，此处为工作草案）。
+本契约已于 2026-08-04 冻结于 `contracts/runtime/v1/worker-runtime.md`（英文正式版）。
+以下内容为冻结时的快照，仅作背景参考；两者不一致时以冻结的英文文档为准。
 
 1. **入口**：容器启动即运行 RepoMesh Runner 进程（PID 1）。不运行 OpenClaw/
    QwenPaw/Hermes 任何组件，不读取 agentconfig 生成的配置树。
