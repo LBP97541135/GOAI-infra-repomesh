@@ -605,6 +605,32 @@ def list_tools() -> list[dict[str, Any]]:
 
 
 def call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Dispatch one tool call, converting any failure into a tool-level error.
+
+    An unhandled exception here would propagate to the stdio loop and kill the
+    server, which costs the client every tool rather than the one call that
+    failed -- and the client cannot tell the difference between "this tool
+    errored" and "the server is gone". Handlers raise ``ValueError`` for
+    expected problems; this catches everything else, notably the
+    ``FileNotFoundError`` raised when an optional external binary such as the
+    MinIO client is absent from the host.
+    """
+    try:
+        return _call_tool(name, arguments)
+    except Exception as exc:  # noqa: BLE001 - the whole point is to not die
+        payload = {
+            "ok": False,
+            "tool": name,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        return {
+            "content": [
+                {"type": "text", "text": json.dumps(payload, ensure_ascii=False)}
+            ]
+        }
+
+
+def _call_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     args = arguments or {}
     if name not in TOOL_NAMES:
         payload = {"ok": False, "error": "unknown_tool", "tool": name}
@@ -2603,14 +2629,31 @@ def _filesync(arguments: dict[str, Any]) -> dict[str, Any]:
             "path": normalized,
             "error": env_error,
         }
-    completed = subprocess.run(
-        command,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=mc_env,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=mc_env,
+        )
+    except FileNotFoundError:
+        # The MinIO client ships in the worker image but not on a remote
+        # member's own machine. Say so plainly: the raw OSError surfaces as
+        # "WinError 2 / No such file or directory" with no hint about which
+        # file, which sends people looking at the shared path instead.
+        return {
+            "ok": False,
+            "tool": "filesync",
+            "action": action,
+            "path": normalized,
+            "error": (
+                f"the MinIO client '{command[0]}' was not found on this host; "
+                "shared storage operations are unavailable until it is installed "
+                "and on PATH"
+            ),
+        }
     command_error = _filesync_command_error(completed)
     if command_error:
         return {
@@ -4112,7 +4155,33 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any] | None:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
+def _force_utf8_stdio() -> None:
+    """Pin stdin/stdout to UTF-8 regardless of the platform locale.
+
+    MCP frames are UTF-8 by specification, and responses are serialized with
+    ``ensure_ascii=False``. On Windows the standard streams default to the
+    active code page instead, so a single non-ASCII character anywhere in a
+    tool description encodes as (for example) GBK and the client cannot decode
+    the frame at all -- ``tools/list`` fails and the agent sees zero tools.
+    Nothing about that failure looks like an encoding problem from the client
+    side, so pin it here rather than relying on PYTHONIOENCODING being set by
+    whoever spawns the server.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            # A stream that cannot be reconfigured (already detached, or a
+            # non-text replacement) is left alone: a degraded encoding beats
+            # refusing to start.
+            pass
+
+
 def main() -> int:
+    _force_utf8_stdio()
     for line in sys.stdin:
         line = line.strip()
         if not line:
