@@ -2243,9 +2243,24 @@ def _archive_room(arguments: dict[str, Any], payload: dict[str, Any]) -> dict[st
 
 
 def _remote_root(value: str) -> str:
+    """Resolve a configured storage prefix into an ``mc`` remote root.
+
+    Refusing an empty prefix is what keeps a misconfiguration loud. The default
+    used to degrade to a bare ``"shared"``, which reads as an object-storage
+    path but is an ordinary *relative* one: ``mc cp <file> shared/a/b.txt``
+    copies within the local filesystem and exits 0, so ``filesync push``
+    answered ``{"ok": true}`` for a file that never reached storage. Nor did
+    the credential guard catch it -- ``_filesync_mc_env`` only demands keys once
+    the remote is alias-qualified, so dropping the alias skipped the check that
+    exists to notice the alias is missing.
+    """
     text = (value or "").strip()
     if not text:
-        raise ValueError("storage sharedPrefix is required")
+        raise ValueError(
+            "shared storage is not configured; set AGENTTEAMS_STORAGE_PREFIX "
+            "(or storage.sharedPrefix in runtime.yaml) so filesync targets "
+            "object storage instead of a local directory"
+        )
     return text.rstrip("/") + "/"
 
 
@@ -2477,7 +2492,8 @@ def _default_shared_prefix() -> str:
     storage_prefix = _storage_root_prefix()
     if storage_prefix:
         return f"{storage_prefix}/shared"
-    return "shared"
+    # Deliberately empty rather than a bare "shared": see _remote_root.
+    return ""
 
 
 def _default_global_shared_prefix() -> str:
@@ -2489,7 +2505,8 @@ def _default_global_shared_prefix() -> str:
     storage_prefix = _storage_root_prefix()
     if storage_prefix:
         return f"{storage_prefix}/shared"
-    return "shared"
+    # Deliberately empty rather than a bare "shared": see _remote_root.
+    return ""
 
 
 def _workspace_dir(arguments: dict[str, Any]) -> Path:

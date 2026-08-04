@@ -136,8 +136,18 @@ assert(
   remote_prompt.include?("not") && remote_prompt.include?("AgentTeams-managed Worker"),
   "remote prompt must define remote worker boundary"
 )
-assert(remote_prompt.include?("current room/session"), "remote prompt must avoid message tool for current-session reports")
-assert(remote_prompt.include?("must leave"), "remote prompt must scope message tool to cross-session routing")
+assert(
+  remote_prompt.include?("`message` MCP tool is not available"),
+  "remote prompt must state that the message tool is unavailable to this role"
+)
+assert(
+  remote_prompt.include?("taskflow") && remote_prompt.include?("artifact"),
+  "remote prompt must name taskflow and artifact as the channels that leave the conversation"
+)
+assert(
+  remote_prompt.include?("Never post intermediate progress"),
+  "remote prompt must leave room forwarding to the bridge"
+)
 leader_prompt = read(plugin_root / agent_prompts.fetch("leader"))
 assert(leader_prompt.include?("Do not treat a worker completion message as automatic project acceptance"), "leader prompt must require acceptance")
 assert(leader_prompt.include?("Request Intake"), "leader prompt must define request intake")

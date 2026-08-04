@@ -54,7 +54,29 @@ python_test = <<~PY
   print(json.dumps({"ok": True, "tools": names}, ensure_ascii=False))
 PY
 
-stdout, stderr, status = Open3.capture3("python3", "-", stdin_data: python_test, chdir: repo_root.to_s)
-fail!(["teamharness MCP server test failed", stderr, stdout].reject(&:empty?).join("\n")) unless status.success?
+# "python3" is not a usable interpreter everywhere: on Windows it commonly
+# resolves to the App Execution Alias stub, which exits non-zero and prints
+# nothing at all. Try each candidate and keep the first that actually runs.
+attempts = []
+stdout = stderr = nil
+status = nil
+%w[python3 python].each do |interpreter|
+  begin
+    stdout, stderr, status = Open3.capture3(
+      interpreter, "-", stdin_data: python_test, chdir: repo_root.to_s
+    )
+  rescue Errno::ENOENT
+    attempts << "#{interpreter}: not found"
+    next
+  end
+  break if status.success?
+
+  attempts << "#{interpreter}: exit #{status.exitstatus}#{stderr.to_s.empty? ? " (no output)" : "\n#{stderr}"}"
+  status = nil
+end
+
+unless status&.success?
+  fail!(["teamharness MCP server test failed", *attempts].join("\n"))
+end
 
 puts JSON.pretty_generate(JSON.parse(stdout))
