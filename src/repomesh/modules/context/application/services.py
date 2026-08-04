@@ -1,7 +1,14 @@
 
 from uuid import UUID
 
-from repomesh.modules.context.contracts import ContextAccessResult, ContextAction
+from repomesh.modules.context.contracts import (
+    ContextAccessResult,
+    ContextAction,
+    ContextStatus,
+    ContextVersionRef,
+    ExecutionContextGrant,
+    PublishContextRequest,
+)
 from repomesh.modules.context.domain import (
     ContextAccessDenied,
     ContextAccessEvent,
@@ -82,6 +89,46 @@ class PublishContextObject:
             },
         )
         await self._store.create_object(context_object, version, events=(event,))
+
+
+class ContextPublicationGateway:
+    def __init__(self, store: ContextStore) -> None:
+        self._store = store
+
+    async def publish(self, request: PublishContextRequest) -> ContextVersionRef:
+        context_object = ContextObject(
+            organization_id=request.organization_id,
+            project_id=request.project_id,
+            object_type=request.object_type,
+            scope=request.scope,
+            owner_subject=request.owner_subject,
+            title=request.title,
+            status=ContextStatus.APPROVED,
+        )
+        version = ContextObjectVersion(
+            context_object_id=context_object.id,
+            version=1,
+            content_uri=request.content_uri,
+            content_hash=request.content_hash,
+            mime_type=request.mime_type,
+            size_bytes=request.size_bytes,
+            created_by=request.created_by,
+        )
+        await PublishContextObject(self._store).execute(
+            context_object,
+            version,
+            actor_type=ActorType.AGENT,
+            actor_id=request.created_by,
+        )
+        return ContextVersionRef(
+            context_object_id=context_object.id,
+            version_id=version.id,
+            version=version.version,
+            object_type=context_object.object_type,
+            scope=context_object.scope,
+            title=context_object.title,
+            content_hash=version.content_hash,
+        )
 
 
 class PublishContextVersion:
@@ -337,3 +384,32 @@ class RecordContextAccess:
         if result is not ContextAccessResult.ALLOWED:
             raise ContextAccessDenied(result.value)
         return access
+
+
+class GetExecutionContextGrant:
+    """Expose only the immutable execution policy from an agent-bound bundle."""
+
+    def __init__(self, store: ContextStore) -> None:
+        self._store = store
+
+    async def execute(
+        self, bundle_id: UUID, *, run_id: UUID, agent_id: UUID
+    ) -> ExecutionContextGrant:
+        bundle = await self._store.get_bundle(bundle_id)
+        if bundle is None:
+            raise ContextNotFound(f"context bundle not found: {bundle_id}")
+        if bundle.run_id != run_id or bundle.agent_id != agent_id:
+            raise ContextAccessDenied("bundle_binding_mismatch")
+        return ExecutionContextGrant(
+            bundle_id=bundle.id,
+            project_id=bundle.project_id,
+            run_id=bundle.run_id,
+            agent_id=bundle.agent_id,
+            repository_id=bundle.repository_id,
+            allowed_tools=bundle.allowed_tools,
+            allowed_paths=bundle.allowed_paths,
+            denied_paths=bundle.denied_paths,
+            network_policy=bundle.network_policy,
+            expires_at=bundle.expires_at,
+            content_hash=bundle.content_hash,
+        )

@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
+from repomesh.modules.agent_directory.contracts import AgentPrincipalView
 from repomesh.modules.context.contracts import ContextObjectType, ContextScope
+from repomesh.modules.project.contracts import ProjectAgentTopologyView
 
 
 class AuthorizationAction(StrEnum):
@@ -41,3 +44,13 @@ class AuthorizationRequest:
 class AuthorizationDecision:
     allowed: bool
     reason: str
+
+
+class AgentAuthorizationGateway(Protocol):
+    def authorize(
+        self,
+        profile: AgentPrincipalView,
+        request: AuthorizationRequest,
+        *,
+        topology: ProjectAgentTopologyView | None = None,
+    ) -> AuthorizationDecision: ...

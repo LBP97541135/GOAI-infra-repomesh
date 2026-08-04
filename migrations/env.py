@@ -6,6 +6,10 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipalRecord
+from repomesh.modules.collaboration.infrastructure import (
+    CollaborationMessageRecord,
+    ProcessedMatrixEventRecord,
+)
 from repomesh.modules.context.infrastructure.models import (
     ContextAccessEventRecord,
     ContextBundleItemRecord,
@@ -21,6 +25,11 @@ from repomesh.modules.project.infrastructure import (
     ProjectRepositoryTeamRecord,
 )
 from repomesh.modules.repository_intelligence.infrastructure.models import RepositoryRecord
+from repomesh.modules.specification.infrastructure import (
+    SpecificationRecord,
+    SpecificationVersionRecord,
+)
+from repomesh.modules.task_orchestration.infrastructure import TaskRecord
 from repomesh.persistence.base import Base
 from repomesh.persistence.models import (
     AuditEventRecord,
@@ -33,6 +42,8 @@ from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
     AgentPrincipalRecord,
+    CollaborationMessageRecord,
+    ProcessedMatrixEventRecord,
     ContextObjectRecord,
     ContextObjectVersionRecord,
     ContextRelationRecord,
@@ -44,6 +55,9 @@ _REGISTERED_MODELS = (
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
     RepositoryRecord,
+    SpecificationRecord,
+    SpecificationVersionRecord,
+    TaskRecord,
     StateEventRecord,
     AuditEventRecord,
     OutboxEventRecord,

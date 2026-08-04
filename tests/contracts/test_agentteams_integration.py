@@ -285,6 +285,29 @@ async def test_manager_and_worker_lifecycle_use_distinct_endpoints() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_manager_exposes_matrix_identity_for_inbound_authentication() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response(
+            200,
+            {
+                "name": "rm-manager-main",
+                "phase": "Ready",
+                "matrixUserID": "@rm-manager-main:matrix.local",
+            },
+        )
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        manager = await client.get_manager("rm-manager-main")
+    finally:
+        await client.close()
+    assert manager is not None
+    assert manager.matrix_user_id == "@rm-manager-main:matrix.local"
+
+
+@pytest.mark.asyncio
 async def test_matrix_task_uses_transaction_id_as_idempotency_key() -> None:
     captured: httpx.Request | None = None
 
@@ -318,6 +341,53 @@ async def test_matrix_task_uses_transaction_id_as_idempotency_key() -> None:
         "body": "Implement task PRJ-1-api-01",
     }
     assert event_id == "$event-1"
+
+
+@pytest.mark.asyncio
+async def test_matrix_sync_extracts_joined_text_messages() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/_matrix/client/v3/sync"
+        assert request.url.params["since"] == "batch-1"
+        return response(
+            200,
+            {
+                "next_batch": "batch-2",
+                "rooms": {
+                    "join": {
+                        "!team:matrix.local": {
+                            "timeline": {
+                                "events": [
+                                    {
+                                        "type": "m.room.message",
+                                        "event_id": "$report-1",
+                                        "sender": "@worker:matrix.local",
+                                        "content": {
+                                            "msgtype": "m.text",
+                                            "body": '{"schema":"repomesh.agent-report.v1"}',
+                                        },
+                                    },
+                                    {"type": "m.room.member", "event_id": "$member"},
+                                ]
+                            }
+                        }
+                    }
+                },
+            },
+        )
+
+    client = AgentTeamsMatrixClient(
+        "http://matrix:6167",
+        "matrix-token",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        batch = await client.sync_once(since="batch-1", timeout_ms=1000)
+    finally:
+        await client.close()
+    assert batch.next_batch == "batch-2"
+    assert len(batch.messages) == 1
+    assert batch.messages[0].event_id == "$report-1"
+    assert batch.messages[0].room_id == "!team:matrix.local"
 
 
 def test_upstream_pin_matches_repository_contract() -> None:
