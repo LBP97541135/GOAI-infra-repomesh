@@ -22,10 +22,10 @@ import tempfile
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-# ``claude-code`` is not a valid identifier, so the bridge package is imported
-# by putting its parent on sys.path -- the same way a supervisor would consume
-# it, and the reason bridge/ carries an __init__.py at all.
-BRIDGE_PARENT = REPO_ROOT / "plugins" / "teamharness" / "remote" / "claude-code"
+# ``bridge`` is shared by every runtime, so its parent goes on sys.path --
+# the same way a supervisor consumes it, and the reason bridge/ carries an
+# __init__.py at all.
+BRIDGE_PARENT = REPO_ROOT / "plugins" / "teamharness" / "remote"
 if str(BRIDGE_PARENT) not in sys.path:
     sys.path.insert(0, str(BRIDGE_PARENT))
 

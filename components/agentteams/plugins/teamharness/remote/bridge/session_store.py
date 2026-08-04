@@ -107,10 +107,23 @@ class SessionStore:
         with self._lock:
             return self._records.get(task_id)
 
-    def resume_ref(self, task_id: str) -> str | None:
-        """The handle to pass as ``TurnRequest.session_ref``, or ``None``."""
+    def resume_ref(self, task_id: str, driver: str = "") -> str | None:
+        """The handle to pass as ``TurnRequest.session_ref``, or ``None``.
+
+        A handle is only valid for the runtime that issued it: a Claude Code
+        session id and a Codex thread id are both opaque strings, so handing
+        one to the other's ``--resume`` fails in whatever way that CLI happens
+        to fail -- or, worse, silently starts an unrelated conversation. When
+        ``driver`` is supplied and does not match the recorded owner, the
+        handle is refused and the turn starts fresh, which is always safe.
+
+        Defaults to unchecked so existing callers keep working; the supervisor
+        passes its runtime name.
+        """
         record = self.get(task_id)
         if record is None or not record.session_ref:
+            return None
+        if driver and record.driver and record.driver != driver:
             return None
         return record.session_ref
 

@@ -30,32 +30,25 @@ Credentials are never touched
 
 from __future__ import annotations
 
-from collections import deque
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
 import threading
 from typing import Any, Generator, Sequence
 
+from . import _process
 from ..protocol import DriverProbe, TurnEvent, TurnRequest, TurnResult
 
-# Version probing must not hang a supervisor start-up.
-PROBE_TIMEOUT_SECONDS = 10
-# How long to wait for a child that has already closed stdout to actually exit.
-PROCESS_WAIT_SECONDS = 15
-# Grace between SIGTERM/TerminateProcess and the unconditional kill.
-TERMINATE_GRACE_SECONDS = 5
-# Bounded stderr retention: enough to explain a crash, small enough that a
-# runaway child cannot grow the bridge's memory.
-STDERR_TAIL_LINES = 50
-STDERR_TAIL_CHARS = 2000
-# Non-JSON stdout lines are kept for diagnostics only, never as events.
-MAX_STRAY_LINES = 20
-# Any injected env value at least this long is treated as a secret worth
-# redacting from error text. Short values are flags ("1", "true"), not tokens.
-MIN_REDACTABLE_SECRET = 8
+# Process plumbing -- timeouts, stderr bounds, the redaction threshold, reaping
+# -- is shared with every other driver in ``_process``. Only protocol
+# translation lives below. Two copies of process reaping is how one of them
+# quietly stops reaping.
+PROBE_TIMEOUT_SECONDS = _process.PROBE_TIMEOUT_SECONDS
+PROCESS_WAIT_SECONDS = _process.PROCESS_WAIT_SECONDS
+TERMINATE_GRACE_SECONDS = _process.TERMINATE_GRACE_SECONDS
+STDERR_TAIL_CHARS = _process.STDERR_TAIL_CHARS
+MAX_STRAY_LINES = _process.MAX_STRAY_LINES
 
 
 class ClaudeCodeDriver:
@@ -86,6 +79,9 @@ class ClaudeCodeDriver:
         )
         if not self._command:
             raise ValueError("binary must name at least one command element")
+        # Resolve argv[0] once, at construction: an npm-installed CLI on
+        # Windows is a .CMD shim that cannot be spawned by bare name.
+        self._command = _process.resolve_command(self._command)
         self._extra_args: tuple[str, ...] = tuple(str(arg) for arg in extra_args)
         self._env: dict[str, str] = dict(env or {})
         # Guards the single live child. One driver instance owns at most one
@@ -129,7 +125,7 @@ class ClaudeCodeDriver:
         except OSError as exc:
             return DriverProbe(available=False, binary=resolved, reason=f"spawn failed: {exc}")
         if completed.returncode != 0:
-            detail = _tail(self._redact(completed.stderr or completed.stdout or ""))
+            detail = _process.tail(self._redact(completed.stderr or completed.stdout or ""))
             return DriverProbe(
                 available=False,
                 binary=resolved,
@@ -138,7 +134,7 @@ class ClaudeCodeDriver:
         return DriverProbe(
             available=True,
             binary=resolved,
-            version=_first_line(completed.stdout),
+            version=_process.first_line(completed.stdout),
             authenticated=_has_local_credentials(),
         )
 
@@ -153,17 +149,10 @@ class ClaudeCodeDriver:
 
         argv = self._build_argv(request)
         try:
-            process = subprocess.Popen(
+            process = _process.spawn(
                 argv,
                 cwd=str(request.workspace),
                 env=self._child_env(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
             )
         except OSError as exc:
             return TurnResult(status="failed", error=f"spawn failed: {exc}")
@@ -173,11 +162,7 @@ class ClaudeCodeDriver:
 
         # stderr is drained by a thread rather than read after the fact: a child
         # that fills the stderr pipe while we block on stdout deadlocks both.
-        stderr_tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
-        pump = threading.Thread(
-            target=_drain, args=(process.stderr, stderr_tail), daemon=True
-        )
-        pump.start()
+        stderr_tail, pump = _process.start_stderr_pump(process)
 
         session_ref = ""
         final_text = ""
@@ -236,7 +221,7 @@ class ClaudeCodeDriver:
                 # same as EOF and let the no-result path below report the abort.
                 pass
 
-            exit_code = _wait(process, PROCESS_WAIT_SECONDS)
+            exit_code = _process.wait(process, PROCESS_WAIT_SECONDS)
             stderr_text = self._redact("\n".join(stderr_tail))
 
             if result_frame is not None:
@@ -298,53 +283,14 @@ class ClaudeCodeDriver:
         return argv
 
     def _child_env(self) -> dict[str, str] | None:
-        """Inherit the parent environment, overlaid with the injected values.
-
-        ``None`` (plain inheritance) when nothing was injected, so the common
-        case leaves ``Popen`` on its default path.
-        """
-        if not self._env:
-            return None
-        merged = dict(os.environ)
-        merged.update(self._env)
-        return merged
+        return _process.child_env(self._env)
 
     def _redact(self, text: str) -> str:
-        """Strip injected secret values out of anything user-visible.
-
-        The bridge passes Matrix and gateway tokens through ``env``; a CLI that
-        echoes its environment on crash would otherwise leak them into a room
-        message via the error field.
-        """
-        if not text:
-            return ""
-        for value in self._env.values():
-            if value and len(value) >= MIN_REDACTABLE_SECRET:
-                text = text.replace(value, "***")
-        return text
+        return _process.redact(text, self._env)
 
     def _reap(self, process: subprocess.Popen[str]) -> None:
         """Terminate, then kill, then release the pipes. Idempotent."""
-        if process.poll() is None:
-            try:
-                # On Windows this is TerminateProcess, i.e. already the hard
-                # stop; on POSIX it is SIGTERM and the kill below is the
-                # backstop for a child that ignores it.
-                process.terminate()
-            except OSError:
-                pass
-            if _wait(process, TERMINATE_GRACE_SECONDS) is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                _wait(process, TERMINATE_GRACE_SECONDS)
-        for stream in (process.stdout, process.stderr):
-            if stream is not None:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
+        _process.reap(process)
         with self._lock:
             if self._process is process:
                 self._process = None
@@ -427,30 +373,10 @@ def _no_result_error(exit_code: int | None, stderr_text: str, stray_lines: list[
     else:
         head = "runtime exited cleanly without a result frame"
     detail = stderr_text or ("\n".join(stray_lines) if stray_lines else "")
-    return f"{head}: {_tail(detail)}" if detail else head
+    return f"{head}: {_process.tail(detail)}" if detail else head
 
 
 # ---- process helpers -------------------------------------------------
-
-
-def _wait(process: subprocess.Popen[str], timeout: float) -> int | None:
-    """``wait`` that reports a hung child as ``None`` instead of raising."""
-    try:
-        return process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return None
-
-
-def _drain(stream: Any, sink: deque[str]) -> None:
-    """Consume stderr into a bounded tail so the pipe can never fill up."""
-    if stream is None:
-        return
-    try:
-        for line in stream:
-            sink.append(line.rstrip("\r\n"))
-    except (OSError, ValueError):
-        # The pipe was closed by _reap while this thread was blocked on it.
-        pass
 
 
 def _has_local_credentials() -> bool:
@@ -469,17 +395,3 @@ def _has_local_credentials() -> bool:
         except OSError:
             continue
     return False
-
-
-def _first_line(text: str) -> str:
-    for line in (text or "").splitlines():
-        if line.strip():
-            return line.strip()
-    return ""
-
-
-def _tail(text: str, limit: int = STDERR_TAIL_CHARS) -> str:
-    text = (text or "").strip()
-    if len(text) <= limit:
-        return text
-    return "..." + text[-limit:]

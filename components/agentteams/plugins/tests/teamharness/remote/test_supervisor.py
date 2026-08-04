@@ -27,9 +27,9 @@ from typing import Any, Callable
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-# ``claude-code`` is not a valid identifier, so the bridge package is imported
-# by putting its parent on sys.path -- exactly how the supervisor is consumed.
-BRIDGE_PARENT = REPO_ROOT / "plugins" / "teamharness" / "remote" / "claude-code"
+# ``bridge`` is shared by every runtime, so its parent goes on sys.path --
+# exactly how the supervisor is consumed.
+BRIDGE_PARENT = REPO_ROOT / "plugins" / "teamharness" / "remote"
 if str(BRIDGE_PARENT) not in sys.path:
     sys.path.insert(0, str(BRIDGE_PARENT))
 
@@ -65,6 +65,7 @@ class ScriptedDriver:
         events: tuple[TurnEvent, ...] = (),
         result: TurnResult | None = None,
         raises: BaseException | None = None,
+        probe_result: DriverProbe | None = None,
     ) -> None:
         self.events = list(events)
         self.result = result if result is not None else TurnResult(
@@ -73,9 +74,18 @@ class ScriptedDriver:
         self.raises = raises
         self.request: Any = None
         self.cancelled = False
+        # A driver that runs turns at all is signed in, so the default says so.
+        # The supervisor re-probes after a failed turn to tell "this task went
+        # wrong" apart from "the CLI is gone", and a fake reporting
+        # ``authenticated=False`` would look like the latter to every test.
+        self.probe_result = probe_result or DriverProbe(
+            available=True, binary="fake", authenticated=True
+        )
+        self.probes = 0
 
     def probe(self) -> DriverProbe:
-        return DriverProbe(available=True, binary="fake")
+        self.probes += 1
+        return self.probe_result
 
     def run_turn(self, request: Any) -> Any:
         self.request = request
@@ -105,7 +115,7 @@ class BlockingDriver:
         self.request: Any = None
 
     def probe(self) -> DriverProbe:
-        return DriverProbe(available=True, binary="fake")
+        return DriverProbe(available=True, binary="fake", authenticated=True)
 
     def run_turn(self, request: Any) -> Any:
         self.request = request
@@ -432,6 +442,43 @@ class SessionContinuityTest(SupervisorTestCase):
         self.assertEqual(second.request.task_id, "$root")
         self.assertEqual(second.request.session_ref, "sess-abc")
         self.assertEqual(self.sessions.get("$root").turn_count, 2)
+
+    def test_session_is_recorded_against_the_driver_that_issued_it(self) -> None:
+        """Regression: every runtime used to record itself as ``claude-code``.
+
+        ``Supervisor.driver_name`` defaults to ``claude-code`` and the real
+        wiring never overrode it, so a Codex turn stored a Codex thread id
+        under the Claude Code name. Only a live Codex turn surfaced it --
+        nothing here constructs the supervisor the way ``build_supervisor``
+        does, which is exactly why the default went unnoticed.
+        """
+        self.baseline()
+        driver = ScriptedDriver(
+            events=(TurnEvent(kind="session_ref", text="thread-xyz"),),
+            result=TurnResult(status="completed", final_text="done"),
+        )
+        supervisor = self.make(
+            FakeInbox(batch([event("$root")], next_batch="s2")),
+            DriverFactory(driver),
+            driver_name="codex-cli",
+        )
+        supervisor.run_once()
+
+        self.assertEqual(self.sessions.get("$root").driver, "codex-cli")
+
+    def test_a_handle_from_another_runtime_is_not_resumed(self) -> None:
+        """A Claude session id and a Codex thread id are both opaque strings.
+
+        Handing one to the other's ``--resume`` fails in whatever way that CLI
+        happens to fail, or silently opens an unrelated conversation. Starting
+        fresh is always safe, so a mismatch must read as "no handle".
+        """
+        self.sessions.ensure("$root", "!room:example.org", "claude-code", "/ws")
+        self.sessions.bind_session_ref("$root", "sess-abc")
+
+        self.assertEqual(self.sessions.resume_ref("$root"), "sess-abc")
+        self.assertEqual(self.sessions.resume_ref("$root", "claude-code"), "sess-abc")
+        self.assertIsNone(self.sessions.resume_ref("$root", "codex-cli"))
 
     def test_session_ref_is_bound_even_when_the_turn_fails(self) -> None:
         self.baseline()
@@ -1016,6 +1063,203 @@ class MentionStrippingTest(unittest.TestCase):
 
     def test_no_user_id_is_a_no_op(self) -> None:
         self.assertEqual(sup._strip_mention_prefix("  hello  ", ""), "hello")
+
+
+# ---- which runtime ---------------------------------------------------
+
+
+class RuntimeSelectionTest(unittest.TestCase):
+    """Flag, then bootstrap file, then registry default."""
+
+    def resolve(self, argv: list[str], configured: str) -> str:
+        args = sup.build_arg_parser().parse_args(argv)
+        # The same expression main() uses; asserted here because main() also
+        # loads a file, builds a supervisor and probes a real CLI.
+        return args.runtime or configured or sup.DEFAULT_RUNTIME
+
+    def test_the_flag_wins_over_the_file(self) -> None:
+        """So one config can be pointed at a second CLI without editing it."""
+        self.assertEqual(
+            self.resolve(["--runtime", "claude-code"], "codex-cli"), "claude-code"
+        )
+
+    def test_the_file_is_used_when_the_flag_is_absent(self) -> None:
+        self.assertEqual(self.resolve([], "codex-cli"), "codex-cli")
+
+    def test_the_default_applies_when_neither_states_one(self) -> None:
+        self.assertEqual(self.resolve([], ""), sup.DEFAULT_RUNTIME)
+
+    def test_the_flag_has_no_default_of_its_own(self) -> None:
+        """Otherwise argparse's default would silently outrank the file."""
+        self.assertIsNone(sup.build_arg_parser().parse_args([]).runtime)
+
+
+# ---- runtime readiness gate ------------------------------------------
+
+
+class FakeSupervisorProbe:
+    """Just enough Supervisor for ``await_runtime``: a scripted probe sequence."""
+
+    def __init__(self, *probes: DriverProbe) -> None:
+        self._queue = list(probes)
+        self.calls = 0
+
+    def probe_driver(self) -> DriverProbe:
+        self.calls += 1
+        if len(self._queue) > 1:
+            return self._queue.pop(0)
+        return self._queue[0]
+
+
+READY = DriverProbe(available=True, binary="claude", version="1.2.3", authenticated=True)
+SIGNED_OUT = DriverProbe(available=True, binary="claude", authenticated=False)
+MISSING = DriverProbe(available=False, reason="executable not found on PATH: claude")
+
+
+class AwaitRuntimeTest(unittest.TestCase):
+    """The gate exists because the poll loop acks a batch it has walked.
+
+    A bridge that starts without a usable CLI baselines the backlog and then
+    acks every task as its turn fails, and none of it comes back once the
+    operator signs in. So "not ready" has to mean "do not start", not "warn".
+    """
+
+    def setUp(self) -> None:
+        self.log = logging.getLogger("await-runtime-test")
+        self.log.addHandler(logging.NullHandler())
+        self.slept: list[float] = []
+        self.clock = 0.0
+
+    def now(self) -> float:
+        return self.clock
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.clock += seconds
+
+    def await_it(self, supervisor: Any, wait: float = 300.0) -> bool:
+        return sup.await_runtime(
+            supervisor,
+            "claude-code",
+            wait,
+            self.log,
+            sleep_fn=self.sleep,
+            now_fn=self.now,
+            interval=5.0,
+        )
+
+    def test_a_ready_runtime_starts_without_waiting(self) -> None:
+        supervisor = FakeSupervisorProbe(READY)
+        self.assertTrue(self.await_it(supervisor))
+        self.assertEqual(self.slept, [], "a ready runtime must not delay startup")
+        self.assertEqual(supervisor.calls, 1)
+
+    def test_signing_in_while_it_waits_is_picked_up(self) -> None:
+        """The whole point: the fix happens in another terminal, mid-wait.
+
+        No restart, because a restart is exactly when an operator is tempted to
+        skip the gate.
+        """
+        supervisor = FakeSupervisorProbe(SIGNED_OUT, SIGNED_OUT, READY)
+        self.assertTrue(self.await_it(supervisor))
+        self.assertEqual(self.slept, [5.0, 5.0])
+        self.assertEqual(supervisor.calls, 3)
+
+    def test_installing_it_while_it_waits_is_picked_up(self) -> None:
+        supervisor = FakeSupervisorProbe(MISSING, READY)
+        self.assertTrue(self.await_it(supervisor))
+        self.assertEqual(supervisor.calls, 2)
+
+    def test_giving_up_refuses_to_start(self) -> None:
+        supervisor = FakeSupervisorProbe(SIGNED_OUT)
+        self.assertFalse(self.await_it(supervisor, wait=12.0))
+        # 0s, 5s, 10s probe; at 15s the budget is spent.
+        self.assertEqual(self.slept, [5.0, 5.0, 5.0])
+
+    def test_zero_wait_fails_on_the_first_probe(self) -> None:
+        supervisor = FakeSupervisorProbe(SIGNED_OUT)
+        self.assertFalse(self.await_it(supervisor, wait=0.0))
+        self.assertEqual(self.slept, [], "0 means fail fast, for supervised starts")
+        self.assertEqual(supervisor.calls, 1)
+
+    def test_present_but_signed_out_is_not_ready(self) -> None:
+        """`available` alone is not enough -- the turn would fail on auth."""
+        self.assertFalse(self.await_it(FakeSupervisorProbe(SIGNED_OUT), wait=0.0))
+
+
+class RuntimeDiedMidRunTest(SupervisorTestCase):
+    """The residual case the startup gate cannot cover.
+
+    ``authenticated`` is a file-existence check, so a laptop can pass the gate
+    and still be signed out; and a session can outlive its token. Either way the
+    turn never ran, so the batch must not be acked.
+    """
+
+    def dead_runtime(self) -> DriverFactory:
+        """A turn that fails, then a re-probe that finds the CLI signed out.
+
+        Two instances because ``probe_driver`` builds a fresh driver, which is
+        what the real supervisor does -- the probe must not depend on the state
+        of the driver that just failed.
+        """
+        return DriverFactory(
+            ScriptedDriver(
+                result=TurnResult(status="failed", error="not logged in"),
+                probe_result=SIGNED_OUT,
+            ),
+            ScriptedDriver(probe_result=SIGNED_OUT),
+        )
+
+    def test_a_failed_turn_on_a_dead_runtime_does_not_ack_the_batch(self) -> None:
+        self.baseline()
+        inbox = FakeInbox(batch([event("$a", body=f"{MEMBER_ID} do it")], next_batch="s9"))
+        supervisor = self.make(inbox, self.dead_runtime())
+
+        committed = supervisor.run_once()
+
+        self.assertFalse(committed, "an uncommitted batch replays on restart")
+        self.assertNotEqual(self.state.cursor, "s9", "the cursor must not advance")
+        self.assertFalse(self.state.is_seen("$a"), "the task must stay unseen")
+        self.assertEqual(
+            self.sender.sent, [],
+            "no failure is announced: the replay would contradict it",
+        )
+
+    def test_the_task_is_still_claimable_after_the_stop(self) -> None:
+        self.baseline()
+        inbox = FakeInbox(batch([event("$a", body=f"{MEMBER_ID} do it")], next_batch="s9"))
+        supervisor = self.make(inbox, self.dead_runtime())
+        supervisor.run_once()
+
+        # Settled non-terminally, like a Ctrl-C'd turn: retryable, not a
+        # duplicate to be refused forever.
+        claim = self.state.claim_turn(supervisor.task_id_for(event("$a")), "$a")
+        self.assertTrue(
+            claim.granted,
+            "the turn must be claimable again once the operator signs back in",
+        )
+
+    def test_an_ordinary_failure_on_a_live_runtime_still_reports(self) -> None:
+        """The guard must not swallow real failures -- that is the common case."""
+        self.baseline()
+        driver = ScriptedDriver(result=TurnResult(status="failed", error="bad prompt"))
+        inbox = FakeInbox(batch([event("$a", body=f"{MEMBER_ID} do it")], next_batch="s9"))
+        supervisor = self.make(inbox, DriverFactory(driver))
+
+        self.assertTrue(supervisor.run_once())
+        self.assertEqual(self.state.cursor, "s9")
+        self.assertEqual(len(self.sender.sent), 1)
+        self.assertEqual(self.sender.sent[0]["body"], sup.STATUS_NOTICE["failed"])
+
+    def test_a_successful_turn_never_pays_for_a_probe(self) -> None:
+        self.baseline()
+        factory = DriverFactory(ScriptedDriver())
+        inbox = FakeInbox(batch([event("$a", body=f"{MEMBER_ID} do it")], next_batch="s9"))
+        self.make(inbox, factory).run_once()
+        self.assertEqual(
+            len(factory.made), 1,
+            "one driver for the turn and no second one for a re-probe",
+        )
 
 
 if __name__ == "__main__":

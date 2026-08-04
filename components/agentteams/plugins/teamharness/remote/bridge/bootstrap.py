@@ -41,6 +41,17 @@ DEFAULT_STATE_DIR_TEMPLATE = "~/.agentteams/remote/{member_name}"
 DEFAULT_MCP_ENV_PASSTHROUGH: tuple[str, ...] = (
     "AGENTTEAMS_MATRIX_URL",
     "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+    # Shared object storage. The controller already provisions a scoped MinIO
+    # user for every member -- including a containerManaged: false one, because
+    # that happens during identity provisioning, before the container skip --
+    # so these name credentials the member *has*, not ones it must be granted.
+    # Listing them by default costs nothing when unset: the projected
+    # ``${VAR}`` expands empty and ``filesync`` reports its normal
+    # "alias is not configured" error, exactly as it does today.
+    "AGENTTEAMS_FS_ENDPOINT",
+    "AGENTTEAMS_FS_ACCESS_KEY",
+    "AGENTTEAMS_FS_SECRET_KEY",
+    "AGENTTEAMS_STORAGE_PREFIX",
 )
 # Accounts the controller and Manager use to invite members to team rooms.
 DEFAULT_INVITER_LOCALPARTS: tuple[str, ...] = ("admin", "manager")
@@ -89,6 +100,21 @@ class BootstrapConfig:
     state_dir: Path
     leader_name: str = ""
     runtime_name: str = ""
+    # Which local CLI drives this member, from ``local.runtime``.
+    #
+    # **Not** ``runtime_name`` above, despite how that reads. ``runtime_name``
+    # is the AgentTeams agent name behind the ``agents/{runtime_name}/`` storage
+    # prefix; this one is a key of the driver registry ("claude-code",
+    # "codex-cli"). The two words collide because both names are inherited, and
+    # the collision is worth a comment rather than a silent trap: writing
+    # ``member.runtimeName: codex-cli`` moves the *storage prefix* and leaves
+    # the CLI on its default, with neither side complaining.
+    #
+    # Empty means "not stated here"; ``--runtime`` and then the registry default
+    # decide. Before this existed the choice lived only on the command line, so
+    # two members on one laptop were distinguishable only by how they had been
+    # launched -- nothing in either bootstrap file said which CLI it meant.
+    runtime: str = ""
     role: str = DEFAULT_ROLE
     personal_room_id: str = ""
     storage: StorageFacts = field(default_factory=StorageFacts)
@@ -182,6 +208,7 @@ def load_bootstrap(
         state_dir=_resolve_path(state_dir_raw, base_dir),
         leader_name=_text(team.get("leaderName")),
         runtime_name=_text(member.get("runtimeName")) or member_name,
+        runtime=_text(local.get("runtime")),
         role=_text(member.get("role")) or DEFAULT_ROLE,
         personal_room_id=_text(member.get("personalRoomId")),
         storage=_storage_facts(_mapping(data, "storage")),

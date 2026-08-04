@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 _BRIDGE_ROOT = (
-    Path(__file__).resolve().parents[3] / "teamharness" / "remote" / "claude-code"
+    Path(__file__).resolve().parents[3] / "teamharness" / "remote"
 )
 if str(_BRIDGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_BRIDGE_ROOT))
@@ -105,6 +105,25 @@ class TestLoadFullFile(BootstrapTestCase):
         )
         self.assertEqual(config.mcp_env_passthrough, DEFAULT_MCP_ENV_PASSTHROUGH)
 
+    def test_default_passthrough_covers_matrix_and_scoped_storage(self) -> None:
+        """Named explicitly, because the equality check above is tautological.
+
+        The storage variables are what make ``filesync`` reach the member's own
+        scoped MinIO user; dropping one silently degrades pull/push to the
+        "alias is not configured" error with nothing to point at.
+        """
+        self.assertEqual(
+            set(DEFAULT_MCP_ENV_PASSTHROUGH),
+            {
+                "AGENTTEAMS_MATRIX_URL",
+                "AGENTTEAMS_WORKER_MATRIX_TOKEN",
+                "AGENTTEAMS_FS_ENDPOINT",
+                "AGENTTEAMS_FS_ACCESS_KEY",
+                "AGENTTEAMS_FS_SECRET_KEY",
+                "AGENTTEAMS_STORAGE_PREFIX",
+            },
+        )
+
     def test_driver_args_are_read_verbatim_and_default_empty(self) -> None:
         """Operator-granted runtime authority; never defaulted on their behalf."""
         self.assertEqual(load_bootstrap(self.write(MINIMAL_YAML), env={}).driver_args, ())
@@ -141,6 +160,32 @@ class TestLoadFullFile(BootstrapTestCase):
     def test_runtime_name_falls_back_to_member_name(self) -> None:
         config = load_bootstrap(self.write(MINIMAL_YAML), env={})
         self.assertEqual(config.runtime_name, "worker-a")
+
+    def test_local_runtime_names_the_cli_and_defaults_to_unstated(self) -> None:
+        """Which CLI drives this member belongs in the file, not only in argv.
+
+        Two members on one laptop used to be distinguishable only by how each
+        had been launched; nothing in either bootstrap said which CLI it meant.
+        Empty means "unstated" so ``--runtime`` and then the registry default
+        still decide -- it is not this loader's job to pick one.
+        """
+        self.assertEqual(load_bootstrap(self.write(MINIMAL_YAML), env={}).runtime, "")
+        path = self.write(MINIMAL_YAML + "  runtime: codex-cli\n")
+        self.assertEqual(load_bootstrap(path, env={}).runtime, "codex-cli")
+
+    def test_local_runtime_is_independent_of_member_runtime_name(self) -> None:
+        """The two ``runtime`` words name different things, and must not bleed.
+
+        ``member.runtimeName`` is the AgentTeams agent name behind the
+        ``agents/{runtimeName}/`` storage prefix; ``local.runtime`` is a driver
+        registry key. Setting one must leave the other alone, or an operator who
+        writes the CLI into ``runtimeName`` silently moves their storage prefix
+        instead of changing runtimes.
+        """
+        path = self.write(FULL_YAML + "  runtime: codex-cli\n")
+        config = load_bootstrap(path, env={})
+        self.assertEqual(config.runtime, "codex-cli")
+        self.assertEqual(config.runtime_name, "worker-a-runtime")
 
     def test_explicit_local_section_overrides_defaults(self) -> None:
         path = self.write(

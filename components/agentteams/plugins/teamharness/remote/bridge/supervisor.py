@@ -68,6 +68,7 @@ from .protocol import (
     TurnRequest,
     TurnResult,
 )
+from .runtimes import DEFAULT_RUNTIME, load_runtime, runtime_names
 from .session_store import SessionStore
 
 LOGGER_NAME = "teamharness.remote.supervisor"
@@ -82,6 +83,15 @@ DEFAULT_POLL_WAIT_MS = 20_000
 DEFAULT_BACKFILL_PAGE_LIMIT = 10
 INITIAL_BACKOFF_SECONDS = 1.0
 MAX_BACKOFF_SECONDS = 60.0
+
+# How long to keep re-probing an unusable local CLI before giving up, and how
+# often. Waiting is the default because the two things that make a runtime
+# unusable -- not installed, not signed in -- are both fixed in another
+# terminal while this process is already running, and re-probing costs one
+# ``--version`` call. Five minutes is long enough to finish a browser sign-in
+# and short enough that an unattended start still terminates.
+DEFAULT_RUNTIME_WAIT_SECONDS = 300
+RUNTIME_PROBE_INTERVAL_SECONDS = 5.0
 
 # Only these wake the agent. ``file`` events carry no instruction and state
 # events never reach us -- ``inbox`` drops them at the edge.
@@ -228,6 +238,23 @@ class Supervisor:
     def probe_driver(self) -> DriverProbe:
         """Startup diagnostic: is the local runtime usable at all?"""
         return self._driver_factory().probe()
+
+    def _runtime_still_usable(self) -> bool:
+        """Re-probe after a failed turn. Never raises; unknown counts as usable.
+
+        Only reached on failure, so the extra ``--version`` costs nothing on the
+        happy path. Defaulting a broken *probe* to "usable" is deliberate: this
+        gate stops the bridge, and a probe that itself errors is much weaker
+        evidence than the turn failure already in hand. A wrong stop is
+        recoverable but noisy; letting an ordinary failed turn report itself is
+        the behaviour everything else expects.
+        """
+        try:
+            probe = self.probe_driver()
+        except Exception:  # pragma: no cover - driver-specific
+            self._log.exception("re-probing the runtime after a failed turn raised")
+            return True
+        return bool(probe.available and probe.authenticated)
 
     def rooms(self) -> list[str]:
         """Rooms this member answers in.
@@ -527,6 +554,26 @@ class Supervisor:
             max(0.0, self._now_fn() - started),
         )
 
+        if result.status == "failed" and not self._runtime_still_usable():
+            # The runtime died under us -- signed out, uninstalled mid-session,
+            # a token that expired. This turn never ran, so it has no side
+            # effects to reconcile and nothing useful to report to the room.
+            # Stopping before the ack leaves the cursor where it is, and the
+            # non-terminal settle keeps the claim retryable, so the task is
+            # still waiting after the operator signs back in and restarts.
+            # Forwarding a failure here would be the one irreversible act: the
+            # room would carry a "could not do it" that the replay then
+            # contradicts.
+            self._log.error(
+                "task %s failed and the %s runtime is no longer usable; stopping "
+                "before this batch is acked so the task is not lost",
+                task_id,
+                self._driver_name,
+            )
+            self._inbox_state.settle_turn(task_id, event_id, "interrupted")
+            self.request_stop("local runtime became unusable")
+            return
+
         self._forward(event, task_id, event_id, result)
         # ``cancelled`` here always means "a bridge shutdown interrupted the
         # turn", and dedup treats ``cancelled`` as terminal because it is
@@ -548,7 +595,10 @@ class Supervisor:
             room_id=room_id,
             prompt=self.prompt_for(event),
             workspace=self._config.workspace,
-            session_ref=self._session_store.resume_ref(task_id),
+            # Scoped to this runtime: a handle recorded by a different CLI is
+            # not resumable by this one, and starting fresh beats resuming
+            # something that is not ours.
+            session_ref=self._session_store.resume_ref(task_id, self._driver_name),
             timeout_seconds=self._turn_timeout_seconds,
             trigger_event_id=event_id,
         )
@@ -740,12 +790,31 @@ def _strip_mention_prefix(body: str, matrix_user_id: str) -> str:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="bridge.supervisor",
-        description="TeamHarness remote member bridge for Claude Code.",
+        description="TeamHarness remote member bridge for a local coding CLI.",
     )
     parser.add_argument(
         "--bootstrap",
         default=None,
         help="path to the local bootstrap file (default: $AGENTTEAMS_REMOTE_BOOTSTRAP)",
+    )
+    parser.add_argument(
+        "--runtime",
+        default=None,
+        choices=runtime_names(),
+        help=(
+            "local coding CLI to drive; overrides local.runtime in the "
+            f"bootstrap file (default: {DEFAULT_RUNTIME})"
+        ),
+    )
+    parser.add_argument(
+        "--wait-for-runtime",
+        type=int,
+        default=DEFAULT_RUNTIME_WAIT_SECONDS,
+        metavar="SECONDS",
+        help=(
+            "keep re-probing an unusable local CLI for this long before giving "
+            f"up (default: {DEFAULT_RUNTIME_WAIT_SECONDS}); 0 exits immediately"
+        ),
     )
     parser.add_argument(
         "--once",
@@ -774,7 +843,7 @@ def _import_inbox_tool() -> Any:
     PR #828 closed. ``mcp/`` is not an installable package, so its directory
     goes on ``sys.path`` the same way the MCP server's own entry point does.
     """
-    mcp_dir = Path(__file__).resolve().parents[3] / "mcp"
+    mcp_dir = Path(__file__).resolve().parents[2] / "mcp"
     if str(mcp_dir) not in sys.path:
         sys.path.insert(0, str(mcp_dir))
     import inbox_tool  # type: ignore[import-not-found]
@@ -842,7 +911,7 @@ def plugin_dir() -> Path:
     *inside* the package it projects, so any path an operator could set here
     would only be a way to point at a different, wrong copy.
     """
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[2]
 
 
 def build_asset_context(config: BootstrapConfig) -> AssetContext:
@@ -861,24 +930,108 @@ def build_asset_context(config: BootstrapConfig) -> AssetContext:
     )
 
 
-def build_supervisor(config: BootstrapConfig, turn_timeout: float) -> Supervisor:
-    from .drivers.claude_code import ClaudeCodeDriver
-    from .projectors.claude_code import ClaudeCodeProjector
+def build_supervisor(
+    config: BootstrapConfig,
+    turn_timeout: float,
+    runtime: str = DEFAULT_RUNTIME,
+) -> Supervisor:
+    """Assemble a supervisor around one runtime's leaves.
 
+    The runtime is resolved through ``runtimes.load_runtime`` rather than
+    imported here, so that adding a CLI never edits this module. Supervision
+    must stay ignorant of which CLI it is driving.
+    """
+    binding = load_runtime(runtime)
+    # Built once: a runtime whose configuration travels as invocation arguments
+    # needs the same facts the projector writes into files.
+    asset_ctx = build_asset_context(config)
     return Supervisor(
+        # Recorded against every session so a stored resume handle carries the
+        # runtime that issued it. Left to its default, every runtime claimed to
+        # be claude-code -- caught only by running a real Codex turn and
+        # reading sessions.json afterwards.
+        driver_name=binding.name,
         config=config,
         inbox_state=InboxState(config.state_dir / "inbox.json"),
         session_store=SessionStore(config.state_dir / "sessions.json"),
         # ``driver_args`` is how the operator grants write authority. Without it
-        # headless Claude Code declines every edit, and the room just gets
-        # "I need permission to write" back -- verified against a live
-        # deployment before this was wired through.
-        driver_factory=lambda: ClaudeCodeDriver(extra_args=config.driver_args),
+        # a headless CLI declines every edit, and the room just gets "I need
+        # permission to write" back -- verified against a live deployment
+        # before this was wired through.
+        driver_factory=lambda: binding.driver_factory(config.driver_args, asset_ctx),
         poll_fn=build_poll_fn(config),
         send_fn=build_send_fn(config),
         turn_timeout_seconds=turn_timeout,
-        projector=ClaudeCodeProjector(),
+        projector=binding.projector_factory(),
     )
+
+
+def await_runtime(
+    supervisor: Supervisor,
+    runtime: str,
+    wait_seconds: float,
+    log: logging.Logger,
+    *,
+    sleep_fn: Any = time.sleep,
+    now_fn: Any = time.monotonic,
+    interval: float = RUNTIME_PROBE_INTERVAL_SECONDS,
+) -> bool:
+    """Block until the local CLI is usable. ``False`` means give up, do not start.
+
+    Refusing to start is the point, and it is a correctness fix rather than a
+    nicety. The poll loop acks a whole batch once it has been walked --
+    ``handled_ids`` is every event in it, not the ones that succeeded -- so a
+    bridge that joins the room without a working CLI takes a first-run baseline
+    over the backlog and then acks each new task as its turn fails. Signing in
+    afterwards recovers none of it: those events are past the cursor and in the
+    seen-set. The messages are simply gone, and nothing in the room says so.
+
+    Both failure modes are worth waiting on rather than exiting for, because
+    both are repaired in another terminal while this process runs: an absent
+    binary gets installed, an absent login gets `codex login`. The probe is one
+    ``--version`` call plus a file-existence check, so polling it is cheap.
+
+    What this deliberately does **not** do is verify the credential actually
+    works. ``authenticated`` is a file-existence check -- opening those files is
+    forbidden -- and for Codex a bare ``config.toml`` satisfies it, so a signed
+    out laptop can pass this gate. That residual case is caught later, by the
+    mid-run guard in ``_process``.
+    """
+    hint = load_runtime(runtime).sign_in_hint
+    started = now_fn()
+    announced = False
+
+    while True:
+        probe = supervisor.probe_driver()
+        if probe.available and probe.authenticated:
+            log.info(
+                "%s is ready: %s%s",
+                runtime,
+                probe.binary,
+                f" ({probe.version})" if probe.version else "",
+            )
+            return True
+
+        if probe.available:
+            reason = f"no local credentials found; {hint}"
+        else:
+            reason = probe.reason or "runtime is not usable"
+
+        if now_fn() - started >= wait_seconds:
+            log.error(
+                "%s is still not usable after %.0fs: %s. Not starting: joining "
+                "the room now would consume tasks that every turn then fails, "
+                "and they are not replayed once acked.",
+                runtime,
+                max(0.0, wait_seconds),
+                reason,
+            )
+            return False
+
+        if not announced:
+            log.warning("waiting for %s: %s", runtime, reason)
+            announced = True
+        sleep_fn(interval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -895,13 +1048,19 @@ def main(argv: list[str] | None = None) -> int:
         log.error("%s", exc)
         return 2
 
-    supervisor = build_supervisor(config, float(args.turn_timeout))
+    # Precedence: explicit flag, then the bootstrap file, then the registry
+    # default. The flag wins so one config can be pointed at a second CLI for a
+    # one-off comparison run without editing it.
+    runtime = args.runtime or config.runtime or DEFAULT_RUNTIME
 
-    probe = supervisor.probe_driver()
-    if not probe.available:
-        log.warning("claude code runtime is not usable yet: %s", probe.reason)
-    elif not probe.authenticated:
-        log.warning("claude code has no local credentials; turns will fail until you sign in")
+    try:
+        supervisor = build_supervisor(config, float(args.turn_timeout), runtime)
+    except ValueError as exc:
+        log.error("%s", exc)
+        return 2
+
+    if not await_runtime(supervisor, runtime, args.wait_for_runtime, log):
+        return 3
 
     def _handle_signal(signum: int, _frame: Any) -> None:
         supervisor.request_stop(f"signal {signum}")

@@ -31,9 +31,9 @@ import tempfile
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-# ``claude-code`` is not a valid identifier, so the bridge package is imported
-# by putting its parent on sys.path -- exactly how the supervisor is consumed.
-BRIDGE_PARENT = REPO_ROOT / "plugins" / "teamharness" / "remote" / "claude-code"
+# ``bridge`` is shared by every runtime, so its parent goes on sys.path --
+# exactly how the supervisor is consumed.
+BRIDGE_PARENT = REPO_ROOT / "plugins" / "teamharness" / "remote"
 if str(BRIDGE_PARENT) not in sys.path:
     sys.path.insert(0, str(BRIDGE_PARENT))
 
@@ -52,6 +52,11 @@ PERSONAL_ROOM = "!personal:example.org"
 MEMBER_ID = "@bohan-local:example.org"
 TOKEN_VAR = "AGENTTEAMS_WORKER_MATRIX_TOKEN"
 FAKE_TOKEN = "syt_fake_token_value_do_not_project_0123456789"
+# The member's own scoped MinIO secret. A second passthrough credential with a
+# different shape than the Matrix token, so a leak guard that only recognises
+# ``syt_`` does not pass by accident.
+STORAGE_SECRET_VAR = "AGENTTEAMS_FS_SECRET_KEY"
+FAKE_STORAGE_SECRET = "minio_fake_secret_do_not_project_9876543210"
 
 # Granted to remote-member by plugin.yaml.
 EXPECTED_SKILLS = {
@@ -268,6 +273,19 @@ class McpConfigTest(ProjectorTestCase):
         self.assertEqual(env["AGENTTEAMS_MATRIX_URL"], "${AGENTTEAMS_MATRIX_URL}")
         self.assertEqual(env[TOKEN_VAR], "${" + TOKEN_VAR + "}")
 
+    def test_mcp_env_tells_the_server_where_the_workspace_is(self) -> None:
+        """Without this, every taskflow/filesync call fails.
+
+        The server infers the workspace from QWENPAW_WORKING_DIR inside a
+        worker container. A remote member has no such variable, so the
+        projector supplies TEAMHARNESS_SHARED_DIR -- found when a live Codex
+        turn got ``{"ok": false, "error": "workspaceDir is required"}`` back
+        from ``ack_task``.
+        """
+        self.projector.project(self.context())
+        env = self.mcp()["mcpServers"]["teamharness"]["env"]
+        self.assertEqual(env["TEAMHARNESS_SHARED_DIR"], str(self.workspace / "shared"))
+
     def test_mcp_never_writes_a_real_token(self) -> None:
         # The passthrough variable is populated for real; the projector must
         # still write only a reference to its name.
@@ -285,6 +303,33 @@ class McpConfigTest(ProjectorTestCase):
         self.assertNotIn(FAKE_TOKEN, raw)
         self.assertNotIn("syt_", raw)
         self.assertIn("${" + TOKEN_VAR + "}", raw)
+
+    def test_mcp_never_writes_a_real_storage_secret(self) -> None:
+        # Same red line as the Matrix token, for the credential that made
+        # shared storage reachable. This one is easier to leak by accident: an
+        # ``mc`` alias URL embeds the secret inline, so a projector "helpfully"
+        # precomputing MC_HOST_* would write it straight into the repository.
+        ctx = AssetContext(
+            workspace=self.workspace,
+            role="remote-member",
+            member_name="bohan-local",
+            team_name=TEAM_NAME,
+            plugin_dir=PLUGIN_DIR,
+            mcp_env_passthrough=("AGENTTEAMS_FS_ENDPOINT", STORAGE_SECRET_VAR),
+        )
+        previous = os.environ.get(STORAGE_SECRET_VAR)
+        os.environ[STORAGE_SECRET_VAR] = FAKE_STORAGE_SECRET
+        try:
+            self.projector.project(ctx)
+        finally:
+            if previous is None:
+                os.environ.pop(STORAGE_SECRET_VAR, None)
+            else:
+                os.environ[STORAGE_SECRET_VAR] = previous
+
+        raw = self.read(".mcp.json")
+        self.assertNotIn(FAKE_STORAGE_SECRET, raw)
+        self.assertIn("${" + STORAGE_SECRET_VAR + "}", raw)
 
     def test_role_variable_in_passthrough_stays_literal(self) -> None:
         ctx = AssetContext(
