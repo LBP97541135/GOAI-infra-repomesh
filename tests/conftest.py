@@ -5,6 +5,8 @@ import pytest
 
 from repomesh.bootstrap.container import ApplicationContainer
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
+from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
+from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
 from repomesh.modules.repository_intelligence.infrastructure import PostgresRepositoryCatalog
 from repomesh.persistence import Database
 from repomesh.persistence.base import ALL_SCHEMAS
@@ -21,6 +23,8 @@ def application_container(tmp_path: object) -> Iterator[ApplicationContainer]:
     asyncio.run(database.create_all_for_tests())
     yield ApplicationContainer(
         database=database,
+        agent_directory=PostgresAgentDirectory(database),
+        project_topology_store=PostgresProjectTopologyStore(database),
         repository_catalog=PostgresRepositoryCatalog(database),
         outbox_store=OutboxStore(database),
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),

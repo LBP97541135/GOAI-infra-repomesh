@@ -1,5 +1,5 @@
 name = "agent_directory"
 owner = "agent-platform"
-status = "planned"
+status = "active"
 schema = "agent_directory"
-responsibilities = ["agent profiles", "manager bindings", "resource bindings", "adapter registrations"]
+responsibilities = ["agent principals", "leader hierarchy", "AgentTeams resource bindings", "authorization ceilings"]

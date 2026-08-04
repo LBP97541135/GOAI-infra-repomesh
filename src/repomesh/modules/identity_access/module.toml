@@ -1,5 +1,5 @@
 name = "identity_access"
 owner = "platform"
-status = "planned"
+status = "active"
 schema = "identity_access"
 responsibilities = ["organizations and users", "authorization policy", "credential references", "action enforcement"]

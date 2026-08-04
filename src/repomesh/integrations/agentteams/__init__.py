@@ -9,6 +9,8 @@ from .control_plane import (
     AgentTeamsVersion,
 )
 from .matrix import AgentTeamsMatrixClient
+from .principal_registration import RegisterNativeAgent, RegisterNativeAgentRequest
+from .project_topology import ReconcileProjectAgentTopology
 
 AgentTeamsClient = AgentTeamsControlPlaneClient
 
@@ -23,4 +25,7 @@ __all__ = [
     "AgentTeamsResponseError",
     "AgentTeamsUnavailable",
     "AgentTeamsVersion",
+    "ReconcileProjectAgentTopology",
+    "RegisterNativeAgent",
+    "RegisterNativeAgentRequest",
 ]
