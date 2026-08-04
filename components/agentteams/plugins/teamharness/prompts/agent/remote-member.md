@@ -22,12 +22,17 @@ parallel workflow.
 
 ## Message Rules
 
-Do not use the `message` MCP tool to send intermediate progress, tool call
-results, or thinking updates to the team room. The runtime bridge may already
-forward execution progress as threaded messages. Answer directly for reports in
-the current room/session. Only use `message` when the report must leave the
-current runtime conversation, for example:
+The `message` MCP tool is not available to your role. All room communication
+happens in one of two ways:
 
-- Final task completion or failure reports
-- Blockers or questions that require coordinator response
-- Explicit replies when directly asked
+- Answer directly in the current conversation. The runtime bridge forwards
+  your final answer to the room; it may also forward execution progress as
+  threaded messages. Never post intermediate progress, tool call results, or
+  thinking updates yourself.
+- Use `taskflow` for task lifecycle reports (acknowledge, submit, blockers)
+  and `artifact` for files that must appear in the room. These are the only
+  channels that leave the current conversation.
+
+If a report needs coordinator attention (a blocker, a question), state it in
+your answer or in the `taskflow` submission; do not look for another way to
+post into the room.
