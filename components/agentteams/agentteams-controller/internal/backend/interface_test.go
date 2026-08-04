@@ -18,6 +18,8 @@ func TestResolveRuntime(t *testing.T) {
 		{"explicit_openclaw_preserved", RuntimeOpenClaw, RuntimeHermes, RuntimeOpenClaw},
 		{"explicit_hermes_preserved", RuntimeHermes, RuntimeCopaw, RuntimeHermes},
 		{"explicit_qwenpaw_preserved", RuntimeQwenPaw, RuntimeCopaw, RuntimeQwenPaw},
+		{"explicit_repomesh_runner_preserved", RuntimeRepomeshRunner, RuntimeOpenClaw, RuntimeRepomeshRunner},
+		{"empty_uses_fallback_repomesh_runner", "", RuntimeRepomeshRunner, RuntimeRepomeshRunner},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -39,6 +41,8 @@ func TestValidRuntime(t *testing.T) {
 		{RuntimeCopaw, true},
 		{RuntimeHermes, true},
 		{RuntimeQwenPaw, true},
+		{RuntimeRepomeshRunner, true},
+		{"repomesh-runner", true},
 		{"unknown", false},
 	}
 	for _, tc := range cases {

@@ -46,6 +46,10 @@ type SandboxConfig struct {
 	SandboxPrewarmSizeConfigured bool
 	ControllerName               string
 	ResourcePrefix               string
+
+	// RepomeshRunnerWorkerImage is the default repomesh-runner worker image
+	// (AGENTTEAMS_REPOMESH_WORKER_IMAGE).
+	RepomeshRunnerWorkerImage string
 }
 
 // SandboxBackend manages worker lifecycle via sandbox providers (e.g. OpenKruise).
@@ -154,6 +158,8 @@ func (s *SandboxBackend) Create(ctx context.Context, req CreateRequest) (*Worker
 			workerImage = s.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && s.config.QwenPawWorkerImage != "":
 			workerImage = s.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeRepomeshRunner && s.config.RepomeshRunnerWorkerImage != "":
+			workerImage = s.config.RepomeshRunnerWorkerImage
 		case s.config.WorkerImage != "":
 			workerImage = s.config.WorkerImage
 		}

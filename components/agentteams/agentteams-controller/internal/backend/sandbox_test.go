@@ -548,6 +548,12 @@ func TestSandboxBackend_Create_ImageResolution(t *testing.T) {
 			wantImage: "qwenpaw:v4",
 		},
 		{
+			name:      "repomesh-runner runtime",
+			runtime:   RuntimeRepomeshRunner,
+			config:    SandboxConfig{WorkerImage: "default:latest", RepomeshRunnerWorkerImage: "repomesh-runner:v5"},
+			wantImage: "repomesh-runner:v5",
+		},
+		{
 			name:      "default worker image",
 			config:    SandboxConfig{WorkerImage: "default/worker:latest"},
 			wantImage: "default/worker:latest",

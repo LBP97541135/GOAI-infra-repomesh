@@ -631,6 +631,10 @@ func TestK8sCreateRuntimeWorkingDir(t *testing.T) {
 		{"hermes", RuntimeHermes, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"copaw", RuntimeCopaw, "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
 		{"empty_default", "", "/root/agentteams-fs/agents/x", "/root/agentteams-fs/agents/x"},
+		// repomesh-runner opts out of the agents/<name> workspace-sync mirror
+		// (runtime.v1 contract), so neither WorkingDir nor HOME is imposed —
+		// the Runner image's own values apply.
+		{"repomesh_runner", RuntimeRepomeshRunner, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -686,6 +690,8 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw", RuntimeCopaw, "", "agentteams/copaw-worker:latest", RuntimeCopaw},
 		{"explicit_hermes", RuntimeHermes, "", "agentteams/hermes-worker:latest", RuntimeHermes},
 		{"explicit_qwenpaw", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest", RuntimeQwenPaw},
+		{"explicit_repomesh_runner", RuntimeRepomeshRunner, "", "agentteams/repomesh-worker:latest", RuntimeRepomeshRunner},
+		{"empty_with_repomesh_runner_fallback", "", RuntimeRepomeshRunner, "agentteams/repomesh-worker:latest", RuntimeRepomeshRunner},
 		{"explicit_openclaw", RuntimeOpenClaw, "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_no_fallback", "", "", "agentteams/worker-agent:latest", RuntimeOpenClaw},
 		{"empty_with_copaw_fallback", "", RuntimeCopaw, "agentteams/copaw-worker:latest", RuntimeCopaw},
@@ -704,6 +710,8 @@ func TestK8sCreateResolvesImageFromRuntime(t *testing.T) {
 				QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
 				WorkerCPU:          "1000m",
 				WorkerMemory:       "2Gi",
+
+				RepomeshRunnerWorkerImage: "agentteams/repomesh-worker:latest",
 			}, "agentteams-worker-", nil)
 
 			if _, err := b.Create(context.Background(), CreateRequest{

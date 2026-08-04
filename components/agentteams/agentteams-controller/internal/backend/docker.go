@@ -25,7 +25,10 @@ type DockerConfig struct {
 	HermesWorkerImage    string // default hermes worker image (AGENTTEAMS_HERMES_WORKER_IMAGE)
 	OpenHumanWorkerImage string // default openhuman worker image (AGENTTEAMS_OPENHUMAN_WORKER_IMAGE)
 	QwenPawWorkerImage   string // default qwenpaw worker image (AGENTTEAMS_QWENPAW_WORKER_IMAGE)
-	DefaultNetwork       string // default Docker network (default "agentteams-net")
+	// RepomeshRunnerWorkerImage is the default repomesh-runner worker image
+	// (AGENTTEAMS_REPOMESH_WORKER_IMAGE).
+	RepomeshRunnerWorkerImage string
+	DefaultNetwork            string // default Docker network (default "agentteams-net")
 }
 
 // DockerBackend manages worker containers via the Docker Engine API over a Unix socket.
@@ -116,6 +119,8 @@ func (d *DockerBackend) Create(ctx context.Context, req CreateRequest) (*WorkerR
 			image = d.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && d.config.QwenPawWorkerImage != "":
 			image = d.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeRepomeshRunner && d.config.RepomeshRunnerWorkerImage != "":
+			image = d.config.RepomeshRunnerWorkerImage
 		default:
 			image = d.config.WorkerImage
 		}
