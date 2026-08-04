@@ -24,5 +24,10 @@
 - [数据库基础](database.md)
 - [产品方向与验证方案](agentic-delivery-product-brief.md)
 
+## AgentTeams 外部 CLI 接入
+
+- [外部 CLI Agent 接入开发规范](agentteams-external-cli-integration/integration-guidelines.md)
+- [远程成员桥接设计](agentteams-external-cli-integration/bridge-design.md)
+
 文档描述语义，模块 `contracts.py` 是可执行契约。两者不一致时停止联调，由生产模块 Owner
 在同一个 PR 中修正，禁止消费方自行兼容未声明字段。
