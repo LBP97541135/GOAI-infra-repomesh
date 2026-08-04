@@ -1,0 +1,332 @@
+[
+  {
+    "id": "TT-001",
+    "source_commit": "5b9edca54250e1e5e82ebe38e9245efd97e8d474",
+    "requirement": "修复订票和取消订单流程中发送通知邮件的异常。\n用户反馈下单后收不到确认邮件，取消订单后也收不到通知。\n经排查是邮件发送接口调用异常，需要检查相关服务的通知调用逻辑。",
+    "entry_repo": "ts-preserve-service",
+    "ground_truth": {
+      "direct": [
+        "ts-preserve-service",
+        "ts-preserve-other-service",
+        "ts-cancel-service"
+      ],
+      "propagated": [
+        "ts-notification-service"
+      ],
+      "context": []
+    },
+    "commit_message": "fix: send email exception",
+    "difficulty": "easy",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-002",
+    "source_commit": "1c932a7f80fee81fe74e683e3f36cae0b25e5d68",
+    "requirement": "修复票价计算和座位分配相关的 bug。\n票价服务的数据传递存在异常，导致座位分配时价格计算不准确。\n需要检查票价服务与座位、订票服务之间的数据流。",
+    "entry_repo": "ts-seat-service",
+    "ground_truth": {
+      "direct": [
+        "ts-seat-service",
+        "ts-preserve-service",
+        "ts-preserve-other-service",
+        "ts-order-other-service",
+        "ts-route-plan-service",
+        "ts-travel-service",
+        "ts-travel2-service",
+        "ts-security-service",
+        "ts-auth-service"
+      ],
+      "propagated": [
+        "ts-price-service",
+        "ts-config-service",
+        "ts-order-service"
+      ],
+      "context": []
+    },
+    "commit_message": "fix price bug",
+    "difficulty": "hard",
+    "anti_bias_type": "cross-domain"
+  },
+  {
+    "id": "TT-003",
+    "source_commit": "2ef30fcf3eeeff71e16c239863d70c1eba432383",
+    "requirement": "修复管理后台 API 的数据模型不一致问题。\n管理端的订单、用户、路线等接口返回的数据字段与前端不匹配。\n需要统一管理后台各服务的数据模型。",
+    "entry_repo": "ts-admin-basic-info-service",
+    "ground_truth": {
+      "direct": [
+        "ts-admin-basic-info-service",
+        "ts-admin-order-service",
+        "ts-admin-route-service",
+        "ts-admin-travel-service",
+        "ts-admin-user-service",
+        "ts-contacts-service",
+        "ts-order-other-service",
+        "ts-order-service",
+        "ts-user-service"
+      ],
+      "propagated": [],
+      "context": []
+    },
+    "commit_message": "fix admin api bug",
+    "difficulty": "medium",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-004",
+    "source_commit": "313886e99befb94be6cd45f085c98e0019f59829",
+    "requirement": "修复订单管理、用户管理和寄存服务的线上 hotfix。\n线上出现订单状态不同步、用户信息丢失和寄存价格计算错误的问题。\n需要紧急修复相关服务的数据处理逻辑。",
+    "entry_repo": "ts-admin-order-service",
+    "ground_truth": {
+      "direct": [
+        "ts-admin-order-service",
+        "ts-admin-user-service",
+        "ts-consign-price-service",
+        "ts-consign-service",
+        "ts-order-other-service",
+        "ts-order-service",
+        "ts-preserve-service",
+        "ts-rebook-service",
+        "ts-station-service",
+        "ts-user-service"
+      ],
+      "propagated": [],
+      "context": [
+        "ts-cancel-service"
+      ]
+    },
+    "commit_message": "Hotfix #243",
+    "difficulty": "hard",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-005",
+    "source_commit": "bf5555ed",
+    "requirement": "修复路线查询和站点数据传递的 bug。\n路线规划服务在查询中转站时数据传递异常，导致路线结果不完整。\n需要检查路线服务与基础服务、站点服务之间的数据流。",
+    "entry_repo": "ts-route-plan-service",
+    "ground_truth": {
+      "direct": [
+        "ts-admin-basic-info-service",
+        "ts-admin-order-service",
+        "ts-basic-service",
+        "ts-order-service",
+        "ts-route-plan-service",
+        "ts-travel2-service",
+        "ts-travel-plan-service"
+      ],
+      "propagated": [
+        "ts-route-service",
+        "ts-station-service"
+      ],
+      "context": []
+    },
+    "commit_message": "fix route bug",
+    "difficulty": "medium",
+    "anti_bias_type": "cross-domain"
+  },
+  {
+    "id": "TT-006",
+    "source_commit": "a20d161297708829f2f91fe6fb7698406be338b9",
+    "requirement": "新增车站 ID 的批量查询功能。\n现有接口只支持单个车站 ID 查询，无法满足批量查询场景。\n需要在车站服务中新增批量查询接口，并在订单和车次服务中对接。",
+    "entry_repo": "ts-station-service",
+    "ground_truth": {
+      "direct": [
+        "ts-station-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-travel-service"
+      ],
+      "propagated": [
+        "ts-basic-service",
+        "ts-preserve-service"
+      ],
+      "context": []
+    },
+    "commit_message": "Fix bug in queryStationId",
+    "difficulty": "easy",
+    "anti_bias_type": "trap"
+  },
+  {
+    "id": "TT-007",
+    "source_commit": "45d84b44",
+    "requirement": "修复前端调用订票和支付相关 API 的 bug。\n用户在订票流程中选择座位和支付时接口返回异常。\n需要检查订票服务的座位调用和支付安全验证逻辑。",
+    "entry_repo": "ts-preserve-other-service",
+    "ground_truth": {
+      "direct": [
+        "ts-food-service",
+        "ts-order-service",
+        "ts-preserve-other-service",
+        "ts-seat-service",
+        "ts-security-service"
+      ],
+      "propagated": [],
+      "context": []
+    },
+    "commit_message": "fix ui api bug",
+    "difficulty": "medium",
+    "anti_bias_type": "synonym"
+  },
+  {
+    "id": "TT-008",
+    "source_commit": "a6c5f71fe8c9950a33f48ac97af350acffea09ab",
+    "requirement": "删除独立的 SSO 登录注册模块，用统一的认证服务替代。\n现有的 SSO、登录、注册三个独立服务维护成本高。\n需要将认证逻辑统一到 auth 服务中，删除冗余服务。",
+    "entry_repo": "ts-auth-service",
+    "ground_truth": {
+      "direct": [
+        "ts-login-service",
+        "ts-register-service",
+        "ts-sso-service",
+        "ts-security-service"
+      ],
+      "propagated": [],
+      "context": [
+        "ts-user-service"
+      ]
+    },
+    "commit_message": "delete sso login register",
+    "difficulty": "easy",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-009",
+    "source_commit": "4df9a5e2a856079db504bc44ac1db084ddd5c422",
+    "requirement": "重构配置管理和车站信息服务的接口实现。\n配置服务和车站服务的接口返回格式不统一。\n需要统一两个服务的接口规范并更新下游调用方。",
+    "entry_repo": "ts-config-service",
+    "ground_truth": {
+      "direct": [
+        "ts-config-service",
+        "ts-station-service",
+        "ts-food-service"
+      ],
+      "propagated": [
+        "ts-admin-basic-info-service",
+        "ts-seat-service",
+        "ts-basic-service",
+        "ts-order-service"
+      ],
+      "context": []
+    },
+    "commit_message": "modify ts-config-service ts-station-service",
+    "difficulty": "medium",
+    "anti_bias_type": "cross-domain"
+  },
+  {
+    "id": "TT-010",
+    "source_commit": "48e8f8e9",
+    "requirement": "调整支付流程和订票保存服务的代码细节。\n支付服务和订票服务之间的数据传递需要优化。\n需要检查支付完成后通知订单的逻辑。",
+    "entry_repo": "ts-payment-service",
+    "ground_truth": {
+      "direct": [
+        "ts-payment-service",
+        "ts-preserve-service",
+        "ts-preserve-other-service"
+      ],
+      "propagated": [
+        "ts-order-service",
+        "ts-inside-payment-service"
+      ],
+      "context": []
+    },
+    "commit_message": "modify code details",
+    "difficulty": "easy",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-011",
+    "source_commit": "2459960e",
+    "requirement": "调整通知服务和订单管理的数据处理逻辑。\n通知服务发送消息时数据格式有误，导致订单服务接收失败。\n需要修正通知和订单服务之间的数据格式约定。",
+    "entry_repo": "ts-notification-service",
+    "ground_truth": {
+      "direct": [
+        "ts-notification-service",
+        "ts-order-other-service",
+        "ts-order-service"
+      ],
+      "propagated": [
+        "ts-cancel-service",
+        "ts-preserve-service"
+      ],
+      "context": []
+    },
+    "commit_message": "modify code details",
+    "difficulty": "easy",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-012",
+    "source_commit": "228066f5",
+    "requirement": "修复用户信息修改功能的 bug。\n用户修改个人信息后，认证服务没有同步更新。\n需要检查用户服务和认证服务之间的数据同步逻辑。",
+    "entry_repo": "ts-user-service",
+    "ground_truth": {
+      "direct": [
+        "ts-auth-service",
+        "ts-user-service"
+      ],
+      "propagated": [
+        "ts-admin-user-service"
+      ],
+      "context": []
+    },
+    "commit_message": "fix modify user bug",
+    "difficulty": "easy",
+    "anti_bias_type": "trap"
+  },
+  {
+    "id": "TT-013",
+    "source_commit": "32686beb",
+    "requirement": "修复订单数据模型的 bug。\n订单实体类的字段定义有误，导致序列化时数据丢失。\n需要修正订单模型并检查所有引用订单数据的服务。",
+    "entry_repo": "ts-order-service",
+    "ground_truth": {
+      "direct": [
+        "ts-order-service",
+        "ts-order-other-service"
+      ],
+      "propagated": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-rebook-service"
+      ],
+      "context": []
+    },
+    "commit_message": "fix bug in Order class",
+    "difficulty": "easy",
+    "anti_bias_type": "cross-domain"
+  },
+  {
+    "id": "TT-014",
+    "source_commit": "3addb104",
+    "requirement": "修复车次信息查询服务的 bug。\n车次信息服务在查询经停车次时返回空数据。\n需要检查车次信息与旅行服务之间的数据查询逻辑。",
+    "entry_repo": "ts-ticketinfo-service",
+    "ground_truth": {
+      "direct": [
+        "ts-ticketinfo-service",
+        "ts-travel-service"
+      ],
+      "propagated": [
+        "ts-basic-service"
+      ],
+      "context": []
+    },
+    "commit_message": "fix bug in ticker-info-service",
+    "difficulty": "easy",
+    "anti_bias_type": "none"
+  },
+  {
+    "id": "TT-015",
+    "source_commit": "122fb40b",
+    "requirement": "修复通知服务的接口调用问题。\n订票服务调用通知接口时参数格式不匹配。\n需要检查订票服务中调用通知服务的代码。",
+    "entry_repo": "ts-notification-service",
+    "ground_truth": {
+      "direct": [
+        "ts-preserve-service",
+        "ts-preserve-other-service"
+      ],
+      "propagated": [
+        "ts-cancel-service"
+      ],
+      "context": []
+    },
+    "commit_message": "repair ts-notification-service",
+    "difficulty": "easy",
+    "anti_bias_type": "trap"
+  }
+]
