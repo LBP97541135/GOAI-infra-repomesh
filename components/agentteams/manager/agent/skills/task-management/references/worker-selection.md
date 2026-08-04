@@ -49,6 +49,13 @@ The `find-worker.sh` output already includes `container_status` and `availabilit
 - `idle` or `busy` → container running, assign directly
 - `stopped` → wake up first: `lifecycle-worker.sh --action ensure-ready --worker <name>`
 - `unavailable` → try `ensure-ready` first (attempts recreate); if `status=failed`, notify admin to recreate via `create-worker.sh`
+- `container_status: "remote"` → a `containerManaged: false` member running on
+  the operator's own machine. **Never run `lifecycle-worker.sh` against it** —
+  there is no container to ensure or recreate. Its `idle` means only "no
+  tracked tasks"; whether the process is actually up is knowable only after
+  assignment, by the ack deadline. No ack in the usual window means the
+  operator's bridge is off (machine asleep, process stopped) — notify admin
+  and reassign, do not attempt repair.
 
 If you already ran `find-worker.sh`, do NOT run a separate container check. Only run standalone check when assigning to an explicitly named Worker (Step 0 was skipped).
 

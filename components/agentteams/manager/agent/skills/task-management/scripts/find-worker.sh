@@ -70,8 +70,20 @@ while IFS= read -r worker; do
         idle_since=$(jq --arg w "${name}" '.workers[$w].idle_since // null' "${LIFECYCLE_FILE}" 2>/dev/null || echo null)
     fi
 
+    # A containerManaged:false member has no container by design -- the process
+    # runs on an operator's own machine, and only the bridge there knows
+    # whether it is up. Without this marker the empty containerState reads as
+    # "unknown", which invites lifecycle repair; ensure-ready would then try to
+    # recreate a container that must not exist. Applied after the lifecycle
+    # override so a stale lifecycle-state entry cannot re-label the worker.
+    container_managed=$(echo "${worker}" | jq -r 'if has("containerManaged") then .containerManaged else true end')
+    [ "${container_managed}" != "false" ] || container_status="remote"
+
     availability=idle
     case "${container_status}" in
+        # "remote" is deliberately absent from the outage arms: with no
+        # container the tracked-task count is the only signal available here,
+        # and real liveness is checked at assignment time by the ack deadline.
         not_found) availability=unavailable ;;
         stopped|exited) availability=stopped ;;
         *) [ "${finite_tasks}" -eq 0 ] || availability=busy ;;

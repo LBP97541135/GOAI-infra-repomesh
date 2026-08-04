@@ -1,9 +1,20 @@
 ---
 name: worker-management
-description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a QwenPaw console. Use agentteams-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
+description: Use when admin requests hand-creating or resetting a Worker, starting/stopping a Worker, managing Worker skills, enabling peer mentions, or opening a QwenPaw console. Also covers remote members (containerManaged false) that run on the admin's own machine via Codex CLI or Claude Code. Use agentteams-find-worker only as a helper for Nacos-backed market import or when task assignment needs you to discover a suitable Worker.
 ---
 
 # Worker Management
+
+## Remote member? Different document.
+
+If admin wants a member that runs **on their own machine** — "via Codex", "via
+Claude Code", "remote member", "on my laptop", `containerManaged: false` — stop
+here and read `references/create-remote-member.md`. That flow skips the runtime
+four-way choice below (those are container images; a remote member has no
+container), uses `agt apply -f` instead of `agt create worker`, and ends with a
+bootstrap handout instead of a running container. Note the near-miss: the
+"local worker / run on my machine" row in the runtime table means a *container*
+with local access — when wording is ambiguous, ask which one admin means.
 
 ## Before You Create: Confirm with Admin
 
