@@ -174,6 +174,10 @@ class AgentTeamsControlPlaneClient:
         body = await self._get_optional(self._resource_path("workers", name))
         return self._worker_ref(body) if body else None
 
+    async def get_manager(self, name: str) -> ManagerRuntimeRef | None:
+        body = await self._get_optional(self._resource_path("managers", name))
+        return self._manager_ref(body) if body else None
+
     async def ensure_worker_ready(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
         path = self._resource_path("workers", name) + "/ensure-ready"
         body = await self._json(

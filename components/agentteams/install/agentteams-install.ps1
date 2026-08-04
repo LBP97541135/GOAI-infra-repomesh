@@ -1452,6 +1452,10 @@ function Test-ShouldSkipStep {
 
 function Clear-StepVars {
     param([string]$StepFn)
+    # Non-interactive installs are driven entirely by caller-provided environment
+    # variables. Clearing them while traversing upgrade steps silently discards
+    # credentials and produces a running Manager with no usable LLM provider.
+    if ($script:AGENTTEAMS_NON_INTERACTIVE) { return }
     switch ($StepFn) {
         "Step-Mode" { $script:AGENTTEAMS_QUICKSTART = $false }
         "Step-Existing" {
@@ -2651,10 +2655,30 @@ function Install-Manager {
         $script:config.CONSOLE_DOMAIN = if ($env:AGENTTEAMS_CONSOLE_DOMAIN) { $env:AGENTTEAMS_CONSOLE_DOMAIN } else { "console-local.agentteams.io" }
     }
 
+    # Upgrade keep-all skips Step-Llm and intentionally does not reload secrets
+    # from the persisted env file. Explicit process environment values must still
+    # override the retained configuration for unattended installs.
+    if ($env:AGENTTEAMS_LLM_PROVIDER) { $config.LLM_PROVIDER = $env:AGENTTEAMS_LLM_PROVIDER }
+    if ($env:AGENTTEAMS_DEFAULT_MODEL) { $config.DEFAULT_MODEL = $env:AGENTTEAMS_DEFAULT_MODEL }
+    if ($env:AGENTTEAMS_OPENAI_BASE_URL) { $config.OPENAI_BASE_URL = $env:AGENTTEAMS_OPENAI_BASE_URL }
+    if ($env:AGENTTEAMS_LLM_API_KEY) { $config.LLM_API_KEY = $env:AGENTTEAMS_LLM_API_KEY }
+
     Write-Log ""
 
     # Generate secrets
     Write-Log (Get-Msg "install.generating_secrets")
+    $config.ADMIN_USER = if ($env:AGENTTEAMS_ADMIN_USER) {
+        $env:AGENTTEAMS_ADMIN_USER.ToLowerInvariant()
+    } elseif ($config.ADMIN_USER) {
+        $config.ADMIN_USER.ToLowerInvariant()
+    } else {
+        "admin"
+    }
+    if ($env:AGENTTEAMS_ADMIN_PASSWORD) {
+        $config.ADMIN_PASSWORD = $env:AGENTTEAMS_ADMIN_PASSWORD
+    } elseif (-not $config.ADMIN_PASSWORD) {
+        $config.ADMIN_PASSWORD = "admin$((New-RandomKey).Substring(0, 12))"
+    }
     $config.MANAGER_PASSWORD = if ($env:AGENTTEAMS_MANAGER_PASSWORD) { $env:AGENTTEAMS_MANAGER_PASSWORD } else { New-RandomKey }
     $config.REGISTRATION_TOKEN = if ($env:AGENTTEAMS_REGISTRATION_TOKEN) { $env:AGENTTEAMS_REGISTRATION_TOKEN } else { New-RandomKey }
     $config.MINIO_USER = if ($env:AGENTTEAMS_MINIO_USER) { $env:AGENTTEAMS_MINIO_USER } else { $config.ADMIN_USER }
@@ -3062,6 +3086,12 @@ function Install-Manager {
         }
         if ($env:AGENTTEAMS_MATRIX_DEBUG -eq "1") {
             $ctrlArgs += @("-e", "AGENTTEAMS_MATRIX_DEBUG=1")
+        }
+        if ($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED) {
+            $ctrlArgs += @(
+                "-e",
+                "AGENTTEAMS_MATRIX_APPSERVICE_ENABLED=$($env:AGENTTEAMS_MATRIX_APPSERVICE_ENABLED)"
+            )
         }
         if ($config.GITHUB_TOKEN) {
             $ctrlArgs += @("-e", "AGENTTEAMS_GITHUB_TOKEN=$($config.GITHUB_TOKEN)")

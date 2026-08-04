@@ -1,7 +1,11 @@
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
-from repomesh.modules.agent_directory.contracts import AgentPrincipalView, AgentRole
+from repomesh.modules.agent_directory.contracts import (
+    AgentPrincipalStatus,
+    AgentPrincipalView,
+    AgentRole,
+)
 from repomesh.modules.context.contracts import ContextObjectType, ContextScope
 from repomesh.modules.identity_access.contracts import (
     AuthorizationAction,
@@ -89,6 +93,7 @@ ROLE_AUTHORIZATION_POLICIES = {
             {
                 AuthorizationAction.AGENT_DISCOVER,
                 AuthorizationAction.CONTEXT_PUBLISH,
+                AuthorizationAction.CONTEXT_APPROVE,
                 AuthorizationAction.TEAM_MANAGE,
                 AuthorizationAction.TASK_MANAGE,
                 AuthorizationAction.REPOSITORY_READ,
@@ -105,7 +110,9 @@ ROLE_AUTHORIZATION_POLICIES = {
             }
         ),
         publish_types=_REPOSITORY_LEADER_PUBLISH_TYPES,
-        approve_types=frozenset(),
+        approve_types=frozenset(
+            {ContextObjectType.ENGINEERING_SPEC, ContextObjectType.TASK_SPEC}
+        ),
     ),
     AgentRole.WORKER: RoleAuthorizationPolicy(
         actions=_READ_ACTIONS
@@ -132,12 +139,25 @@ ROLE_AUTHORIZATION_POLICIES = {
 }
 
 
+class PolicyAuthorizationGateway:
+    def authorize(
+        self,
+        profile: AgentPrincipalView,
+        request: AuthorizationRequest,
+        *,
+        topology: ProjectAgentTopologyView | None = None,
+    ) -> AuthorizationDecision:
+        return authorize_agent(profile, request, topology=topology)
+
+
 def authorize_agent(
     profile: AgentPrincipalView,
     request: AuthorizationRequest,
     *,
     topology: ProjectAgentTopologyView | None = None,
 ) -> AuthorizationDecision:
+    if profile.status is not AgentPrincipalStatus.ACTIVE:
+        return AuthorizationDecision(False, "agent_disabled")
     if profile.organization_id != request.organization_id:
         return AuthorizationDecision(False, "organization_mismatch")
     policy = ROLE_AUTHORIZATION_POLICIES[profile.role]

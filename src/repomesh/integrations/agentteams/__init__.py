@@ -8,7 +8,9 @@ from .control_plane import (
     AgentTeamsUnavailable,
     AgentTeamsVersion,
 )
-from .matrix import AgentTeamsMatrixClient
+from .identity import AgentTeamsMatrixIdentityVerifier
+from .inbound import AgentTeamsMatrixInboundPoller
+from .matrix import AgentTeamsMatrixClient, MatrixRoomMessage, MatrixSyncBatch
 from .principal_registration import RegisterNativeAgent, RegisterNativeAgentRequest
 from .project_topology import ReconcileProjectAgentTopology
 
@@ -22,6 +24,10 @@ __all__ = [
     "AgentTeamsControlPlaneClient",
     "AgentTeamsError",
     "AgentTeamsMatrixClient",
+    "AgentTeamsMatrixIdentityVerifier",
+    "AgentTeamsMatrixInboundPoller",
+    "MatrixRoomMessage",
+    "MatrixSyncBatch",
     "AgentTeamsResponseError",
     "AgentTeamsUnavailable",
     "AgentTeamsVersion",

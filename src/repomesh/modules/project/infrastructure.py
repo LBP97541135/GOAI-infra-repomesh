@@ -79,6 +79,10 @@ class InMemoryProjectTopologyStore:
     async def get(self, project_id: UUID) -> ProjectAgentTopology | None:
         return self._topologies.get(project_id)
 
+    async def get_view(self, project_id: UUID):
+        topology = await self.get(project_id)
+        return topology.to_view() if topology is not None else None
+
     async def get_by_idempotency_key(
         self, idempotency_key: str
     ) -> tuple[ProjectAgentTopology, str] | None:
@@ -138,6 +142,10 @@ class PostgresProjectTopologyStore:
                 )
             ).all()
         return self._to_domain(record, teams)
+
+    async def get_view(self, project_id: UUID):
+        topology = await self.get(project_id)
+        return topology.to_view() if topology is not None else None
 
     async def get_by_idempotency_key(
         self, idempotency_key: str

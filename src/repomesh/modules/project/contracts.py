@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
 
@@ -29,3 +30,7 @@ class ProjectAgentTopologyView:
     project_id: UUID
     organization_leader_id: UUID
     repository_teams: tuple[RepositoryTeamView, ...]
+
+
+class ProjectTopologyReader(Protocol):
+    async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None: ...

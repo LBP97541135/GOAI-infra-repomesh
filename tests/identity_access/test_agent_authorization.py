@@ -283,3 +283,143 @@ async def test_worker_project_shared_visibility_is_limited_to_selected_objects()
     decision = evaluate_permission(unselected, layers=layers)
     assert not decision.allowed
     assert decision.reason == "project_membership:context_object"
+
+
+@pytest.mark.asyncio
+async def test_spec_visibility_isolated_by_role_repository_and_assignment() -> None:
+    directory = InMemoryAgentDirectory()
+    create = CreateAgent(directory)
+    organization_id = uuid4()
+    project_id = uuid4()
+    repository_a_id = uuid4()
+    repository_b_id = uuid4()
+    organization_leader = await create.execute(
+        CreateAgentRequest(
+            organization_id=organization_id,
+            role=AgentRole.ORGANIZATION_LEADER,
+            agentteams_resource_name="visibility-organization-leader",
+        ),
+        idempotency_key="visibility-organization-leader",
+    )
+    team_a = await CreateRepositoryAgentTeam(directory).execute(
+        CreateRepositoryAgentTeamRequest(
+            organization_id=organization_id,
+            organization_leader_id=organization_leader.principal.id,
+            repository_id=repository_a_id,
+            leader_agentteams_resource_name="visibility-repository-a-leader",
+            worker_agentteams_resource_names=("visibility-repository-a-worker",),
+            worker_responsibility_paths=("src/pricing/**", "tests/pricing/**"),
+        ),
+        idempotency_key="visibility-repository-a-team",
+    )
+    team_b = await CreateRepositoryAgentTeam(directory).execute(
+        CreateRepositoryAgentTeamRequest(
+            organization_id=organization_id,
+            organization_leader_id=organization_leader.principal.id,
+            repository_id=repository_b_id,
+            leader_agentteams_resource_name="visibility-repository-b-leader",
+            worker_agentteams_resource_names=("visibility-repository-b-worker",),
+            worker_responsibility_paths=("src/checkout/**", "tests/checkout/**"),
+        ),
+        idempotency_key="visibility-repository-b-team",
+    )
+    topology = await CreateProjectAgentTopology(
+        directory, InMemoryProjectTopologyStore()
+    ).execute(
+        CreateProjectAgentTopologyRequest(
+            organization_id=organization_id,
+            project_id=project_id,
+            organization_leader_id=organization_leader.principal.id,
+            repository_teams=(
+                RepositoryTeamAssignment(
+                    repository_id=repository_a_id,
+                    leader_agent_id=team_a.leader.id,
+                    worker_agent_ids=(team_a.workers[0].id,),
+                ),
+                RepositoryTeamAssignment(
+                    repository_id=repository_b_id,
+                    leader_agent_id=team_b.leader.id,
+                    worker_agent_ids=(team_b.workers[0].id,),
+                ),
+            ),
+        ),
+        idempotency_key="visibility-project-topology",
+    )
+
+    shared_spec_id = uuid4()
+    unassigned_shared_notes_id = uuid4()
+    repository_a_spec_id = uuid4()
+    repository_b_spec_id = uuid4()
+    worker_a_task_spec_id = uuid4()
+    worker_b_task_spec_id = uuid4()
+
+    visibility = {
+        organization_leader.principal.id: frozenset(
+            {shared_spec_id, unassigned_shared_notes_id}
+        ),
+        team_a.leader.id: frozenset({shared_spec_id, repository_a_spec_id}),
+        team_b.leader.id: frozenset({shared_spec_id, repository_b_spec_id}),
+        team_a.workers[0].id: frozenset({shared_spec_id, worker_a_task_spec_id}),
+        team_b.workers[0].id: frozenset({shared_spec_id, worker_b_task_spec_id}),
+    }
+
+    def can_read(profile, object_id, scope, repository_id=None):
+        return evaluate_permission(
+            PermissionRequest(
+                action=ContextAction.READ,
+                scope=scope,
+                context_object_id=object_id,
+                repository_id=repository_id,
+                tool="context.read",
+            ),
+            layers=(
+                agent_permission_layer(profile),
+                project_membership_permission_layer(
+                    profile,
+                    topology,
+                    context_object_ids=visibility[profile.id],
+                ),
+            ),
+        ).allowed
+
+    org = organization_leader.principal
+    leader_a = team_a.leader
+    leader_b = team_b.leader
+    worker_a = team_a.workers[0]
+    worker_b = team_b.workers[0]
+
+    assert can_read(org, shared_spec_id, ContextScope.PROJECT_SHARED)
+    assert not can_read(
+        org, repository_a_spec_id, ContextScope.TEAM_PRIVATE, repository_a_id
+    )
+
+    assert can_read(leader_a, shared_spec_id, ContextScope.PROJECT_SHARED)
+    assert can_read(
+        leader_a, repository_a_spec_id, ContextScope.TEAM_PRIVATE, repository_a_id
+    )
+    assert not can_read(
+        leader_a, repository_b_spec_id, ContextScope.TEAM_PRIVATE, repository_b_id
+    )
+    assert can_read(
+        leader_b, repository_b_spec_id, ContextScope.TEAM_PRIVATE, repository_b_id
+    )
+    assert not can_read(
+        leader_b, repository_a_spec_id, ContextScope.TEAM_PRIVATE, repository_a_id
+    )
+
+    assert can_read(worker_a, shared_spec_id, ContextScope.PROJECT_SHARED)
+    assert not can_read(
+        worker_a, unassigned_shared_notes_id, ContextScope.PROJECT_SHARED
+    )
+    assert not can_read(
+        worker_a, repository_a_spec_id, ContextScope.TEAM_PRIVATE, repository_a_id
+    )
+    assert can_read(
+        worker_a, worker_a_task_spec_id, ContextScope.TASK_PRIVATE, repository_a_id
+    )
+    assert not can_read(
+        worker_a, worker_b_task_spec_id, ContextScope.TASK_PRIVATE, repository_b_id
+    )
+    assert can_read(
+        worker_b, worker_b_task_spec_id, ContextScope.TASK_PRIVATE, repository_b_id
+    )

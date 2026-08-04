@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
 
@@ -90,3 +92,37 @@ class ContextAccessRecorded:
     path: str
     content_hash: str
     result: ContextAccessResult
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionContextGrant:
+    bundle_id: UUID
+    project_id: UUID
+    run_id: UUID
+    agent_id: UUID
+    repository_id: UUID
+    allowed_tools: tuple[str, ...]
+    allowed_paths: tuple[str, ...]
+    denied_paths: tuple[str, ...]
+    network_policy: tuple[str, ...]
+    expires_at: datetime
+    content_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class PublishContextRequest:
+    organization_id: UUID
+    project_id: UUID
+    object_type: ContextObjectType
+    scope: ContextScope
+    owner_subject: str
+    title: str
+    content_uri: str
+    content_hash: str
+    mime_type: str
+    size_bytes: int
+    created_by: str
+
+
+class ContextPublisher(Protocol):
+    async def publish(self, request: PublishContextRequest) -> ContextVersionRef: ...
