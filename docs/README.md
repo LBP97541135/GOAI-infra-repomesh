@@ -20,6 +20,8 @@
 - [First-party AgentTeams Runtime ADR](adr/0002-first-party-agentteams-runtime.md)
 - [Runner Protocol Drivers ADR](adr/0003-runner-protocol-drivers.md)
 - [Runner Driver 层设计规范](development/runner-driver-spec.md)
+- [AgentTeams 资源投影规范](development/agentteams-projection-spec.md)
+- [AgentTeams Fork 与 repomesh-runner Runtime 实施计划](development/agentteams-runner-runtime-plan.md)
 
 ## 数据与运行
 
