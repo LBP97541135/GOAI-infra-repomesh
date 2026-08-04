@@ -1,6 +1,16 @@
 name = "agentscope-ai/AgentTeams"
 version = "v1.2.0"
-commit = "793db242257a569d911b1aa59c1cd554af78511f"
+commit = "793db242257a569d911b1aa59c1cd554af78511f"   # upstream base
 license = "Apache-2.0"
 controller_api = "/api/v1"
 matrix_api = "/_matrix/client/v3"
+
+# Product fork of AgentTeams carrying the first-party repomesh-runner runtime.
+[product_fork]
+repo = ""                          # filled in once the fork is created
+branch = "repomesh/main"
+commit = ""                        # updated on every subtree pull
+
+[compatibility]
+runtime_contract = "runtime.v1"
+# RepoMesh version and commit are injected by the build, never hand-written here.

@@ -9,12 +9,21 @@ from .control_plane import (
     AgentTeamsVersion,
 )
 from .matrix import AgentTeamsMatrixClient
+from .versions import (
+    UPSTREAM_MANIFEST,
+    ComponentVersions,
+    ComponentVersionsError,
+    ReleaseIdentity,
+    load_component_versions,
+    release_identity,
+)
 
 AgentTeamsClient = AgentTeamsControlPlaneClient
 
 __all__ = [
     "AGENTTEAMS_COMMIT",
     "AGENTTEAMS_VERSION",
+    "UPSTREAM_MANIFEST",
     "AgentTeamsClient",
     "AgentTeamsConflict",
     "AgentTeamsControlPlaneClient",
@@ -23,4 +32,9 @@ __all__ = [
     "AgentTeamsResponseError",
     "AgentTeamsUnavailable",
     "AgentTeamsVersion",
+    "ComponentVersions",
+    "ComponentVersionsError",
+    "ReleaseIdentity",
+    "load_component_versions",
+    "release_identity",
 ]
