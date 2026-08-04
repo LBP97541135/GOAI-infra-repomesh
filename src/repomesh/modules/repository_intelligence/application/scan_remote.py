@@ -71,6 +71,10 @@ _URL_PATTERN = re.compile(
 def parse_user_input(text: str) -> ParsedInput:
     """Extract the URL/path and the requirement from free text.
 
+    .. deprecated::
+        Prefer passing URL and requirement separately via :func:`load_requirement`.
+        This function is retained for backward compatibility.
+
     Examples::
 
         >>> parse_user_input("在 https://gitlab.example.com/orders/order-service 里加微信支付")
@@ -103,16 +107,57 @@ def parse_user_input(text: str) -> ParsedInput:
     )
     requirement = requirement.strip()
 
-    # Entry repo name: only if the URL looks like a single repo (has ≥2 path segments
-    # after the host).  Final determination is done by the fetcher's identify().
-    # We just pre-extract a candidate here.
+    entry_repo_name = _infer_entry_repo_name(url)
+    return ParsedInput(url=url, requirement=requirement, entry_repo_name=entry_repo_name)
+
+
+def load_requirement(
+    requirement: str | None = None,
+    requirement_file: str | None = None,
+) -> str:
+    """Load requirement text from a direct string or a file.
+
+    Parameters
+    ----------
+    requirement:
+        Inline requirement text (``--requirement`` flag).
+    requirement_file:
+        Path to a Markdown or plain-text file (``--requirement-file`` flag).
+
+    Exactly one of the two must be provided.
+    """
+
+    if requirement_file:
+        from pathlib import Path  # noqa: PLC0415
+
+        return Path(requirement_file).read_text(encoding="utf-8")
+    if requirement:
+        return requirement
+    raise ValueError(
+        "必须提供需求：使用 --requirement 传入文本，"
+        "或使用 --requirement-file 传入文件路径"
+    )
+
+
+def extract_entry_repo_name(url: str) -> str | None:
+    """Infer the entry repo name from a single-repo URL.
+
+    Returns ``None`` for group/org URLs.
+    """
+
+    return _infer_entry_repo_name(url)
+
+
+def _infer_entry_repo_name(url: str) -> str | None:
+    """Pre-extract a candidate entry repo name from the URL path."""
+
     from urllib.parse import urlparse  # noqa: PLC0415
 
     parsed_url = urlparse(url)
     path_segments = [s for s in parsed_url.path.split("/") if s]
-    entry_repo_name = infer_name(path_segments[-1]) if len(path_segments) >= 2 else None
-
-    return ParsedInput(url=url, requirement=requirement, entry_repo_name=entry_repo_name)
+    if len(path_segments) >= 2:
+        return infer_name(path_segments[-1])
+    return None
 
 
 # ---------------------------------------------------------------------------

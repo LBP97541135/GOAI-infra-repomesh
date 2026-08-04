@@ -7,6 +7,8 @@ import pytest
 
 from repomesh.modules.repository_intelligence.application import (
     RepositoryDiscoveryService,
+    extract_entry_repo_name,
+    load_requirement,
     parse_user_input,
 )
 from repomesh.modules.repository_intelligence.application.scan_remote import (
@@ -359,3 +361,89 @@ async def test_discovery_entry_point_in_llm_results() -> None:
     assert order.score == 1.0
     assert order.is_entry_point is True
     assert order.rationale == "User-specified entry point"
+
+
+# ---------------------------------------------------------------------------
+# load_requirement tests
+# ---------------------------------------------------------------------------
+
+
+class TestLoadRequirement:
+    def test_load_from_text(self) -> None:
+        result = load_requirement(requirement="修复支付回调超时")
+        assert result == "修复支付回调超时"
+
+    def test_load_from_file(self, tmp_path: Path) -> None:
+        req_file = tmp_path / "req.md"
+        req_file.write_text("# 需求\n\n修复支付回调超时的问题", encoding="utf-8")
+        result = load_requirement(requirement_file=str(req_file))
+        assert "修复支付回调超时" in result
+
+    def test_file_takes_priority_over_text(self, tmp_path: Path) -> None:
+        """When both are given, file takes priority (CLI uses mutual exclusion)."""
+        req_file = tmp_path / "req.md"
+        req_file.write_text("file content", encoding="utf-8")
+        result = load_requirement(requirement="text content", requirement_file=str(req_file))
+        assert result == "file content"
+
+    def test_neither_given_raises(self) -> None:
+        with pytest.raises(ValueError, match="必须提供需求"):
+            load_requirement()
+
+    def test_file_not_found_raises(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            load_requirement(requirement_file="/nonexistent/path.md")
+
+
+# ---------------------------------------------------------------------------
+# extract_entry_repo_name tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractEntryRepoName:
+    def test_single_repo_url(self) -> None:
+        result = extract_entry_repo_name(
+            "https://gitlab.example.com/orders/order-service"
+        )
+        assert result == "order-service"
+
+    def test_group_url_returns_none(self) -> None:
+        result = extract_entry_repo_name("https://gitlab.example.com/orders/")
+        assert result is None
+
+    def test_github_url(self) -> None:
+        result = extract_entry_repo_name(
+            "https://github.com/FudanSELab/train-ticket"
+        )
+        assert result == "train-ticket"
+
+
+# ---------------------------------------------------------------------------
+# discover with keywords parameter
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverWithKeywords:
+    @pytest.mark.asyncio
+    async def test_keywords_passed_through(self) -> None:
+        """Verify discover accepts keywords without error."""
+        catalog = InMemoryRepositoryCatalog()
+        catalog._profiles["r1"] = RepositoryProfile(
+            id="r1",
+            name="payment-service",
+            url="https://gitlab.example.com/payments/payment-service",
+            auto_card=AutoCard(
+                top_dirs=("src",),
+                deps=("stripe",),
+                recent_commits=("add stripe payment",),
+                exposed_apis=(),
+                low_signal=False,
+            ),
+        )
+        service = RepositoryDiscoveryService(catalog)
+        # Use a requirement that matches the repo name and deps for fallback.
+        results = await service.discover(
+            "payment stripe integration",
+            keywords=["payment", "stripe"],
+        )
+        assert len(results) > 0

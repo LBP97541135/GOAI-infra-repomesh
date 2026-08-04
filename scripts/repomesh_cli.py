@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
-"""RepoMesh CLI — one-shot repository discovery.
+"""RepoMesh CLI — requirement-driven repository discovery.
 
 Usage::
 
-    # One-shot: user gives a sentence with URL + requirement
+    # Text requirement
     python scripts/repomesh_cli.py run \\
-        "在 https://gitlab.metaglobal.cn/orders/order-service 里加微信支付"
+        -r "修复订票流程中微信支付回调超时的问题" \\
+        https://gitlab.metaglobal.cn/orders/order-service
+
+    # Requirement document (Markdown / plain text)
+    python scripts/repomesh_cli.py run \\
+        -f PRD.md \\
+        https://gitlab.metaglobal.cn/orders/order-service
+
+    # Non-interactive mode (CI/CD)
+    python scripts/repomesh_cli.py run \\
+        --no-interactive -r "加微信支付" \\
+        https://gitlab.metaglobal.cn/
 
     # Local scan (debugging)
     python scripts/repomesh_cli.py scan /path/to/repo
@@ -36,8 +47,10 @@ if str(_SRC_DIR) not in sys.path:
 
 from repomesh.modules.repository_intelligence.application import (  # noqa: E402
     RepositoryDiscoveryService,
+    RequirementAnalyzer,
+    extract_entry_repo_name,
+    load_requirement,
     make_llm_client,
-    parse_user_input,
     scan_org,
     scan_repo,
 )
@@ -57,27 +70,54 @@ from repomesh.modules.repository_intelligence.infrastructure.platform import (  
     make_fetcher,
 )
 
+#: Maximum rounds of interactive Q&A.
+_MAX_INTERACTION_ROUNDS = 2
+
+
 # ---------------------------------------------------------------------------
 # Sub-command: run
 # ---------------------------------------------------------------------------
 
 
 async def cmd_run_async(args: argparse.Namespace) -> int:
-    user_input: str = args.prompt
+    url: str | None = args.url
 
-    # ① Parse input.
+    # ① Load requirement (from text or file).
     try:
-        parsed = parse_user_input(user_input)
-    except ValueError as exc:
+        requirement = load_requirement(args.requirement, args.requirement_file)
+    except (ValueError, FileNotFoundError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
-    print(f"URL: {parsed.url}", file=sys.stderr)
-    print(f"Requirement: {parsed.requirement}", file=sys.stderr)
+    # ② If URL is missing, prompt the user for it.
+    if not url:
+        if args.no_interactive:
+            print(
+                "Error: URL is required but was not provided. "
+                "Use: repomesh run <url> -r \"requirement\"",
+                file=sys.stderr,
+            )
+            return 1
+        print("⚠ 未提供仓库或组织 URL。", file=sys.stderr)
+        print(
+            "请输入目标 URL（仓库或组织地址），例如：\n"
+            "  https://gitlab.example.com/orders/order-service\n"
+            "  https://github.com/FudanSELab/train-ticket",
+            file=sys.stderr,
+        )
+        try:
+            url = input("URL > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            url = ""
+        if not url:
+            print("Error: URL is required. Aborting.", file=sys.stderr)
+            return 1
 
-    platform = detect_platform(parsed.url)
+    print(f"URL: {url}", file=sys.stderr)
+    print(f"Requirement: {requirement[:200]}...", file=sys.stderr)
 
-    # ② Determine URL type and fetch repo list.
+    platform = detect_platform(url)
+
     if platform is Platform.LOCAL:
         print(
             "Error: local paths are not supported by 'run'. "
@@ -98,16 +138,69 @@ async def cmd_run_async(args: argparse.Namespace) -> int:
 
     fetcher = make_fetcher(platform, **{f"{platform.value}_token": token})
 
-    print(f"Identifying URL type on {platform.value}...", file=sys.stderr)
-    url_type = await fetcher.identify(parsed.url)
+    # ② LLM setup (needed for both interaction and discovery).
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    base_url = os.environ.get(
+        "REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
+    )
+    model = os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat")
+    llm_client = make_llm_client(api_key, base_url=base_url, model=model)
+
+    # ③ Requirement sufficiency check + interactive Q&A.
+    extracted_keywords: list[str] = []
+    if llm_client is not None and not args.no_interactive:
+        analyzer = RequirementAnalyzer(llm_client)
+        for round_num in range(_MAX_INTERACTION_ROUNDS):
+            analysis = analyzer.analyze(requirement)
+            extracted_keywords = analysis.extracted_keywords
+
+            if analysis.sufficient:
+                print(
+                    f"\n需求信息充分（置信度 {analysis.confidence:.0%}），"
+                    f"开始分析。",
+                    file=sys.stderr,
+                )
+                break
+
+            missing = ", ".join(analysis.missing_dimensions) or "信息不足"
+            print(
+                f"\n需求信息还不够明确（缺少：{missing}）",
+                file=sys.stderr,
+            )
+            if round_num == _MAX_INTERACTION_ROUNDS - 1:
+                print(
+                    "已达到最大交互轮次，将使用现有信息继续分析。",
+                    file=sys.stderr,
+                )
+                break
+
+            for question in analysis.questions:
+                print(f"\n❓ {question}")
+                try:
+                    answer = input("> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    answer = ""
+                if answer:
+                    requirement += f"\n\n[补充信息] {question}\n{answer}"
+    elif llm_client is None:
+        print(
+            "\n⚠ No DEEPSEEK_API_KEY set — using keyword-matching fallback.",
+            file=sys.stderr,
+        )
+    else:
+        print("\n--no-interactive: 跳过需求充分度评估。", file=sys.stderr)
+
+    # ④ Determine URL type and fetch repo list.
+    print(f"\nIdentifying URL type on {platform.value}...", file=sys.stderr)
+    url_type = await fetcher.identify(url)
 
     entry_repo_name: str | None = None
-    group_url: str = parsed.url
+    group_url: str = url
 
     if url_type is UrlType.SINGLE_REPO:
-        entry_repo_name = parsed.entry_repo_name
+        entry_repo_name = extract_entry_repo_name(url)
         print("Single repo detected. Finding parent group...", file=sys.stderr)
-        parent = await fetcher.fetch_parent_group_url(parsed.url)
+        parent = await fetcher.fetch_parent_group_url(url)
         if parent:
             group_url = parent
             print(f"Parent group: {group_url}", file=sys.stderr)
@@ -121,13 +214,13 @@ async def cmd_run_async(args: argparse.Namespace) -> int:
         print("Group/org detected.", file=sys.stderr)
     else:
         print(
-            f"Error: could not identify {parsed.url} as a repo or group "
+            f"Error: could not identify {url} as a repo or group "
             f"on {platform.value}.",
             file=sys.stderr,
         )
         return 1
 
-    # ③ Load or build cache.
+    # ⑤ Load or build cache.
     cache = OrgCache()
     profiles = cache.load(group_url)
 
@@ -154,34 +247,23 @@ async def cmd_run_async(args: argparse.Namespace) -> int:
         cache.save(group_url, profiles)
         print(f"Cached {len(profiles)} repos.", file=sys.stderr)
 
-    # ④ LLM discovery.
+    # ⑥ LLM discovery.
     catalog = InMemoryRepositoryCatalog()
     for profile in profiles:
         catalog._profiles[profile.id] = profile  # noqa: SLF001
 
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    base_url = os.environ.get(
-        "REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
-    )
-    model = os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat")
-    llm_client = make_llm_client(api_key, base_url=base_url, model=model)
-
-    if llm_client is None:
-        print(
-            "\n⚠ No DEEPSEEK_API_KEY set — using keyword-matching fallback.",
-            file=sys.stderr,
-        )
-    else:
+    if llm_client is not None:
         print(f"\nUsing LLM: {model}", file=sys.stderr)
 
     service = RepositoryDiscoveryService(catalog, llm_client=llm_client)
     results = await service.discover(
-        parsed.requirement,
+        requirement,
         limit=args.limit,
         entry_point=entry_repo_name,
+        keywords=extracted_keywords or None,
     )
 
-    # ⑤ Output.
+    # ⑦ Output.
     _print_results(results, profiles)
     return 0
 
@@ -274,19 +356,39 @@ def cmd_scan(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="repomesh_cli",
-        description="RepoMesh — one-shot repository discovery from a single sentence.",
+        description="RepoMesh — requirement-driven repository discovery.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # run
     p_run = sub.add_parser(
         "run",
-        help="Give a sentence with a URL and requirement. "
-        "The system does everything else.",
+        help="Provide a requirement and URL. "
+        "The system finds which repos need changes.",
     )
     p_run.add_argument(
-        "prompt",
-        help='Your input, e.g. "在 https://gitlab.example.com/orders/order-service 里加微信支付"',
+        "url",
+        nargs="?",
+        default=None,
+        help="Repository or organization URL. "
+        "If omitted, the system will prompt for it.",
+    )
+    # Requirement input: mutually exclusive, at least one required.
+    req_group = p_run.add_mutually_exclusive_group(required=True)
+    req_group.add_argument(
+        "--requirement",
+        "-r",
+        help="Requirement text (a paragraph of business description).",
+    )
+    req_group.add_argument(
+        "--requirement-file",
+        "-f",
+        help="Path to a requirement document (Markdown or plain text).",
+    )
+    p_run.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Skip interactive Q&A; analyse with whatever info is given.",
     )
     p_run.add_argument("--limit", type=int, default=10, help="Max candidates.")
     p_run.set_defaults(func=cmd_run)
