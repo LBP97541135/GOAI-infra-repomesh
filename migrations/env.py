@@ -5,6 +5,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipalRecord
 from repomesh.modules.context.infrastructure.models import (
     ContextAccessEventRecord,
     ContextBundleItemRecord,
@@ -14,6 +15,10 @@ from repomesh.modules.context.infrastructure.models import (
     ContextObjectRecord,
     ContextObjectVersionRecord,
     ContextRelationRecord,
+)
+from repomesh.modules.project.infrastructure import (
+    ProjectAgentTopologyRecord,
+    ProjectRepositoryTeamRecord,
 )
 from repomesh.modules.repository_intelligence.infrastructure.models import RepositoryRecord
 from repomesh.persistence.base import Base
@@ -27,6 +32,7 @@ from repomesh.persistence.models import (
 from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
+    AgentPrincipalRecord,
     ContextObjectRecord,
     ContextObjectVersionRecord,
     ContextRelationRecord,
@@ -35,6 +41,8 @@ _REGISTERED_MODELS = (
     ContextDeltaRecord,
     ContextDeltaItemRecord,
     ContextAccessEventRecord,
+    ProjectAgentTopologyRecord,
+    ProjectRepositoryTeamRecord,
     RepositoryRecord,
     StateEventRecord,
     AuditEventRecord,

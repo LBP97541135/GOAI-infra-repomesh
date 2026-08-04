@@ -21,8 +21,9 @@ AgentTeams and Coding Agent adapters are different layers:
 | RepoMesh Runner | coding CLI process, native session, tests, execution artifacts and runtime events |
 | Coding Agent Adapter | Claude Code, Codex, Cursor and other CLI-specific launch/session behavior |
 
-AgentTeams messages and resources are runtime projections. RepoMesh IDs and database records
-remain the source of truth.
+AgentTeams Manager/Worker resources are the runtime identity and configuration source of truth.
+RepoMesh records remain the source of truth only for business identity, repository responsibility,
+project membership, authorization and delivery state.
 
 ## Two API Paths
 
@@ -55,7 +56,7 @@ delivery therefore does not create another Matrix event.
 | RepoMesh concept | AgentTeams projection |
 | --- | --- |
 | Project execution group | Team |
-| Repository manager or team coordinator | Worker with role `team_leader` |
+| Repository Leader | Worker with role `team_leader` |
 | Task executor | Worker with role `worker` |
 | Worker role instructions | `identity`, `soul`, `agents` |
 | Approved built-in capabilities | `skills` names |
@@ -63,6 +64,30 @@ delivery therefore does not create another Matrix event.
 | Task dispatch | Matrix `m.room.message` |
 
 Resource names use `rm-{kind}-{full UUID hex}` so retries map to the same external identity.
+
+## Agent registration and binding
+
+AgentTeams creates and configures native Manager/Worker resources. RepoMesh Agent Directory then
+registers a minimal `AgentPrincipal` and a unique resource binding. It does not copy model,
+runtime, identity, Soul, Skills, MCP servers, channel policy or Matrix state.
+
+```text
+AgentTeams Manager / Worker
+            |
+            +-> RepoMesh AgentPrincipal binding
+                    +-> organization and Leader chain
+                    +-> repository and responsibility paths
+                    +-> enabled/disabled business status
+```
+
+The Organization Leader binds to an AgentTeams Manager. Repository Leaders and Workers bind to
+existing AgentTeams Workers and are attached to project Teams by native resource name. Project
+reconciliation never recreates their runtime configuration.
+
+AgentTeams channel policies control communication reachability; Context visibility remains a
+RepoMesh permission decision derived from role, project membership and Task/Run delegation, then
+enforced when immutable run bundles are built. Neither Matrix room membership nor prompt text
+grants access to RepoMesh context.
 
 ## Idempotency And Reconciliation
 
@@ -98,11 +123,15 @@ Implemented and contract-tested:
 - bearer authentication and external error mapping;
 - idempotent Matrix task delivery;
 - composition-root wiring, client shutdown, and optional/required readiness modes.
+- minimal Agent principals with strict Leader hierarchy and native resource bindings;
+- role-ceiling visibility and tool-policy evaluation with explicit denies;
+- idempotent Agent principal registration and direct Team references to native Workers.
 
 Still required for an end-to-end demo:
 
 - start an AgentTeams v1.2 stack and run the live compatibility test;
-- persist RepoMesh-to-AgentTeams resource bindings;
-- build the application service that projects a confirmed RepoMesh project into Workers/Team;
+- persist RepoMesh-to-AgentTeams resource bindings and observed generations;
+- project a confirmed RepoMesh project into a Team after its agents have been provisioned;
 - route Matrix events back as observations and feedback, without treating chat as business state;
 - connect an AgentTeams Worker assignment to the Coding Agent Runtime launch plan.
+- add a runtime-neutral AgentTeams `toolPolicy` contract for hard builtin-tool enforcement.

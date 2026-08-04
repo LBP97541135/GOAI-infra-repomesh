@@ -11,7 +11,9 @@ from repomesh.integrations.agentteams.control_plane import (
 )
 from repomesh.integrations.agentteams.matrix import AgentTeamsMatrixClient
 from repomesh.modules.agent_runtime.ports.agent_team import (
+    ChannelPolicyProjection,
     ManagerProjection,
+    McpServerProjection,
     TeamMemberProjection,
     TeamProjection,
     TeamRole,
@@ -128,6 +130,58 @@ async def test_ensure_worker_reuses_matching_projection_without_post() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_creation_projects_identity_prompts_mcp_and_channel_policy() -> None:
+    posted: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posted
+        if request.method == "GET":
+            return response(404, {"error": "not found"})
+        posted = json.loads(request.content)
+        return response(201, {**posted, "phase": "Pending"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await client.ensure_worker(
+            WorkerProjection(
+                name="rm-worker-secure",
+                model="qwen3.6-plus",
+                identity="Repository worker",
+                soul="Be precise.",
+                agents="Follow the assigned task only.",
+                skills=("task-management",),
+                mcp_servers=(
+                    McpServerProjection("github", "https://gateway.example/mcp/github"),
+                ),
+                channel_policy=ChannelPolicyProjection(
+                    dm_deny_extra=("unrelated-worker",),
+                ),
+            ),
+            idempotency_key="secure-worker-v1",
+        )
+    finally:
+        await client.close()
+
+    assert posted["soul"] == "Be precise."
+    assert posted["agents"] == "Follow the assigned task only."
+    assert posted["mcpServers"] == [
+        {
+            "name": "github",
+            "url": "https://gateway.example/mcp/github",
+            "transport": "http",
+        }
+    ]
+    assert posted["channelPolicy"] == {
+        "groupAllowExtra": [],
+        "groupDenyExtra": [],
+        "dmAllowExtra": [],
+        "dmDenyExtra": ["unrelated-worker"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_ensure_worker_rejects_different_existing_projection() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return response(
@@ -170,6 +224,7 @@ async def test_team_references_independently_created_workers() -> None:
                 "leaderName": "rm-worker-lead",
                 "readyWorkers": 0,
                 "totalWorkers": 2,
+                "leaderDMRoomID": "!leader:matrix.local",
             },
         )
 
@@ -196,6 +251,7 @@ async def test_team_references_independently_created_workers() -> None:
     ]
     assert team.leader_name == "rm-worker-lead"
     assert team.total_workers == 2
+    assert team.leader_room_id == "!leader:matrix.local"
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 name = "project"
 owner = "project-planning"
-status = "planned"
+status = "active"
 schema = "project"
-responsibilities = ["project lifecycle", "project repositories", "memberships", "workstreams"]
+responsibilities = ["project lifecycle", "project repositories", "agent memberships", "repository team topology", "workstreams"]

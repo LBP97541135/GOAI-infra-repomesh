@@ -52,6 +52,12 @@ AgentPolicy & ProjectMembership & TaskSpec & RunDelegation - ExplicitDeny
 The decision can constrain context objects, repositories, paths, tools, command categories,
 network targets, secret purposes, expiry, and usage count. A denial at any layer rejects access.
 
+Role visibility is only a ceiling. Workers may include `project_shared` in that ceiling so a Run
+can mount an explicitly selected Spec or Contract, but the Project Membership layer contains the
+exact allowed object IDs. It does not grant discovery or reading of every project-shared object.
+Context publishing and approval use the Identity and Access action policy and object-type matrix;
+read access never grants write access.
+
 ## Runtime Boundary
 
 The Context module produces a `ContextWorkspacePlan` containing exact object versions, content

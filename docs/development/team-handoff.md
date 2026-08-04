@@ -124,7 +124,7 @@ Snapshot 编译出该 Worker 可见的 Agent、ContextObjectVersion、Skill、�
 用户需求
   -> Specification 保存 PRD 和 Engineering Spec
   -> Repository Intelligence 推荐仓库并保留证据
-  -> Project Manager 确认项目仓库范围
+  -> Organization Leader 在临时项目上下文中确认仓库范围
   -> Specification 冻结跨仓 Contract 和验收标准
   -> Task Orchestration 生成 Task DAG 和执行顺序
   -> Context 生成每个 Worker 的 VisibilitySnapshot 和 Bundle

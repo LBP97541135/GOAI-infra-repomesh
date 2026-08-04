@@ -2,11 +2,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
 )
 from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
+from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
@@ -25,6 +27,8 @@ class ApplicationContainer:
     """Process-level dependencies assembled outside business modules."""
 
     database: Database
+    agent_directory: AgentDirectory
+    project_topology_store: ProjectTopologyStore
     repository_catalog: RepositoryCatalog
     outbox_store: OutboxStore
     mock_coding_agent_factory: Callable[[str], CodingAgent]
