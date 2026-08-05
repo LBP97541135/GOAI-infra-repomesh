@@ -359,23 +359,39 @@ profiles must not claim enforcement they cannot deliver. The `claude-code`
 profile keeps `permission_arguments` for mode selection only, and its
 capability flags stay conservative.
 
-### Bypass and YOLO are permitted (product decision, 2026-08-03)
+### Bypass is auto-approval, never unfiltered (decision D2, 2026-08-05)
 
-Because the intermediate modes were measured not to constrain the agent, the
-previous prohibition on `bypass_permissions` was removed rather than kept as
-ceremony. Current behavior:
+`bypass_permissions` is permitted as a mode (the 2026-08-03 decision that lifted
+the prohibition stands), but it means **"do not ask"**, not **"do not filter"**.
+Platform deny rules bind in every mode; bypass only removes the interactive
+confirmation step. Precedence is fixed (decision D3):
+
+```
+denied_paths > disallowed_tools > allowed_paths > allowed_tools > provider mode
+```
 
 | Mode | argv effect | policy answer |
 | --- | --- | --- |
 | `default` | `--permission-mode default` | ESCALATE (run ends `input_required`) |
-| `accept_edits` / `auto` | `--permission-mode acceptEdits` | ALLOW, minus `disallowed_tools` |
-| `bypass_permissions` | `--permission-mode bypassPermissions`, `--yolo`, `--dangerously-bypass-approvals-and-sandbox` | ALLOW unconditionally, `disallowed_tools` included |
+| `accept_edits` / `auto` | `--permission-mode acceptEdits` | ALLOW, minus `denied_paths`, `disallowed_tools` and off-allowlist `allowed_paths` |
+| `bypass_permissions` | `--permission-mode default` (deliberately the ask-everything args) | ALLOW, still minus `denied_paths` and `disallowed_tools` |
 
-`DriverExecutor` no longer rejects the mode, `CliProfile` may map it, and the
-legacy adapter layer passes it through for every `SessionKind`. The declared
-mode is still carried on the task for audit.
+**No profile maps a CLI's own bypass flag.** `--permission-mode
+bypassPermissions`, `--yolo` and `--dangerously-bypass-approvals-and-sandbox`
+all stop the CLI from emitting the permission callback — and that callback
+(`control_request` / `session/request_permission` / codex approval requests) is
+the only channel on which the deny rules are enforced. Mapping them would
+silence the enforcement point in exactly the mode that needs it most. Platform
+bypass therefore keeps the CLI in its ask-everything mode and auto-approves over
+the protocol, at the cost of one round-trip per tool call.
 
-Two rules survive the change:
+Boundary layering, stated plainly: the protocol callback is a **cooperative**
+defence (it holds only because the CLI asks and honours the answer); the **hard**
+boundary is the container, filesystem and network scope around the process.
+Path extraction reads string leaves of the tool input, so a path buried inside a
+shell command string is not seen by the policy.
+
+Two rules survive unchanged:
 
 1. The mode is task state, never environment state. A Runner must not read
    `AGENTTEAMS_YOLO` or any inherited variable as a permission source —
@@ -383,6 +399,11 @@ Two rules survive the change:
 2. Whatever must actually hold has to be enforced below the agent: worktree
    scope, read-only context mounts, container filesystem and network limits.
    Until those exist, an autonomous run is bounded only by its workspace path.
+
+Adjudication and the reasoning behind it: decision D2/D3 in
+`docs/Bohan/Runtime/runner-execution-plane-plan.md`. This subsection supersedes
+steps 2-3 of section 8 below, which still describe the pre-D2 executor (an
+outright rejection of the mode, and a precedence chain without the path rules).
 
 ## 6d. Side-effect policy: the Runner never retries
 

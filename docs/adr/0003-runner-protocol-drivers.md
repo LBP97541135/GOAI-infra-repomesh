@@ -84,6 +84,36 @@ permission vocabulary).
    mode is the workspace, container, and network scope around the process. A run's declared
    mode remains recorded for audit.
 
+   Corrected 2026-08-05 (decision D2/D3 in
+   `docs/Bohan/Runtime/runner-execution-plane-plan.md`). The amendment above stands on one
+   point and is wrong on two. It stands in permitting `bypass_permissions` for worker
+   sessions. It is wrong in mapping the mode onto each provider's native bypass flag, and in
+   making the policy answer ALLOW unconditionally.
+
+   The flaw is that the two are coupled: a CLI launched with `--permission-mode
+   bypassPermissions` / `--yolo` / `--dangerously-bypass-approvals-and-sandbox` stops emitting
+   the permission callback altogether, and that callback is the only place a Runner-side rule
+   can be applied at all. The amendment therefore did not merely widen what the policy allows
+   — it removed the policy from the run. The 2026-08-03 measurements showed that CLI tool
+   *flags* are advisory; they did not show that the *callback* is, and on ACP and app-server
+   the callback is a genuine protocol request the agent waits on.
+
+   Adjudicated semantics, in force:
+
+   - Platform `bypass_permissions` means auto-approval **over the protocol**, not the absence
+     of filtering. It removes the interactive confirmation step and nothing else.
+   - `denied_paths` and `disallowed_tools` are answered DENY in **every** mode, bypass
+     included. Precedence:
+     `denied_paths > disallowed_tools > allowed_paths > allowed_tools > provider mode`.
+   - No profile maps a CLI's own bypass flag, ever. `claude-code` maps
+     `BYPASS_PERMISSIONS` to the same ask-everything arguments as `DEFAULT`; `kimi` and
+     `codex` map no permission arguments at all.
+   - The boundary is layered and the layers are not equivalent: the protocol callback is a
+     **cooperative** defence, honoured only because the CLI asks and respects the answer; the
+     **hard** boundary remains worktree isolation, container filesystem scope and network
+     egress control. Neither substitutes for the other, and the cooperative layer must not be
+     switched off just because it is cooperative.
+
    Runner processes must not honor an inherited `AGENTTEAMS_YOLO` (or equivalent) environment
    variable as a permission source: the mode comes from the RunnerTask, so the runtime
    environment can never silently widen or narrow what the task declared.
