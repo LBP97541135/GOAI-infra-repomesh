@@ -82,7 +82,11 @@ PROFILES: tuple[CliProfile, ...] = (
         binaries=("claude",),
         # observable stays False until control_request handling is verified live.
         observable=False,
-        resumable=False,
+        # Resume is `--resume <session_id>`; verified end to end against
+        # Claude Code 2.1.222 on 2026-08-05, including the crash case (id taken
+        # from the event stream mid-turn, process killed, id resumed in a fresh
+        # process, prior context recalled). An unknown id fails loudly.
+        resumable=True,
         base_arguments=(
             "-p",
             "--output-format",
@@ -111,7 +115,12 @@ PROFILES: tuple[CliProfile, ...] = (
         family=DriverFamily.ACP,
         binaries=("kimi",),
         observable=True,
-        resumable=False,
+        # Resume is the ACP `session/resume` RPC; verified end to end against
+        # the installed kimi CLI on 2026-08-05, including the crash case (id
+        # taken from the event stream mid-turn, process killed, id resumed in a
+        # fresh process, prior context recalled). An unknown id fails loudly
+        # with `-32602 Invalid params: Unknown sessionId`.
+        resumable=True,
         base_arguments=("acp",),
         # Permissions travel over ACP as ``session/request_permission``, so no
         # flags are mapped here; ``--yolo`` in particular would suppress them.
@@ -122,9 +131,12 @@ PROFILES: tuple[CliProfile, ...] = (
         family=DriverFamily.APP_SERVER,
         binaries=("codex",),
         observable=True,
-        # thread/resume is implemented but unverified end to end; the executor
-        # only forwards a resume id for resumable profiles.
-        resumable=False,
+        # Resume is the app-server `thread/resume` RPC; verified end to end
+        # against codex-cli 0.145.0 on 2026-08-05, including the crash case
+        # (thread id taken from the event stream mid-turn, process killed, id
+        # resumed in a fresh process, prior context recalled). An unknown id
+        # fails loudly with `-32600 no rollout found for thread id`.
+        resumable=True,
         base_arguments=("app-server",),
         # Approvals travel over the protocol as server-initiated requests, so
         # there are no permission flags to map onto this surface —

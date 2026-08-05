@@ -400,6 +400,78 @@ async def test_invalid_session_ids_are_dropped(tmp_path, fake_factory):
     assert DriverEventKind.SESSION_STARTED not in recorder.kinds()
 
 
+async def test_failed_resume_does_not_report_the_unopened_session(tmp_path, fake_factory):
+    """An unknown --resume id is echoed back on the error frame; drop it.
+
+    Reporting it would tell the platform the session is alive and retryable,
+    when in fact no session was ever opened.
+    """
+
+    factory = fake_factory(
+        [
+            result_frame(
+                subtype="error_during_execution",
+                is_error=True,
+                result="provider reported an error",
+                session_id="sess-ghost",
+            )
+        ],
+        exit_code=1,
+        stderr="No conversation found with session ID: sess-ghost",
+    )
+
+    result = await StreamJsonDriver(factory).execute(
+        make_request(tmp_path, resume_session_id="sess-ghost"), PROFILE, Recorder()
+    )
+
+    assert result.status is DriverResultStatus.FAILED
+    assert result.native_session_id is None
+    assert "No conversation found" in result.diagnostics
+
+
+async def test_failure_after_init_still_reports_the_live_session(tmp_path, fake_factory):
+    """The crash-resume case: init confirmed the session, so it is retryable."""
+
+    factory = fake_factory(
+        [
+            {"type": "system", "subtype": "init", "session_id": "sess-live"},
+            assistant_text("working on it"),
+            result_frame(
+                subtype="error_during_execution",
+                is_error=True,
+                result="API call failed: 529 overloaded",
+                session_id="sess-live",
+            ),
+        ],
+        exit_code=1,
+    )
+    recorder = Recorder()
+
+    result = await StreamJsonDriver(factory).execute(
+        make_request(tmp_path, resume_session_id="sess-live"), PROFILE, recorder
+    )
+
+    assert result.status is DriverResultStatus.FAILED
+    assert result.native_session_id == "sess-live"
+    assert DriverEventKind.SESSION_STARTED in recorder.kinds()
+
+
+async def test_failed_run_reports_a_session_id_it_did_not_ask_to_resume(tmp_path, fake_factory):
+    """Only the echo of the requested id is suppressed, not every failure id."""
+
+    factory = fake_factory(
+        [result_frame(subtype="error_during_execution", is_error=True, session_id="sess-fresh")],
+        exit_code=1,
+    )
+
+    result = await StreamJsonDriver(factory).execute(
+        make_request(tmp_path, resume_session_id="sess-ghost"), PROFILE, Recorder()
+    )
+
+    assert result.status is DriverResultStatus.FAILED
+    assert result.native_session_id == "sess-fresh"
+
+
 async def test_non_json_lines_are_logged_and_ignored(tmp_path, fake_factory):
     factory = fake_factory(
         [

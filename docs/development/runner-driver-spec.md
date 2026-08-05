@@ -301,8 +301,8 @@ Approval: codex issues approvals as server-initiated requests. None were
 observed under the default local config — the agent executed PowerShell freely
 — so the handler is written per the JSON-RPC pattern (respond on the request's
 `id`) and is covered only by fake-process tests until a sandboxed config
-reproduces one. Treat `observable=True`, `resumable=False` until resume is
-verified.
+reproduces one. `observable=True`; `resumable` was flipped to `True` on
+2026-08-05 once resume was measured end to end (section 6e).
 
 Hermeticity note: the app-server auto-starts the user's configured MCP servers
 (`playwright`, `node_repl`, … were observed). A Runner container must ship a
@@ -324,9 +324,9 @@ Corrections from the implementation pass (also observed live, codex 0.145.0):
   model comes back as `result.model`. The driver hard-fails when the echoed
   model differs from the requested one, mirroring the ACP "never silently
   substitute a model" rule.
-- `thread/resume` params `{threadId, cwd}` confirmed through its error path
-  (`-32600 no rollout found for thread id …`); a successful resume is still
-  unverified, so `codex` keeps `resumable=False`.
+- `thread/resume` params `{threadId, cwd}` confirmed through both paths: the
+  error path (`-32600 no rollout found for thread id …`) and, on 2026-08-05, a
+  successful resume (section 6e).
 - Observed `phase` values are `final_answer` and `commentary`.
 - Two further notifications land in the LOG bucket: `warning`
   (`{threadId, message}`) and `turn/started`.
@@ -426,6 +426,45 @@ is deliberately empty: **a driver attempts a run exactly once.**
 The reason for keeping this explicit: if the driver retried silently, the same
 task would run twice against the same worktree — once by the driver and once by
 orchestration — with no record of the first attempt.
+
+## 6e. Session resume verified (2026-08-05)
+
+All three profiles now carry `resumable=True`. Each mechanism was measured
+against the real, authenticated CLI on this date — clean resume, crash resume
+and unknown-id rejection:
+
+| Profile | CLI | Mechanism | Clean resume | Crash resume | Unknown id |
+| --- | --- | --- | --- | --- | --- |
+| `codex` | codex-cli 0.145.0 | `thread/resume` (app-server) | PASS, same thread id | PASS | fails loudly, `-32600 no rollout found for thread id`, no session id reported |
+| `claude-code` | Claude Code 2.1.222 | `--resume <id>` (stream-json) | PASS, same session id | PASS | fails loudly, `error_during_execution` + stderr `No conversation found with session ID` |
+| `kimi` | kimi acp | `session/resume` (ACP) | PASS, same session id | PASS | fails loudly, `-32602 Invalid params: Unknown sessionId`, no session id reported |
+
+Method: turn one plants a nonce and yields a session id; turn two resumes that
+id in a **fresh process** and must recall the nonce. Crash resume additionally
+takes the id from the driver's event stream *while the turn is still running*,
+kills the process group, then resumes — which also proves each driver announces
+the id at event time rather than at turn end.
+
+Consequence: `executor.py` forwards `resume_session_id` only for resumable
+profiles, so this flip is what activates resume end to end. Nothing else gates
+it.
+
+Caveat, stream-json only: a failing `--resume` of an unknown id still echoes
+that id back on the `result` frame, so the driver would have reported a session
+that was never opened — indistinguishable, to retry logic, from "the turn failed
+but the session is alive, resume it". `stream_json.py` now treats a session id
+as *confirmed* only when it arrives on the init/system frame; an id seen solely
+on a failing `result` frame that merely mirrors the requested
+`resume_session_id` is dropped. The rule is structural, not a match on the
+vendor's error text. A mid-turn crash after init still reports the id, which is
+the case that matters. The other two drivers are correct by construction: their
+resume RPC errors before any session is adopted.
+
+Coverage: unit tests in `tests/runner/test_stream_json_driver.py` (both
+directions of the caveat) and gated real-CLI resume / unknown-id tests in
+`tests/runner/test_smoke_real_clis.py`. No crash-resume smoke test — killing
+process groups inside pytest is flaky; that path rests on the unit tests plus
+the recorded probe above.
 
 ## 7. Supervision (`supervision.py`)
 

@@ -341,7 +341,8 @@ class _Run:
 
     def _on_result(self, event: Mapping[str, Any]) -> DriverResult:
         session_id = sanitize_session_id(event.get("session_id"))
-        if session_id is not None:
+        succeeded = event.get("is_error") is False
+        if session_id is not None and (succeeded or not self._echoes_unopened_resume(session_id)):
             self._session_id = session_id
         raw_text = event.get("result")
         text = raw_text.strip() if isinstance(raw_text, str) else ""
@@ -358,6 +359,23 @@ class _Run:
                 detail = f"{subtype}: {detail}"
             return self.result(DriverResultStatus.FAILED, diagnostics=self._with_stderr(detail))
         return self.result(DriverResultStatus.SUCCEEDED, summary=text or self._candidate_summary)
+
+    def _echoes_unopened_resume(self, session_id: str) -> bool:
+        """True when the id is only the resume id we asked for, unconfirmed.
+
+        A session is confirmed to exist only when the CLI announces it on the
+        init/system frame (:meth:`_on_system`, the sole other writer of
+        ``_session_id``). When a ``--resume`` of an id the CLI never opened
+        fails, its error result frame still echoes that id back, and reporting
+        it would tell the platform "the session is alive, retry with it" for a
+        session that will never resume. The rule is structural rather than a
+        match on the vendor's error text, which is not a contract.
+        """
+
+        if self._session_id is not None:
+            return False
+        requested = sanitize_session_id(self._request.resume_session_id)
+        return requested is not None and session_id == requested
 
     def _decide(
         self,
