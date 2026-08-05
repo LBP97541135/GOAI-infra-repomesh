@@ -33,6 +33,9 @@ async def test_postgres_repository_transaction_and_outbox() -> None:
         await RegisterRepository(catalog).execute(profile)
 
         assert await catalog.get(profile.id) == profile
-        assert any(message.payload["url"] == profile.url for message in await outbox.pending())
+        assert any(
+            message.payload.get("url") == profile.url
+            for message in await outbox.pending()
+        )
     finally:
         await database.dispose()
