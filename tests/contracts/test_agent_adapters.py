@@ -89,10 +89,17 @@ def test_driver_backed_clis_are_marked_superseded() -> None:
 
 
 def test_every_driver_profile_has_a_catalog_entry() -> None:
-    """The reverse direction: the Runner cannot drive an unknown CLI."""
+    """The reverse direction: the Runner cannot drive an unknown CLI.
+
+    Profiles that declare ``vendor_cli=False`` are exempt: they do not point at
+    a vendor CLI at all (the validation mock agent shipped with the worker
+    image), so there is nothing in the discovery catalog for them to drift from.
+    """
 
     catalog_ids = {spec_item.id for spec_item in SPECS}
     for profile in PROFILES:
+        if not profile.vendor_cli:
+            continue
         assert profile.id in catalog_ids, profile.id
 
 

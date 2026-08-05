@@ -1,0 +1,23 @@
+# Build context filter for components/repomesh-runner/Dockerfile.
+#
+# BuildKit prefers `<dockerfile path>.dockerignore` over the context root's
+# .dockerignore, which exists for the application image and excludes all of
+# `components/` — including the mock coding agent this image installs. The list
+# below is that one, with `components/agentteams` (16 MB of Go sources this
+# image has no use for) excluded instead of the whole components tree.
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+*.egg-info
+.env
+build
+dist
+docs
+tests
+datasets
+migrations
+components/agentteams

@@ -130,13 +130,44 @@ src/repomesh_runner/
 - **至多一次执行**：同一 `idempotency_key` 不重复执行（轨道 A 的 dedup 语义,实现独立）。
 - 心跳：不做（runtime 计划 §2.2 已钉死：无 `idleTimeout` 永不休眠,Local 模式不看 heartbeat）。
 
-### M4 · 镜像与活体验证（2 天）
+### M4 · 镜像与活体验证 — **大部分完成（2026-08-05）**
 
-- Worker 镜像：Runner + Scenario Mock（**不含任何 vendor CLI 与凭据**）。
-- 验证阶梯 4 层：embedded controller `apply` 一个 `runtime: repomesh-runner` 的 Worker CR →
-  容器 Running、phase 正确、`agt get workers` 可见 → Mock RunnerTask 端到端（下发 → 执行 →
-  事件回传全链路）。
-- 验证阶梯 5 层：Mock 长任务空转 30 分钟、零 Matrix 活动，断言 Worker 不被休眠。
+**已完成**
+
+- **Worker 镜像** `components/repomesh-runner/Dockerfile`：Runner 为 PID 1，
+  python slim 基底(不用阿里云 registry，任何人可构建)，**零 vendor CLI、零凭据**。
+- **Mock coding agent**(`components/repomesh-runner/mock/`)：计划假设"Runner 已有七场景
+  Scenario Mock"——**并没有**。那七个场景实现的是 repomesh 侧的 port，Runner 侧只有
+  测试内的 `FakeProcess`(进程内替身，不是可执行程序)。于是新写了一个说 stream-json
+  协议的独立可执行 mock，13 个测试用**真 driver + 真子进程**驱动它。
+- **验证阶梯 1 层**(Go 单测)：首次真正执行，全绿。含 `TestValidRuntime`、三后端镜像解析、
+  空配置树，以及计划 §2.2 的关键证据 `TestShouldSleepNeverSleepsWithoutIdleTimeout`。
+- **验证阶梯 2 层**(controller reconcile)：`internal/controller` 全包通过。
+- **验证阶梯 3 层**(RepoMesh 契约)：454 passed。
+- **controller 镜像**已构建并证明带补丁：`agt create worker --help` 现在列出
+  `(openclaw|copaw|hermes|openhuman|repomesh-runner)`，CRD 枚举含新值。
+- **Runner 端到端**(不经 controller)：容器 → 长轮询取 RunnerTask → 驱动 mock agent →
+  回传 `runner.accepted` + `runner.completed`，幂等键与序号正确，结构化证据字段齐全，
+  任务完成后不重复执行。**SIGTERM 优雅停机实测 4 秒**(Docker 宽限期 10 秒，
+  被 SIGKILL 会耗满)。
+
+**只有真跑容器才暴露的缺陷(已修)**：任务源若立刻返回 `204` 而不 hold 连接，
+Runner 会热循环——实测 **25 秒 1121 次轮询**、140KB 日志。单测看不见，因为它们注入假
+`sleep`、从不测真实耗时。修法是按实际耗时补足窗口：守规矩的服务端零额外开销，
+不守规矩的被限到每窗口一次。修后实测 **30 秒 7 次**。
+
+**未完成，需要活体环境**
+
+- 验证阶梯 4 层的 controller 半场(真 controller 创建真容器)：跑着的 embedded controller
+  是旧镜像(实测 `repomesh-runner` 计数 0、`agt` 只列四个 runtime)。要么替换其二进制，
+  要么重建 embedded 镜像起隔离实例——前者会动到 bridge 轨道的活体成员，**未擅自执行**。
+  注意 reconcile 逻辑本身已被第 2 层 Go 测试覆盖，此层的增量价值是真 Docker backend。
+- 验证阶梯 5 层：30 分钟免休眠，依赖上一条。
+
+**顺带发现**：`Makefile` 的 `build-agentteams-controller` 会在 build 前把 `manager/agent`
+临时拷进 controller 目录、build 后删除——直接 `docker build` 必然失败(上游基线里
+`agentteams-controller/agent/` 根本不存在)。因此 controller 镜像**内含 manager 技能**，
+走正规构建即可摆脱手工同步。但本分支不含 bridge 轨道的技能改动(两条轨道尚未合并)。
 
 ### M5 · Fork 阶段 0 — **已完成（2026-08-05）**
 

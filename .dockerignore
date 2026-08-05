@@ -12,3 +12,9 @@ components
 dist
 docs
 tests
+# ...except the mock coding agent, which components/repomesh-runner/Dockerfile
+# installs into the worker image. That Dockerfile also ships its own
+# Dockerfile.dockerignore, which BuildKit prefers over this file; this exception
+# keeps the build working if the context is filtered by this file instead.
+!components/repomesh-runner/mock
+!components/repomesh-runner/mock/**

@@ -61,10 +61,28 @@ class FakeSleep:
         self.delays.append(seconds)
 
 
+class FakeClock:
+    """A monotonic clock the test drives: every reading is ``step`` seconds after the last.
+
+    The source reads the clock once before a request and once after, so ``step`` is exactly how
+    long each request appears to have taken.
+    """
+
+    def __init__(self, step: float = 0.0) -> None:
+        self._step = step
+        self._now = 0.0
+
+    def __call__(self) -> float:
+        reading = self._now
+        self._now += self._step
+        return reading
+
+
 def build_source(
     handler,
     *,
     sleep: FakeSleep | None = None,
+    monotonic: FakeClock | None = None,
     timeout_seconds: float = 5.0,
     **kwargs: object,
 ) -> tuple[HttpLongPollTaskSource, FakeSleep, list[httpx.Request]]:
@@ -81,6 +99,8 @@ def build_source(
         timeout_seconds=timeout_seconds,
         client=client,
         sleep=sleep,
+        # Default to a server that answers instantly, which is what the MockTransport does.
+        monotonic=monotonic or FakeClock(),
         **kwargs,  # type: ignore[arg-type]
     )
     return source, sleep, requests
@@ -99,10 +119,59 @@ async def test_two_hundred_yields_a_parsed_task() -> None:
 
 
 @pytest.mark.asyncio
-async def test_two_hundred_four_means_no_work_without_local_waiting() -> None:
-    source, sleep, _ = build_source(lambda request: httpx.Response(204))
+async def test_an_instant_two_hundred_four_is_paced_out_to_the_full_window() -> None:
+    source, sleep, _ = build_source(lambda request: httpx.Response(204), monotonic=FakeClock(0.0))
 
     assert await source.next_task() is None
+    assert sleep.delays == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_a_two_hundred_four_that_held_the_window_is_not_paced() -> None:
+    source, sleep, _ = build_source(lambda request: httpx.Response(204), monotonic=FakeClock(5.0))
+
+    assert await source.next_task() is None
+    assert sleep.delays == []
+
+
+@pytest.mark.asyncio
+async def test_a_two_hundred_four_a_hair_short_of_the_window_is_not_paced() -> None:
+    source, sleep, _ = build_source(lambda request: httpx.Response(204), monotonic=FakeClock(4.7))
+
+    assert await source.next_task() is None
+    assert sleep.delays == []
+
+
+@pytest.mark.asyncio
+async def test_a_two_hundred_four_paces_only_the_unused_remainder() -> None:
+    source, sleep, _ = build_source(lambda request: httpx.Response(204), monotonic=FakeClock(4.0))
+
+    assert await source.next_task() is None
+    assert sleep.delays == [1.0]
+
+
+@pytest.mark.asyncio
+async def test_an_instant_two_hundred_four_costs_one_request_per_window() -> None:
+    source, sleep, requests = build_source(
+        lambda request: httpx.Response(204), monotonic=FakeClock(0.0)
+    )
+
+    for _ in range(4):
+        assert await source.next_task() is None
+
+    assert len(requests) == 4
+    assert sleep.delays == [5.0, 5.0, 5.0, 5.0]
+
+
+@pytest.mark.asyncio
+async def test_instant_task_delivery_is_never_paced() -> None:
+    source, sleep, _ = build_source(
+        lambda request: httpx.Response(200, json=task_payload()), monotonic=FakeClock(0.0)
+    )
+
+    for _ in range(3):
+        assert await source.next_task() is not None
+
     assert sleep.delays == []
 
 
@@ -135,12 +204,44 @@ async def test_backoff_resets_after_a_successful_poll() -> None:
         httpx.Response(204),
         httpx.Response(500),
     ]
-    source, sleep, _ = build_source(lambda request: responses.pop(0))
+    # The 204 holds the whole window, so nothing but backoff shows up in the delays.
+    source, sleep, _ = build_source(lambda request: responses.pop(0), monotonic=FakeClock(5.0))
 
     for _ in range(4):
         await source.next_task()
 
     assert sleep.delays == [1.0, 2.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_pacing_does_not_stack_on_top_of_an_empty_poll_backoff() -> None:
+    responses = [
+        httpx.Response(500),
+        httpx.Response(204),
+        httpx.Response(500),
+    ]
+    source, sleep, _ = build_source(lambda request: responses.pop(0), monotonic=FakeClock(0.0))
+
+    for _ in range(3):
+        await source.next_task()
+
+    # One backoff, one full-window pacing sleep, one reset backoff — never two waits for one poll.
+    assert sleep.delays == [1.0, 5.0, 1.0]
+
+
+@pytest.mark.asyncio
+async def test_failure_paths_wait_only_for_their_backoff() -> None:
+    responses = [
+        httpx.Response(500),
+        httpx.Response(200, content=b"<html>gateway</html>"),
+        httpx.Response(404),
+    ]
+    source, sleep, _ = build_source(lambda request: responses.pop(0), monotonic=FakeClock(0.0))
+
+    for _ in range(3):
+        assert await source.next_task() is None
+
+    assert sleep.delays == [1.0, 2.0, 4.0]
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,10 @@ class CliProfile:
     launchable: bool = True
     observable: bool = False
     resumable: bool = False
+    #: False marks a profile that is not a vendor CLI at all (the validation
+    #: mock below). Such a profile has no entry in the discovery catalog and no
+    #: vendor to keep in sync with, so the catalog cross-checks skip it.
+    vendor_cli: bool = True
     base_arguments: tuple[str, ...] = ()
     model_flag: str | None = None
     system_prompt_flag: str | None = None
@@ -142,6 +146,39 @@ PROFILES: tuple[CliProfile, ...] = (
         # there are no permission flags to map onto this surface —
         # ``--dangerously-bypass-approvals-and-sandbox`` would remove them.
         app_server=AppServerConfig(quiescence_seconds=1.0),
+    ),
+    CliProfile(
+        # Validation-only profile: NOT a vendor CLI. It drives
+        # ``components/repomesh-runner/mock/mock_coding_agent.py``, a stdlib
+        # script that replays a scripted stream-json conversation, so the worker
+        # image and the execution plane can be exercised end to end without any
+        # vendor binary, network access, or credentials. Never use it to serve
+        # real work: it does not read or write the workspace and never calls a
+        # model.
+        id="mock",
+        family=DriverFamily.STREAM_JSON,
+        # The launcher installed on PATH by components/repomesh-runner/Dockerfile.
+        binaries=("repomesh-mock-agent",),
+        launchable=True,
+        # Verified in tests/runner/test_mock_agent_executable.py against the real
+        # driver and a real subprocess: the mock emits session_started, text,
+        # thinking, tool_use/tool_result and control_request events, and answers
+        # the control_response frame the driver writes back.
+        observable=True,
+        # Resume is `--resume <session_id>`: the mock persists the turn under
+        # REPOMESH_MOCK_STATE_DIR and repeats the recalled prompt back on the
+        # next turn. An unknown id fails loudly with an error result.
+        resumable=True,
+        # No base arguments: the mock speaks stream-json natively and needs no
+        # dialect flags.
+        model_flag="--model",
+        system_prompt_flag="--append-system-prompt",
+        resume_flag="--resume",
+        # No permission flags, deliberately: permissions travel over the
+        # control_request channel, which is exactly what this profile exists to
+        # exercise. The mock's boundary is the container around it.
+        stream_json=StreamJsonConfig(prompt_via_stdin=True),
+        vendor_cli=False,
     ),
 )
 
