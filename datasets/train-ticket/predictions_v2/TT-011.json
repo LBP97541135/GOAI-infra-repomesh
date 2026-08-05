@@ -1,0 +1,65 @@
+{
+  "case_id": "TT-011",
+  "requirement": "调整通知服务和订单管理的数据处理逻辑。\n通知服务发送消息时数据格式有误，导致订单服务接收失败。\n需要修正通知和订单服务之间的数据格式约定。",
+  "entry_repo": "ts-notification-service",
+  "predicted_repositories": [
+    "ts-notification-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-cancel-service",
+    "ts-rebook-service",
+    "ts-admin-order-service"
+  ],
+  "details": [
+    {
+      "name": "ts-notification-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "The requirement explicitly mentions order service receiving notifications, so it must align with the corrected data format."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "This service also handles orders and may consume notifications, so it could be affected by the format change."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve-service, it may send notifications and require format alignment."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Preserve service likely triggers notifications and may need to adapt to the corrected format."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Cancellation flows often send notifications, so it may need to match the new format."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Rebooking operations may involve notifications and could be impacted by the format change."
+    },
+    {
+      "name": "ts-admin-order-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Admin order service may view or process notifications, but less likely to be directly affected."
+    }
+  ]
+}

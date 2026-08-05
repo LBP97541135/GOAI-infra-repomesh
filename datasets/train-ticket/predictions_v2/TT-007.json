@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-007",
+  "requirement": "修复前端调用订票和支付相关 API 的 bug。\n用户在订票流程中选择座位和支付时接口返回异常。\n需要检查订票服务的座位调用和支付安全验证逻辑。",
+  "entry_repo": "ts-preserve-other-service",
+  "predicted_repositories": [
+    "ts-preserve-other-service",
+    "ts-payment-service",
+    "ts-seat-service",
+    "ts-inside-payment-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service",
+    "ts-route-plan-service",
+    "ts-price-service",
+    "ts-auth-service",
+    "ts-security-service",
+    "ts-user-service",
+    "ts-contacts-service"
+  ],
+  "details": [
+    {
+      "name": "ts-preserve-other-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-payment-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "The bug involves payment security validation, and ts-preserve-other-service likely calls ts-payment-service to process payments."
+    },
+    {
+      "name": "ts-seat-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "The bug involves seat selection during booking, and ts-preserve-other-service likely calls ts-seat-service for seat availability and assignment."
+    },
+    {
+      "name": "ts-inside-payment-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "ts-inside-payment-service handles internal payment processing and may be invoked by ts-preserve-other-service for payment-related operations."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Booking flow creates orders, and ts-preserve-other-service likely interacts with ts-order-service to create or update orders."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "ts-order-other-service handles other order types and may be involved in the booking flow alongside ts-preserve-other-service."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Booking involves travel details, and ts-preserve-other-service may call ts-travel-service for trip information."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "ts-travel2-service provides alternative travel routes and may be used by ts-preserve-other-service for booking options."
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Route information is needed for booking, and ts-preserve-other-service may depend on ts-route-service for route details."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Route planning may be part of the booking flow, and ts-preserve-other-service could call ts-route-plan-service."
+    },
+    {
+      "name": "ts-price-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Price calculation is essential for payment, and ts-preserve-other-service may call ts-price-service to get ticket prices."
+    },
+    {
+      "name": "ts-auth-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Payment security validation may involve authentication, and ts-preserve-other-service might call ts-auth-service for user verification."
+    },
+    {
+      "name": "ts-security-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Security checks for payment could involve ts-security-service, which may be called by ts-preserve-other-service."
+    },
+    {
+      "name": "ts-user-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "User information is needed for booking and payment, and ts-preserve-other-service may call ts-user-service to fetch user details."
+    },
+    {
+      "name": "ts-contacts-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Contact information may be used in booking, and ts-preserve-other-service could interact with ts-contacts-service."
+    }
+  ]
+}

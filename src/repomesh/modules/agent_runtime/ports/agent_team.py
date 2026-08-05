@@ -32,6 +32,21 @@ class TeamRole(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class McpServerProjection:
+    name: str
+    url: str
+    transport: str = "http"
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelPolicyProjection:
+    group_allow_extra: tuple[str, ...] = ()
+    group_deny_extra: tuple[str, ...] = ()
+    dm_allow_extra: tuple[str, ...] = ()
+    dm_deny_extra: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ManagerProjection:
     name: str
     model: str
@@ -47,7 +62,11 @@ class WorkerProjection:
     model: str
     runtime: WorkerRuntime = WorkerRuntime.OPENCLAW
     identity: str | None = None
+    soul: str | None = None
+    agents: str | None = None
     skills: tuple[str, ...] = ()
+    mcp_servers: tuple[McpServerProjection, ...] = ()
+    channel_policy: ChannelPolicyProjection | None = None
     state: DesiredRuntimeState = DesiredRuntimeState.RUNNING
 
 
@@ -95,6 +114,7 @@ class TeamRuntimeRef:
     name: str
     phase: str
     team_room_id: str | None
+    leader_room_id: str | None
     leader_name: str
     ready_workers: int
     total_workers: int
@@ -112,6 +132,8 @@ class AgentTeamControlPlane(Protocol):
     async def ensure_team(
         self, projection: TeamProjection, *, idempotency_key: str
     ) -> TeamRuntimeRef: ...
+
+    async def get_manager(self, name: str) -> ManagerRuntimeRef | None: ...
 
     async def get_worker(self, name: str) -> WorkerRuntimeRef | None: ...
 

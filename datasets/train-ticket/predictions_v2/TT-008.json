@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-008",
+  "requirement": "删除独立的 SSO 登录注册模块，用统一的认证服务替代。\n现有的 SSO、登录、注册三个独立服务维护成本高。\n需要将认证逻辑统一到 auth 服务中，删除冗余服务。",
+  "entry_repo": "ts-auth-service",
+  "predicted_repositories": [
+    "ts-auth-service",
+    "ts-user-service",
+    "ts-security-service",
+    "ts-gateway-service",
+    "ts-verification-code-service",
+    "ts-admin-user-service",
+    "ts-notification-service",
+    "ts-contacts-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service",
+    "ts-order-service",
+    "ts-wait-order-service",
+    "ts-preserve-service",
+    "ts-order-other-service",
+    "ts-rebook-service"
+  ],
+  "details": [
+    {
+      "name": "ts-auth-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-user-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "User management is closely tied to authentication; likely needs to align with the unified auth service for user registration and login flows."
+    },
+    {
+      "name": "ts-security-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Security-related service may need to integrate with the new unified auth service for token validation and access control."
+    },
+    {
+      "name": "ts-gateway-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Gateway routes authentication requests; must be updated to point to the unified auth service instead of separate SSO/login/register services."
+    },
+    {
+      "name": "ts-verification-code-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Verification codes are often used in login/registration; may need to be integrated or coordinated with the unified auth service."
+    },
+    {
+      "name": "ts-admin-user-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Admin user management may depend on authentication endpoints; needs to adapt to the consolidated auth service."
+    },
+    {
+      "name": "ts-notification-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "May send notifications for authentication events (e.g., password reset, account confirmation) and could be affected by changes in auth flows."
+    },
+    {
+      "name": "ts-contacts-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Contacts are user-specific; may rely on auth for user identification."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve-service, may rely on authentication for user-specific operations."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Cancellation operations may require user authentication; could be affected by auth service changes."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Order management may require user identity from auth; changes to auth could affect order creation and retrieval."
+    },
+    {
+      "name": "ts-wait-order-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Waitlist orders may need user identity; could be affected by auth changes."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Preservation of tickets may require user authentication; could be impacted if auth endpoints change."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Handles other order types; may depend on authentication for user-specific data."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Rebooking may require user authentication; likely to be impacted by auth consolidation."
+    }
+  ]
+}

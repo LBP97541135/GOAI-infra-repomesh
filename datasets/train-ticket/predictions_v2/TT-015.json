@@ -1,0 +1,65 @@
+{
+  "case_id": "TT-015",
+  "requirement": "修复通知服务的接口调用问题。\n订票服务调用通知接口时参数格式不匹配。\n需要检查订票服务中调用通知服务的代码。",
+  "entry_repo": "ts-notification-service",
+  "predicted_repositories": [
+    "ts-notification-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-cancel-service",
+    "ts-rebook-service",
+    "ts-wait-order-service"
+  ],
+  "details": [
+    {
+      "name": "ts-notification-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "The requirement mentions the booking service calling the notification service with mismatched parameters, and ts-preserve-service is the primary booking service that likely invokes notifications."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "This service also handles ticket preservation and may call the notification service, so it could be affected by interface changes."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Order-related services may also trigger notifications, and the parameter mismatch could originate here."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Similar to ts-order-service, this service might call notifications and need updates to match the fixed interface."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Cancellation flows often send notifications, so this service could be impacted by the interface fix."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Rebooking operations may also trigger notifications, making it a candidate for affected code."
+    },
+    {
+      "name": "ts-wait-order-service",
+      "score": 0.3,
+      "is_entry_point": false,
+      "rationale": "Wait-order functionality might send notifications, but with lower likelihood of direct involvement."
+    }
+  ]
+}

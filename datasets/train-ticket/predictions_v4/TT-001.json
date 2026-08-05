@@ -1,0 +1,26 @@
+{
+  "case_id": "TT-001",
+  "requirement": "修复订票和取消订单流程中发送通知邮件的异常。\n用户反馈下单后收不到确认邮件，取消订单后也收不到通知。\n经排查是邮件发送接口调用异常，需要检查相关服务的通知调用逻辑。",
+  "entry_repo": "ts-preserve-service",
+  "discovery_candidates": [
+    "ts-preserve-service",
+    "ts-notification-service",
+    "ts-cancel-service",
+    "ts-preserve-other-service"
+  ],
+  "required_repositories": [
+    "ts-preserve-service",
+    "ts-notification-service",
+    "ts-cancel-service",
+    "ts-preserve-other-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-preserve-service",
+    "ts-notification-service",
+    "ts-cancel-service",
+    "ts-preserve-other-service"
+  ]
+}

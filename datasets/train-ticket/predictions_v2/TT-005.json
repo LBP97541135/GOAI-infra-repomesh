@@ -1,0 +1,58 @@
+{
+  "case_id": "TT-005",
+  "requirement": "修复路线查询和站点数据传递的 bug。\n路线规划服务在查询中转站时数据传递异常，导致路线结果不完整。\n需要检查路线服务与基础服务、站点服务之间的数据流。",
+  "entry_repo": "ts-route-plan-service",
+  "predicted_repositories": [
+    "ts-route-plan-service",
+    "ts-route-service",
+    "ts-station-service",
+    "ts-basic-service",
+    "ts-travel-plan-service",
+    "ts-travel-service",
+    "ts-travel2-service"
+  ],
+  "details": [
+    {
+      "name": "ts-route-plan-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Route planning service likely calls route service for route data, and the bug mentions incomplete route results due to data transfer issues."
+    },
+    {
+      "name": "ts-station-service",
+      "score": 0.85,
+      "is_entry_point": false,
+      "rationale": "Station data is involved in the bug, and route planning may query station service for transfer station information."
+    },
+    {
+      "name": "ts-basic-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Basic service may provide foundational data used by route planning, and the requirement mentions checking data flow with basic service."
+    },
+    {
+      "name": "ts-travel-plan-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel plan service may also interact with route planning for journey planning, potentially affected by route data issues."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Travel service may consume route planning results, so changes could impact it, though less directly."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Similar to travel service, may use route planning data for alternative travel options."
+    }
+  ]
+}

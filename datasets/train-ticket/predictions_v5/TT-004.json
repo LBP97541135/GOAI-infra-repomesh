@@ -1,0 +1,52 @@
+{
+  "case_id": "TT-004",
+  "requirement": "紧急修复订单管理、用户管理和寄存服务的线上 hotfix。\n\n1. 订单状态同步问题：修复用户下单后订单状态不更新的问题，确保支付后订单状态正确变为已支付；同时修复后台与前台订单状态显示不一致的问题，例如用户退票后后台仍显示已支付，需保证前后台状态实时同步。\n\n2. 用户信息丢失问题：修复用户修改个人信息后联系方式（手机号、邮箱）丢失的问题，确保信息保存完整；同时修复订票后订单关联的用户信息不完整的问题，保证订单中用户联系方式可用。\n\n3. 寄存价格计算错误问题：修复寄存服务价格计算逻辑，确保按小时正确计费（前2小时免费，之后每小时5元），并正确处理超过24小时的封顶价格，避免多收或少收。\n\n要求紧急修复相关服务的数据处理逻辑，确保线上稳定。",
+  "original_requirement": "修复订单管理、用户管理和寄存服务的线上 hotfix。\n线上出现订单状态不同步、用户信息丢失和寄存价格计算错误的问题。\n需要紧急修复相关服务的数据处理逻辑。",
+  "entry_repo": "ts-admin-order-service",
+  "discovery_candidates": [
+    "ts-admin-order-service",
+    "ts-admin-user-service",
+    "ts-consign-price-service",
+    "ts-order-service",
+    "ts-user-service",
+    "ts-consign-service",
+    "ts-inside-payment-service",
+    "ts-cancel-service",
+    "ts-payment-service",
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-order-other-service"
+  ],
+  "required_repositories": [
+    "ts-admin-order-service",
+    "ts-admin-user-service",
+    "ts-consign-price-service",
+    "ts-order-service",
+    "ts-user-service",
+    "ts-consign-service",
+    "ts-cancel-service",
+    "ts-payment-service"
+  ],
+  "maybe_repositories": [
+    "ts-inside-payment-service",
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-order-other-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-admin-order-service",
+    "ts-admin-user-service",
+    "ts-consign-price-service",
+    "ts-order-service",
+    "ts-user-service",
+    "ts-consign-service",
+    "ts-cancel-service",
+    "ts-payment-service",
+    "ts-inside-payment-service",
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-order-other-service"
+  ]
+}

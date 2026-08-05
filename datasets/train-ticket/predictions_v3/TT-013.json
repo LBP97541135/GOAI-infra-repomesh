@@ -1,0 +1,30 @@
+{
+  "case_id": "TT-013",
+  "requirement": "修复订单数据模型的 bug。\n订单实体类的字段定义有误，导致序列化时数据丢失。\n需要修正订单模型并检查所有引用订单数据的服务。",
+  "entry_repo": "ts-order-service",
+  "discovery_candidates": [
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-preserve-service",
+    "ts-rebook-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service"
+  ],
+  "confirmed_repositories": [
+    "ts-order-service",
+    "ts-order-other-service"
+  ],
+  "excluded_repositories": [
+    "ts-admin-order-service",
+    "ts-preserve-service",
+    "ts-rebook-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-order-service",
+    "ts-order-other-service"
+  ]
+}

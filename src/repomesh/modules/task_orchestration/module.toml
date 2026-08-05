@@ -1,5 +1,5 @@
 name = "task_orchestration"
 owner = "orchestration"
-status = "planned"
+status = "active"
 schema = "task_orchestration"
 responsibilities = ["task state machine", "dependency graph", "readiness", "leases and scheduling"]

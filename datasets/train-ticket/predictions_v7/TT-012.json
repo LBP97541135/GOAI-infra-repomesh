@@ -1,0 +1,23 @@
+{
+  "case_id": "TT-012",
+  "requirement": "修复用户信息修改功能的 bug。\n用户修改个人信息后，认证服务没有同步更新。\n需要检查用户服务和认证服务之间的数据同步逻辑。",
+  "entry_repo": "ts-user-service",
+  "discovery_candidates": [
+    "ts-user-service",
+    "ts-auth-service",
+    "ts-admin-user-service"
+  ],
+  "required_repositories": [
+    "ts-user-service",
+    "ts-auth-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [
+    "ts-admin-user-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-user-service",
+    "ts-auth-service"
+  ]
+}

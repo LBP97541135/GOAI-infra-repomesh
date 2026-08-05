@@ -1,0 +1,26 @@
+{
+  "case_id": "TT-006",
+  "requirement": "新增车站 ID 的批量查询功能。\n现有接口只支持单个车站 ID 查询，无法满足批量查询场景。\n需要在车站服务中新增批量查询接口，并在订单和车次服务中对接。",
+  "entry_repo": "ts-station-service",
+  "discovery_candidates": [
+    "ts-station-service",
+    "ts-travel-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-travel2-service"
+  ],
+  "confirmed_repositories": [
+    "ts-station-service",
+    "ts-order-service"
+  ],
+  "excluded_repositories": [
+    "ts-travel-service",
+    "ts-order-other-service",
+    "ts-travel2-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-station-service",
+    "ts-order-service"
+  ]
+}

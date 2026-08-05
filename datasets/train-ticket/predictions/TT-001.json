@@ -1,0 +1,65 @@
+{
+  "case_id": "TT-001",
+  "requirement": "修复订票和取消订单流程中发送通知邮件的异常。\n用户反馈下单后收不到确认邮件，取消订单后也收不到通知。\n经排查是邮件发送接口调用异常，需要检查相关服务的通知调用逻辑。",
+  "entry_repo": "ts-preserve-service",
+  "predicted_repositories": [
+    "ts-preserve-service",
+    "ts-notification-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-rebook-service",
+    "ts-execute-service"
+  ],
+  "details": [
+    {
+      "name": "ts-preserve-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-notification-service",
+      "score": 0.95,
+      "is_entry_point": false,
+      "rationale": "Central service for sending notifications/emails; any email sending anomaly would be fixed here."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Handles alternative reservation flow and has similar email exception fix in commit history, likely shares notification logic."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Handles order cancellation and has commit 'fix: send email exception', directly related to cancellation notification emails."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Order service may be involved in order lifecycle and could call notification service for confirmations."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Handles other order types and may also trigger notifications for orders/cancellations."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Rebooking may involve order changes and could trigger notification emails, though less directly related."
+    },
+    {
+      "name": "ts-execute-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Executes order actions and may send notifications after successful execution, potentially affected."
+    }
+  ]
+}

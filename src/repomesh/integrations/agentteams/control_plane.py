@@ -119,6 +119,24 @@ class AgentTeamsControlPlaneClient:
             "state": projection.state.value,
         }
         self._set_optional(payload, "identity", projection.identity)
+        self._set_optional(payload, "soul", projection.soul)
+        self._set_optional(payload, "agents", projection.agents)
+        if projection.mcp_servers:
+            payload["mcpServers"] = [
+                {
+                    "name": server.name,
+                    "url": server.url,
+                    "transport": server.transport,
+                }
+                for server in projection.mcp_servers
+            ]
+        if projection.channel_policy is not None:
+            payload["channelPolicy"] = {
+                "groupAllowExtra": list(projection.channel_policy.group_allow_extra),
+                "groupDenyExtra": list(projection.channel_policy.group_deny_extra),
+                "dmAllowExtra": list(projection.channel_policy.dm_allow_extra),
+                "dmDenyExtra": list(projection.channel_policy.dm_deny_extra),
+            }
         body = await self._create_or_reconcile(
             "/api/v1/workers",
             path,
@@ -155,6 +173,10 @@ class AgentTeamsControlPlaneClient:
     async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
         body = await self._get_optional(self._resource_path("workers", name))
         return self._worker_ref(body) if body else None
+
+    async def get_manager(self, name: str) -> ManagerRuntimeRef | None:
+        body = await self._get_optional(self._resource_path("managers", name))
+        return self._manager_ref(body) if body else None
 
     async def ensure_worker_ready(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
         path = self._resource_path("workers", name) + "/ensure-ready"
@@ -270,11 +292,31 @@ class AgentTeamsControlPlaneClient:
             "model": expected.model,
             "runtime": expected.runtime.value,
             "skills": list(expected.skills),
+            "mcpServers": [
+                {
+                    "name": server.name,
+                    "url": server.url,
+                    "transport": server.transport,
+                }
+                for server in expected.mcp_servers
+            ],
         }
         if expected.identity:
             fields["identity"] = expected.identity
+        if expected.soul:
+            fields["soul"] = expected.soul
+        if expected.agents:
+            fields["agents"] = expected.agents
+        if expected.channel_policy is not None:
+            fields["channelPolicy"] = {
+                "groupAllowExtra": list(expected.channel_policy.group_allow_extra),
+                "groupDenyExtra": list(expected.channel_policy.group_deny_extra),
+                "dmAllowExtra": list(expected.channel_policy.dm_allow_extra),
+                "dmDenyExtra": list(expected.channel_policy.dm_deny_extra),
+            }
         normalized = dict(body)
         normalized["skills"] = list(body.get("skills") or [])
+        normalized["mcpServers"] = list(body.get("mcpServers") or [])
         AgentTeamsControlPlaneClient._assert_fields("worker", normalized, fields)
 
     @staticmethod
@@ -319,6 +361,7 @@ class AgentTeamsControlPlaneClient:
             name=str(body.get("name", "")),
             phase=str(body.get("phase", "")),
             team_room_id=body.get("teamRoomID"),
+            leader_room_id=body.get("leaderDMRoomID"),
             leader_name=str(body.get("leaderName", "")),
             ready_workers=int(body.get("readyWorkers", 0)),
             total_workers=int(body.get("totalWorkers", 0)),

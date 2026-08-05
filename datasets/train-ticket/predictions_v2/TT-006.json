@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-006",
+  "requirement": "新增车站 ID 的批量查询功能。\n现有接口只支持单个车站 ID 查询，无法满足批量查询场景。\n需要在车站服务中新增批量查询接口，并在订单和车次服务中对接。",
+  "entry_repo": "ts-station-service",
+  "predicted_repositories": [
+    "ts-station-service",
+    "ts-travel-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-travel2-service",
+    "ts-route-service",
+    "ts-route-plan-service",
+    "ts-preserve-other-service",
+    "ts-travel-plan-service",
+    "ts-preserve-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service",
+    "ts-train-service",
+    "ts-price-service",
+    "ts-seat-service"
+  ],
+  "details": [
+    {
+      "name": "ts-station-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Requirement explicitly mentions train service needs to integrate the new batch station query API."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Requirement explicitly mentions order service needs to integrate the new batch station query API."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Likely also handles orders and may need to call the batch station query for order-related operations."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "As a travel service variant, it may also need to use the batch station query for route planning."
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Route service likely depends on station data and may benefit from batch queries for route management."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Route planning may need to fetch multiple station details at once, so it could integrate the new API."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve service, it may also require batch station info for reservation workflows."
+    },
+    {
+      "name": "ts-travel-plan-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel plan service likely aggregates station data for planning and could use batch queries."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Preserve service handles ticket reservations and may need station details for multiple stations in a trip."
+    },
+    {
+      "name": "ts-admin-route-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin route service may manage routes and could use batch station queries for administrative operations."
+    },
+    {
+      "name": "ts-admin-travel-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin travel service may need station info for travel management and could adopt the batch API."
+    },
+    {
+      "name": "ts-train-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Train service may reference station IDs and could benefit from batch queries for train schedules."
+    },
+    {
+      "name": "ts-price-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Price service may calculate fares based on station pairs and could use batch station lookups."
+    },
+    {
+      "name": "ts-seat-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Seat service might need station info for seat availability across routes, potentially using batch queries."
+    }
+  ]
+}

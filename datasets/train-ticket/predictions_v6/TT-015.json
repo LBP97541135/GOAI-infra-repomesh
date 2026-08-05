@@ -1,0 +1,45 @@
+{
+  "case_id": "TT-015",
+  "requirement": "修复通知服务的接口调用问题。\n订票服务调用通知接口时参数格式不匹配。\n需要检查订票服务中调用通知服务的代码。",
+  "entry_repo": "ts-notification-service",
+  "discovery_candidates": [
+    "ts-notification-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service",
+    "ts-rebook-service",
+    "ts-wait-order-service",
+    "ts-payment-service",
+    "ts-inside-payment-service"
+  ],
+  "required_repositories": [
+    "ts-notification-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service"
+  ],
+  "maybe_repositories": [
+    "ts-rebook-service",
+    "ts-wait-order-service",
+    "ts-payment-service",
+    "ts-inside-payment-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-notification-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service",
+    "ts-rebook-service",
+    "ts-wait-order-service",
+    "ts-payment-service",
+    "ts-inside-payment-service"
+  ]
+}

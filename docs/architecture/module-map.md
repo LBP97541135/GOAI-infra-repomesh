@@ -6,7 +6,7 @@ into an organization.
 
 | Module | Owner | Owns | Does not own |
 | --- | --- | --- | --- |
-| Agent Directory | agent-platform | agent profiles and bindings | running processes, secrets |
+| Agent Directory | agent-platform | business principals and AgentTeams bindings | runtime configuration, processes, secrets |
 | Repository Intelligence | repository-intelligence | scans, profiles, dependency evidence, discovery | confirmed project scope |
 | Project | project-planning | lifecycle, repository scope, membership, workstreams | spec content, tasks |
 | Specification | project-planning | specs, contracts, decisions | scheduling, execution |

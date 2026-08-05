@@ -11,7 +11,9 @@ from repomesh.integrations.agentteams.control_plane import (
 )
 from repomesh.integrations.agentteams.matrix import AgentTeamsMatrixClient
 from repomesh.modules.agent_runtime.ports.agent_team import (
+    ChannelPolicyProjection,
     ManagerProjection,
+    McpServerProjection,
     TeamMemberProjection,
     TeamProjection,
     TeamRole,
@@ -128,6 +130,58 @@ async def test_ensure_worker_reuses_matching_projection_without_post() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_creation_projects_identity_prompts_mcp_and_channel_policy() -> None:
+    posted: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal posted
+        if request.method == "GET":
+            return response(404, {"error": "not found"})
+        posted = json.loads(request.content)
+        return response(201, {**posted, "phase": "Pending"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await client.ensure_worker(
+            WorkerProjection(
+                name="rm-worker-secure",
+                model="qwen3.6-plus",
+                identity="Repository worker",
+                soul="Be precise.",
+                agents="Follow the assigned task only.",
+                skills=("task-management",),
+                mcp_servers=(
+                    McpServerProjection("github", "https://gateway.example/mcp/github"),
+                ),
+                channel_policy=ChannelPolicyProjection(
+                    dm_deny_extra=("unrelated-worker",),
+                ),
+            ),
+            idempotency_key="secure-worker-v1",
+        )
+    finally:
+        await client.close()
+
+    assert posted["soul"] == "Be precise."
+    assert posted["agents"] == "Follow the assigned task only."
+    assert posted["mcpServers"] == [
+        {
+            "name": "github",
+            "url": "https://gateway.example/mcp/github",
+            "transport": "http",
+        }
+    ]
+    assert posted["channelPolicy"] == {
+        "groupAllowExtra": [],
+        "groupDenyExtra": [],
+        "dmAllowExtra": [],
+        "dmDenyExtra": ["unrelated-worker"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_ensure_worker_rejects_different_existing_projection() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return response(
@@ -170,6 +224,7 @@ async def test_team_references_independently_created_workers() -> None:
                 "leaderName": "rm-worker-lead",
                 "readyWorkers": 0,
                 "totalWorkers": 2,
+                "leaderDMRoomID": "!leader:matrix.local",
             },
         )
 
@@ -196,6 +251,7 @@ async def test_team_references_independently_created_workers() -> None:
     ]
     assert team.leader_name == "rm-worker-lead"
     assert team.total_workers == 2
+    assert team.leader_room_id == "!leader:matrix.local"
 
 
 @pytest.mark.asyncio
@@ -226,6 +282,29 @@ async def test_manager_and_worker_lifecycle_use_distinct_endpoints() -> None:
     assert manager.name == "rm-manager-main"
     assert worker.phase == "Ready"
     assert calls[-1] == ("POST", "/api/v1/workers/rm-worker-api/ensure-ready")
+
+
+@pytest.mark.asyncio
+async def test_get_manager_exposes_matrix_identity_for_inbound_authentication() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response(
+            200,
+            {
+                "name": "rm-manager-main",
+                "phase": "Ready",
+                "matrixUserID": "@rm-manager-main:matrix.local",
+            },
+        )
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        manager = await client.get_manager("rm-manager-main")
+    finally:
+        await client.close()
+    assert manager is not None
+    assert manager.matrix_user_id == "@rm-manager-main:matrix.local"
 
 
 @pytest.mark.asyncio
@@ -262,6 +341,53 @@ async def test_matrix_task_uses_transaction_id_as_idempotency_key() -> None:
         "body": "Implement task PRJ-1-api-01",
     }
     assert event_id == "$event-1"
+
+
+@pytest.mark.asyncio
+async def test_matrix_sync_extracts_joined_text_messages() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/_matrix/client/v3/sync"
+        assert request.url.params["since"] == "batch-1"
+        return response(
+            200,
+            {
+                "next_batch": "batch-2",
+                "rooms": {
+                    "join": {
+                        "!team:matrix.local": {
+                            "timeline": {
+                                "events": [
+                                    {
+                                        "type": "m.room.message",
+                                        "event_id": "$report-1",
+                                        "sender": "@worker:matrix.local",
+                                        "content": {
+                                            "msgtype": "m.text",
+                                            "body": '{"schema":"repomesh.agent-report.v1"}',
+                                        },
+                                    },
+                                    {"type": "m.room.member", "event_id": "$member"},
+                                ]
+                            }
+                        }
+                    }
+                },
+            },
+        )
+
+    client = AgentTeamsMatrixClient(
+        "http://matrix:6167",
+        "matrix-token",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        batch = await client.sync_once(since="batch-1", timeout_ms=1000)
+    finally:
+        await client.close()
+    assert batch.next_batch == "batch-2"
+    assert len(batch.messages) == 1
+    assert batch.messages[0].event_id == "$report-1"
+    assert batch.messages[0].room_id == "!team:matrix.local"
 
 
 def test_upstream_pin_matches_repository_contract() -> None:

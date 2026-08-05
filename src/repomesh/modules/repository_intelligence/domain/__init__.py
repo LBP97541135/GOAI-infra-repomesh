@@ -1,3 +1,3 @@
-from .models import DiscoveryEvidence, RepositoryProfile
+from .models import AutoCard, DiscoveryEvidence, RepositoryProfile, tokenize
 
-__all__ = ["DiscoveryEvidence", "RepositoryProfile"]
+__all__ = ["AutoCard", "DiscoveryEvidence", "RepositoryProfile", "tokenize"]

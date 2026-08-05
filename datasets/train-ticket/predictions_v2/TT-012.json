@@ -1,0 +1,37 @@
+{
+  "case_id": "TT-012",
+  "requirement": "修复用户信息修改功能的 bug。\n用户修改个人信息后，认证服务没有同步更新。\n需要检查用户服务和认证服务之间的数据同步逻辑。",
+  "entry_repo": "ts-user-service",
+  "predicted_repositories": [
+    "ts-user-service",
+    "ts-auth-service",
+    "ts-admin-user-service",
+    "ts-gateway-service"
+  ],
+  "details": [
+    {
+      "name": "ts-user-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-auth-service",
+      "score": 0.95,
+      "is_entry_point": false,
+      "rationale": "The requirement explicitly states the authentication service is not syncing after user profile updates, so it must be updated to receive or fetch the changes."
+    },
+    {
+      "name": "ts-admin-user-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin user management may also modify user data and could be affected by the same sync issue, though the primary flow is user-service to auth-service."
+    },
+    {
+      "name": "ts-gateway-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "The gateway routes requests between services and may need configuration or routing changes if the sync API endpoints change."
+    }
+  ]
+}

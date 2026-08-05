@@ -1,0 +1,28 @@
+{
+  "case_id": "TT-012",
+  "requirement": "修复用户信息修改功能中认证服务未同步更新的bug。当用户（包括普通用户和管理员）修改个人信息（如手机号、邮箱、角色或权限等）后，认证服务应立即同步更新，确保用户使用新信息登录和接收验证码，并保证权限及时生效。当前问题表现为用户修改后认证信息未更新，导致登录失败、验证码发送到旧地址或权限异常。需要检查用户服务和认证服务之间的数据同步逻辑，确保修改操作触发即时同步，避免延迟。",
+  "original_requirement": "修复用户信息修改功能的 bug。\n用户修改个人信息后，认证服务没有同步更新。\n需要检查用户服务和认证服务之间的数据同步逻辑。",
+  "entry_repo": "ts-user-service",
+  "discovery_candidates": [
+    "ts-user-service",
+    "ts-auth-service",
+    "ts-admin-user-service",
+    "ts-verification-code-service"
+  ],
+  "required_repositories": [
+    "ts-user-service",
+    "ts-auth-service",
+    "ts-admin-user-service"
+  ],
+  "maybe_repositories": [
+    "ts-verification-code-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-user-service",
+    "ts-auth-service",
+    "ts-admin-user-service",
+    "ts-verification-code-service"
+  ]
+}

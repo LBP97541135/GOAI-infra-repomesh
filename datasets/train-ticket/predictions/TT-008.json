@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-008",
+  "requirement": "删除独立的 SSO 登录注册模块，用统一的认证服务替代。\n现有的 SSO、登录、注册三个独立服务维护成本高。\n需要将认证逻辑统一到 auth 服务中，删除冗余服务。",
+  "entry_repo": "ts-auth-service",
+  "predicted_repositories": [
+    "ts-auth-service",
+    "ts-user-service",
+    "ts-security-service",
+    "ts-gateway-service",
+    "ts-admin-user-service",
+    "ts-config-service",
+    "ts-basic-service",
+    "ts-notification-service",
+    "ts-preserve-other-service",
+    "ts-rebook-service",
+    "ts-cancel-service",
+    "ts-preserve-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-travel2-service"
+  ],
+  "details": [
+    {
+      "name": "ts-auth-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-user-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "User service likely handles user profiles and may need to integrate with the unified auth service for authentication-related operations."
+    },
+    {
+      "name": "ts-security-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Security service may contain authentication or authorization logic that needs to be consolidated into the auth service."
+    },
+    {
+      "name": "ts-gateway-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Gateway service likely routes authentication requests and may need to update endpoints to point to the unified auth service."
+    },
+    {
+      "name": "ts-admin-user-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin user service may manage user accounts and could be affected by changes in authentication flow."
+    },
+    {
+      "name": "ts-config-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Config service may hold authentication-related configuration that needs to be updated for the unified auth service."
+    },
+    {
+      "name": "ts-basic-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Basic service may provide common utilities or configuration that could be impacted by auth service changes."
+    },
+    {
+      "name": "ts-notification-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Notification service may send auth-related emails (e.g., registration confirmation) and could need adjustments."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve service, it may depend on authentication for other booking flows."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Rebook service may require authentication for rebooking tickets and could be impacted."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Order service may require user authentication for order management and could be impacted."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Other order service may also depend on authentication for order-related operations."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Cancel service may need user authentication to process cancellations and could be affected."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Preserve service may rely on user authentication for booking operations and could be affected by auth changes."
+    },
+    {
+      "name": "ts-food-delivery-service",
+      "score": 0.3,
+      "is_entry_point": false,
+      "rationale": "Food delivery service may depend on authentication for delivery tracking."
+    }
+  ]
+}

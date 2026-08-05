@@ -1,0 +1,38 @@
+{
+  "case_id": "TT-004",
+  "requirement": "修复订单管理、用户管理和寄存服务的线上 hotfix。\n线上出现订单状态不同步、用户信息丢失和寄存价格计算错误的问题。\n需要紧急修复相关服务的数据处理逻辑。",
+  "entry_repo": "ts-admin-order-service",
+  "discovery_candidates": [
+    "ts-admin-order-service",
+    "ts-order-service",
+    "ts-user-service",
+    "ts-consign-price-service",
+    "ts-order-other-service",
+    "ts-consign-service",
+    "ts-admin-user-service",
+    "ts-price-service"
+  ],
+  "required_repositories": [
+    "ts-admin-order-service",
+    "ts-order-service",
+    "ts-user-service",
+    "ts-consign-price-service",
+    "ts-consign-service"
+  ],
+  "maybe_repositories": [
+    "ts-order-other-service"
+  ],
+  "excluded_repositories": [
+    "ts-admin-user-service",
+    "ts-price-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-admin-order-service",
+    "ts-order-service",
+    "ts-user-service",
+    "ts-consign-price-service",
+    "ts-consign-service",
+    "ts-order-other-service"
+  ]
+}
