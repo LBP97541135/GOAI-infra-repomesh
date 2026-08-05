@@ -21,6 +21,13 @@ immutable URI plus SHA-256 references. Matrix messages are not command or event 
 - `worker-runtime.md`: the `repomesh-runner` worker runtime — entrypoint, environment, configuration
   tree, heartbeat, termination, and storage boundary of an AgentTeams worker that runs a Runner.
 
+## Reference
+
+- `task-and-result-reference.md`: worked examples and field semantics for RunnerTask and the
+  result-bearing RunnerEvents — envelope vs payload, permission precedence, idempotency, and
+  session-id (resume) semantics. The schemas stay authoritative; this is the human-readable
+  companion, generated from the implementation's own wire output.
+
 ## Compatibility
 
 Additive optional fields are backward compatible within v1. Removing a field, renaming a field,
