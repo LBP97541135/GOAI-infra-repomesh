@@ -40,6 +40,22 @@
         "baseRevision": {"type": "string", "minLength": 1, "maxLength": 200}
       }
     },
+    "workspace": {
+      "description": "Workspace prepared by the platform before dispatch. When present it is the single source of truth for where execution happens and at which base revision; repository.url and repository.baseRevision are then reference metadata only and the Runner never clones.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["workspaceId", "path", "baseSha"],
+      "properties": {
+        "workspaceId": {"type": "string", "minLength": 1, "maxLength": 200},
+        "path": {
+          "description": "Absolute path prepared by the platform; existence is verified by the Runner executor, not by this contract.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "baseSha": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    },
     "contextBundle": {
       "type": "object",
       "additionalProperties": false,
@@ -48,7 +64,11 @@
         "bundleId": {"type": "string", "format": "uuid"},
         "version": {"type": "integer", "minimum": 1},
         "manifestUri": {"type": "string", "format": "uri"},
-        "contentHash": {"$ref": "#/$defs/sha256"}
+        "contentHash": {"$ref": "#/$defs/sha256"},
+        "codingPackageHash": {
+          "description": "Content hash of the coding package materialized into the workspace, when the bundle carries one.",
+          "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        }
       }
     },
     "permissions": {
@@ -73,6 +93,18 @@
           "type": "array",
           "items": {"type": "string", "minLength": 1},
           "uniqueItems": true
+        },
+        "allowedPaths": {
+          "description": "Paths the adapter may read and write, relative to the assigned workspace.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "deniedPaths": {
+          "description": "Paths the adapter may never touch. Denial applies in every permission mode.",
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
         }
       }
     },
@@ -80,6 +112,17 @@
     "credentialRefs": {
       "type": "array",
       "items": {"type": "string", "minLength": 1, "maxLength": 300},
+      "uniqueItems": true
+    },
+    "workerAgentId": {
+      "description": "AgentTeams worker agent the task is assigned to, when the platform pins one.",
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "testCommands": {
+      "description": "Verification commands the Runner runs in the workspace after the adapter finishes.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
       "uniqueItems": true
     },
     "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 200},

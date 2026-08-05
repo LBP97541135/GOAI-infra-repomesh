@@ -67,11 +67,34 @@ class RepositoryCheckout:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceAssignment:
+    """Workspace prepared by the platform before the task is dispatched.
+
+    When a task carries a workspace assignment it is the single source of truth for where
+    execution happens and at which base revision. ``RepositoryCheckout`` (``repository.url`` and
+    ``baseRevision``) is then reference metadata only: the Runner never clones.
+    """
+
+    workspace_id: str
+    path: str
+    base_sha: str
+
+    def __post_init__(self) -> None:
+        if not self.workspace_id.strip():
+            raise ValueError("workspace_id is required")
+        if not self.path.strip():
+            raise ValueError("workspace path is required")
+        if not self.base_sha.strip():
+            raise ValueError("workspace base_sha is required")
+
+
+@dataclass(frozen=True, slots=True)
 class ContextBundleRef:
     bundle_id: UUID
     version: int
     manifest_uri: str
     content_hash: str
+    coding_package_hash: str | None = None
 
     def __post_init__(self) -> None:
         if self.version < 1:
@@ -79,6 +102,8 @@ class ContextBundleRef:
         if not self.manifest_uri.strip():
             raise ValueError("context bundle manifest_uri is required")
         _validate_sha256(self.content_hash)
+        if self.coding_package_hash is not None:
+            _validate_sha256(self.coding_package_hash)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,11 +112,15 @@ class RunnerPermissions:
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
     network_targets: tuple[str, ...] = ()
+    allowed_paths: tuple[str, ...] = ()
+    denied_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_unique_strings("allowed_tools", self.allowed_tools)
         _validate_unique_strings("disallowed_tools", self.disallowed_tools)
         _validate_unique_strings("network_targets", self.network_targets)
+        _validate_unique_strings("allowed_paths", self.allowed_paths)
+        _validate_unique_strings("denied_paths", self.denied_paths)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +140,9 @@ class RunnerTask:
     issued_at: datetime
     resume_session_id: str | None = None
     credential_refs: tuple[str, ...] = ()
+    workspace: WorkspaceAssignment | None = None
+    worker_agent_id: UUID | None = None
+    test_commands: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.attempt < 1:
@@ -123,6 +155,7 @@ class RunnerTask:
             raise ValueError("idempotency_key is required")
         _validate_timezone("issued_at", self.issued_at)
         _validate_unique_strings("credential_refs", self.credential_refs)
+        _validate_unique_strings("test_commands", self.test_commands)
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -140,20 +173,36 @@ class RunnerTask:
                 "url": self.repository.url,
                 "baseRevision": self.repository.base_revision,
             },
+            "workspace": (
+                {
+                    "workspaceId": self.workspace.workspace_id,
+                    "path": self.workspace.path,
+                    "baseSha": self.workspace.base_sha,
+                }
+                if self.workspace is not None
+                else None
+            ),
             "contextBundle": {
                 "bundleId": str(self.context_bundle.bundle_id),
                 "version": self.context_bundle.version,
                 "manifestUri": self.context_bundle.manifest_uri,
                 "contentHash": self.context_bundle.content_hash,
+                "codingPackageHash": self.context_bundle.coding_package_hash,
             },
             "permissions": {
                 "mode": self.permissions.mode.value,
                 "allowedTools": list(self.permissions.allowed_tools),
                 "disallowedTools": list(self.permissions.disallowed_tools),
                 "networkTargets": list(self.permissions.network_targets),
+                "allowedPaths": list(self.permissions.allowed_paths),
+                "deniedPaths": list(self.permissions.denied_paths),
             },
             "resumeSessionId": self.resume_session_id,
             "credentialRefs": list(self.credential_refs),
+            "workerAgentId": (
+                str(self.worker_agent_id) if self.worker_agent_id is not None else None
+            ),
+            "testCommands": list(self.test_commands),
             "idempotencyKey": self.idempotency_key,
             "issuedAt": self.issued_at.isoformat(),
         }
@@ -175,12 +224,27 @@ class ArtifactRef:
 
 
 @dataclass(frozen=True, slots=True)
+class TestCommandResult:
+    command: str
+    exit_code: int
+
+    def __post_init__(self) -> None:
+        if not self.command.strip():
+            raise ValueError("test command is required")
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerExecutionResult:
     status: RunnerResultStatus
     summary: str
     native_session_id: str | None = None
     artifacts: tuple[ArtifactRef, ...] = ()
     test_command: str | None = None
+    changed_files: tuple[str, ...] = ()
+    test_results: tuple[TestCommandResult, ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_unique_strings("changed_files", self.changed_files)
 
 
 @dataclass(frozen=True, slots=True)

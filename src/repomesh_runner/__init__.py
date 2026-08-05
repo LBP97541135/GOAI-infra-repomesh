@@ -12,6 +12,8 @@ from .contracts import (
     RunnerPermissions,
     RunnerResultStatus,
     RunnerTask,
+    TestCommandResult,
+    WorkspaceAssignment,
 )
 from .engine import (
     ExecuteRunnerTask,
@@ -36,4 +38,6 @@ __all__ = [
     "RunnerPermissions",
     "RunnerResultStatus",
     "RunnerTask",
+    "TestCommandResult",
+    "WorkspaceAssignment",
 ]
