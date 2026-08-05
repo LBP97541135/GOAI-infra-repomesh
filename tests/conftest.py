@@ -6,6 +6,7 @@ import pytest
 from repomesh.bootstrap.container import ApplicationContainer
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
+from repomesh.modules.agent_runtime.infrastructure import PostgresAgentRuntimeStore
 from repomesh.modules.collaboration import PostgresCollaborationMessageStore
 from repomesh.modules.context.infrastructure import PostgresContextStore
 from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
@@ -25,6 +26,7 @@ def application_container(tmp_path: object) -> Iterator[ApplicationContainer]:
         schema_translate_map={schema: None for schema in ALL_SCHEMAS},
     )
     asyncio.run(database.create_all_for_tests())
+    agent_runtime_store = PostgresAgentRuntimeStore(database)
     yield ApplicationContainer(
         database=database,
         agent_directory=PostgresAgentDirectory(database),
@@ -35,5 +37,8 @@ def application_container(tmp_path: object) -> Iterator[ApplicationContainer]:
         collaboration_message_store=PostgresCollaborationMessageStore(database),
         context_store=PostgresContextStore(database),
         specification_store=PostgresSpecificationStore(database),
+        coding_run_store=agent_runtime_store,
+        workspace_store=agent_runtime_store,
+        session_binding_store=agent_runtime_store,
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),
     )

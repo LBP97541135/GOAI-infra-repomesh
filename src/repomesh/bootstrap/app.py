@@ -13,6 +13,7 @@ from repomesh.integrations.agentteams import (
 )
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
+from repomesh.modules.agent_runtime.infrastructure import PostgresAgentRuntimeStore
 from repomesh.modules.collaboration import (
     PostgresCollaborationMessageStore,
     PostgresProcessedMatrixEventStore,
@@ -61,6 +62,7 @@ def build_default_container() -> ApplicationContainer:
     topology_store = PostgresProjectTopologyStore(database)
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
+    agent_runtime_store = PostgresAgentRuntimeStore(database)
     background_services = ()
     if messenger is not None:
         collaboration = SendCollaborationMessage(
@@ -94,6 +96,9 @@ def build_default_container() -> ApplicationContainer:
         collaboration_message_store=collaboration_store,
         context_store=PostgresContextStore(database),
         specification_store=PostgresSpecificationStore(database),
+        coding_run_store=agent_runtime_store,
+        workspace_store=agent_runtime_store,
+        session_binding_store=agent_runtime_store,
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),
         agent_team_control_plane=control_plane,
         agent_team_messenger=messenger,

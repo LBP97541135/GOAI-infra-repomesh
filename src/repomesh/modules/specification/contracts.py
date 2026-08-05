@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol
 from uuid import UUID
 
 
@@ -141,3 +142,9 @@ class CodingAgentPackage:
     test_commands: tuple[str, ...]
     context_files: tuple[RenderedSpecification, ...]
     content_hash: str
+
+
+class CodingAgentPackageBuilder(Protocol):
+    async def execute(
+        self, command: BuildCodingAgentPackageCommand
+    ) -> CodingAgentPackage: ...

@@ -14,3 +14,21 @@ provider is invoked.
 
 This gate does not replace Runner sandboxing. The Runner must still enforce filesystem, process,
 network and secret restrictions so provider behavior cannot bypass the control-plane decision.
+
+## Runner-independent run preparation
+
+`PrepareCodingRun` joins a task-scoped `CodingAgentPackage`, immutable
+`ExecutionContextGrant`, and registered repository Workspace into a persisted internal
+`CodingRun`. Creating the Run and binding the Workspace is atomic.
+
+The internal model owns:
+
+- `PREPARED -> SUBMITTED -> RUNNING -> terminal -> REVIEWED` lifecycle rules.
+- Workspace ownership, Base SHA, Task binding, and single-Run write binding.
+- Context Bundle and Coding Package hashes.
+- Adapter/Workspace/Context-bound native session records.
+- Changed-path and required-test result validation.
+
+`RunnerGateway` is intentionally provider- and transport-neutral. Until the external Runner wire
+contract is frozen, `MockRunnerGateway` is the only implementation. Runner DTO mapping, context
+injection, and real event transport belong in a future integration adapter, not this module.

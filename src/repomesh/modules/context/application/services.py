@@ -413,3 +413,8 @@ class GetExecutionContextGrant:
             expires_at=bundle.expires_at,
             content_hash=bundle.content_hash,
         )
+
+    async def get_grant(
+        self, bundle_id: UUID, *, run_id: UUID, agent_id: UUID
+    ) -> ExecutionContextGrant:
+        return await self.execute(bundle_id, run_id=run_id, agent_id=agent_id)

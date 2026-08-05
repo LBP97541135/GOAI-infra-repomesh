@@ -3,13 +3,22 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from repomesh.modules.agent_directory.ports import AgentDirectory
+from repomesh.modules.agent_runtime.application import PrepareCodingRun
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
 )
 from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
+from repomesh.modules.agent_runtime.ports.run_store import (
+    CodingRunStore,
+    SessionBindingStore,
+    WorkspaceStore,
+)
 from repomesh.modules.collaboration.ports import CollaborationMessageStore
-from repomesh.modules.context.application import ContextPublicationGateway
+from repomesh.modules.context.application import (
+    ContextPublicationGateway,
+    GetExecutionContextGrant,
+)
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project.ports import ProjectTopologyStore
@@ -48,6 +57,9 @@ class ApplicationContainer:
     collaboration_message_store: CollaborationMessageStore
     context_store: ContextStore
     specification_store: SpecificationStore
+    coding_run_store: CodingRunStore
+    workspace_store: WorkspaceStore
+    session_binding_store: SessionBindingStore
     mock_coding_agent_factory: Callable[[str], CodingAgent]
     agent_team_control_plane: AgentTeamControlPlane | None = None
     agent_team_messenger: AgentTeamMessenger | None = None
@@ -81,6 +93,14 @@ class ApplicationContainer:
             self.task_store,
             self.specification_store,
             PolicyAuthorizationGateway(),
+        )
+
+    def prepare_coding_run_service(self) -> PrepareCodingRun:
+        return PrepareCodingRun(
+            self.coding_agent_package_builder(),
+            GetExecutionContextGrant(self.context_store),
+            self.workspace_store,
+            self.coding_run_store,
         )
 
     async def close(self) -> None:

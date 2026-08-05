@@ -19,6 +19,7 @@ from repomesh.bootstrap import create_app  # noqa: E402
 from repomesh.bootstrap.container import ApplicationContainer  # noqa: E402
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario  # noqa: E402
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory  # noqa: E402
+from repomesh.modules.agent_runtime.infrastructure import PostgresAgentRuntimeStore  # noqa: E402
 from repomesh.modules.collaboration import PostgresCollaborationMessageStore  # noqa: E402
 from repomesh.modules.context.infrastructure import PostgresContextStore  # noqa: E402
 from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore  # noqa: E402
@@ -38,6 +39,7 @@ async def build_container(database_path: Path) -> ApplicationContainer:
         schema_translate_map={schema: None for schema in ALL_SCHEMAS},
     )
     await database.create_all_for_tests()
+    agent_runtime_store = PostgresAgentRuntimeStore(database)
     return ApplicationContainer(
         database=database,
         agent_directory=PostgresAgentDirectory(database),
@@ -48,6 +50,9 @@ async def build_container(database_path: Path) -> ApplicationContainer:
         collaboration_message_store=PostgresCollaborationMessageStore(database),
         context_store=PostgresContextStore(database),
         specification_store=PostgresSpecificationStore(database),
+        coding_run_store=agent_runtime_store,
+        workspace_store=agent_runtime_store,
+        session_binding_store=agent_runtime_store,
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),
     )
 

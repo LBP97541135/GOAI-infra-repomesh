@@ -126,3 +126,9 @@ class PublishContextRequest:
 
 class ContextPublisher(Protocol):
     async def publish(self, request: PublishContextRequest) -> ContextVersionRef: ...
+
+
+class ExecutionContextGrantReader(Protocol):
+    async def get_grant(
+        self, bundle_id: UUID, *, run_id: UUID, agent_id: UUID
+    ) -> ExecutionContextGrant: ...
