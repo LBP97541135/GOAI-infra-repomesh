@@ -5,18 +5,17 @@ Speaks the NDJSON dialect of ``claude -p --output-format stream-json
 frame written to stdin, and ``control_request`` / ``control_response``
 round-trips for permission prompts.
 
-Argv note — permission arguments are deliberately not emitted. Profiles carry
-``permission_arguments`` per ``RunnerPermissionMode``, but ``DriverRequest`` is
-a frozen contract and does not carry the mode; adding a field here would be a
-contract change. So this driver spawns with
-``base_arguments + model + system prompt + resume`` only and leaves the CLI in
-its default permission behaviour — which is precisely the mode that asks before
-each tool via ``control_request``. Every tool call is therefore answered by the
-request's ``PermissionPolicy`` over the protocol rather than pre-authorised on
-the command line, which is the more conservative of the two paths. Wiring
-``permission_arguments`` belongs to the executor once the contract grows a mode
-field.
+Argv note — the driver never reads ``profile.permission_arguments`` itself.
+``DriverRequest`` is a frozen contract and does not carry the permission mode,
+so the executor resolves the mode against the profile and hands the result down
+as ``extra_arguments``; :func:`build_arguments` splices those in right after
+``base_arguments``. Whatever the mode maps to, the CLI must stay in a mode that
+asks before each tool via ``control_request``: that channel is where the
+request's ``PermissionPolicy`` enforces the platform's deny rules, and a CLI-side
+bypass flag would silence it.
 """
+
+from __future__ import annotations
 
 import asyncio
 import contextlib

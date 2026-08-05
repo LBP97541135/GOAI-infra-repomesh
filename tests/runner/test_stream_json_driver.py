@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
+from repomesh_runner.contracts import RunnerPermissionMode
 from repomesh_runner.drivers.base import (
     DriverEvent,
     DriverEventKind,
@@ -274,6 +275,35 @@ async def test_permission_allow_writes_control_response(tmp_path, fake_factory):
     assert recorder.payloads(DriverEventKind.PERMISSION_REQUEST) == [
         {"tool_name": "Bash", "decision": "allow"}
     ]
+
+
+async def test_bypass_argv_still_answers_control_requests(tmp_path, fake_factory):
+    """The bypass mapping must leave the CLI asking, or the deny rules go dark."""
+
+    policy = StubPolicy(PermissionDecision.ALLOW)
+    bypass_arguments = PROFILE.permission_arguments[RunnerPermissionMode.BYPASS_PERMISSIONS]
+    factory = fake_factory(
+        [
+            control_request("Bash", {"command": "ls -la"}),
+            result_frame(result="listed"),
+        ]
+    )
+
+    result = await StreamJsonDriver(factory).execute(
+        make_request(tmp_path, permission_policy=policy, extra_arguments=bypass_arguments),
+        PROFILE,
+        Recorder(),
+    )
+
+    assert result.status is DriverResultStatus.SUCCEEDED
+    assert "bypassPermissions" not in factory.spawned_specs[0].arguments
+    assert bypass_arguments == ("--permission-mode", "default")
+    assert factory.spawned_specs[0].arguments == (*PROFILE.base_arguments, *bypass_arguments)
+    # The callback channel is alive: the tool call was decided by the policy.
+    assert policy.calls == [("Bash", {"command": "ls -la"})]
+    assert json.loads(factory.process.stdin_frames[1])["response"]["response"]["behavior"] == (
+        "allow"
+    )
 
 
 async def test_permission_deny_writes_control_response(tmp_path, fake_factory):

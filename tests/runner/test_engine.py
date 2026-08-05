@@ -15,6 +15,9 @@ from repomesh_runner import (
     RunnerResultStatus,
     RunnerTask,
 )
+from repomesh_runner import (
+    TestCommandResult as CommandOutcome,
+)
 
 NOW = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 SHA256 = "sha256:" + "a" * 64
@@ -93,6 +96,51 @@ async def test_success_publishes_ordered_idempotent_events() -> None:
         "run-4-attempt-1:event:2",
     ]
     assert sink.records[1][0].native_session_id == "session-123"
+
+
+@pytest.mark.asyncio
+async def test_completion_payload_carries_structured_execution_evidence() -> None:
+    result = RunnerExecutionResult(
+        status=RunnerResultStatus.SUCCEEDED,
+        summary="Implementation and tests completed",
+        changed_files=("src/app.py", "tests/test_app.py"),
+        test_results=(
+            CommandOutcome(command="pytest -q", exit_code=0),
+            CommandOutcome(command="ruff check src", exit_code=0),
+        ),
+    )
+    sink = RecordingSink()
+    service = ExecuteRunnerTask(ResultExecutor(result), sink, clock=lambda: NOW)
+
+    await service.execute(make_task())
+
+    payload = sink.records[1][0].payload
+    assert payload["changedFiles"] == ["src/app.py", "tests/test_app.py"]
+    assert payload["testResults"] == [
+        {"command": "pytest -q", "exitCode": 0},
+        {"command": "ruff check src", "exitCode": 0},
+    ]
+    assert sink.records[1][0].to_wire()["payload"]["changedFiles"] == [
+        "src/app.py",
+        "tests/test_app.py",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failing_test_evidence_travels_on_the_failed_event() -> None:
+    result = RunnerExecutionResult(
+        status=RunnerResultStatus.FAILED,
+        summary="test_command_failed: pytest -q (exit code 1)",
+        test_results=(CommandOutcome(command="pytest -q", exit_code=1),),
+    )
+    sink = RecordingSink()
+    service = ExecuteRunnerTask(ResultExecutor(result), sink, clock=lambda: NOW)
+
+    await service.execute(make_task())
+
+    assert sink.records[1][0].event_type is RunnerEventType.FAILED
+    assert sink.records[1][0].payload["testResults"] == [{"command": "pytest -q", "exitCode": 1}]
+    assert sink.records[1][0].payload["changedFiles"] == []
 
 
 @pytest.mark.asyncio

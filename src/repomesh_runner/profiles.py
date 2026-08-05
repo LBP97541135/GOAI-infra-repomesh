@@ -4,10 +4,14 @@ A profile carries only per-CLI differences; protocol behavior lives in the
 family driver. Capabilities are three independent claims — launchable,
 observable, resumable — and default to the least capable truthful value.
 
-Permission note: ``bypass_permissions`` is a mappable mode. CLI tool flags were
-measured to be advisory rather than enforceable (spec section 6c), so the run
-boundary is the workspace, container, and network scope around the process —
-never the flags handed to the agent.
+Permission note: ``permission_arguments`` selects the CLI mode only, and no
+profile may map onto a CLI's own bypass flag. Platform ``bypass_permissions``
+means "auto-approve over the protocol", not "stop asking": a CLI left in bypass
+stops emitting permission callbacks, and those callbacks are where
+``denied_paths`` / ``disallowed_tools`` are enforced. CLI tool flags were
+measured to be advisory rather than enforceable (spec section 6c) in any case,
+so the hard boundary remains the workspace, container, and network scope around
+the process — never the flags handed to the agent.
 """
 
 from collections.abc import Mapping
@@ -94,10 +98,11 @@ PROFILES: tuple[CliProfile, ...] = (
             RunnerPermissionMode.DEFAULT: ("--permission-mode", "default"),
             RunnerPermissionMode.ACCEPT_EDITS: ("--permission-mode", "acceptEdits"),
             RunnerPermissionMode.AUTO: ("--permission-mode", "acceptEdits"),
-            RunnerPermissionMode.BYPASS_PERMISSIONS: (
-                "--permission-mode",
-                "bypassPermissions",
-            ),
+            # Deliberately the DEFAULT (ask-everything) arguments, not
+            # ``bypassPermissions``: platform bypass means auto-approval over
+            # the protocol, and the CLI's own bypass flag stops it from emitting
+            # the control_request channel that enforces the deny rules.
+            RunnerPermissionMode.BYPASS_PERMISSIONS: ("--permission-mode", "default"),
         },
         stream_json=StreamJsonConfig(prompt_via_stdin=True),
     ),
@@ -108,6 +113,8 @@ PROFILES: tuple[CliProfile, ...] = (
         observable=True,
         resumable=False,
         base_arguments=("acp",),
+        # Permissions travel over ACP as ``session/request_permission``, so no
+        # flags are mapped here; ``--yolo`` in particular would suppress them.
         acp=AcpConfig(protocol_version=1, quiescence_seconds=2.0),
     ),
     CliProfile(
@@ -120,7 +127,8 @@ PROFILES: tuple[CliProfile, ...] = (
         resumable=False,
         base_arguments=("app-server",),
         # Approvals travel over the protocol as server-initiated requests, so
-        # there are no permission flags to map onto this surface.
+        # there are no permission flags to map onto this surface —
+        # ``--dangerously-bypass-approvals-and-sandbox`` would remove them.
         app_server=AppServerConfig(quiescence_seconds=1.0),
     ),
 )
