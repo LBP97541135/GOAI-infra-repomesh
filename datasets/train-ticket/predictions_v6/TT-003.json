@@ -1,0 +1,45 @@
+{
+  "case_id": "TT-003",
+  "requirement": "修复管理后台 API 的数据模型不一致问题。\n管理端的订单、用户、路线等接口返回的数据字段与前端不匹配。\n需要统一管理后台各服务的数据模型。",
+  "entry_repo": "ts-admin-basic-info-service",
+  "discovery_candidates": [
+    "ts-admin-basic-info-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service",
+    "ts-admin-user-service",
+    "ts-order-service",
+    "ts-route-service",
+    "ts-user-service",
+    "ts-travel-service",
+    "ts-travel2-service"
+  ],
+  "required_repositories": [
+    "ts-admin-basic-info-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service",
+    "ts-admin-user-service",
+    "ts-order-service",
+    "ts-route-service",
+    "ts-user-service"
+  ],
+  "maybe_repositories": [
+    "ts-travel-service",
+    "ts-travel2-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-admin-basic-info-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service",
+    "ts-admin-user-service",
+    "ts-order-service",
+    "ts-route-service",
+    "ts-user-service",
+    "ts-travel-service",
+    "ts-travel2-service"
+  ]
+}

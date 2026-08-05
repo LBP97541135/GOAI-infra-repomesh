@@ -1,0 +1,45 @@
+{
+  "case_id": "TT-002",
+  "requirement": "修复票价计算和座位分配相关的 bug。\n票价服务的数据传递存在异常，导致座位分配时价格计算不准确。\n需要检查票价服务与座位、订票服务之间的数据流。",
+  "entry_repo": "ts-seat-service",
+  "discovery_candidates": [
+    "ts-seat-service",
+    "ts-price-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-order-other-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-travel-plan-service",
+    "ts-route-plan-service"
+  ],
+  "required_repositories": [
+    "ts-seat-service",
+    "ts-price-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ],
+  "maybe_repositories": [
+    "ts-order-other-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-travel-plan-service"
+  ],
+  "excluded_repositories": [
+    "ts-route-plan-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-seat-service",
+    "ts-price-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-order-other-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-travel-plan-service"
+  ]
+}

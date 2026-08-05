@@ -1,0 +1,53 @@
+{
+  "case_id": "TT-009",
+  "requirement": "重构配置管理和车站信息服务的接口实现。\n配置服务和车站服务的接口返回格式不统一。\n需要统一两个服务的接口规范并更新下游调用方。",
+  "entry_repo": "ts-config-service",
+  "discovery_candidates": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-admin-basic-info-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service",
+    "ts-admin-user-service",
+    "ts-basic-service",
+    "ts-route-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-travel-plan-service",
+    "ts-route-plan-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ],
+  "required_repositories": [
+    "ts-config-service",
+    "ts-station-service"
+  ],
+  "maybe_repositories": [
+    "ts-route-service",
+    "ts-travel-service",
+    "ts-route-plan-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ],
+  "excluded_repositories": [
+    "ts-admin-basic-info-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service",
+    "ts-admin-user-service",
+    "ts-basic-service",
+    "ts-travel2-service",
+    "ts-travel-plan-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-route-service",
+    "ts-travel-service",
+    "ts-route-plan-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "case_id": "TT-008",
+  "requirement": "删除独立的 SSO 登录注册模块，用统一的认证服务替代。\n现有的 SSO、登录、注册三个独立服务维护成本高。\n需要将认证逻辑统一到 auth 服务中，删除冗余服务。",
+  "entry_repo": "ts-auth-service",
+  "discovery_candidates": [
+    "ts-auth-service",
+    "ts-user-service",
+    "ts-security-service",
+    "ts-gateway-service",
+    "ts-verification-code-service"
+  ],
+  "required_repositories": [
+    "ts-auth-service",
+    "ts-gateway-service"
+  ],
+  "maybe_repositories": [
+    "ts-user-service"
+  ],
+  "excluded_repositories": [
+    "ts-security-service",
+    "ts-verification-code-service"
+  ],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-auth-service",
+    "ts-gateway-service",
+    "ts-user-service"
+  ]
+}

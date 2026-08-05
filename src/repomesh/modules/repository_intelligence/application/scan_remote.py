@@ -326,8 +326,33 @@ def _parse_dep_file(filename: str, content: str) -> list[str]:
         return _parse_package_json(content)
     if filename == "go.mod":
         return _parse_go_mod(content)
+    if filename == "pom.xml":
+        return _parse_pom_xml(content)
     # For unrecognised files, return empty (don't guess).
     return []
+
+
+def _parse_pom_xml(content: str) -> list[str]:
+    """Parse a Maven pom.xml and return dependency artifact IDs.
+
+    Only extracts ``<artifactId>`` inside ``<dependency>`` blocks
+    (not ``<dependencyManagement>``).
+    """
+
+    import re  # noqa: PLC0415
+
+    deps: list[str] = []
+
+    # Find all <dependency>...</dependency> blocks
+    for block in re.finditer(
+        r"<dependency>(.*?)</dependency>", content, re.DOTALL,
+    ):
+        inner = block.group(1)
+        m = re.search(r"<artifactId>\s*(.*?)\s*</artifactId>", inner)
+        if m and m.group(1).strip():
+            deps.append(m.group(1).strip())
+
+    return deps
 
 
 def _parse_requirements(content: str) -> list[str]:

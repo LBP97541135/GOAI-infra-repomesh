@@ -18,7 +18,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from repomesh.modules.repository_intelligence.domain import (
     AutoCard,
@@ -139,7 +139,7 @@ def _build_confirmation_prompt(
         "}"
     )
 
-    # V4 measure 2: include discovery rationale
+    # Include discovery rationale
     pm_context = ""
     if discovery_rationale:
         pm_context = (
@@ -222,14 +222,6 @@ def _parse_confirmation(raw: str, repo_name: str) -> ConfirmationResult:
         plan_summary=data.get("plan_summary", ""),
         missing_dependencies=data.get("missing_dependencies", []) if status != "EXCLUDED" else [],
     )
-
-
-# ---------------------------------------------------------------------------
-# Confirmation service
-# ---------------------------------------------------------------------------
-
-if TYPE_CHECKING:
-    pass
 
 
 # ---------------------------------------------------------------------------
