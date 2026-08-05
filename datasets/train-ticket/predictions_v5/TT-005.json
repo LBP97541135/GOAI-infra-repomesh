@@ -1,0 +1,28 @@
+{
+  "case_id": "TT-005",
+  "requirement": "修复路线查询和站点数据传递的 bug。具体场景是用户查询从北京到上海的路线时，如果存在中转方案（如经南京中转），查询结果中只显示直达车次，中转方案缺失，导致路线结果不完整。问题可能源于最近上线的路线推荐算法优化，导致路线规划服务在查询中转站时数据传递异常。期望修复后，路线查询应返回所有可选方案，包括直达和中转，每个方案需展示总耗时和换乘等待时间，以便用户选择。需要检查路线服务与基础服务、站点服务之间的数据流，确保中转站数据正确传递。",
+  "original_requirement": "修复路线查询和站点数据传递的 bug。\n路线规划服务在查询中转站时数据传递异常，导致路线结果不完整。\n需要检查路线服务与基础服务、站点服务之间的数据流。",
+  "entry_repo": "ts-route-plan-service",
+  "discovery_candidates": [
+    "ts-route-plan-service",
+    "ts-route-service",
+    "ts-station-service",
+    "ts-basic-service"
+  ],
+  "required_repositories": [
+    "ts-route-plan-service",
+    "ts-route-service",
+    "ts-station-service"
+  ],
+  "maybe_repositories": [
+    "ts-basic-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-route-plan-service",
+    "ts-route-service",
+    "ts-station-service",
+    "ts-basic-service"
+  ]
+}

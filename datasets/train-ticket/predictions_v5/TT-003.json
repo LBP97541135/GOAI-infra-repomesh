@@ -1,0 +1,36 @@
+{
+  "case_id": "TT-003",
+  "requirement": "修复管理后台API的数据模型不一致问题。管理端的订单、用户、路线等接口返回的数据字段与前端不匹配，导致页面显示异常或需要额外处理。具体问题包括：订单管理接口返回的时间戳格式与前端期望的日期格式不一致，且缺少乘客信息等字段；用户管理接口返回的用户ID无法直接用于显示，前端需要额外调用接口获取手机号等联系方式；路线管理接口仅返回起点和终点，缺少途经站点等详细信息。统一后的数据模型以前端展示需求为准，确保各服务返回的数据字段完整、格式一致，避免前端进行额外转换或多次调用。涉及的主要页面包括订单管理、用户管理和路线管理，需保证这些页面的数据展示正常。",
+  "original_requirement": "修复管理后台 API 的数据模型不一致问题。\n管理端的订单、用户、路线等接口返回的数据字段与前端不匹配。\n需要统一管理后台各服务的数据模型。",
+  "entry_repo": "ts-admin-basic-info-service",
+  "discovery_candidates": [
+    "ts-admin-basic-info-service",
+    "ts-admin-user-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-route-service",
+    "ts-order-service",
+    "ts-user-service"
+  ],
+  "required_repositories": [
+    "ts-admin-basic-info-service",
+    "ts-admin-user-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-route-service",
+    "ts-order-service",
+    "ts-user-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-admin-basic-info-service",
+    "ts-admin-user-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-route-service",
+    "ts-order-service",
+    "ts-user-service"
+  ]
+}

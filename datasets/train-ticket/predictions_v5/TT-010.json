@@ -1,0 +1,31 @@
+{
+  "case_id": "TT-010",
+  "requirement": "调整支付流程和订票保存服务的代码细节，优化支付服务和订票服务之间的数据传递。当前存在支付成功后订单状态更新不及时甚至丢失的问题，导致乘客重复支付或投诉。期望支付成功后能实时通知订票服务更新订单状态，并增加自动重试机制以应对网络波动，确保支付结果准确反映到订单。此次调整属于修复现有问题，不涉及新增支付方式等新业务需求。",
+  "original_requirement": "调整支付流程和订票保存服务的代码细节。\n支付服务和订票服务之间的数据传递需要优化。\n需要检查支付完成后通知订单的逻辑。",
+  "entry_repo": "ts-payment-service",
+  "discovery_candidates": [
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-inside-payment-service",
+    "ts-notification-service"
+  ],
+  "required_repositories": [
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-inside-payment-service"
+  ],
+  "maybe_repositories": [
+    "ts-notification-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-inside-payment-service",
+    "ts-notification-service"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "case_id": "TT-007",
+  "requirement": "修复前端调用订票和支付相关API的bug，确保订票流程顺畅。具体表现为：用户选择座位后能正常进入支付页面，支付成功后显示订单确认和成功提示。该问题为最近一次系统更新后出现，之前正常。接口异常表现为页面弹窗提示“系统繁忙，请稍后再试”或页面无响应。需要检查订票服务的座位调用逻辑和支付安全验证逻辑，确保接口稳定返回，避免用户流程中断。",
+  "original_requirement": "修复前端调用订票和支付相关 API 的 bug。\n用户在订票流程中选择座位和支付时接口返回异常。\n需要检查订票服务的座位调用和支付安全验证逻辑。",
+  "entry_repo": "ts-preserve-other-service",
+  "discovery_candidates": [
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-seat-service",
+    "ts-inside-payment-service"
+  ],
+  "required_repositories": [
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-seat-service",
+    "ts-inside-payment-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-seat-service",
+    "ts-inside-payment-service"
+  ]
+}

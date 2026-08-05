@@ -1,0 +1,34 @@
+{
+  "case_id": "TT-013",
+  "requirement": "修复订单数据模型的bug。订单实体类的字段定义有误，导致序列化时数据丢失。具体表现为：在用户端查询订单列表或详情时，支付状态、乘车人信息（姓名、身份证号）、座位类型等字段缺失，导致显示不完整；在后台管理端查看订单详情时，同样存在字段丢失问题；导出订单报表时，Excel中缺少相应列。此外，通知服务在发送邮件或短信时，也可能因数据不完整而无法提供正确的订单信息。期望修复后，所有涉及订单数据展示和使用的场景（包括用户查询、后台管理、报表导出、通知服务）都能完整显示所有必要字段，确保数据的一致性和完整性。",
+  "original_requirement": "修复订单数据模型的 bug。\n订单实体类的字段定义有误，导致序列化时数据丢失。\n需要修正订单模型并检查所有引用订单数据的服务。",
+  "entry_repo": "ts-order-service",
+  "discovery_candidates": [
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-notification-service",
+    "ts-preserve-other-service",
+    "ts-preserve-service"
+  ],
+  "required_repositories": [
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-notification-service",
+    "ts-preserve-service"
+  ],
+  "maybe_repositories": [
+    "ts-preserve-other-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-notification-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ]
+}
