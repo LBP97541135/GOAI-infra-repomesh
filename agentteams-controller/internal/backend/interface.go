@@ -36,6 +36,11 @@ const (
 	RuntimeHermes    = "hermes"
 	RuntimeOpenHuman = "openhuman"
 	RuntimeQwenPaw   = "qwenpaw"
+	// RuntimeRepomeshRunner runs the RepoMesh Runner process as PID 1. It
+	// starts no OpenClaw / QwenPaw / Hermes component and reads no
+	// agentconfig-generated configuration tree — see the frozen
+	// `contracts/runtime/v1/worker-runtime.md` contract.
+	RuntimeRepomeshRunner = "repomesh-runner"
 )
 
 const (
@@ -59,7 +64,7 @@ func NormalizeAuthTokenExpirationSeconds(seconds int64) int64 {
 // ValidRuntime reports whether r is a recognized runtime value.
 // An empty string is valid — backends resolve it via ResolveRuntime.
 func ValidRuntime(r string) bool {
-	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw
+	return r == "" || r == RuntimeOpenClaw || r == RuntimeCopaw || r == RuntimeHermes || r == RuntimeOpenHuman || r == RuntimeQwenPaw || r == RuntimeRepomeshRunner
 }
 
 // ResolveRuntime returns the effective runtime for a backend request.
@@ -147,7 +152,7 @@ type CreateRequest struct {
 	Name    string            `json:"name"`
 	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
-	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "qwenpaw"
+	Runtime string            `json:"runtime,omitempty"` // "openclaw" | "copaw" | "hermes" | "qwenpaw" | "repomesh-runner"
 	// RuntimeFallback is the value used by Backend.Create when Runtime is
 	// empty, before falling back to RuntimeOpenClaw. Manager / Worker
 	// reconcilers populate this from AGENTTEAMS_MANAGER_RUNTIME /

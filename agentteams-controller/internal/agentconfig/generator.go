@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 )
 
 // Generator produces worker runtime configuration files in pure Go.
@@ -24,6 +26,15 @@ func NewGenerator(cfg Config) *Generator {
 
 // GenerateOpenClawConfig produces the openclaw.json content for a worker.
 func (g *Generator) GenerateOpenClawConfig(req WorkerConfigRequest) ([]byte, error) {
+	// The repomesh-runner runtime runs the RepoMesh Runner as PID 1 and reads
+	// no agentconfig-generated configuration tree (frozen contract
+	// `contracts/runtime/v1/worker-runtime.md`, "Configuration tree": none).
+	// Emit an empty tree rather than an openclaw.json full of gateway tokens,
+	// Matrix credentials and plugin paths the Runner would never honour.
+	if req.WorkerRuntime == backend.RuntimeRepomeshRunner {
+		return json.MarshalIndent(map[string]interface{}{}, "", "  ")
+	}
+
 	modelName := req.ModelName
 	if modelName == "" {
 		modelName = g.config.DefaultModel

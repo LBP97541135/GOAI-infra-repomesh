@@ -443,6 +443,8 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 		{"explicit_copaw_uses_copaw_image", RuntimeCopaw, "", "agentteams/copaw-worker:latest"},
 		{"explicit_hermes_uses_hermes_image", RuntimeHermes, "", "agentteams/hermes-worker:latest"},
 		{"explicit_qwenpaw_uses_qwenpaw_image", RuntimeQwenPaw, "", "agentteams/qwenpaw-worker:latest"},
+		{"explicit_repomesh_runner_uses_repomesh_image", RuntimeRepomeshRunner, "", "agentteams/repomesh-worker:latest"},
+		{"empty_runtime_with_repomesh_runner_fallback", "", RuntimeRepomeshRunner, "agentteams/repomesh-worker:latest"},
 		{"explicit_openclaw_uses_worker_image", RuntimeOpenClaw, "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_no_fallback_uses_worker_image", "", "", "agentteams/worker-agent:latest"},
 		{"empty_runtime_with_copaw_fallback_uses_copaw_image", "", RuntimeCopaw, "agentteams/copaw-worker:latest"},
@@ -462,6 +464,8 @@ func TestDockerCreateResolvesImageFromRuntime(t *testing.T) {
 					HermesWorkerImage:  "agentteams/hermes-worker:latest",
 					QwenPawWorkerImage: "agentteams/qwenpaw-worker:latest",
 					DefaultNetwork:     "agentteams-net",
+
+					RepomeshRunnerWorkerImage: "agentteams/repomesh-worker:latest",
 				},
 				containerPrefix: "agentteams-worker-",
 				client: &http.Client{

@@ -300,6 +300,10 @@ worker:
     openhuman:
       repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/higress/agentteams-openhuman-worker
       tag: ""                 # defaults to global.imageTag
+    # repomesh-runner: RepoMesh Runner as PID 1 (contracts/runtime/v1/worker-runtime.md).
+    repomeshRunner:
+      repository: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-repomesh-worker
+      tag: ""                 # defaults to global.imageTag
   defaultRuntime: "openclaw"
   resources:
     requests:

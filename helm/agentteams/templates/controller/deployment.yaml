@@ -84,6 +84,8 @@ spec:
               value: {{ include "agentteams.worker.hermesImage" . | quote }}
             - name: AGENTTEAMS_OPENHUMAN_WORKER_IMAGE
               value: {{ include "agentteams.worker.openhumanImage" . | quote }}
+            - name: AGENTTEAMS_REPOMESH_WORKER_IMAGE
+              value: {{ include "agentteams.worker.repomeshRunnerImage" . | quote }}
             - name: AGENTTEAMS_DEFAULT_WORKER_RUNTIME
               value: {{ .Values.worker.defaultRuntime | quote }}
             - name: TZ

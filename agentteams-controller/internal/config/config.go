@@ -514,6 +514,8 @@ func (c *Config) DockerConfig() backend.DockerConfig {
 		HermesWorkerImage:    envOrDefault("AGENTTEAMS_HERMES_WORKER_IMAGE", "agentteams/agentteams-hermes-worker:latest"),
 		OpenHumanWorkerImage: envOrDefault("AGENTTEAMS_OPENHUMAN_WORKER_IMAGE", "agentteams/agentteams-openhuman-worker:latest"),
 		DefaultNetwork:       envOrDefault("AGENTTEAMS_DOCKER_NETWORK", "agentteams-net"),
+
+		RepomeshRunnerWorkerImage: envOrDefault("AGENTTEAMS_REPOMESH_WORKER_IMAGE", "agentteams/agentteams-repomesh-worker:latest"),
 	}
 }
 
@@ -559,6 +561,8 @@ func (c *Config) K8sConfig() backend.K8sConfig {
 		WorkerMemory:         c.K8sWorkerMemory,
 		ControllerName:       c.ControllerName,
 		ResourcePrefix:       c.ResourcePrefix,
+
+		RepomeshRunnerWorkerImage: envOrDefault("AGENTTEAMS_REPOMESH_WORKER_IMAGE", "agentteams/agentteams-repomesh-worker:latest"),
 	}
 }
 
@@ -577,6 +581,8 @@ func (c *Config) SandboxConfig() backend.SandboxConfig {
 		SandboxPrewarmSizeConfigured: c.SandboxPrewarmSizeConfigured,
 		ControllerName:               c.ControllerName,
 		ResourcePrefix:               c.ResourcePrefix,
+
+		RepomeshRunnerWorkerImage: envOrDefault("AGENTTEAMS_REPOMESH_WORKER_IMAGE", "agentteams/agentteams-repomesh-worker:latest"),
 	}
 }
 

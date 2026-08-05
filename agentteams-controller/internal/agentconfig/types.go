@@ -43,6 +43,12 @@ type WorkerConfigRequest struct {
 	TeamLeaderName string           // if non-empty, this is a team worker
 	ChannelPolicy  *ChannelPolicy   // optional communication policy overrides
 	Heartbeat      *HeartbeatConfig // optional: team leader heartbeat settings
+
+	// WorkerRuntime is the worker's effective runtime value (backend.Runtime*).
+	// Empty means the historical openclaw-family default. Only
+	// backend.RuntimeRepomeshRunner changes generator behaviour today: that
+	// runtime reads no configuration tree, so an empty one is emitted.
+	WorkerRuntime string
 }
 
 // ChannelPolicy describes additive/subtractive communication rules.

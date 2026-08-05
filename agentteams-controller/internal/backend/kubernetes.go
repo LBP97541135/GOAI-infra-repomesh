@@ -32,8 +32,11 @@ type K8sConfig struct {
 	HermesWorkerImage    string
 	OpenHumanWorkerImage string
 	QwenPawWorkerImage   string
-	WorkerCPU            string
-	WorkerMemory         string
+	// RepomeshRunnerWorkerImage is the default repomesh-runner worker image
+	// (AGENTTEAMS_REPOMESH_WORKER_IMAGE).
+	RepomeshRunnerWorkerImage string
+	WorkerCPU                 string
+	WorkerMemory              string
 
 	// ControllerName identifies this controller instance. The agent
 	// PodTemplateSpec overlay (see LoadAgentPodTemplate) is looked up as the
@@ -264,6 +267,8 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 			image = k.config.OpenHumanWorkerImage
 		case req.Runtime == RuntimeQwenPaw && k.config.QwenPawWorkerImage != "":
 			image = k.config.QwenPawWorkerImage
+		case req.Runtime == RuntimeRepomeshRunner && k.config.RepomeshRunnerWorkerImage != "":
+			image = k.config.RepomeshRunnerWorkerImage
 		case k.config.WorkerImage != "":
 			image = k.config.WorkerImage
 		}
@@ -280,6 +285,15 @@ func (k *K8sBackend) Create(ctx context.Context, req CreateRequest) (*WorkerResu
 				req.Env = map[string]string{}
 			}
 			req.Env["HOME"] = req.WorkingDir
+		case req.Runtime == RuntimeRepomeshRunner:
+			// repomesh-runner deliberately gets no workspace anchoring. The
+			// runtime.v1 contract states the runtime never uses the
+			// `agents/<name>/*` workspace-sync mirror and reads no
+			// agentconfig-generated tree, so pinning WorkingDir / HOME to
+			// /root/agentteams-fs/agents/<name> (the MinIO mirror root that
+			// the openclaw-family layout below relies on) would impose
+			// OpenClaw conventions the Runner does not honour. Leaving both
+			// unset lets the Runner image's own WORKDIR / HOME apply.
 		default:
 			// Both openclaw and hermes use the same workspace layout:
 			// HOME == WorkingDir == /root/agentteams-fs/agents/<name> (== MinIO
@@ -746,6 +760,11 @@ func defaultRuntime(runtime string) string {
 		return RuntimeHermes
 	case RuntimeQwenPaw:
 		return RuntimeQwenPaw
+	case RuntimeRepomeshRunner:
+		// Must be explicit: falling through to RuntimeOpenClaw would stamp
+		// `agentteams.io/runtime: openclaw` on a Pod/SandboxClaim that runs
+		// the RepoMesh Runner, mislabelling it for selectors and `agt get`.
+		return RuntimeRepomeshRunner
 	default:
 		return RuntimeOpenClaw
 	}
