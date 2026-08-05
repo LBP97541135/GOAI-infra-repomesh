@@ -1,0 +1,93 @@
+{
+  "case_id": "TT-002",
+  "requirement": "修复票价计算和座位分配相关的 bug。\n票价服务的数据传递存在异常，导致座位分配时价格计算不准确。\n需要检查票价服务与座位、订票服务之间的数据流。",
+  "entry_repo": "ts-seat-service",
+  "predicted_repositories": [
+    "ts-seat-service",
+    "ts-price-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-travel-service",
+    "ts-travel-plan-service",
+    "ts-travel2-service",
+    "ts-route-plan-service",
+    "ts-basic-service",
+    "ts-config-service"
+  ],
+  "details": [
+    {
+      "name": "ts-seat-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-price-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Price service is the source of price data; bug in data flow likely originates here and affects seat allocation."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.85,
+      "is_entry_point": false,
+      "rationale": "Preserve service orchestrates ticket booking and likely calls seat and price services, so it is affected by data flow issues."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve service, it handles booking flows and may interact with seat and price services."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Order service manages orders and may rely on price and seat data, so it could be impacted by the bug."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Handles other order types and may also depend on price and seat services."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel service may invoke seat and price services for trip planning and booking, so it could be affected."
+    },
+    {
+      "name": "ts-travel-plan-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel plan service aggregates travel options and may depend on seat and price services."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel2 service provides alternative travel options and may also use seat and price data."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Route plan service may compute routes and prices, potentially interacting with seat and price services."
+    },
+    {
+      "name": "ts-basic-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Basic service may provide common utilities or configuration used by seat and price services."
+    },
+    {
+      "name": "ts-config-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Config service may hold configuration for price and seat services, affecting their behavior."
+    }
+  ]
+}

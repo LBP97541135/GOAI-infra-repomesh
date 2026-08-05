@@ -1,0 +1,54 @@
+{
+  "TT-001": [
+    "ts-cancel-service",
+    "ts-notification-service"
+  ],
+  "TT-002": [
+    "ts-price-service"
+  ],
+  "TT-003": [],
+  "TT-004": [
+    "ts-order-service"
+  ],
+  "TT-005": [
+    "ts-route-plan-service",
+    "ts-route-service"
+  ],
+  "TT-006": [
+    "ts-station-service",
+    "ts-order-service"
+  ],
+  "TT-007": [
+    "ts-order-service"
+  ],
+  "TT-008": [
+    "ts-auth-service"
+  ],
+  "TT-009": [
+    "ts-config-service",
+    "ts-station-service"
+  ],
+  "TT-010": [
+    "ts-payment-service",
+    "ts-inside-payment-service"
+  ],
+  "TT-011": [
+    "ts-notification-service",
+    "ts-order-service"
+  ],
+  "TT-012": [
+    "ts-user-service",
+    "ts-auth-service"
+  ],
+  "TT-013": [
+    "ts-order-service",
+    "ts-order-other-service"
+  ],
+  "TT-014": [
+    "ts-travel-service",
+    "ts-route-service"
+  ],
+  "TT-015": [
+    "ts-preserve-service"
+  ]
+}

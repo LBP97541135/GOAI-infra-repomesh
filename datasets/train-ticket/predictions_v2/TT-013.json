@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-013",
+  "requirement": "修复订单数据模型的 bug。\n订单实体类的字段定义有误，导致序列化时数据丢失。\n需要修正订单模型并检查所有引用订单数据的服务。",
+  "entry_repo": "ts-order-service",
+  "predicted_repositories": [
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service",
+    "ts-preserve-service",
+    "ts-rebook-service",
+    "ts-inside-payment-service",
+    "ts-payment-service",
+    "ts-wait-order-service",
+    "ts-execute-service",
+    "ts-notification-service",
+    "ts-gateway-service",
+    "ts-travel-service",
+    "ts-travel2-service"
+  ],
+  "details": [
+    {
+      "name": "ts-order-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Handles other order types and likely shares or references the order data model, so it may need updates."
+    },
+    {
+      "name": "ts-admin-order-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Admin service for orders, likely consumes order data and may need to align with corrected model."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve-service, handles other order creation and may reference order model."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Cancels orders and likely reads/writes order data, so it may need to adapt to corrected model."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Preserve service creates orders and may serialize order data, so it could be affected by model changes."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Rebooking involves order data and may serialize or deserialize order entities."
+    },
+    {
+      "name": "ts-inside-payment-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Internal payment service likely references order data for transactions."
+    },
+    {
+      "name": "ts-payment-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Payment processing uses order information, so it may need to align with corrected model."
+    },
+    {
+      "name": "ts-wait-order-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Manages wait orders and may interact with order data structures."
+    },
+    {
+      "name": "ts-execute-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Executes order-related operations and may reference order model fields."
+    },
+    {
+      "name": "ts-notification-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Sends notifications about orders and may parse order data, so it could be affected."
+    },
+    {
+      "name": "ts-gateway-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Gateway routes requests to order services but may not directly manipulate order model; lower confidence."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.3,
+      "is_entry_point": false,
+      "rationale": "Travel service may indirectly use order data but less likely to need changes; low confidence."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.3,
+      "is_entry_point": false,
+      "rationale": "Similar to travel-service, may have indirect dependencies on order data."
+    }
+  ]
+}

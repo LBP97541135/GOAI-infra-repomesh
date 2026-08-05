@@ -1,0 +1,65 @@
+{
+  "case_id": "TT-014",
+  "requirement": "修复车次信息查询服务的 bug。\n车次信息服务在查询经停车次时返回空数据。\n需要检查车次信息与旅行服务之间的数据查询逻辑。",
+  "entry_repo": "ts-travel-service",
+  "predicted_repositories": [
+    "ts-travel-service",
+    "ts-route-service",
+    "ts-route-plan-service",
+    "ts-travel2-service",
+    "ts-station-service",
+    "ts-train-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service"
+  ],
+  "details": [
+    {
+      "name": "ts-travel-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Route information is likely queried by ts-travel-service to determine stops, so a bug in querying passing stations may involve route data."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "This service plans routes and may interact with travel service for stop information, potentially affected by changes in query logic."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "As a related travel service, it may share data models or APIs with ts-travel-service and could be impacted by changes."
+    },
+    {
+      "name": "ts-station-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Station data is essential for determining passing stops, so this service may need updates if query logic changes."
+    },
+    {
+      "name": "ts-train-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Train information is used in travel queries; changes to how stops are queried might involve train data."
+    },
+    {
+      "name": "ts-admin-route-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Admin route service manages route data and could be involved if the bug relates to route configuration."
+    },
+    {
+      "name": "ts-admin-travel-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Admin travel service may manage travel-related data and could be affected by changes in travel query logic."
+    }
+  ]
+}

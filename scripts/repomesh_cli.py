@@ -250,7 +250,7 @@ async def cmd_run_async(args: argparse.Namespace) -> int:
     # ⑥ LLM discovery.
     catalog = InMemoryRepositoryCatalog()
     for profile in profiles:
-        await catalog.add(profile)
+        catalog._profiles[profile.id] = profile  # noqa: SLF001
 
     if llm_client is not None:
         print(f"\nUsing LLM: {model}", file=sys.stderr)
