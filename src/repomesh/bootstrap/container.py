@@ -3,6 +3,10 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from repomesh.modules.agent_directory.ports import AgentDirectory
+from repomesh.modules.capability_management import (
+    PresetCapabilityAssembler,
+    ResolveAgentCapabilities,
+)
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
@@ -55,6 +59,12 @@ class ApplicationContainer:
     agentteams_required: bool = False
     external_resources: tuple[AsyncCloseable, ...] = ()
     background_services: tuple[BackgroundService, ...] = ()
+
+    def capability_assembler(self) -> PresetCapabilityAssembler:
+        return PresetCapabilityAssembler()
+
+    def agent_capabilities(self) -> ResolveAgentCapabilities:
+        return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
 
     async def start(self) -> None:
         for service in self.background_services:

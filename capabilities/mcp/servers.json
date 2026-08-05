@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "policy": {
+    "credentials": "brokered_at_runtime",
+    "directAgentSecrets": false,
+    "auditEveryCall": true,
+    "defaultDeny": true
+  },
+  "servers": [
+    {
+      "id": "github",
+      "source": "https://github.com/github/github-mcp-server",
+      "pin": "required-before-deployment",
+      "roles": ["organization_leader", "repository_leader"]
+    },
+    {
+      "id": "context7",
+      "source": "https://github.com/upstash/context7",
+      "pin": "required-before-deployment",
+      "roles": ["repository_leader", "worker"]
+    },
+    {
+      "id": "playwright",
+      "source": "https://github.com/microsoft/playwright-mcp",
+      "pin": "required-before-deployment",
+      "roles": ["worker"],
+      "requiredTaskFeatures": ["web_e2e"],
+      "runtimeArgs": ["--isolated"]
+    }
+  ]
+}
+

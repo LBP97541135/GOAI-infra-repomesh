@@ -1,0 +1,8 @@
+name = "capability_management"
+owner = "platform"
+schema = "none"
+responsibilities = [
+  "declare governed MCP and Skill presets",
+  "assemble role-scoped agent capability bundles",
+]
+
