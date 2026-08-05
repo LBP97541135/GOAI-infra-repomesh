@@ -1,0 +1,110 @@
+{
+  "TT-001": [
+    "ts-preserve-service",
+    "ts-notification-service",
+    "ts-cancel-service",
+    "ts-preserve-other-service"
+  ],
+  "TT-002": [
+    "ts-seat-service",
+    "ts-price-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ],
+  "TT-003": [
+    "ts-admin-basic-info-service",
+    "ts-admin-travel-service",
+    "ts-admin-order-service",
+    "ts-admin-route-service",
+    "ts-admin-user-service"
+  ],
+  "TT-004": [
+    "ts-admin-order-service",
+    "ts-order-service",
+    "ts-consign-price-service",
+    "ts-user-service",
+    "ts-admin-user-service",
+    "ts-consign-service",
+    "ts-order-other-service"
+  ],
+  "TT-005": [
+    "ts-route-plan-service",
+    "ts-route-service",
+    "ts-station-service",
+    "ts-basic-service"
+  ],
+  "TT-006": [
+    "ts-station-service",
+    "ts-order-service",
+    "ts-travel-service",
+    "ts-order-other-service",
+    "ts-travel2-service"
+  ],
+  "TT-007": [
+    "ts-preserve-other-service",
+    "ts-payment-service",
+    "ts-seat-service",
+    "ts-inside-payment-service",
+    "ts-order-service",
+    "ts-order-other-service"
+  ],
+  "TT-008": [
+    "ts-auth-service",
+    "ts-user-service",
+    "ts-security-service",
+    "ts-gateway-service",
+    "ts-verification-code-service"
+  ],
+  "TT-009": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-route-service",
+    "ts-admin-basic-info-service",
+    "ts-preserve-other-service",
+    "ts-preserve-service",
+    "ts-admin-travel-service",
+    "ts-admin-route-service",
+    "ts-route-plan-service",
+    "ts-travel-plan-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-travel2-service"
+  ],
+  "TT-010": [
+    "ts-payment-service",
+    "ts-inside-payment-service",
+    "ts-preserve-service",
+    "ts-order-service",
+    "ts-preserve-other-service",
+    "ts-order-other-service"
+  ],
+  "TT-011": [
+    "ts-notification-service",
+    "ts-order-service",
+    "ts-order-other-service"
+  ],
+  "TT-012": [
+    "ts-user-service",
+    "ts-auth-service"
+  ],
+  "TT-013": [
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-admin-order-service",
+    "ts-preserve-other-service",
+    "ts-cancel-service",
+    "ts-preserve-service",
+    "ts-rebook-service"
+  ],
+  "TT-014": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ],
+  "TT-015": [
+    "ts-notification-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ]
+}

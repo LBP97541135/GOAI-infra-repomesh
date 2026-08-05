@@ -1,0 +1,23 @@
+{
+  "case_id": "TT-014",
+  "requirement": "修复车次信息查询服务的 bug。\n车次信息服务在查询经停车次时返回空数据。\n需要检查车次信息与旅行服务之间的数据查询逻辑。",
+  "entry_repo": "ts-travel-service",
+  "discovery_candidates": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ],
+  "required_repositories": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ]
+}
