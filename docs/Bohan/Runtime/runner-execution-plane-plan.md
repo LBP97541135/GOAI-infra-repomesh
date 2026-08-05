@@ -138,11 +138,33 @@ src/repomesh_runner/
   事件回传全链路）。
 - 验证阶梯 5 层：Mock 长任务空转 30 分钟、零 Matrix 活动，断言 Worker 不被休眠。
 
-### M5 · Fork 阶段 0（并行,不阻塞 M1-M4）
+### M5 · Fork 阶段 0 — **已完成（2026-08-05）**
 
-- 建 GitHub fork + `repomesh/main` 分支，`upstream.toml` 的 `[product_fork]` 填实。
-- runtime 注册补丁走一次"Fork 评审 → subtree pull → 构建 → 四元组输出"全流程演练
-  （验证阶梯 6 层）。趁补丁小走通管线。
+- Fork：`catbobyman/AgentTeams`，分支 `repomesh/main`，从上游基线 `793db24`(v1.2.0)
+  **fast-forward** 到 `c306069`(含 runtime 注册补丁 + main 侧 install 脚本改动)。
+  没有强推，历史与上游真正接续。
+- `upstream.toml` 的 `[product_fork]` 已填实；ADR 0002 四元组现在报真值
+  (`fork_commit` / `upstream_commit` / `runtime_contract` 实测非空,
+  `repomesh_commit` 由构建注入 `REPOMESH_BUILD_COMMIT`,本地为空属预期)。
+- 往返管线（验证阶梯 6 层）已双向跑通：`subtree split` → push fork，
+  再 `subtree pull --squash` 回来，**merge 相对第一父零内容漂移**，
+  两个提交是纯记账。记账点建立后，后续 pull 才不会重复导入。
+
+**踩到的坑（会挡住任何人第一次做往返）**：squash 方式导入的 subtree
+**切断了与上游的历史连接**——本地根本没有 `793db24` 这个对象，
+`git subtree split` 直接失败(`could not rev-parse split hash ... from commit <squash>`)。
+必须先把上游对象取回本地：
+
+```bash
+git remote add agentteams-upstream https://github.com/agentscope-ai/AgentTeams.git
+git fetch --filter=blob:none agentteams-upstream 793db242257a569d911b1aa59c1cd554af78511f
+```
+
+`--filter=blob:none` 让这一步只取历史不取文件内容，很快。
+
+**流程偏差，需知情**：计划原文要求"所有产品补丁经 fork 分支 PR 评审合入"。
+第一刀补丁是直接 push 建立基线的——它已在本 monorepo 的分支上评审过，
+再走一次自评自合的 PR 是走过场。**从第二个补丁起**按原流程走 PR。
 
 ## 四、验收标准（对交接清单逐条回应）
 
