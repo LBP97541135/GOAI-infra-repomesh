@@ -1,0 +1,24 @@
+{
+  "case_id": "TT-015",
+  "requirement": "修复通知服务的接口调用问题。订票服务在用户订票成功后调用通知服务发送邮件和短信通知时，参数格式不匹配，导致通知发送失败。具体表现为：通知服务收到的参数中缺少“取票号”字段，且“车次”字段类型错误（订票服务传的是字符串，通知服务期望是数字）。此问题在最近一次系统升级后出现，影响所有通过订票服务订票成功的用户，导致他们无法收到确认通知。期望的正确行为是：订票服务调用通知服务时，参数格式正确，包含所有必要字段（如取票号），且字段类型符合通知服务要求，通知服务能正常解析并成功发送邮件和短信。需要检查订票服务中调用通知服务的代码，修正参数格式，确保通知功能恢复正常。",
+  "original_requirement": "修复通知服务的接口调用问题。\n订票服务调用通知接口时参数格式不匹配。\n需要检查订票服务中调用通知服务的代码。",
+  "entry_repo": "ts-notification-service",
+  "discovery_candidates": [
+    "ts-notification-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ],
+  "required_repositories": [
+    "ts-notification-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-notification-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "case_id": "TT-014",
+  "requirement": "修复车次信息查询服务的 bug，该服务在查询经停车次时返回空数据。具体场景为：用户查询某条线路（输入出发站和到达站）并选择日期后，系统应返回所有经过这两个站的车次，但当前无论选择什么日期，返回结果均为空。修复后，查询结果应包含车次号、出发时间、到达时间、历时以及票价信息，并且对于所选日期停运的车次不应显示。该问题为最近出现，之前功能正常，无明确错误提示，但系统日志中应有相关记录。需要检查车次信息与旅行服务之间的数据查询逻辑，确保正确返回经停车次数据。",
+  "original_requirement": "修复车次信息查询服务的 bug。\n车次信息服务在查询经停车次时返回空数据。\n需要检查车次信息与旅行服务之间的数据查询逻辑。",
+  "entry_repo": "ts-travel-service",
+  "discovery_candidates": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ],
+  "required_repositories": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ],
+  "maybe_repositories": [],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service"
+  ]
+}

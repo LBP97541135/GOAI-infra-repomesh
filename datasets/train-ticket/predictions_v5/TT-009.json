@@ -1,0 +1,43 @@
+{
+  "case_id": "TT-009",
+  "requirement": "重构配置管理和车站信息服务的接口实现，统一两个服务的接口返回格式。当前配置服务返回嵌套JSON，车站服务返回扁平结构，字段命名不一致（如下划线 vs 驼峰），导致前端和下游服务需要编写大量兼容代码，且字段含义不明确易出错。统一后的接口规范采用RESTful风格，返回格式统一为包含状态码、消息和数据的JSON对象，字段命名统一使用驼峰式，列表数据提供统一分页结构。下游调用方包括订单服务、支付服务和管理后台前端，需根据新规范调整请求和解析逻辑，如修改字段映射和数据结构处理。项目将提供详细接口文档和示例以支持适配。",
+  "original_requirement": "重构配置管理和车站信息服务的接口实现。\n配置服务和车站服务的接口返回格式不统一。\n需要统一两个服务的接口规范并更新下游调用方。",
+  "entry_repo": "ts-config-service",
+  "discovery_candidates": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-admin-user-service",
+    "ts-admin-travel-service",
+    "ts-admin-order-service",
+    "ts-admin-basic-info-service",
+    "ts-admin-route-service"
+  ],
+  "required_repositories": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-admin-order-service",
+    "ts-admin-basic-info-service"
+  ],
+  "maybe_repositories": [
+    "ts-admin-user-service",
+    "ts-admin-travel-service",
+    "ts-admin-route-service"
+  ],
+  "excluded_repositories": [],
+  "supplemented_repositories": [],
+  "predicted_repositories": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-payment-service",
+    "ts-order-service",
+    "ts-admin-order-service",
+    "ts-admin-basic-info-service",
+    "ts-admin-user-service",
+    "ts-admin-travel-service",
+    "ts-admin-route-service"
+  ]
+}
