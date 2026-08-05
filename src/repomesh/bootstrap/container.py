@@ -3,15 +3,15 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from repomesh.modules.agent_directory.ports import AgentDirectory
-from repomesh.modules.capability_management import (
-    PresetCapabilityAssembler,
-    ResolveAgentCapabilities,
-)
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
 )
 from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
+from repomesh.modules.capability_management import (
+    PresetCapabilityAssembler,
+    ResolveAgentCapabilities,
+)
 from repomesh.modules.collaboration.ports import CollaborationMessageStore
 from repomesh.modules.context.application import ContextPublicationGateway
 from repomesh.modules.context.ports import ContextStore
