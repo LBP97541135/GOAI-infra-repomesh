@@ -172,15 +172,15 @@
     "entry_repo": "ts-auth-service",
     "ground_truth": {
       "direct": [
-        "ts-login-service",
-        "ts-register-service",
-        "ts-sso-service",
         "ts-security-service"
       ],
-      "propagated": [],
+      "propagated": [
+        "ts-auth-service"
+      ],
       "context": [
         "ts-user-service"
-      ]
+      ],
+      "note": "ts-login-service, ts-register-service, ts-sso-service were deleted in this commit and no longer exist in the current repo version"
     },
     "commit_message": "delete sso login register",
     "difficulty": "easy",
@@ -295,16 +295,19 @@
     "id": "TT-014",
     "source_commit": "3addb104",
     "requirement": "修复车次信息查询服务的 bug。\n车次信息服务在查询经停车次时返回空数据。\n需要检查车次信息与旅行服务之间的数据查询逻辑。",
-    "entry_repo": "ts-ticketinfo-service",
+    "entry_repo": "ts-travel-service",
     "ground_truth": {
       "direct": [
-        "ts-ticketinfo-service",
         "ts-travel-service"
       ],
       "propagated": [
         "ts-basic-service"
       ],
-      "context": []
+      "context": [
+        "ts-train-service",
+        "ts-route-service"
+      ],
+      "note": "ts-ticketinfo-service was deleted and merged into ts-travel-service; entry_repo changed accordingly"
     },
     "commit_message": "fix bug in ticker-info-service",
     "difficulty": "easy",

@@ -1,0 +1,44 @@
+{
+  "case_id": "TT-012",
+  "requirement": "修复用户信息修改功能的 bug。\n用户修改个人信息后，认证服务没有同步更新。\n需要检查用户服务和认证服务之间的数据同步逻辑。",
+  "entry_repo": "ts-user-service",
+  "predicted_repositories": [
+    "ts-user-service",
+    "ts-auth-service",
+    "ts-admin-user-service",
+    "ts-contacts-service",
+    "ts-notification-service"
+  ],
+  "details": [
+    {
+      "name": "ts-user-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-auth-service",
+      "score": 0.95,
+      "is_entry_point": false,
+      "rationale": "Auth service must sync user data updates; requirement explicitly mentions it not updating after user changes."
+    },
+    {
+      "name": "ts-admin-user-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin user management may also modify user profiles and could be affected by sync logic changes."
+    },
+    {
+      "name": "ts-contacts-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Contacts service may rely on user data consistency, but less directly tied to auth sync."
+    },
+    {
+      "name": "ts-notification-service",
+      "score": 0.3,
+      "is_entry_point": false,
+      "rationale": "Notifications might be triggered on profile changes, but no direct dependency on auth sync."
+    }
+  ]
+}

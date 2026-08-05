@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-007",
+  "requirement": "修复前端调用订票和支付相关 API 的 bug。\n用户在订票流程中选择座位和支付时接口返回异常。\n需要检查订票服务的座位调用和支付安全验证逻辑。",
+  "entry_repo": "ts-preserve-other-service",
+  "predicted_repositories": [
+    "ts-preserve-other-service",
+    "ts-payment-service",
+    "ts-seat-service",
+    "ts-inside-payment-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service",
+    "ts-route-plan-service",
+    "ts-security-service",
+    "ts-train-service",
+    "ts-auth-service",
+    "ts-gateway-service"
+  ],
+  "details": [
+    {
+      "name": "ts-preserve-other-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-payment-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Payment security validation is mentioned in the requirement, and ts-payment-service handles payment processing and likely interacts with ts-preserve-other-service."
+    },
+    {
+      "name": "ts-seat-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Seat selection is part of the booking flow and ts-preserve-other-service likely calls this service for seat availability and assignment."
+    },
+    {
+      "name": "ts-inside-payment-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "This service handles internal payment operations and may be called by ts-preserve-other-service during the payment flow."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Order creation is part of the booking flow, and ts-preserve-other-service may interact with ts-order-service to create or update orders."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Similar to ts-order-service, this service handles other order types and may be involved in the booking flow."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "This service handles the main preserve (booking) flow and may share logic or be called by ts-preserve-other-service."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel information is needed for booking, and ts-preserve-other-service may call ts-travel-service for trip details."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Alternative travel service that may be used for booking or seat selection."
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Route information may be required for seat selection and booking, and ts-preserve-other-service could depend on it."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Route planning may be involved in the booking flow, potentially called by ts-preserve-other-service."
+    },
+    {
+      "name": "ts-security-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Security validation logic may be centralized here, and ts-preserve-other-service might interact with it for payment security."
+    },
+    {
+      "name": "ts-train-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Train information is needed for seat selection, and ts-preserve-other-service may query this service."
+    },
+    {
+      "name": "ts-auth-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Payment security validation may involve authentication or authorization checks, and ts-preserve-other-service could call ts-auth-service."
+    },
+    {
+      "name": "ts-gateway-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "The gateway routes API calls and may need changes if the bug is related to API routing or request handling."
+    }
+  ]
+}

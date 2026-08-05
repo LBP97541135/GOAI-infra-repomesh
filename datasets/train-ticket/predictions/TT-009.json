@@ -1,0 +1,114 @@
+{
+  "case_id": "TT-009",
+  "requirement": "重构配置管理和车站信息服务的接口实现。\n配置服务和车站服务的接口返回格式不统一。\n需要统一两个服务的接口规范并更新下游调用方。",
+  "entry_repo": "ts-config-service",
+  "predicted_repositories": [
+    "ts-config-service",
+    "ts-station-service",
+    "ts-route-service",
+    "ts-travel-service",
+    "ts-travel-plan-service",
+    "ts-travel2-service",
+    "ts-route-plan-service",
+    "ts-admin-basic-info-service",
+    "ts-preserve-other-service",
+    "ts-admin-route-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-service",
+    "ts-admin-travel-service",
+    "ts-admin-user-service"
+  ],
+  "details": [
+    {
+      "name": "ts-config-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-station-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Station information service is explicitly mentioned as needing unified interface format with config service."
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Route service likely uses station information and config, so interface changes could impact it."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Travel service likely calls station and config services, so downstream changes are probable."
+    },
+    {
+      "name": "ts-travel-plan-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Travel plan service likely uses station and config data, so interface changes could affect it."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Travel2 service may also depend on station and config services, requiring updates."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Route plan service depends on station and config data, so may need updates to align with new interfaces."
+    },
+    {
+      "name": "ts-admin-basic-info-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Admin basic info service likely consumes config and station services, so may need updates to align with new interface formats."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Preserve other service may also depend on config or station services, requiring updates."
+    },
+    {
+      "name": "ts-admin-route-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin route service may depend on config or station data, requiring updates to downstream calls."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Order service may use station or config data, so interface changes could impact it."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Order other service may also depend on config or station services, requiring updates."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Preserve service may call config or station services during ticket booking, so downstream updates may be needed."
+    },
+    {
+      "name": "ts-admin-travel-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin travel service may call config or station services, so interface changes could affect it."
+    },
+    {
+      "name": "ts-admin-user-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Admin user service may interact with config or station services, requiring downstream updates."
+    }
+  ]
+}

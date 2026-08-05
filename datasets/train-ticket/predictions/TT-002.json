@@ -1,0 +1,65 @@
+{
+  "case_id": "TT-002",
+  "requirement": "修复票价计算和座位分配相关的 bug。\n票价服务的数据传递存在异常，导致座位分配时价格计算不准确。\n需要检查票价服务与座位、订票服务之间的数据流。",
+  "entry_repo": "ts-seat-service",
+  "predicted_repositories": [
+    "ts-seat-service",
+    "ts-price-service",
+    "ts-order-service",
+    "ts-preserve-service",
+    "ts-travel-service",
+    "ts-travel2-service",
+    "ts-route-service",
+    "ts-order-other-service"
+  ],
+  "details": [
+    {
+      "name": "ts-seat-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-price-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Price calculation is central to the bug; seat service likely calls price service for fare data."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Order service handles booking and may pass price/seat data, interacting with both seat and price services."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Preserve service orchestrates ticket booking and likely invokes seat and price services, so data flow changes affect it."
+    },
+    {
+      "name": "ts-travel-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Travel service may provide trip details used in price calculation and seat allocation, potentially affected by data flow changes."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Similar to travel service, may be involved in route/trip data that influences pricing and seat availability."
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Route service supplies route information that could affect price calculation, though less directly tied to seat allocation."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.3,
+      "is_entry_point": false,
+      "rationale": "Handles other order types that might also use seat and price services, but lower likelihood of direct impact."
+    }
+  ]
+}

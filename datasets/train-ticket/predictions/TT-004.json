@@ -1,0 +1,79 @@
+{
+  "case_id": "TT-004",
+  "requirement": "修复订单管理、用户管理和寄存服务的线上 hotfix。\n线上出现订单状态不同步、用户信息丢失和寄存价格计算错误的问题。\n需要紧急修复相关服务的数据处理逻辑。",
+  "entry_repo": "ts-admin-order-service",
+  "predicted_repositories": [
+    "ts-admin-order-service",
+    "ts-consign-price-service",
+    "ts-order-service",
+    "ts-consign-service",
+    "ts-admin-user-service",
+    "ts-order-other-service",
+    "ts-user-service",
+    "ts-admin-basic-info-service",
+    "ts-admin-route-service",
+    "ts-admin-travel-service"
+  ],
+  "details": [
+    {
+      "name": "ts-admin-order-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-consign-price-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Directly responsible for consign price calculation, so it must be fixed for the pricing error."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Order status synchronization issues likely involve the core order service that ts-admin-order-service manages."
+    },
+    {
+      "name": "ts-consign-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Consignment service handles consign price calculations, which are reported as incorrect."
+    },
+    {
+      "name": "ts-admin-user-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "User information loss is directly related to user management, and this service is the admin counterpart for user operations."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Handles other order types and may share data processing logic with ts-admin-order-service, affecting order status sync."
+    },
+    {
+      "name": "ts-user-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Core user data service that ts-admin-user-service interacts with; user info loss likely originates here."
+    },
+    {
+      "name": "ts-admin-basic-info-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "May provide basic info used by order/user/consign services, but less directly related to the reported issues."
+    },
+    {
+      "name": "ts-admin-route-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Route admin service could be tangentially involved if order status depends on route data, but not a primary suspect."
+    },
+    {
+      "name": "ts-admin-travel-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Travel admin service may interact with orders but is less likely to be affected by these specific hotfixes."
+    }
+  ]
+}

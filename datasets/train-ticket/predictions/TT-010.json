@@ -1,0 +1,72 @@
+{
+  "case_id": "TT-010",
+  "requirement": "调整支付流程和订票保存服务的代码细节。\n支付服务和订票服务之间的数据传递需要优化。\n需要检查支付完成后通知订单的逻辑。",
+  "entry_repo": "ts-payment-service",
+  "predicted_repositories": [
+    "ts-payment-service",
+    "ts-inside-payment-service",
+    "ts-order-service",
+    "ts-order-other-service",
+    "ts-preserve-service",
+    "ts-preserve-other-service",
+    "ts-notification-service",
+    "ts-cancel-service",
+    "ts-rebook-service"
+  ],
+  "details": [
+    {
+      "name": "ts-payment-service",
+      "score": 1.0,
+      "is_entry_point": true,
+      "rationale": "User-specified entry point"
+    },
+    {
+      "name": "ts-inside-payment-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "Handles internal payment processing and likely interacts with ts-payment-service for payment completion."
+    },
+    {
+      "name": "ts-order-service",
+      "score": 0.85,
+      "is_entry_point": false,
+      "rationale": "Order service receives payment notifications and updates order status, directly affected by payment flow changes."
+    },
+    {
+      "name": "ts-order-other-service",
+      "score": 0.8,
+      "is_entry_point": false,
+      "rationale": "Handles other order types and may also receive payment completion notifications."
+    },
+    {
+      "name": "ts-preserve-service",
+      "score": 0.75,
+      "is_entry_point": false,
+      "rationale": "Preservation service may trigger payments and needs to align with updated payment data flow."
+    },
+    {
+      "name": "ts-preserve-other-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "Similar to preserve-service, may interact with payment for other ticket types."
+    },
+    {
+      "name": "ts-notification-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "May send payment-related notifications after payment completion, requiring logic updates."
+    },
+    {
+      "name": "ts-cancel-service",
+      "score": 0.55,
+      "is_entry_point": false,
+      "rationale": "Cancellation flow may involve payment refunds and could be affected by payment data changes."
+    },
+    {
+      "name": "ts-rebook-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Rebooking may involve payment adjustments and could depend on payment service changes."
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "case_id": "TT-014",
+  "requirement": "修复车次信息查询服务的 bug。\n车次信息服务在查询经停车次时返回空数据。\n需要检查车次信息与旅行服务之间的数据查询逻辑。",
+  "entry_repo": "ts-ticketinfo-service",
+  "predicted_repositories": [
+    "ts-travel-service",
+    "ts-route-service",
+    "ts-train-service",
+    "ts-travel-plan-service",
+    "ts-route-plan-service",
+    "ts-station-service"
+  ],
+  "details": [
+    {
+      "name": "ts-travel-service",
+      "score": 0.9,
+      "is_entry_point": false,
+      "rationale": "The requirement mentions checking data query logic between ticket info and travel services; ts-travel-service is the primary travel service that likely provides train/trip data."
+    },
+    {
+      "name": "ts-travel2-service",
+      "score": 0.7,
+      "is_entry_point": false,
+      "rationale": "ts-travel2-service is another travel-related service that may be involved in querying stop information for trains."
+    },
+    {
+      "name": "ts-route-service",
+      "score": 0.6,
+      "is_entry_point": false,
+      "rationale": "Route service may provide route and stop data that ticket info queries depend on."
+    },
+    {
+      "name": "ts-route-plan-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Route plan service could be involved in planning or querying stops for a trip."
+    },
+    {
+      "name": "ts-train-service",
+      "score": 0.5,
+      "is_entry_point": false,
+      "rationale": "Train service holds train information that may be used to determine stops."
+    },
+    {
+      "name": "ts-station-service",
+      "score": 0.4,
+      "is_entry_point": false,
+      "rationale": "Station service may provide station data used in stop queries."
+    }
+  ]
+}
