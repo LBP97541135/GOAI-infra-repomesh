@@ -146,7 +146,7 @@ class TestParseConfirmation:
 
     def test_invalid_status_defaults_to_required(self) -> None:
         raw = json.dumps({
-            "status": "MAYBE",
+            "status": "UNKNOWN",
             "confidence": 0.5,
             "reason": "unsure",
         })
@@ -169,6 +169,29 @@ class TestParseConfirmation:
         })
         result_low = _parse_confirmation(raw_low, "ts-test-service")
         assert result_low.confidence == 0.0
+
+    def test_maybe_status(self) -> None:
+        raw = json.dumps({
+            "status": "MAYBE",
+            "confidence": 0.6,
+            "reason": "might be indirectly affected",
+            "plan_summary": "check API compatibility",
+            "missing_dependencies": [],
+        })
+        result = _parse_confirmation(raw, "ts-order-service")
+        assert result.status == "MAYBE"
+        assert result.confidence == 0.6
+
+    def test_maybe_has_missing_deps(self) -> None:
+        raw = json.dumps({
+            "status": "MAYBE",
+            "confidence": 0.5,
+            "reason": "depends on changing service",
+            "plan_summary": "monitor",
+            "missing_dependencies": ["ts-config-service"],
+        })
+        result = _parse_confirmation(raw, "ts-order-service")
+        assert result.missing_dependencies == ["ts-config-service"]
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +239,7 @@ class TestConfirmationService:
         summary = service.confirm(["ts-avatar-service"], "fix email")
         assert "ts-avatar-service" not in summary.final_repos
         assert len(summary.excluded) == 1
+        assert len(summary.maybe) == 0
 
     def test_keeps_required(self) -> None:
         """Repository Manager says REQUIRED → in final list."""
@@ -232,6 +256,22 @@ class TestConfirmationService:
         assert "ts-notification-service" in summary.final_repos
         assert len(summary.required) == 1
         assert summary.required[0].plan_summary == "fix email params"
+
+    def test_maybe_kept_in_final(self) -> None:
+        """Repository Manager says MAYBE → still in final list."""
+        llm = _FakeLLM(json.dumps({
+            "status": "MAYBE",
+            "confidence": 0.6,
+            "reason": "might be indirectly affected",
+            "plan_summary": "check API compat",
+            "missing_dependencies": [],
+        }))
+        profile = _make_profile("ts-order-service")
+        service = ConfirmationService(llm, {"ts-order-service": profile})
+        summary = service.confirm(["ts-order-service"], "fix email")
+        assert "ts-order-service" in summary.final_repos
+        assert len(summary.maybe) == 1
+        assert len(summary.required) == 0
 
     def test_collects_missing_dependencies(self) -> None:
         """REQUIRED repo reports a missing dependency → supplemented."""

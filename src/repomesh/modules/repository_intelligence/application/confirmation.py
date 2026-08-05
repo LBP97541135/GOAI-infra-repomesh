@@ -65,7 +65,7 @@ class ConfirmationResult:
     """Result of a single Repository Manager confirmation."""
 
     repository: str
-    status: str  # "REQUIRED" or "EXCLUDED"
+    status: str  # "REQUIRED", "MAYBE", or "EXCLUDED"
     confidence: float = 0.0
     reason: str = ""
     plan_summary: str = ""
@@ -76,14 +76,17 @@ class ConfirmationResult:
 class ConfirmationSummary:
     """Aggregated result of confirming all candidates."""
 
-    required: list[ConfirmationResult]
-    excluded: list[ConfirmationResult]
-    supplemented_repos: list[str]  # repos added via missing_dependencies
+    required: list[ConfirmationResult]   # REQUIRED only
+    maybe: list[ConfirmationResult]      # MAYBE (kept but low-confidence)
+    excluded: list[ConfirmationResult]   # EXCLUDED
+    supplemented_repos: list[str]        # repos added via missing_dependencies
 
     @property
     def final_repos(self) -> list[str]:
-        """Names of repos that survived confirmation."""
-        return [r.repository for r in self.required]
+        """Names of repos that survived confirmation (REQUIRED + MAYBE)."""
+        return [r.repository for r in self.required] + [
+            r.repository for r in self.maybe
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +98,9 @@ def _build_confirmation_prompt(
     profile: RepositoryProfile,
     requirement: str,
     all_candidates: list[str],
+    *,
+    discovery_rationale: str = "",
+    discovery_confidence: float = 0.0,
 ) -> list[dict[str, str]]:
     """Build chat messages for a single Repository Manager confirmation.
 
@@ -102,6 +108,7 @@ def _build_confirmation_prompt(
     - Its own repo's AutoCard (detailed)
     - The requirement text
     - The full candidate list (so it knows what other repos were flagged)
+    - The Project Manager's rationale for flagging this repo (V4 measure 2)
     """
 
     card_text = _format_autocard(profile.auto_card) if profile.auto_card else "N/A"
@@ -112,27 +119,46 @@ def _build_confirmation_prompt(
         "Given your repository's details and a feature requirement, you must "
         "decide whether YOUR repository actually needs code changes.\n\n"
         "IMPORTANT RULES:\n"
-        "- Be strict: only say REQUIRED if you have concrete evidence from "
-        "your repo's files, dependencies, APIs, or commit history.\n"
-        "- Do NOT say REQUIRED just because the topic seems related or "
-        "because other repos in the same domain are affected.\n"
-        "- If your repository handles a different concern than what the "
-        "requirement describes, say EXCLUDED.\n\n"
+        "- The Project Manager has already identified your repository as a "
+        "candidate, which means there is initial evidence of relevance.\n"
+        "- Default to REQUIRED or MAYBE unless you have CLEAR evidence that "
+        "your repository is NOT affected by this requirement.\n"
+        "- Use EXCLUDED only when your repository handles a completely "
+        "different concern than what the requirement describes.\n\n"
+        "STATUS DEFINITIONS:\n"
+        "- REQUIRED: Your repository has APIs, dependencies, or code that "
+        "directly corresponds to the requirement.\n"
+        "- MAYBE: Your repository might be indirectly affected (e.g. depends "
+        "on a service that will change) but you are not certain.\n"
+        "- EXCLUDED: Your repository is clearly unrelated to the requirement.\n\n"
         "Return ONLY a JSON object (no markdown fences, no extra text):\n"
         '{\n'
-        '  "status": "REQUIRED" or "EXCLUDED",\n'
+        '  "status": "REQUIRED" or "MAYBE" or "EXCLUDED",\n'
         '  "confidence": 0.0 to 1.0,\n'
         '  "reason": "one sentence explanation citing specific evidence",\n'
-        '  "plan_summary": "if REQUIRED, brief description of the change",\n'
+        '  "plan_summary": "if REQUIRED or MAYBE, brief description of the change",\n'
         '  "missing_dependencies": ["repos you depend on that are NOT in the candidate list"]\n'
         '}'
     )
+
+    # V4 measure 2: include discovery rationale
+    pm_context = ""
+    if discovery_rationale:
+        pm_context = (
+            f"\n\n## Project Manager's Assessment of Your Repository\n\n"
+            f"The Project Manager flagged your repository with confidence "
+            f"{discovery_confidence:.2f}:\n"
+            f'"{discovery_rationale}"\n\n'
+            f"Please verify whether this assessment is correct. If you cannot "
+            f"find evidence to contradict it, lean towards REQUIRED or MAYBE."
+        )
 
     user = (
         f"## Your Repository: {profile.name}\n\n"
         f"{card_text}\n\n"
         f"## Requirement\n\n{requirement}\n\n"
-        f"## All Candidates Flagged by Discovery\n\n{candidates_str}\n\n"
+        f"## All Candidates Flagged by Discovery\n\n{candidates_str}\n"
+        f"{pm_context}\n\n"
         f"## Task\n\n"
         f"Does YOUR repository ({profile.name}) need code changes for this "
         f"requirement? Return the JSON object now."
@@ -187,7 +213,7 @@ def _parse_confirmation(raw: str, repo_name: str) -> ConfirmationResult:
         )
 
     status = data.get("status", "REQUIRED").upper()
-    if status not in ("REQUIRED", "EXCLUDED"):
+    if status not in ("REQUIRED", "MAYBE", "EXCLUDED"):
         status = "REQUIRED"
 
     return ConfirmationResult(
@@ -196,7 +222,7 @@ def _parse_confirmation(raw: str, repo_name: str) -> ConfirmationResult:
         confidence=max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
         reason=data.get("reason", ""),
         plan_summary=data.get("plan_summary", ""),
-        missing_dependencies=data.get("missing_dependencies", []) if status == "REQUIRED" else [],
+        missing_dependencies=data.get("missing_dependencies", []) if status != "EXCLUDED" else [],
     )
 
 
@@ -244,11 +270,18 @@ class ConfirmationService:
         candidate_names: list[str],
         requirement: str,
         *,
+        discovery_evidence: dict[str, tuple[str, float]] | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> ConfirmationSummary:
-        """Confirm each candidate repo in parallel-ish (sequential for now).
+        """Confirm each candidate repo.
 
-        Returns a :class:`ConfirmationSummary` with REQUIRED and EXCLUDED lists.
+        Args:
+            candidate_names: repos to confirm.
+            requirement: the feature requirement text.
+            discovery_evidence: optional mapping of repo_name → (rationale, confidence)
+                from the discovery phase.  When provided, each Repository Manager
+                sees *why* the Project Manager flagged it (V4 measure 2).
+            on_progress: optional callback ``(index, total, name)``.
         """
 
         results: list[ConfirmationResult] = []
@@ -262,8 +295,16 @@ class ConfirmationService:
             if on_progress:
                 on_progress(idx + 1, len(candidate_names), name)
 
+            # V4 measure 2: pass discovery rationale to the Manager
+            rationale = ""
+            conf = 0.0
+            if discovery_evidence and name in discovery_evidence:
+                rationale, conf = discovery_evidence[name]
+
             messages = _build_confirmation_prompt(
                 profile, requirement, candidate_names,
+                discovery_rationale=rationale,
+                discovery_confidence=conf,
             )
             raw = self._llm.chat(messages, temperature=0.0)
             result = _parse_confirmation(raw, name)
@@ -275,18 +316,20 @@ class ConfirmationService:
             )
 
         required = [r for r in results if r.status == "REQUIRED"]
+        maybe = [r for r in results if r.status == "MAYBE"]
         excluded = [r for r in results if r.status == "EXCLUDED"]
 
-        # Collect missing dependencies (one-degree only)
+        # Collect missing dependencies (one-degree only, from REQUIRED + MAYBE)
         existing = set(candidate_names)
         supplemented: list[str] = []
-        for r in required:
+        for r in required + maybe:
             for dep in r.missing_dependencies:
                 if dep not in existing and dep not in supplemented:
                     supplemented.append(dep)
 
         return ConfirmationSummary(
             required=required,
+            maybe=maybe,
             excluded=excluded,
             supplemented_repos=supplemented,
         )
