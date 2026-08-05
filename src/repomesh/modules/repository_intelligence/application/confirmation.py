@@ -119,13 +119,13 @@ def _build_confirmation_prompt(
         "- If your repository handles a different concern than what the "
         "requirement describes, say EXCLUDED.\n\n"
         "Return ONLY a JSON object (no markdown fences, no extra text):\n"
-        '{\n'
+        "{\n"
         '  "status": "REQUIRED" or "EXCLUDED",\n'
         '  "confidence": 0.0 to 1.0,\n'
         '  "reason": "one sentence explanation citing specific evidence",\n'
         '  "plan_summary": "if REQUIRED, brief description of the change",\n'
         '  "missing_dependencies": ["repos you depend on that are NOT in the candidate list"]\n'
-        '}'
+        "}"
     )
 
     user = (
@@ -216,9 +216,7 @@ if TYPE_CHECKING:
 class LLMClient(Protocol):
     """Minimal protocol for an LLM chat client."""
 
-    def chat(
-        self, messages: list[dict[str, str]], *, temperature: float = 0.0
-    ) -> str: ...
+    def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str: ...
 
 
 class ConfirmationService:
@@ -263,7 +261,9 @@ class ConfirmationService:
                 on_progress(idx + 1, len(candidate_names), name)
 
             messages = _build_confirmation_prompt(
-                profile, requirement, candidate_names,
+                profile,
+                requirement,
+                candidate_names,
             )
             raw = self._llm.chat(messages, temperature=0.0)
             result = _parse_confirmation(raw, name)
@@ -271,7 +271,9 @@ class ConfirmationService:
 
             _logger.info(
                 "Confirmation %s: %s (confidence=%.2f)",
-                name, result.status, result.confidence,
+                name,
+                result.status,
+                result.confidence,
             )
 
         required = [r for r in results if r.status == "REQUIRED"]

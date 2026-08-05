@@ -14,7 +14,6 @@ from repomesh.shared.events import EventEnvelope
 
 from .models import RepositoryRecord
 
-#: Key under which the AutoCard is serialised inside ``metadata_payload``.
 _METADATA_AUTO_CARD_KEY = "auto_card"
 
 
@@ -72,4 +71,38 @@ class PostgresRepositoryCatalog:
             description=record.description,
             topics=tuple(record.topics),
             languages=tuple(record.languages),
-            auto_card=_deserialize_auto_card(record.meta
+            auto_card=_deserialize_auto_card(record.metadata_payload),
+            profiled_at=_as_utc(record.profiled_at),
+        )
+
+
+def _serialize_metadata(profile: RepositoryProfile) -> dict[str, Any]:
+    if profile.auto_card is None:
+        return {}
+    card = profile.auto_card
+    return {
+        _METADATA_AUTO_CARD_KEY: {
+            "top_dirs": list(card.top_dirs),
+            "deps": list(card.deps),
+            "recent_commits": list(card.recent_commits),
+            "exposed_apis": list(card.exposed_apis),
+            "low_signal": card.low_signal,
+        }
+    }
+
+
+def _deserialize_auto_card(metadata: dict[str, Any] | None) -> AutoCard | None:
+    payload = (metadata or {}).get(_METADATA_AUTO_CARD_KEY)
+    if not isinstance(payload, dict):
+        return None
+    return AutoCard(
+        top_dirs=tuple(payload.get("top_dirs") or ()),
+        deps=tuple(payload.get("deps") or ()),
+        recent_commits=tuple(payload.get("recent_commits") or ()),
+        exposed_apis=tuple(payload.get("exposed_apis") or ()),
+        low_signal=bool(payload.get("low_signal", False)),
+    )
+
+
+def _as_utc(value):  # noqa: ANN001, ANN202
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value

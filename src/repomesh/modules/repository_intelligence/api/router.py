@@ -23,9 +23,7 @@ def get_catalog(request: Request) -> RepositoryCatalog:
 CatalogDependency = Annotated[RepositoryCatalog, Depends(get_catalog)]
 
 
-def _build_auto_card(body_card) -> AutoCard | None:  # type: ignore[no-untyped-def]
-    """Convert the API-layer ``AutoCardCreate`` to a domain ``AutoCard``."""
-
+def _build_auto_card(body_card) -> AutoCard | None:  # noqa: ANN001
     if body_card is None:
         return None
     return AutoCard(
@@ -62,5 +60,27 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
 async def discover_repositories(
     body: DiscoveryRequest, catalog: CatalogDependency
 ) -> list[DiscoveryCandidate]:
-    # Read DeepSeek configuration from environment so the API stays stateless.
-    api_key = os.environ.get("REPOMESH_DEEP
+    client = make_llm_client(
+        os.environ.get("DEEPSEEK_API_KEY"),
+        base_url=os.environ.get("REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        model=os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat"),
+    )
+    service = RepositoryDiscoveryService(catalog, llm_client=client)
+    evidence = await service.discover(
+        body.requirement,
+        limit=body.limit,
+        entry_point=body.entry_point,
+    )
+    profiles = {profile.id: profile for profile in await catalog.list()}
+    return [
+        DiscoveryCandidate(
+            repository_id=item.repository_id,
+            repository_name=profiles[item.repository_id].name,
+            score=item.score,
+            matched_terms=item.matched_terms,
+            rationale=item.rationale,
+            is_entry_point=item.is_entry_point,
+        )
+        for item in evidence
+        if item.repository_id in profiles
+    ]
