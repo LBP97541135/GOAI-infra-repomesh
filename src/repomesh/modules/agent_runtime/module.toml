@@ -3,3 +3,7 @@ owner = "runtime-integrations"
 status = "active"
 schema = "agent_runtime"
 responsibilities = ["coding runs", "agent sessions", "interrupt and resume", "runtime artifacts"]
+# Boundary: this module owns run state, session records, and the provider-neutral
+# ports. Executing a CLI and speaking its wire protocol belongs to src/repomesh_runner
+# per docs/architecture/runtime-planes.md; both are owned by runtime-integrations.
+excludes = ["cli process execution", "provider wire protocols"]

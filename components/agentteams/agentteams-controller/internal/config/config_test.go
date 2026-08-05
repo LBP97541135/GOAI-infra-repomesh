@@ -297,3 +297,33 @@ func TestLoadConfigAutoPrefixDisabledKeepsExplicitContainerPrefix(t *testing.T) 
 		t.Fatalf("ContainerPrefix = %q, want %q", cfg.ContainerPrefix, "custom-worker-")
 	}
 }
+
+// TestRepomeshRunnerWorkerImageEnvWiring verifies AGENTTEAMS_REPOMESH_WORKER_IMAGE
+// reaches all three backend configs, and that each has a first-party default
+// when the env var is unset.
+func TestRepomeshRunnerWorkerImageEnvWiring(t *testing.T) {
+	cfg := LoadConfig()
+	const wantDefault = "agentteams/agentteams-repomesh-worker:latest"
+	if got := cfg.DockerConfig().RepomeshRunnerWorkerImage; got != wantDefault {
+		t.Fatalf("DockerConfig().RepomeshRunnerWorkerImage = %q, want %q", got, wantDefault)
+	}
+	if got := cfg.K8sConfig().RepomeshRunnerWorkerImage; got != wantDefault {
+		t.Fatalf("K8sConfig().RepomeshRunnerWorkerImage = %q, want %q", got, wantDefault)
+	}
+	if got := cfg.SandboxConfig().RepomeshRunnerWorkerImage; got != wantDefault {
+		t.Fatalf("SandboxConfig().RepomeshRunnerWorkerImage = %q, want %q", got, wantDefault)
+	}
+
+	t.Setenv("AGENTTEAMS_REPOMESH_WORKER_IMAGE", "registry.example.com/repomesh/runner-worker:v9")
+	cfg = LoadConfig()
+	const wantOverride = "registry.example.com/repomesh/runner-worker:v9"
+	if got := cfg.DockerConfig().RepomeshRunnerWorkerImage; got != wantOverride {
+		t.Fatalf("DockerConfig().RepomeshRunnerWorkerImage = %q, want %q", got, wantOverride)
+	}
+	if got := cfg.K8sConfig().RepomeshRunnerWorkerImage; got != wantOverride {
+		t.Fatalf("K8sConfig().RepomeshRunnerWorkerImage = %q, want %q", got, wantOverride)
+	}
+	if got := cfg.SandboxConfig().RepomeshRunnerWorkerImage; got != wantOverride {
+		t.Fatalf("SandboxConfig().RepomeshRunnerWorkerImage = %q, want %q", got, wantOverride)
+	}
+}

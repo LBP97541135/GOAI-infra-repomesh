@@ -6,7 +6,7 @@ from repomesh.integrations.coding_agents.base import (
     AgentBinaryNotFound,
     CliAgentAdapter,
     CommandResult,
-    UnsafePermissionMode,
+    ExecutionStatus,
 )
 from repomesh.integrations.coding_agents.catalog import SPECS
 from repomesh.integrations.coding_agents.registry import (
@@ -25,6 +25,7 @@ from repomesh.modules.agent_runtime.ports.agent_adapter import (
     PromptDelivery,
     SessionKind,
 )
+from repomesh_runner.profiles import PROFILES
 
 
 def spec(adapter_id: str):  # type: ignore[no-untyped-def]
@@ -45,12 +46,61 @@ def adapter(adapter_id: str) -> CliAgentAdapter:
     return CliAgentAdapter(spec(adapter_id), resolved_binary=spec(adapter_id).binaries[0])
 
 
-def test_default_registry_has_23_unique_adapters() -> None:
+def test_registry_lists_unique_discoverable_adapters() -> None:
+    """The catalog is a discovery surface: unique ids, no executability claim.
+
+    Being listed here says the CLI is known and probeable, not that its launch
+    shape was ever validated. Execution authority lives in
+    ``repomesh_runner.profiles``.
+    """
+
     manifests = build_default_registry().list_manifests()
-    assert len(manifests) == 23
-    assert len({manifest.id for manifest in manifests}) == 23
+    assert len(manifests) == len({manifest.id for manifest in manifests})
     assert {"claude-code", "codex", "cursor"}.issubset(manifest.id for manifest in manifests)
     assert AdapterCapability.FEEDBACK in manifests[0].capabilities
+
+
+def test_no_catalog_entry_claims_a_verified_launch_shape() -> None:
+    """Guards the honesty of the catalog.
+
+    Entries are either unverified transcriptions or explicitly superseded by a
+    Runner driver profile. Nothing here may advertise itself as a validated
+    execution path; adding such a status requires a real-CLI contract test.
+    """
+
+    for spec_item in SPECS:
+        assert spec_item.execution_status in (
+            ExecutionStatus.UNVERIFIED,
+            ExecutionStatus.SUPERSEDED_BY_DRIVER,
+        ), spec_item.id
+
+
+def test_driver_backed_clis_are_marked_superseded() -> None:
+    """Every CLI the Runner drives must point away from the catalog.
+
+    This is the guard against the two registries drifting apart again: adding a
+    driver profile without marking the catalog entry fails here.
+    """
+
+    driven = {profile.id for profile in PROFILES}
+    for spec_item in SPECS:
+        if spec_item.id in driven:
+            assert spec_item.execution_status is ExecutionStatus.SUPERSEDED_BY_DRIVER, spec_item.id
+
+
+def test_every_driver_profile_has_a_catalog_entry() -> None:
+    """The reverse direction: the Runner cannot drive an unknown CLI.
+
+    Profiles that declare ``vendor_cli=False`` are exempt: they do not point at
+    a vendor CLI at all (the validation mock agent shipped with the worker
+    image), so there is nothing in the discovery catalog for them to drift from.
+    """
+
+    catalog_ids = {spec_item.id for spec_item in SPECS}
+    for profile in PROFILES:
+        if not profile.vendor_cli:
+            continue
+        assert profile.id in catalog_ids, profile.id
 
 
 def test_registry_rejects_duplicate_and_empty_ids() -> None:
@@ -100,15 +150,20 @@ def test_after_start_adapter_keeps_prompt_out_of_argv() -> None:
     assert "fix the failing test" not in plan.argv
 
 
-def test_worker_cannot_bypass_permissions() -> None:
-    with pytest.raises(UnsafePermissionMode, match="worker"):
-        adapter("cursor").build_launch(request(permission_mode=PermissionMode.BYPASS_PERMISSIONS))
+def test_bypass_permissions_maps_to_native_yolo_for_every_session_kind() -> None:
+    """Bypass is permitted; containment is the workspace and container scope,
+    not provider flags, which were measured to be advisory."""
+
+    worker = adapter("cursor").build_launch(
+        request(permission_mode=PermissionMode.BYPASS_PERMISSIONS)
+    )
     reviewer = adapter("cursor").build_launch(
         request(
             permission_mode=PermissionMode.BYPASS_PERMISSIONS,
             session_kind=SessionKind.REVIEWER,
         )
     )
+    assert "--yolo" in worker.arguments
     assert "--yolo" in reviewer.arguments
 
 

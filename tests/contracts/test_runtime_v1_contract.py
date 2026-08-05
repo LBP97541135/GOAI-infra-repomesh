@@ -1,14 +1,23 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
+
+import pytest
 
 from repomesh_runner import (
     ContextBundleRef,
     RepositoryCheckout,
     RunnerEventType,
+    RunnerExecutionResult,
     RunnerPermissions,
+    RunnerResultStatus,
     RunnerTask,
+    WorkspaceAssignment,
+)
+from repomesh_runner import (
+    TestCommandResult as CommandOutcome,
 )
 
 CONTRACT_ROOT = Path(__file__).parents[2] / "contracts" / "runtime" / "v1"
@@ -59,6 +68,130 @@ def test_runner_task_wire_shape_matches_v1_schema() -> None:
         field_schema = properties[field]
         assert set(field_schema["required"]).issubset(payload[field])
         assert set(payload[field]).issubset(field_schema["properties"])
+
+
+def test_runner_task_without_workspace_emits_null_optional_fields() -> None:
+    payload = make_task().to_wire()
+
+    assert payload["workspace"] is None
+    assert payload["workerAgentId"] is None
+    assert payload["testCommands"] == []
+    assert payload["contextBundle"]["codingPackageHash"] is None
+    assert payload["permissions"]["allowedPaths"] == []
+    assert payload["permissions"]["deniedPaths"] == []
+
+
+def test_runner_task_with_workspace_wire_shape_matches_v1_schema() -> None:
+    schema = load_schema("runner-task.schema.json")
+    properties = schema["properties"]
+    task = replace(
+        make_task(),
+        workspace=WorkspaceAssignment(
+            workspace_id="ws-run-4",
+            path="/srv/repomesh/workspaces/ws-run-4",
+            base_sha="d5e9775" + "0" * 33,
+        ),
+        worker_agent_id=UUID("00000000-0000-0000-0000-000000000008"),
+        test_commands=("pytest -q", "ruff check src"),
+    )
+
+    payload = task.to_wire()
+
+    assert payload["workspace"] == {
+        "workspaceId": "ws-run-4",
+        "path": "/srv/repomesh/workspaces/ws-run-4",
+        "baseSha": "d5e9775" + "0" * 33,
+    }
+    assert payload["workerAgentId"] == "00000000-0000-0000-0000-000000000008"
+    assert payload["testCommands"] == ["pytest -q", "ruff check src"]
+    assert set(payload).issubset(properties)
+    assert set(properties["workspace"]["required"]).issubset(payload["workspace"])
+    assert set(payload["workspace"]).issubset(properties["workspace"]["properties"])
+
+
+def test_workspace_assignment_requires_identifier_path_and_base_sha() -> None:
+    for field, value in (("workspace_id", ""), ("path", "  "), ("base_sha", "")):
+        with pytest.raises(ValueError):
+            WorkspaceAssignment(
+                **{
+                    "workspace_id": "ws-run-4",
+                    "path": "/srv/repomesh/workspaces/ws-run-4",
+                    "base_sha": "0" * 40,
+                    field: value,
+                }
+            )
+
+
+def test_permission_paths_reject_empty_and_duplicate_values() -> None:
+    assert RunnerPermissions(allowed_paths=("src", "tests"), denied_paths=(".git",))
+
+    with pytest.raises(ValueError, match="allowed_paths cannot contain empty values"):
+        RunnerPermissions(allowed_paths=("src", " "))
+    with pytest.raises(ValueError, match="allowed_paths must contain unique values"):
+        RunnerPermissions(allowed_paths=("src", "src"))
+    with pytest.raises(ValueError, match="denied_paths cannot contain empty values"):
+        RunnerPermissions(denied_paths=("",))
+    with pytest.raises(ValueError, match="denied_paths must contain unique values"):
+        RunnerPermissions(denied_paths=(".git", ".git"))
+
+
+def test_context_bundle_coding_package_hash_is_optional_but_validated() -> None:
+    def build(coding_package_hash: str | None) -> ContextBundleRef:
+        return ContextBundleRef(
+            bundle_id=UUID("00000000-0000-0000-0000-000000000007"),
+            version=3,
+            manifest_uri="s3://repomesh-context/bundles/7/manifest.json",
+            content_hash="sha256:" + "a" * 64,
+            coding_package_hash=coding_package_hash,
+        )
+
+    assert build(None).coding_package_hash is None
+    assert build("sha256:" + "b" * 64).coding_package_hash == "sha256:" + "b" * 64
+
+    with pytest.raises(ValueError):
+        build("b" * 64)
+    with pytest.raises(ValueError):
+        build("sha256:" + "B" * 64)
+
+
+def test_runner_task_test_commands_must_be_unique() -> None:
+    with pytest.raises(ValueError, match="test_commands must contain unique values"):
+        replace(make_task(), test_commands=("pytest -q", "pytest -q"))
+    with pytest.raises(ValueError, match="test_commands cannot contain empty values"):
+        replace(make_task(), test_commands=("",))
+
+
+def test_test_command_result_requires_a_command() -> None:
+    assert CommandOutcome(command="pytest -q", exit_code=1).exit_code == 1
+
+    with pytest.raises(ValueError, match="test command is required"):
+        CommandOutcome(command="  ", exit_code=0)
+
+
+def test_runner_execution_result_new_fields_default_to_empty() -> None:
+    result = RunnerExecutionResult(
+        status=RunnerResultStatus.SUCCEEDED,
+        summary="applied the specification",
+    )
+
+    assert result.changed_files == ()
+    assert result.test_results == ()
+
+    enriched = RunnerExecutionResult(
+        status=RunnerResultStatus.SUCCEEDED,
+        summary="applied the specification",
+        changed_files=("src/repomesh_runner/contracts.py",),
+        test_results=(CommandOutcome(command="pytest -q", exit_code=0),),
+    )
+
+    assert enriched.test_results[0].command == "pytest -q"
+
+    with pytest.raises(ValueError, match="changed_files must contain unique values"):
+        RunnerExecutionResult(
+            status=RunnerResultStatus.SUCCEEDED,
+            summary="applied the specification",
+            changed_files=("a.py", "a.py"),
+        )
 
 
 def test_runner_event_enum_matches_python_contract() -> None:

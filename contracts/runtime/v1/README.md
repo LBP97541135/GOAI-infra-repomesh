@@ -16,6 +16,11 @@ change the envelope. Receivers deduplicate tasks by `idempotencyKey` and events 
 The contract contains credential references, never secret values. Context and artifacts are
 immutable URI plus SHA-256 references. Matrix messages are not command or event persistence.
 
+## Runtime definitions
+
+- `worker-runtime.md`: the `repomesh-runner` worker runtime — entrypoint, environment, configuration
+  tree, heartbeat, termination, and storage boundary of an AgentTeams worker that runs a Runner.
+
 ## Compatibility
 
 Additive optional fields are backward compatible within v1. Removing a field, renaming a field,

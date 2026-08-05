@@ -9,6 +9,10 @@ class WorkerRuntime(StrEnum):
     COPAW = "copaw"
     HERMES = "hermes"
     OPENHUMAN = "openhuman"
+    # First-party runtime running the RepoMesh Runner as PID 1; the wire value
+    # must match the controller constant and the CRD enum entry. Contract:
+    # contracts/runtime/v1/worker-runtime.md.
+    REPOMESH_RUNNER = "repomesh-runner"
 
 
 class ManagerRuntime(StrEnum):

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/agentscope-ai/AgentTeams/agentteams-controller/internal/backend"
 )
 
 func TestGenerateOpenClawConfig_Basic(t *testing.T) {
@@ -417,5 +419,74 @@ func TestInjectChannelPolicy_PreservesUnrelatedFields(t *testing.T) {
 	}
 	if extras := got["extras"].(map[string]interface{})["foo"]; extras != "bar" {
 		t.Errorf("extras.foo lost: %v", extras)
+	}
+}
+
+// TestGenerateOpenClawConfig_RepomeshRunnerEmptyTree pins the runtime.v1
+// contract clause "Configuration tree: None. The controller's agentconfig
+// generator emits an empty tree for this runtime." Nothing openclaw-shaped
+// (gateway token, Matrix credentials, plugin paths) may leak into the tree.
+func TestGenerateOpenClawConfig_RepomeshRunnerEmptyTree(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		AdminUser:       "admin",
+		DefaultModel:    "qwen3.5-plus",
+		EmbeddingModel:  "text-embedding-v4",
+	})
+
+	data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+		WorkerName:    "worker-runner",
+		MatrixToken:   "tok-matrix-runner",
+		GatewayKey:    "key-gateway-runner",
+		WorkerRuntime: backend.RuntimeRepomeshRunner,
+		Heartbeat:     &HeartbeatConfig{Enabled: true, Every: "30m"},
+		ChannelPolicy: &ChannelPolicy{GroupAllowExtra: []string{"someone"}},
+	})
+	if err != nil {
+		t.Fatalf("GenerateOpenClawConfig: %v", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(config) != 0 {
+		t.Fatalf("repomesh-runner config tree = %v, want empty", config)
+	}
+	if strings.Contains(string(data), "key-gateway-runner") || strings.Contains(string(data), "tok-matrix-runner") {
+		t.Fatalf("credentials leaked into repomesh-runner config tree: %s", data)
+	}
+}
+
+// TestGenerateOpenClawConfig_OtherRuntimesUnaffected is the control: any other
+// runtime value still produces the full openclaw tree.
+func TestGenerateOpenClawConfig_OtherRuntimesUnaffected(t *testing.T) {
+	g := NewGenerator(Config{
+		MatrixDomain:    "matrix.test:8080",
+		MatrixServerURL: "http://matrix.test:8080",
+		AIGatewayURL:    "http://aigw.test:8080",
+		AdminUser:       "admin",
+		DefaultModel:    "qwen3.5-plus",
+	})
+
+	for _, runtime := range []string{"", backend.RuntimeOpenClaw, backend.RuntimeCopaw, backend.RuntimeHermes} {
+		data, err := g.GenerateOpenClawConfig(WorkerConfigRequest{
+			WorkerName:    "worker-alice",
+			MatrixToken:   "tok-matrix-alice",
+			GatewayKey:    "key-gateway-alice",
+			WorkerRuntime: runtime,
+		})
+		if err != nil {
+			t.Fatalf("GenerateOpenClawConfig(%q): %v", runtime, err)
+		}
+		var config map[string]interface{}
+		if err := json.Unmarshal(data, &config); err != nil {
+			t.Fatalf("invalid JSON for runtime %q: %v", runtime, err)
+		}
+		if _, ok := config["channels"]; !ok {
+			t.Fatalf("runtime %q lost its channels tree: %v", runtime, config)
+		}
 	}
 }

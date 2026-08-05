@@ -331,6 +331,9 @@ func (d *Deployer) DeployWorkerConfig(ctx context.Context, req WorkerDeployReque
 		TeamLeaderName: req.TeamLeaderName,
 		ChannelPolicy:  channelPolicy,
 		Heartbeat:      req.Heartbeat,
+		// Pass the declared runtime so the generator can emit an empty tree
+		// for runtimes that read no configuration (repomesh-runner).
+		WorkerRuntime: req.Spec.Runtime,
 	})
 	if err != nil {
 		return fmt.Errorf("config generation failed: %w", err)

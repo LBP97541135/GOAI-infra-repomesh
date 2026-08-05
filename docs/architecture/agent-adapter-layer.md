@@ -25,7 +25,29 @@ probe or the probe could not decide; it must never be reported as logged in.
 
 ## Registered Adapters
 
-The registry is the single source of truth and currently contains 23 adapters:
+The registry is the single source of truth for **discovery** — which CLIs
+RepoMesh knows about, how to find their binary, and how to probe login state.
+It is **not** the source of truth for execution.
+
+Every entry below was transcribed from the upstream reference in
+`source_revision` and describes the *interactive* invocation. Real-machine
+testing on 2026-08-03 showed those shapes fail unattended: `codex` exits with
+`stdin is not a terminal`, and `kimi` renders its TUI and exits 0 having done
+no work. Unattended execution therefore belongs to the protocol drivers in
+`src/repomesh_runner/drivers`, and each entry carries an `execution_status`:
+
+| Status | Meaning |
+| --- | --- |
+| `unverified` | Never run against the real CLI. Do not execute from this shape. |
+| `superseded_by_driver` | A verified Runner profile exists and is authoritative. |
+
+Currently `claude-code`, `codex`, and `kimi` are `superseded_by_driver`; the
+remaining entries are `unverified`. Contract tests keep the two registries from
+drifting: adding a driver profile without marking its catalog entry fails, and
+so does a profile with no catalog entry.
+
+The 23 registered adapters: 
+
 
 | Adapter id | CLI | Initial prompt | Native restore |
 | --- | --- | --- | --- |

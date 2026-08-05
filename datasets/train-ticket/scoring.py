@@ -150,10 +150,9 @@ def score_case(predicted: list[str], ground_truth: dict[str, Any]) -> CaseMetric
         + WEIGHT_CONTEXT * context_recall
     )
 
-    if predicted_set:
-        precision = len(predicted_set & all_truth_set) / len(predicted_set)
-    else:
-        precision = 0.0
+    precision = (
+        len(predicted_set & all_truth_set) / len(predicted_set) if predicted_set else 0.0
+    )
 
     f1 = _f1(precision, recall)
 
@@ -330,7 +329,7 @@ def _build_report(
         )
         lines.append(header)
         lines.append("-" * len(header))
-        for case, m in metrics:
+        for _case, m in metrics:
             notes: list[str] = []
             if m.missed_direct:
                 notes.append(f"miss_direct=[{','.join(m.missed_direct)}]")

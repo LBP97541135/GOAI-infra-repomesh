@@ -12,6 +12,8 @@ from .contracts import (
     RunnerPermissions,
     RunnerResultStatus,
     RunnerTask,
+    TestCommandResult,
+    WorkspaceAssignment,
 )
 from .engine import (
     ExecuteRunnerTask,
@@ -19,6 +21,7 @@ from .engine import (
     RunnerExecutionError,
     RunnerExecutor,
 )
+from .wire import WireError, parse_runner_task
 
 __all__ = [
     "RUNTIME_SCHEMA_VERSION",
@@ -36,4 +39,8 @@ __all__ = [
     "RunnerPermissions",
     "RunnerResultStatus",
     "RunnerTask",
+    "TestCommandResult",
+    "WireError",
+    "WorkspaceAssignment",
+    "parse_runner_task",
 ]

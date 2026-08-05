@@ -1,6 +1,21 @@
 name = "agentscope-ai/AgentTeams"
 version = "v1.2.0"
-commit = "793db242257a569d911b1aa59c1cd554af78511f"
+commit = "793db242257a569d911b1aa59c1cd554af78511f"   # upstream base
 license = "Apache-2.0"
 controller_api = "/api/v1"
 matrix_api = "/_matrix/client/v3"
+
+# Product fork of AgentTeams carrying the first-party repomesh-runner runtime.
+# The fork's history is continuous with the upstream base above: `repomesh/main`
+# fast-forwards from 793db24, so a subtree round trip needs no rewriting. Note
+# that `git subtree split` can only prove that once the upstream base object is
+# present locally -- the squashed import does not carry it. Fetch it first:
+#   git fetch --filter=blob:none <upstream> <base commit>
+[product_fork]
+repo = "catbobyman/AgentTeams"
+branch = "repomesh/main"
+commit = "c3060691c1fce2a2c24587b75a59f83b487027e8"   # updated on every subtree pull
+
+[compatibility]
+runtime_contract = "runtime.v1"
+# RepoMesh version and commit are injected by the build, never hand-written here.

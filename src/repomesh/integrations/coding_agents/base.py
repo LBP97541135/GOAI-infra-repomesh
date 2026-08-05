@@ -20,7 +20,6 @@ from repomesh.modules.agent_runtime.ports.agent_adapter import (
     LaunchPlan,
     PermissionMode,
     PromptDelivery,
-    SessionKind,
 )
 
 
@@ -74,6 +73,24 @@ class PromptStyle(StrEnum):
     FLAG = "flag"
 
 
+class ExecutionStatus(StrEnum):
+    """How much trust a catalog entry's launch shape has earned.
+
+    ``UNVERIFIED`` is the default and the honest description of most entries:
+    they were transcribed from the upstream reference in ``source_revision``
+    and have never been run against the real CLI.
+
+    ``SUPERSEDED_BY_DRIVER`` marks the CLIs the RepoMesh Runner drives through
+    a verified protocol profile in ``repomesh_runner.profiles``. For those, the
+    launch shape here is known to be wrong for unattended execution — the
+    interactive invocation either demands a TTY or silently completes without
+    doing any work — and the profile is authoritative.
+    """
+
+    UNVERIFIED = "unverified"
+    SUPERSEDED_BY_DRIVER = "superseded_by_driver"
+
+
 @dataclass(frozen=True, slots=True)
 class AuthProbeSpec:
     arguments: tuple[str, ...] | None = None
@@ -101,6 +118,7 @@ class AdapterSpec:
     permission_arguments: Mapping[PermissionMode, tuple[str, ...]] = field(default_factory=dict)
     environment: Mapping[str, str] = field(default_factory=dict)
     auth: AuthProbeSpec = field(default_factory=AuthProbeSpec)
+    execution_status: ExecutionStatus = ExecutionStatus.UNVERIFIED
     source_revision: str = (
         "Untrivial-ai/agent-orchestrator@10025449557665e2474c67096dab47c32d10138f"
     )
@@ -160,6 +178,7 @@ class CliAgentAdapter:
             prompt_delivery=self._spec.prompt_delivery,
             capabilities=frozenset(capabilities),
             source_revision=self._spec.source_revision,
+            execution_status=self._spec.execution_status.value,
         )
 
     async def probe(self) -> AdapterProbe:
@@ -190,6 +209,13 @@ class CliAgentAdapter:
         return AdapterProbe(self._spec.id, True, executable, status)
 
     def build_launch(self, request: AgentLaunchRequest) -> LaunchPlan:
+        """Render the interactive launch shape for preview and discovery.
+
+        This is not the execution path. Unattended runs go through
+        ``repomesh_runner`` protocol drivers; see ``execution_status`` on the
+        spec for whether a verified driver profile supersedes this shape.
+        """
+
         self._validate_permissions(request)
         arguments = list(self._spec.launch_prefix)
         self._append_common_arguments(arguments, request)
@@ -249,11 +275,14 @@ class CliAgentAdapter:
         raise AgentBinaryNotFound(f"{self._spec.id}: binary_not_found")
 
     def _validate_permissions(self, request: AgentLaunchRequest) -> None:
-        if (
-            request.session_kind is SessionKind.WORKER
-            and request.permission_mode is PermissionMode.BYPASS_PERMISSIONS
-        ):
-            raise UnsafePermissionMode("production worker sessions cannot use bypass_permissions")
+        """Permission modes are passed through, including bypass.
+
+        Provider tool flags were measured to be advisory rather than
+        enforceable, so gating here bought no containment. Isolation is owned
+        by the workspace, container, and network scope around the process.
+        ``UnsafePermissionMode`` is retained for adapters that reject a mode
+        their CLI cannot express.
+        """
 
     def _append_common_arguments(
         self,

@@ -13,12 +13,21 @@ from .inbound import AgentTeamsMatrixInboundPoller
 from .matrix import AgentTeamsMatrixClient, MatrixRoomMessage, MatrixSyncBatch
 from .principal_registration import RegisterNativeAgent, RegisterNativeAgentRequest
 from .project_topology import ReconcileProjectAgentTopology
+from .versions import (
+    UPSTREAM_MANIFEST,
+    ComponentVersions,
+    ComponentVersionsError,
+    ReleaseIdentity,
+    load_component_versions,
+    release_identity,
+)
 
 AgentTeamsClient = AgentTeamsControlPlaneClient
 
 __all__ = [
     "AGENTTEAMS_COMMIT",
     "AGENTTEAMS_VERSION",
+    "UPSTREAM_MANIFEST",
     "AgentTeamsClient",
     "AgentTeamsConflict",
     "AgentTeamsControlPlaneClient",
@@ -31,7 +40,12 @@ __all__ = [
     "AgentTeamsResponseError",
     "AgentTeamsUnavailable",
     "AgentTeamsVersion",
+    "ComponentVersions",
+    "ComponentVersionsError",
+    "ReleaseIdentity",
     "ReconcileProjectAgentTopology",
     "RegisterNativeAgent",
     "RegisterNativeAgentRequest",
+    "load_component_versions",
+    "release_identity",
 ]

@@ -174,7 +174,7 @@ type Worker struct {
 type WorkerSpec struct {
 	Model         string                     `json:"model"`
 	ModelProvider string                     `json:"modelProvider,omitempty"` // APIG Model API name for per-worker LLM provider
-	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw (default: openclaw)
+	Runtime       string                     `json:"runtime,omitempty"`       // openclaw | copaw | hermes | qwenpaw | repomesh-runner (default: openclaw)
 	Image         string                     `json:"image,omitempty"`         // custom Docker image
 	WorkerName    string                     `json:"workerName,omitempty"`    // business/runtime identity (Matrix localpart, OSS path key)
 	Identity      string                     `json:"identity,omitempty"`

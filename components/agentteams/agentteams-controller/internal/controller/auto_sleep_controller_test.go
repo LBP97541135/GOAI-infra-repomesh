@@ -93,3 +93,36 @@ func mustParseTime(t *testing.T, value string) time.Time {
 	}
 	return parsed
 }
+
+// TestShouldSleepNeverSleepsWithoutIdleTimeout pins the auto-sleep truth the
+// repomesh-runner runtime.v1 contract depends on: a Worker that does not
+// project spec.idleTimeout (or whose status.lastActiveAt was never written by
+// the Matrix AppService) is never put to sleep, however long it runs. This is
+// why the Runner needs no controller-facing heartbeat in Local deploy mode.
+func TestShouldSleepNeverSleepsWithoutIdleTimeout(t *testing.T) {
+	now := mustParseTime(t, "2026-05-12T10:16:00Z")
+	longAgo := "2020-01-01T00:00:00Z"
+
+	cases := []struct {
+		name         string
+		state        string
+		idleTimeout  string
+		lastActiveAt string
+		want         bool
+	}{
+		{"no_idle_timeout_never_sleeps", "Running", "", longAgo, false},
+		{"no_idle_timeout_and_no_last_active", "Running", "", "", false},
+		{"no_last_active_never_sleeps", "Running", "15m", "", false},
+		{"unparsable_idle_timeout_never_sleeps", "Running", "forever", longAgo, false},
+		{"non_running_state_never_sleeps", "Sleeping", "15m", longAgo, false},
+		{"idle_timeout_with_last_active_sleeps", "Running", "15m", longAgo, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldSleep(now, tc.state, tc.idleTimeout, tc.lastActiveAt); got != tc.want {
+				t.Fatalf("shouldSleep(%q, %q, %q) = %v, want %v",
+					tc.state, tc.idleTimeout, tc.lastActiveAt, got, tc.want)
+			}
+		})
+	}
+}
