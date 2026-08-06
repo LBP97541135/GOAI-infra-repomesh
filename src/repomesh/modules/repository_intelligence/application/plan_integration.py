@@ -238,12 +238,19 @@ def _parse_integrated_plan(raw: str, repo_names: list[str]) -> IntegratedPlan:
         _logger.warning("Failed to parse integrated plan, using fallback")
         return _fallback_plan(repo_names)
 
-    # Parse contracts
+    # Parse contracts (filter out any that reference repos not in the confirmed list)
+    valid_set = set(repo_names)
     contracts: list[ContractSpec] = []
     for c in data.get("contracts", []):
         producer = c.get("producer", "")
         consumer = c.get("consumer", "")
         if not producer or not consumer:
+            continue
+        # Deterministic filter: only keep contracts between confirmed repos
+        if producer not in valid_set or consumer not in valid_set:
+            _logger.info(
+                "Dropping contract %s -> %s (not in confirmed repos)", producer, consumer,
+            )
             continue
         contracts.append(
             ContractSpec(

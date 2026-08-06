@@ -206,6 +206,34 @@ class TestParseIntegratedPlan:
         plan = _parse_integrated_plan(raw, ["A", "B"])
         assert len(plan.contracts) == 1
 
+    def test_parse_contract_filtered_to_confirmed_repos(self):
+        """Contracts referencing repos not in the confirmed list must be dropped."""
+        raw = json.dumps(
+            {
+                "engineering_spec": "Spec",
+                "contracts": [
+                    # valid: both in confirmed list
+                    {"producer": "A", "consumer": "B",
+                     "interface": "API1", "agreement": "ok"},
+                    # invalid: producer not in confirmed list
+                    {"producer": "ts-ghost-service", "consumer": "B",
+                     "interface": "API2", "agreement": "bad"},
+                    # invalid: consumer not in confirmed list
+                    {"producer": "A", "consumer": "ts-phantom-service",
+                     "interface": "API3", "agreement": "bad"},
+                    # invalid: both not in confirmed list
+                    {"producer": "ts-ghost", "consumer": "ts-phantom",
+                     "interface": "API4", "agreement": "bad"},
+                ],
+                "task_dag": [],
+            }
+        )
+        plan = _parse_integrated_plan(raw, ["A", "B"])
+        assert len(plan.contracts) == 1
+        assert plan.contracts[0].producer == "A"
+        assert plan.contracts[0].consumer == "B"
+        assert plan.contracts[0].interface == "API1"
+
 
 class TestPlanIntegrationService:
     def test_integrate_success(self):
