@@ -31,6 +31,25 @@ class TaskView:
 
 
 @dataclass(frozen=True, slots=True)
+class PublishedTaskPackage:
+    team_name: str
+    task_path: str
+    content_hash: str
+
+
+class TaskAssignmentPublisher(Protocol):
+    async def publish(
+        self,
+        task: TaskView,
+        *,
+        team_name: str,
+        room_id: str,
+        assignee_resource_name: str,
+        idempotency_key: str,
+    ) -> PublishedTaskPackage: ...
+
+
+@dataclass(frozen=True, slots=True)
 class AssignTaskCommand:
     organization_id: UUID
     project_id: UUID
@@ -64,10 +83,14 @@ class ProjectTaskProgress:
 
 
 class TaskReportGateway(Protocol):
-    async def report(
-        self, command: ReportTaskCommand, *, idempotency_key: str
-    ) -> TaskView: ...
+    async def report(self, command: ReportTaskCommand, *, idempotency_key: str) -> TaskView: ...
 
 
 class TaskReader(Protocol):
     async def get_view(self, task_id: UUID) -> TaskView | None: ...
+
+
+class TaskExecutionStateGateway(Protocol):
+    async def start(self, task_id: UUID, *, agent_id: UUID) -> TaskView: ...
+
+    async def block(self, task_id: UUID, *, agent_id: UUID, summary: str) -> TaskView: ...

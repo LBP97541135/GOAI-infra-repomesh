@@ -38,6 +38,9 @@ EVENT_SINK_URL = "REPOMESH_RUNNER_EVENT_SINK_URL"
 WORKSPACE_ROOT = "REPOMESH_RUNNER_WORKSPACE_ROOT"
 STATE_DIR = "REPOMESH_RUNNER_STATE_DIR"
 POLL_TIMEOUT_SECONDS = "REPOMESH_RUNNER_POLL_TIMEOUT_SECONDS"
+CONTROL_TOKEN = "REPOMESH_RUNNER_CONTROL_TOKEN"
+WORKSPACE_PATH_FROM = "REPOMESH_RUNNER_WORKSPACE_PATH_FROM"
+WORKSPACE_PATH_TO = "REPOMESH_RUNNER_WORKSPACE_PATH_TO"
 
 LABEL_PREFIX = "REPOMESH_LABEL_"
 
@@ -48,6 +51,9 @@ CONSUMED_VARIABLES = frozenset(
         WORKSPACE_ROOT,
         STATE_DIR,
         POLL_TIMEOUT_SECONDS,
+        CONTROL_TOKEN,
+        WORKSPACE_PATH_FROM,
+        WORKSPACE_PATH_TO,
     }
 )
 
@@ -83,6 +89,9 @@ class RunnerRuntimeEnv:
     state_dir: Path
     poll_timeout_seconds: float = DEFAULT_POLL_TIMEOUT_SECONDS
     labels: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    control_token: str | None = None
+    workspace_path_from: str | None = None
+    workspace_path_to: str | None = None
 
 
 def load_runtime_env(environ: Mapping[str, str]) -> RunnerRuntimeEnv:
@@ -102,6 +111,12 @@ def load_runtime_env(environ: Mapping[str, str]) -> RunnerRuntimeEnv:
     raw_state_dir = _optional(environ, STATE_DIR)
     state_dir = Path(raw_state_dir) if raw_state_dir else workspace_root / DEFAULT_STATE_DIRNAME
 
+    path_from = _optional(environ, WORKSPACE_PATH_FROM)
+    path_to = _optional(environ, WORKSPACE_PATH_TO)
+    if bool(path_from) != bool(path_to):
+        raise RuntimeEnvError(
+            f"{WORKSPACE_PATH_FROM} and {WORKSPACE_PATH_TO} must be configured together"
+        )
     return RunnerRuntimeEnv(
         task_source_url=_required(environ, TASK_SOURCE_URL),
         event_sink_url=_required(environ, EVENT_SINK_URL),
@@ -109,6 +124,9 @@ def load_runtime_env(environ: Mapping[str, str]) -> RunnerRuntimeEnv:
         state_dir=state_dir,
         poll_timeout_seconds=_poll_timeout(environ),
         labels=_labels(environ),
+        control_token=_optional(environ, CONTROL_TOKEN),
+        workspace_path_from=path_from,
+        workspace_path_to=path_to,
     )
 
 

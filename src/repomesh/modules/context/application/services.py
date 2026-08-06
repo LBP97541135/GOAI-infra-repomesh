@@ -1,4 +1,3 @@
-
 from uuid import UUID
 
 from repomesh.modules.context.contracts import (
@@ -412,4 +411,6 @@ class GetExecutionContextGrant:
             network_policy=bundle.network_policy,
             expires_at=bundle.expires_at,
             content_hash=bundle.content_hash,
+            base_sha=bundle.base_sha,
+            workspace_id=bundle.workspace_id,
         )

@@ -30,6 +30,7 @@ class AgentTeamsMatrixClient:
         timeout: float = 10.0,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
+        control_plane=None,
     ) -> None:
         if not access_token.strip():
             raise ValueError("Matrix access token is required")
@@ -39,6 +40,7 @@ class AgentTeamsMatrixClient:
             timeout=timeout,
             transport=transport,
         )
+        self._control_plane = control_plane
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -104,6 +106,7 @@ class AgentTeamsMatrixClient:
         body: str,
         *,
         transaction_id: str,
+        recipient_resource_name: str | None = None,
     ) -> str:
         room = room_id.strip()
         message = body.strip()
@@ -115,6 +118,13 @@ class AgentTeamsMatrixClient:
         if not transaction:
             raise ValueError("transaction_id is required for idempotent Matrix delivery")
 
+        recipient_matrix_id = None
+        if recipient_resource_name and self._control_plane is not None:
+            worker = await self._control_plane.get_worker(recipient_resource_name)
+            recipient_matrix_id = worker.matrix_user_id if worker else None
+            if not recipient_matrix_id:
+                raise AgentTeamsUnavailable("AgentTeams recipient Matrix identity is unavailable")
+            message = f"{recipient_matrix_id} {message}"
         path = (
             f"/_matrix/client/v3/rooms/{quote(room, safe='')}/send/"
             f"m.room.message/{quote(transaction, safe='')}"
@@ -122,7 +132,15 @@ class AgentTeamsMatrixClient:
         try:
             response = await self._client.put(
                 path,
-                json={"msgtype": "m.text", "body": message},
+                json={
+                    "msgtype": "m.text",
+                    "body": message,
+                    **(
+                        {"m.mentions": {"user_ids": [recipient_matrix_id]}}
+                        if recipient_matrix_id
+                        else {}
+                    ),
+                },
             )
         except httpx.HTTPError as error:
             raise AgentTeamsUnavailable("AgentTeams Matrix task delivery failed") from error

@@ -128,11 +128,13 @@ class SendCollaborationMessage:
     async def _deliver(
         self, message: CollaborationMessage, transaction_id: str
     ) -> CollaborationMessageView:
+        recipient = await self._required_agent(message.recipient_agent_id)
         try:
             event_id = await self._messenger.send_task(
                 message.room_id,
                 self._wire_payload(message),
                 transaction_id=transaction_id,
+                recipient_resource_name=recipient.agentteams_resource_name,
             )
         except Exception:
             await self._store.update(message.failed())

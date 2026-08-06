@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,6 +17,18 @@ class Settings(BaseSettings):
     agentteams_controller_token: str | None = None
     agentteams_matrix_url: str = "http://localhost:6167"
     agentteams_matrix_access_token: str | None = None
+    runner_control_token: str | None = None
+    agent_action_token: str | None = None
+    worker_task_control_url: str | None = None
+    agentteams_storage_root: Path = Path(".agentteams-storage")
+    agentteams_storage_endpoint: str | None = None
+    agentteams_storage_access_key: str | None = None
+    agentteams_storage_secret_key: str | None = None
+    agentteams_storage_bucket: str = "agentteams-storage"
+    mcp_gateway_token: str | None = None
+    direct_worker_mcp_enabled: bool = False
+    runner_workspace_root: Path = Path(".repomesh-workspaces")
+    capability_root: Path = Path(".")
 
 
 @lru_cache

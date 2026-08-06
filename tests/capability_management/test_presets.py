@@ -33,7 +33,7 @@ def principal(role: AgentRole) -> AgentPrincipalView:
     (
         (AgentRole.ORGANIZATION_LEADER, 3, 1),
         (AgentRole.REPOSITORY_LEADER, 6, 2),
-        (AgentRole.WORKER, 3, 1),
+        (AgentRole.WORKER, 3, 2),
     ),
 )
 def test_default_role_presets(role, skill_count, mcp_count) -> None:
@@ -51,6 +51,7 @@ def test_web_worker_gets_isolated_playwright_capability() -> None:
     )
 
     assert [server.id for server in bundle.mcp_servers] == [
+        "repomesh-task-control",
         "context7-docs-worker",
         "playwright-web-test",
     ]
@@ -66,9 +67,7 @@ def test_worker_never_receives_github_or_merge_operations() -> None:
 
 
 def test_repository_leader_can_review_but_not_merge_or_edit_code() -> None:
-    bundle = PresetCapabilityAssembler().assemble(
-        principal(AgentRole.REPOSITORY_LEADER)
-    )
+    bundle = PresetCapabilityAssembler().assemble(principal(AgentRole.REPOSITORY_LEADER))
     github = next(server for server in bundle.mcp_servers if server.id.startswith("github"))
 
     assert "github.pull_requests.review" in github.allowed_operations

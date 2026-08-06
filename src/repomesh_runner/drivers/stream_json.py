@@ -193,10 +193,15 @@ class _Run:
                     timeout=self._watchdog.remaining(),
                 )
             except TimeoutError:
+                # This read is the only activity source in the loop. If its exact remaining
+                # budget elapsed, no concurrent frame can have refreshed the watchdog.
+                return self.timed_out()
+            if line is None:
+                # ``wait_for`` cancels the pending async-generator read on timeout. Some
+                # process adapters surface that cancellation as EOF on the following read,
+                # so re-check the watchdog before classifying it as a missing terminal frame.
                 if self._watchdog.expired():
                     return self.timed_out()
-                continue
-            if line is None:
                 break
             self._watchdog.touch()
             terminal = self._consume(line)

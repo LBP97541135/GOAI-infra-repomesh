@@ -161,8 +161,11 @@ async def _serve_forever(env: RunnerRuntimeEnv) -> None:
     source = HttpLongPollTaskSource(
         env.task_source_url,
         timeout_seconds=env.poll_timeout_seconds,
+        control_token=env.control_token,
+        workspace_path_from=env.workspace_path_from,
+        workspace_path_to=env.workspace_path_to,
     )
-    sink = HttpEventSink(env.event_sink_url)
+    sink = HttpEventSink(env.event_sink_url, control_token=env.control_token)
     try:
         await serve(
             source=source,

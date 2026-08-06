@@ -107,6 +107,8 @@ class ExecutionContextGrant:
     network_policy: tuple[str, ...]
     expires_at: datetime
     content_hash: str
+    base_sha: str | None = None
+    workspace_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

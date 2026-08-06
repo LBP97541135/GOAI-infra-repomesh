@@ -15,6 +15,8 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
+from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
@@ -72,6 +74,9 @@ class HttpLongPollTaskSource:
         monotonic: Callable[[], float] = time.monotonic,
         base_backoff_seconds: float = DEFAULT_BASE_BACKOFF_SECONDS,
         max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS,
+        control_token: str | None = None,
+        workspace_path_from: str | None = None,
+        workspace_path_to: str | None = None,
     ) -> None:
         self._url = url
         self._timeout_seconds = timeout_seconds
@@ -83,12 +88,19 @@ class HttpLongPollTaskSource:
         self._monotonic = monotonic
         self._base_backoff_seconds = base_backoff_seconds
         self._max_backoff_seconds = max_backoff_seconds
+        self._headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
         self._consecutive_failures = 0
+        self._workspace_path_from = workspace_path_from
+        self._workspace_path_to = workspace_path_to
 
     async def next_task(self) -> RunnerTask | None:
         started_at = self._monotonic()
         try:
-            response = await self._client.get(self._url, params={"wait": self._timeout_seconds})
+            response = await self._client.get(
+                self._url,
+                params={"wait": self._timeout_seconds},
+                headers=self._headers,
+            )
         except httpx.HTTPError as error:
             _logger.warning("task source request failed: %s", type(error).__name__)
             await self._back_off()
@@ -105,7 +117,7 @@ class HttpLongPollTaskSource:
             return None
 
         try:
-            task = parse_runner_task(response.json())
+            task = self._map_workspace(parse_runner_task(response.json()))
         except (WireError, ValueError) as error:
             _logger.error("task source returned an unparseable task: %s", error)
             await self._back_off()
@@ -114,6 +126,15 @@ class HttpLongPollTaskSource:
         self._consecutive_failures = 0
         _logger.info("accepted task run=%s attempt=%s", task.run_id, task.attempt)
         return task
+
+    def _map_workspace(self, task: RunnerTask) -> RunnerTask:
+        if not task.workspace or not self._workspace_path_from or not self._workspace_path_to:
+            return task
+        if not task.workspace.path.startswith(self._workspace_path_from):
+            raise WireError("workspace path does not match the configured execution-plane prefix")
+        suffix = task.workspace.path[len(self._workspace_path_from) :].lstrip("/\\")
+        mapped = str((Path(self._workspace_path_to) / suffix).resolve())
+        return replace(task, workspace=replace(task.workspace, path=mapped))
 
     async def aclose(self) -> None:
         if self._owns_client:

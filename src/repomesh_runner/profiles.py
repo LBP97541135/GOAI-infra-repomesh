@@ -103,14 +103,14 @@ PROFILES: tuple[CliProfile, ...] = (
         system_prompt_flag="--append-system-prompt",
         resume_flag="--resume",
         permission_arguments={
-            RunnerPermissionMode.DEFAULT: ("--permission-mode", "default"),
+            RunnerPermissionMode.DEFAULT: ("--permission-mode", "manual"),
             RunnerPermissionMode.ACCEPT_EDITS: ("--permission-mode", "acceptEdits"),
             RunnerPermissionMode.AUTO: ("--permission-mode", "acceptEdits"),
             # Deliberately the DEFAULT (ask-everything) arguments, not
             # ``bypassPermissions``: platform bypass means auto-approval over
             # the protocol, and the CLI's own bypass flag stops it from emitting
             # the control_request channel that enforces the deny rules.
-            RunnerPermissionMode.BYPASS_PERMISSIONS: ("--permission-mode", "default"),
+            RunnerPermissionMode.BYPASS_PERMISSIONS: ("--permission-mode", "manual"),
         },
         stream_json=StreamJsonConfig(prompt_via_stdin=True),
     ),

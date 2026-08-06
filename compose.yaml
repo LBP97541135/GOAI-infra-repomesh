@@ -28,8 +28,18 @@ services:
       REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN: ${REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN:-}
       REPOMESH_AGENTTEAMS_MATRIX_URL: http://agentteams-controller:6167
       REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN: ${REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN:-}
+      REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
+      REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_AGENT_ACTION_TOKEN:-}
+      REPOMESH_WORKER_TASK_CONTROL_URL: ${REPOMESH_WORKER_TASK_CONTROL_URL:-}
+      REPOMESH_MCP_GATEWAY_TOKEN: ${REPOMESH_MCP_GATEWAY_TOKEN:-}
+      REPOMESH_DIRECT_WORKER_MCP_ENABLED: ${REPOMESH_DIRECT_WORKER_MCP_ENABLED:-false}
+      REPOMESH_RUNNER_WORKSPACE_ROOT: /runner-workspaces
+      REPOMESH_AGENTTEAMS_STORAGE_ROOT: /agentteams-data/minio/agentteams-storage
     ports:
       - "8000:8000"
+    volumes:
+      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/runner-workspaces
+      - agentteams-storage:/agentteams-data
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,6 +60,9 @@ services:
 
 volumes:
   repomesh-postgres:
+  agentteams-storage:
+    external: true
+    name: agentteams-data
 
 networks:
   agentteams:

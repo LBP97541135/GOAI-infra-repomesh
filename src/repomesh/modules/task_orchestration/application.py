@@ -7,6 +7,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalReader,
     AgentPrincipalStatus,
     AgentPrincipalView,
+    AgentRole,
 )
 from repomesh.modules.collaboration.contracts import (
     CollaborationGateway,
@@ -17,7 +18,9 @@ from repomesh.modules.project.contracts import ProjectTopologyReader
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
     ProjectTaskProgress,
+    PublishedTaskPackage,
     ReportTaskCommand,
+    TaskAssignmentPublisher,
     TaskStatus,
     TaskView,
 )
@@ -37,15 +40,15 @@ class TaskOrchestrator:
         topologies: ProjectTopologyReader,
         tasks: TaskStore,
         collaboration: CollaborationGateway,
+        publisher: TaskAssignmentPublisher | None = None,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
         self._tasks = tasks
         self._collaboration = collaboration
+        self._publisher = publisher
 
-    async def assign(
-        self, command: AssignTaskCommand, *, idempotency_key: str
-    ) -> TaskView:
+    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
@@ -54,7 +57,7 @@ class TaskOrchestrator:
             task, previous_fingerprint = existing
             if fingerprint != previous_fingerprint:
                 raise TaskConflict("idempotency key was used for a different task")
-            await self._send_assignment(task, key)
+            await self._deliver_assignment(task, key)
             return task.to_view()
 
         assigner = await self._required_agent(command.assigned_by_agent_id)
@@ -93,10 +96,39 @@ class TaskOrchestrator:
             idempotency_key=key,
             request_fingerprint=fingerprint,
         )
-        await self._send_assignment(task, key)
+        await self._deliver_assignment(task, key)
         return task.to_view()
 
-    async def _send_assignment(self, task: Task, key: str) -> None:
+    async def _deliver_assignment(self, task: Task, key: str) -> None:
+        assignee = await self._required_agent(task.assignee_agent_id)
+        published = None
+        if assignee.role is AgentRole.WORKER:
+            if self._publisher is None:
+                raise RuntimeError("Worker task publisher is not configured")
+            topology = await self._topologies.get_view(task.project_id)
+            team = next(
+                (
+                    item
+                    for item in topology.repository_teams
+                    if item.repository_id == task.repository_id
+                    and task.assignee_agent_id in item.worker_agent_ids
+                ),
+                None,
+            ) if topology else None
+            if team is None or not team.room_id:
+                raise TaskDenied("Worker Team runtime is not ready for task publication")
+            published = await self._publisher.publish(
+                task.to_view(),
+                team_name=team.agentteams_team_name,
+                room_id=team.room_id,
+                assignee_resource_name=assignee.agentteams_resource_name,
+                idempotency_key=f"{key}:publication",
+            )
+        await self._send_assignment(task, key, published)
+
+    async def _send_assignment(
+        self, task: Task, key: str, published: PublishedTaskPackage | None
+    ) -> None:
         await self._collaboration.send(
             SendCollaborationMessageCommand(
                 organization_id=task.organization_id,
@@ -107,7 +139,7 @@ class TaskOrchestrator:
                 recipient_agent_id=task.assignee_agent_id,
                 kind=CollaborationMessageKind.TASK_ASSIGNMENT,
                 subject=task.title,
-                body=self._assignment_body(task),
+                body=self._assignment_body(task, published),
                 correlation_id=task.id,
             ),
             idempotency_key=f"{key}:message",
@@ -121,9 +153,7 @@ class TaskOrchestrator:
         await self._tasks.update(updated, expected_version=task.version)
         return updated.to_view()
 
-    async def report(
-        self, command: ReportTaskCommand, *, idempotency_key: str
-    ) -> TaskView:
+    async def report(self, command: ReportTaskCommand, *, idempotency_key: str) -> TaskView:
         await self._required_agent(command.reporter_agent_id)
         task = await self._required_task(command.task_id)
         if task.assignee_agent_id != command.reporter_agent_id:
@@ -193,8 +223,7 @@ class TaskOrchestrator:
     def _validate_membership(assigner, assignee, repository_id, topology) -> None:
         if assigner.id == topology.organization_leader_id:
             if not any(
-                team.repository_id == repository_id
-                and team.leader_agent_id == assignee.id
+                team.repository_id == repository_id and team.leader_agent_id == assignee.id
                 for team in topology.repository_teams
             ):
                 raise TaskDenied("repository leader is not assigned to this project repository")
@@ -208,7 +237,20 @@ class TaskOrchestrator:
             raise TaskDenied("worker is not assigned to this project repository team")
 
     @staticmethod
-    def _assignment_body(task: Task) -> str:
+    def _assignment_body(
+        task: Task, published: PublishedTaskPackage | None = None
+    ) -> str:
+        if published is not None:
+            return (
+                "A verified RepoMesh task package is ready. Do not edit code directly in this "
+                "chat session. Call the MCP tool "
+                "repomesh-task-control.start_assigned_task with:\n"
+                f'{{"task_id":"{task.id}","worker_agent_id":"{task.assignee_agent_id}"}}\n\n'
+                f"Task package: {published.task_path}\n"
+                f"Content hash: {published.content_hash}\n"
+                "RepoMesh Runner will prepare the isolated workspace, invoke the configured "
+                "coding-agent adapter, run verification, and persist the result."
+            )
         acceptance = "\n".join(f"- {item}" for item in task.acceptance)
         return (
             f"{task.instruction}\n\nAcceptance criteria:\n{acceptance}\n\n"
@@ -229,3 +271,39 @@ class TaskOrchestrator:
             asdict(command), sort_keys=True, default=str, separators=(",", ":")
         ).encode()
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+class TaskExecutionState:
+    """Persist Worker execution transitions without depending on chat delivery."""
+
+    def __init__(self, directory: AgentPrincipalReader, tasks: TaskStore) -> None:
+        self._directory = directory
+        self._tasks = tasks
+
+    async def start(self, task_id: UUID, *, agent_id: UUID) -> TaskView:
+        task = await self._required(task_id, agent_id)
+        if task.status is TaskStatus.IN_PROGRESS:
+            return task.to_view()
+        updated = task.start()
+        await self._tasks.update(updated, expected_version=task.version)
+        return updated.to_view()
+
+    async def block(self, task_id: UUID, *, agent_id: UUID, summary: str) -> TaskView:
+        task = await self._required(task_id, agent_id)
+        normalized = summary.strip()
+        if task.status is TaskStatus.BLOCKED and task.result_summary == normalized:
+            return task.to_view()
+        updated = task.report(TaskStatus.BLOCKED, normalized)
+        await self._tasks.update(updated, expected_version=task.version)
+        return updated.to_view()
+
+    async def _required(self, task_id: UUID, agent_id: UUID) -> Task:
+        agent = await self._directory.get_view(agent_id)
+        if agent is None or agent.status is not AgentPrincipalStatus.ACTIVE:
+            raise TaskDenied("worker agent is missing or disabled")
+        task = await self._tasks.get(task_id)
+        if task is None:
+            raise TaskNotFound(f"task does not exist: {task_id}")
+        if task.assignee_agent_id != agent_id:
+            raise TaskDenied("only the assignee can change execution state")
+        return task

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from repomesh.modules.agent_directory.application import CreateAgent, CreateAgentRequest
 from repomesh.modules.agent_directory.contracts import AgentCreated, AgentRole
@@ -6,6 +6,7 @@ from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     ManagerProjection,
+    McpServerProjection,
     WorkerProjection,
 )
 
@@ -35,9 +36,11 @@ class RegisterNativeAgent:
         self,
         control_plane: AgentTeamControlPlane,
         directory: AgentDirectory,
+        worker_task_control_url: str | None = None,
     ) -> None:
         self._control_plane = control_plane
         self._register = CreateAgent(directory)
+        self._worker_task_control_url = worker_task_control_url
 
     async def execute(
         self,
@@ -54,11 +57,26 @@ class RegisterNativeAgent:
                 idempotency_key=f"{key}:agentteams",
             )
         elif request.worker is not None:
+            worker = self._with_task_control(request.worker)
             await self._control_plane.ensure_worker(
-                request.worker,
+                worker,
                 idempotency_key=f"{key}:agentteams",
             )
         return await self._register.execute(
             request.principal,
             idempotency_key=f"{key}:principal",
+        )
+
+    def _with_task_control(self, worker: WorkerProjection) -> WorkerProjection:
+        if not self._worker_task_control_url:
+            return worker
+        servers = tuple(
+            server for server in worker.mcp_servers if server.name != "repomesh-task-control"
+        )
+        return replace(
+            worker,
+            mcp_servers=(
+                McpServerProjection("repomesh-task-control", self._worker_task_control_url),
+                *servers,
+            ),
         )

@@ -76,6 +76,7 @@ class ExecuteRunnerTask:
                 "testCommand": result.test_command,
                 "artifacts": [artifact.to_wire() for artifact in result.artifacts],
                 "changedFiles": list(result.changed_files),
+                "commitSha": result.commit_sha,
                 "testResults": [
                     {"command": entry.command, "exitCode": entry.exit_code}
                     for entry in result.test_results

@@ -28,9 +28,7 @@ def _skill(
 
 
 SPEC_KIT = CapabilitySource("https://github.com/github/spec-kit", maintainer="GitHub")
-AWESOME_COPILOT = CapabilitySource(
-    "https://github.com/github/awesome-copilot", maintainer="GitHub"
-)
+AWESOME_COPILOT = CapabilitySource("https://github.com/github/awesome-copilot", maintainer="GitHub")
 ANTHROPIC_PLUGINS = CapabilitySource(
     "https://github.com/anthropics/claude-plugins-official",
     maintainer="Anthropic",
@@ -106,9 +104,7 @@ GITHUB_ORG = CapabilityDefinition(
     id="github-org-readonly",
     kind=CapabilityKind.MCP,
     title="GitHub 组织与交付状态",
-    source=CapabilitySource(
-        "https://github.com/github/github-mcp-server", maintainer="GitHub"
-    ),
+    source=CapabilitySource("https://github.com/github/github-mcp-server", maintainer="GitHub"),
     access=CapabilityAccess.READ_ONLY,
     allowed_roles=frozenset({AgentRole.ORGANIZATION_LEADER}),
     allowed_operations=(
@@ -160,14 +156,22 @@ PLAYWRIGHT_WORKER = CapabilityDefinition(
     id="playwright-web-test",
     kind=CapabilityKind.MCP,
     title="Playwright 隔离式 Web 测试",
-    source=CapabilitySource(
-        "https://github.com/microsoft/playwright-mcp", maintainer="Microsoft"
-    ),
+    source=CapabilitySource("https://github.com/microsoft/playwright-mcp", maintainer="Microsoft"),
     access=CapabilityAccess.EXECUTION,
     allowed_roles=frozenset({AgentRole.WORKER}),
     allowed_operations=("playwright.navigate", "playwright.inspect", "playwright.interact"),
     denied_operations=("playwright.persistent-profile",),
     conditional_on=frozenset({"web_e2e"}),
+)
+
+REPOMESH_TASK_CONTROL = CapabilityDefinition(
+    id="repomesh-task-control",
+    kind=CapabilityKind.MCP,
+    title="RepoMesh 任务执行控制",
+    source=CapabilitySource("internal://repomesh", maintainer="RepoMesh"),
+    access=CapabilityAccess.EXECUTION,
+    allowed_roles=frozenset({AgentRole.WORKER}),
+    allowed_operations=("repomesh.start_assigned_task",),
 )
 
 ROLE_SKILLS = {
@@ -190,7 +194,7 @@ ROLE_SKILLS = {
 ROLE_MCP = {
     AgentRole.ORGANIZATION_LEADER: (GITHUB_ORG,),
     AgentRole.REPOSITORY_LEADER: (GITHUB_REPOSITORY, CONTEXT7_LEADER),
-    AgentRole.WORKER: (CONTEXT7_WORKER, PLAYWRIGHT_WORKER),
+    AgentRole.WORKER: (REPOMESH_TASK_CONTROL, CONTEXT7_WORKER, PLAYWRIGHT_WORKER),
 }
 
 
@@ -215,4 +219,3 @@ class PresetCapabilityAssembler:
                     f"{capability.id} cannot be attached to {principal.role.value}"
                 )
         return AgentCapabilityBundle(principal.role, skills, servers)
-

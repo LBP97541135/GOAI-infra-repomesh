@@ -38,6 +38,7 @@ from repomesh.modules.task_orchestration import (
     TaskOrchestrator,
     TaskStatus,
 )
+from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage
 
 
 class ReadyControlPlane:
@@ -57,7 +58,9 @@ class RecordingMessenger:
     def __init__(self) -> None:
         self.deliveries: list[tuple[str, dict, str]] = []
 
-    async def send_task(self, room_id: str, body: str, *, transaction_id: str) -> str:
+    async def send_task(
+        self, room_id: str, body: str, *, transaction_id: str, **kwargs
+    ) -> str:
         self.deliveries.append((room_id, json.loads(body), transaction_id))
         return f"$event-{len(self.deliveries)}"
 
@@ -67,11 +70,15 @@ class FailOnceMessenger(RecordingMessenger):
         super().__init__()
         self.failed = False
 
-    async def send_task(self, room_id: str, body: str, *, transaction_id: str) -> str:
+    async def send_task(
+        self, room_id: str, body: str, *, transaction_id: str, **kwargs
+    ) -> str:
         if not self.failed:
             self.failed = True
             raise RuntimeError("temporary Matrix outage")
-        return await super().send_task(room_id, body, transaction_id=transaction_id)
+        return await super().send_task(
+            room_id, body, transaction_id=transaction_id, **kwargs
+        )
 
 
 class StaticIdentityVerifier:
@@ -81,6 +88,19 @@ class StaticIdentityVerifier:
 
     async def verify(self, profile, matrix_user_id: str) -> bool:
         return profile.id == self.agent_id and matrix_user_id == self.matrix_user_id
+
+
+class RecordingTaskPublisher:
+    def __init__(self) -> None:
+        self.publications = []
+
+    async def publish(self, task, **kwargs):
+        self.publications.append((task, kwargs))
+        return PublishedTaskPackage(
+            kwargs["team_name"],
+            f"teams/{kwargs['team_name']}/shared/tasks/{task.id}",
+            "sha256:verified",
+        )
 
 
 async def build_flow(messenger=None):
@@ -137,7 +157,9 @@ async def build_flow(messenger=None):
         messenger,
     )
     tasks = InMemoryTaskStore()
-    orchestrator = TaskOrchestrator(directory, topologies, tasks, collaboration)
+    orchestrator = TaskOrchestrator(
+        directory, topologies, tasks, collaboration, RecordingTaskPublisher()
+    )
     return (
         organization_id,
         repository_id,
@@ -221,6 +243,10 @@ async def test_manager_leader_worker_assignment_and_report_flow() -> None:
     assert len(messenger.deliveries) == 4
     assert messenger.deliveries[0][0].startswith("!leader-")
     assert messenger.deliveries[1][0].startswith("!team-")
+    worker_body = messenger.deliveries[1][1]["body"]
+    assert "repomesh-task-control.start_assigned_task" in worker_body
+    assert "Do not edit code directly" in worker_body
+    assert "sha256:verified" in worker_body
     assert messenger.deliveries[2][0].startswith("!team-")
     assert messenger.deliveries[3][0].startswith("!leader-")
     assert all(

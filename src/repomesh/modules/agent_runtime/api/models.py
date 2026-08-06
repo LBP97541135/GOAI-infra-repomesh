@@ -35,3 +35,20 @@ class CodingRunView(BaseModel):
     changed_files: tuple[str, ...]
     test_command: str | None
     events: tuple[RunEventView, ...]
+
+
+class WorkerTaskStartCreate(BaseModel):
+    task_id: UUID
+    worker_agent_id: UUID
+    adapter_id: str = Field(min_length=1, max_length=100)
+    base_revision: str = Field(default="main", min_length=1, max_length=200)
+    task_features: frozenset[str] = frozenset()
+
+
+class WorkerTaskStartView(BaseModel):
+    task_id: UUID
+    run_id: UUID
+    status: str
+    workspace_id: str
+    workspace_path: str
+    base_sha: str

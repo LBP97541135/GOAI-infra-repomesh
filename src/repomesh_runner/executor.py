@@ -16,6 +16,7 @@ import fnmatch
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
+from repomesh_runner.context_verifier import WorkspaceContextVerifier
 from repomesh_runner.contracts import (
     RunnerExecutionResult,
     RunnerPermissionMode,
@@ -260,20 +261,38 @@ class DriverExecutor:
         mapped = self._to_runner_result(result)
         changed_files = await _changed_files(workspace)
         test_results: tuple[TestCommandResult, ...] = ()
+        commit_sha: str | None = None
         status = mapped.status
         summary = mapped.summary
 
-        if result.status is DriverResultStatus.SUCCEEDED and task.test_commands:
-            test_results = await _run_test_commands(workspace, task.test_commands)
-            # A task whose own verification fails is not a success, whatever the
-            # agent claimed in its final message.
-            failure = next((entry for entry in test_results if entry.exit_code != 0), None)
-            if failure is not None:
+        if result.status is DriverResultStatus.SUCCEEDED:
+            violation = _changed_path_violation(changed_files, task.permissions)
+            if violation is not None:
                 status = RunnerResultStatus.FAILED
-                summary = (
-                    f"test_command_failed: {failure.command} "
-                    f"(exit code {failure.exit_code})"
+                summary = f"changed_path_denied: {violation}"
+            elif task.test_commands:
+                test_results = await _run_test_commands(workspace, task.test_commands)
+                # A task whose own verification fails is not a success, whatever the
+                # agent claimed in its final message.
+                failure = next(
+                    (entry for entry in test_results if entry.exit_code != 0), None
                 )
+                if failure is not None:
+                    status = RunnerResultStatus.FAILED
+                    summary = (
+                        f"test_command_failed: {failure.command} "
+                        f"(exit code {failure.exit_code})"
+                    )
+
+            if status is RunnerResultStatus.SUCCEEDED and changed_files:
+                commit_sha, commit_error = await _commit_changes(
+                    workspace,
+                    changed_files,
+                    message=f"repomesh: complete task {task.task_id}",
+                )
+                if commit_error is not None:
+                    status = RunnerResultStatus.FAILED
+                    summary = f"commit_failed: {commit_error}"
 
         return RunnerExecutionResult(
             status=status,
@@ -281,6 +300,7 @@ class DriverExecutor:
             native_session_id=mapped.native_session_id,
             changed_files=changed_files,
             test_results=test_results,
+            commit_sha=commit_sha,
         )
 
     @staticmethod
@@ -353,6 +373,62 @@ async def _git_output(workspace: Path, *arguments: str) -> str | None:
     return stdout.decode(errors="replace")
 
 
+def _changed_path_violation(
+    changed_files: tuple[str, ...], permissions: RunnerPermissions
+) -> str | None:
+    for path in changed_files:
+        normalized = _normalize(path)
+        if any(fnmatch.fnmatch(normalized, pattern) for pattern in permissions.denied_paths):
+            return path
+        if permissions.allowed_paths and not any(
+            fnmatch.fnmatch(normalized, pattern) for pattern in permissions.allowed_paths
+        ):
+            return path
+    return None
+
+
+async def _commit_changes(
+    workspace: Path,
+    changed_files: tuple[str, ...],
+    *,
+    message: str,
+) -> tuple[str | None, str | None]:
+    add_code, add_error = await _git_command(workspace, "add", "--", *changed_files)
+    if add_code != 0:
+        return None, add_error or "git add failed"
+    commit_code, commit_error = await _git_command(
+        workspace,
+        "-c",
+        "user.name=RepoMesh Worker",
+        "-c",
+        "user.email=worker@repomesh.local",
+        "commit",
+        "-m",
+        message,
+    )
+    if commit_code != 0:
+        return None, commit_error or "git commit failed"
+    commit_sha = await _git_output(workspace, "rev-parse", "HEAD")
+    if commit_sha is None:
+        return None, "created commit could not be resolved"
+    return commit_sha.strip().lower(), None
+
+
+async def _git_command(workspace: Path, *arguments: str) -> tuple[int, str]:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            *arguments,
+            cwd=str(workspace),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await process.communicate()
+    except (OSError, ValueError, NotImplementedError) as error:
+        return _SPAWN_FAILURE_EXIT_CODE, f"{type(error).__name__}: {error}"
+    return process.returncode, stderr.decode(errors="replace").strip()[:500]
+
+
 def _parse_porcelain(output: str) -> tuple[str, ...]:
     paths: list[str] = []
     for line in output.splitlines():
@@ -363,6 +439,8 @@ def _parse_porcelain(output: str) -> tuple[str, ...]:
             # Rename/copy: the new path is what the run produced.
             entry = entry.rsplit(" -> ", 1)[1]
         entry = entry.strip().strip('"')
+        if entry.startswith(".repomesh/"):
+            continue
         if entry and entry not in paths:
             paths.append(entry)
     return tuple(paths)
@@ -411,4 +489,5 @@ def build_default_executor(workspace_root: Path) -> DriverExecutor:
             DriverFamily.APP_SERVER: AppServerDriver(factory),
         },
         workspace_root=workspace_root,
+        context_verifier=WorkspaceContextVerifier(),
     )

@@ -21,9 +21,7 @@ class TaskNotFound(TaskOrchestrationError):
     pass
 
 
-_FINAL_STATUSES = frozenset(
-    {TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED}
-)
+_FINAL_STATUSES = frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,9 +49,14 @@ class Task:
             raise ValueError("a task must be assigned to another agent")
 
     def start(self) -> "Task":
-        if self.status is not TaskStatus.ASSIGNED:
+        if self.status not in {TaskStatus.ASSIGNED, TaskStatus.BLOCKED}:
             raise TaskConflict(f"cannot start task from {self.status.value}")
-        return replace(self, status=TaskStatus.IN_PROGRESS, version=self.version + 1)
+        return replace(
+            self,
+            status=TaskStatus.IN_PROGRESS,
+            result_summary=None,
+            version=self.version + 1,
+        )
 
     def report(self, status: TaskStatus, summary: str) -> "Task":
         if self.status in _FINAL_STATUSES:

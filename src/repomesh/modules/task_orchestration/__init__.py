@@ -1,6 +1,6 @@
 """Task graphs, readiness, leases, scheduling, retry, and checkpoints."""
 
-from .application import TaskOrchestrator
+from .application import TaskExecutionState, TaskOrchestrator
 from .contracts import (
     AssignTaskCommand,
     ProjectTaskProgress,
@@ -22,6 +22,7 @@ __all__ = [
     "TaskNotFound",
     "TaskOrchestrationError",
     "TaskOrchestrator",
+    "TaskExecutionState",
     "TaskStatus",
     "TaskView",
 ]

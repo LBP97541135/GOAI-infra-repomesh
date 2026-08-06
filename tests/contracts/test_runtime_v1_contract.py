@@ -176,15 +176,25 @@ def test_runner_execution_result_new_fields_default_to_empty() -> None:
 
     assert result.changed_files == ()
     assert result.test_results == ()
+    assert result.commit_sha is None
 
     enriched = RunnerExecutionResult(
         status=RunnerResultStatus.SUCCEEDED,
         summary="applied the specification",
         changed_files=("src/repomesh_runner/contracts.py",),
         test_results=(CommandOutcome(command="pytest -q", exit_code=0),),
+        commit_sha="a" * 40,
     )
 
     assert enriched.test_results[0].command == "pytest -q"
+    assert enriched.commit_sha == "a" * 40
+
+    with pytest.raises(ValueError, match="commit_sha"):
+        RunnerExecutionResult(
+            status=RunnerResultStatus.SUCCEEDED,
+            summary="invalid commit",
+            commit_sha="abc",
+        )
 
     with pytest.raises(ValueError, match="changed_files must contain unique values"):
         RunnerExecutionResult(

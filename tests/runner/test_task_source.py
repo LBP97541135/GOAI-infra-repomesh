@@ -119,6 +119,18 @@ async def test_two_hundred_yields_a_parsed_task() -> None:
 
 
 @pytest.mark.asyncio
+async def test_control_token_is_sent_as_bearer_auth() -> None:
+    source, _, requests = build_source(
+        lambda request: httpx.Response(200, json=task_payload()),
+        control_token="runner-secret",
+    )
+
+    await source.next_task()
+
+    assert requests[0].headers["Authorization"] == "Bearer runner-secret"
+
+
+@pytest.mark.asyncio
 async def test_an_instant_two_hundred_four_is_paced_out_to_the_full_window() -> None:
     source, sleep, _ = build_source(lambda request: httpx.Response(204), monotonic=FakeClock(0.0))
 

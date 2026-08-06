@@ -49,6 +49,12 @@ def test_poll_timeout_is_read_as_a_float(tmp_path: Path) -> None:
     assert load_runtime_env(environ).poll_timeout_seconds == 2.5
 
 
+def test_control_token_is_consumed(tmp_path: Path) -> None:
+    environ = base_environ(tmp_path) | {"REPOMESH_RUNNER_CONTROL_TOKEN": "runner-secret"}
+
+    assert load_runtime_env(environ).control_token == "runner-secret"
+
+
 @pytest.mark.parametrize("value", ["soon", "0", "-1"])
 def test_unusable_poll_timeout_is_refused(tmp_path: Path, value: str) -> None:
     environ = base_environ(tmp_path) | {"REPOMESH_RUNNER_POLL_TIMEOUT_SECONDS": value}

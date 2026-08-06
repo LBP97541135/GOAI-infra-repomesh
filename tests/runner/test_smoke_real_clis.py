@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from repomesh_runner.contracts import RunnerPermissionMode
 from repomesh_runner.drivers.acp import AcpDriver
 from repomesh_runner.drivers.app_server import AppServerDriver
 from repomesh_runner.drivers.base import (
@@ -30,6 +31,11 @@ CODEX = resolve_binary(("codex",))
 class DenyAllPolicy:
     def decide(self, tool_name: str, tool_input: object) -> PermissionDecision:
         return PermissionDecision.DENY
+
+
+class AllowAllPolicy:
+    def decide(self, tool_name: str, tool_input: object) -> PermissionDecision:
+        return PermissionDecision.ALLOW
 
 
 @pytest.mark.skipif(
@@ -80,6 +86,35 @@ async def test_claude_stream_json_reaches_a_terminal_state(tmp_path: Path) -> No
         assert result.summary.strip()
     else:
         assert result.diagnostics
+
+
+@pytest.mark.skipif(
+    not (SMOKE_ENABLED and CLAUDE),
+    reason="requires REPOMESH_RUNNER_SMOKE=1 and claude installed",
+)
+async def test_claude_edits_an_isolated_workspace(tmp_path: Path) -> None:
+    """Prove the adapter can grant a real edit, not merely return chat text."""
+
+    driver = StreamJsonDriver(SubprocessFactory())
+    profile = get_profile("claude-code")
+    request = DriverRequest(
+        executable=CLAUDE or "",
+        workspace=tmp_path,
+        prompt=(
+            "Create a file named repomesh-smoke.txt in the current directory. "
+            "Its complete contents must be exactly REPOMESH_REAL_ADAPTER_OK followed "
+            "by one newline. Do not modify any other file."
+        ),
+        permission_policy=AllowAllPolicy(),
+        idle_window_seconds=180.0,
+        extra_arguments=profile.permission_arguments[RunnerPermissionMode.ACCEPT_EDITS],
+    )
+    result = await driver.execute(request, profile, lambda event: None)
+
+    assert result.status is DriverResultStatus.SUCCEEDED, result.diagnostics
+    assert (tmp_path / "repomesh-smoke.txt").read_text().strip() == (
+        "REPOMESH_REAL_ADAPTER_OK"
+    )
 
 
 @pytest.mark.skipif(

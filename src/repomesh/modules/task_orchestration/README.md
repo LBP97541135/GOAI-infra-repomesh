@@ -12,6 +12,11 @@ launch vendor agents directly.
 - Reports travel back through the same Leader chain via Collaboration.
 - Project progress is calculated from persisted task states, not Matrix history.
 - Assignment and report delivery are idempotent and recover after a transient Matrix failure.
+- Worker assignment first publishes an AgentTeams-compatible `spec.md`, `meta.json`, and
+  content-hash manifest into the Team namespace; Matrix notification happens only after the
+  published files are read back and verified.
+- Worker assignment messages instruct the assignee to call RepoMesh `start_assigned_task`;
+  repository edits are prepared and dispatched through Runner instead of the chat agent.
 - PostgreSQL updates use an optimistic task version to reject concurrent overwrites.
 
 Dependency-graph readiness, leases, parallel scheduling and retry policy remain the next layer;

@@ -11,6 +11,10 @@ from repomesh.integrations.agentteams import (
     AgentTeamsMatrixIdentityVerifier,
     AgentTeamsMatrixInboundPoller,
 )
+from repomesh.integrations.agentteams.task_publishing import (
+    AgentTeamsObjectTaskPublisher,
+    AgentTeamsTaskPublisher,
+)
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.collaboration import (
@@ -41,6 +45,18 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 def build_default_container() -> ApplicationContainer:
     settings = get_settings()
+    task_publisher = AgentTeamsTaskPublisher(settings.agentteams_storage_root)
+    if (
+        settings.agentteams_storage_endpoint
+        and settings.agentteams_storage_access_key
+        and settings.agentteams_storage_secret_key
+    ):
+        task_publisher = AgentTeamsObjectTaskPublisher(
+            settings.agentteams_storage_endpoint,
+            settings.agentteams_storage_access_key,
+            settings.agentteams_storage_secret_key,
+            settings.agentteams_storage_bucket,
+        )
     database = Database(settings.database_url)
     control_plane = AgentTeamsControlPlaneClient(
         settings.agentteams_controller_url,
@@ -50,6 +66,7 @@ def build_default_container() -> ApplicationContainer:
         AgentTeamsMatrixClient(
             settings.agentteams_matrix_url,
             settings.agentteams_matrix_access_token,
+            control_plane=control_plane,
         )
         if settings.agentteams_matrix_access_token
         else None
@@ -62,6 +79,7 @@ def build_default_container() -> ApplicationContainer:
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
     background_services = ()
+    task_report_gateway = None
     if messenger is not None:
         collaboration = SendCollaborationMessage(
             agent_directory,
@@ -75,7 +93,9 @@ def build_default_container() -> ApplicationContainer:
             topology_store,
             task_store,
             collaboration,
+            task_publisher,
         )
+        task_report_gateway = tasks
         inbound = ProcessMatrixTaskReport(
             agent_directory,
             topology_store,
@@ -101,6 +121,7 @@ def build_default_container() -> ApplicationContainer:
         agentteams_required=settings.agentteams_required,
         external_resources=resources,
         background_services=background_services,
+        task_report_gateway=task_report_gateway,
     )
 
 

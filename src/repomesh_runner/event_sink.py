@@ -45,6 +45,7 @@ class HttpEventSink:
         base_backoff_seconds: float = DEFAULT_BASE_BACKOFF_SECONDS,
         max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS,
         timeout_seconds: float = 30.0,
+        control_token: str | None = None,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
@@ -55,10 +56,13 @@ class HttpEventSink:
         self._sleep = sleep
         self._base_backoff_seconds = base_backoff_seconds
         self._max_backoff_seconds = max_backoff_seconds
+        self._control_headers = (
+            {"Authorization": f"Bearer {control_token}"} if control_token else {}
+        )
 
     async def publish(self, event: RunnerEvent, *, idempotency_key: str) -> None:
         payload = event.to_wire()
-        headers = {IDEMPOTENCY_HEADER: idempotency_key}
+        headers = {**self._control_headers, IDEMPOTENCY_HEADER: idempotency_key}
         reason = "not attempted"
 
         for attempt in range(1, self._max_attempts + 1):

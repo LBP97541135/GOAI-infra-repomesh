@@ -23,7 +23,12 @@ class CollaborationMessageStore(Protocol):
 
 class CollaborationMessenger(Protocol):
     async def send_task(
-        self, room_id: str, body: str, *, transaction_id: str
+        self,
+        room_id: str,
+        body: str,
+        *,
+        transaction_id: str,
+        recipient_resource_name: str | None = None,
     ) -> str: ...
 
 

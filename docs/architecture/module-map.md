@@ -28,8 +28,13 @@ into an organization.
 | RepoMesh Runner | runtime-integrations | first-party Python coding execution, native sessions and runtime events |
 | Coding agents | runtime-integrations | provider CLI and native session differences |
 | Workspace | runtime-integrations | worktree isolation and recovery |
+| Worker task control | runtime-integrations | AgentTeams MCP start action, automatic Run/Context creation and durable Runner dispatch |
 | SCM | quality-delivery | GitHub/GitLab repository and PR operations |
 | CI | quality-delivery | check observation, job trigger, failure logs |
+
+The runtime integration composes approved Task Specifications, immutable Context Grants and
+role capability presets into a Runner task. The Workspace adapter owns repository mirror caching,
+run-scoped worktree creation and immutable base revision resolution; it does not own task state.
 
 ## Change protocol
 

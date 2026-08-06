@@ -242,9 +242,16 @@ class RunnerExecutionResult:
     test_command: str | None = None
     changed_files: tuple[str, ...] = ()
     test_results: tuple[TestCommandResult, ...] = ()
+    commit_sha: str | None = None
 
     def __post_init__(self) -> None:
         _validate_unique_strings("changed_files", self.changed_files)
+        if self.commit_sha is not None:
+            normalized = self.commit_sha.strip().lower()
+            if len(normalized) not in {40, 64} or any(
+                character not in "0123456789abcdef" for character in normalized
+            ):
+                raise ValueError("commit_sha must be a full Git object id")
 
 
 @dataclass(frozen=True, slots=True)

@@ -98,6 +98,17 @@ async def test_the_idempotency_key_travels_as_a_header() -> None:
 
 
 @pytest.mark.asyncio
+async def test_control_token_is_sent_as_bearer_auth() -> None:
+    sink, _, requests = build_sink(
+        lambda request: httpx.Response(200), control_token="runner-secret"
+    )
+
+    await sink.publish(make_event(), idempotency_key="key")
+
+    assert requests[0].headers["Authorization"] == "Bearer runner-secret"
+
+
+@pytest.mark.asyncio
 async def test_the_body_is_the_wire_event() -> None:
     sink, _, requests = build_sink(lambda request: httpx.Response(200))
     event = make_event()

@@ -108,6 +108,7 @@ async def test_completion_payload_carries_structured_execution_evidence() -> Non
             CommandOutcome(command="pytest -q", exit_code=0),
             CommandOutcome(command="ruff check src", exit_code=0),
         ),
+        commit_sha="a" * 40,
     )
     sink = RecordingSink()
     service = ExecuteRunnerTask(ResultExecutor(result), sink, clock=lambda: NOW)
@@ -120,6 +121,7 @@ async def test_completion_payload_carries_structured_execution_evidence() -> Non
         {"command": "pytest -q", "exitCode": 0},
         {"command": "ruff check src", "exitCode": 0},
     ]
+    assert payload["commitSha"] == "a" * 40
     assert sink.records[1][0].to_wire()["payload"]["changedFiles"] == [
         "src/app.py",
         "tests/test_app.py",

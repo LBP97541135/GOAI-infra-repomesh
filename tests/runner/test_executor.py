@@ -200,7 +200,7 @@ class TestDriverExecutor:
         )
         result = await make_executor(driver, tmp_path).execute(task)
         assert result.status is RunnerResultStatus.SUCCEEDED
-        assert driver.requests[0].extra_arguments == ("--permission-mode", "default")
+        assert driver.requests[0].extra_arguments == ("--permission-mode", "manual")
         assert "bypassPermissions" not in build_arguments(
             driver.requests[0], get_profile("claude-code")
         )
@@ -378,6 +378,50 @@ class TestExecutionEvidence:
         result = await make_executor(driver, tmp_path).execute(task)
 
         assert set(result.changed_files) == {"added.py", "nested/other.py"}
+        assert result.commit_sha == subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=workspace,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout == ""
+
+    @needs_git
+    async def test_changed_path_outside_allowlist_fails_without_commit(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = make_git_workspace(tmp_path)
+        (workspace / "forbidden.py").write_text("x = 1\n", encoding="utf-8")
+        driver = RecordingDriver(
+            DriverResult(status=DriverResultStatus.SUCCEEDED, summary="ok")
+        )
+        task = make_task(
+            permissions=RunnerPermissions(
+                mode=RunnerPermissionMode.ACCEPT_EDITS,
+                allowed_paths=("src/**",),
+            ),
+            workspace=WorkspaceAssignment(
+                workspace_id="ws-denied", path=str(workspace), base_sha="abc123"
+            ),
+        )
+
+        result = await make_executor(driver, tmp_path).execute(task)
+
+        assert result.status is RunnerResultStatus.FAILED
+        assert result.summary == "changed_path_denied: forbidden.py"
+        assert result.commit_sha is None
+        assert subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=workspace,
+            capture_output=True,
+        ).returncode != 0
 
     @needs_git
     async def test_workspace_below_the_repository_toplevel_reports_nothing(
@@ -458,6 +502,7 @@ class TestExecutionEvidence:
         assert "exit code 3" in result.summary
         # every command still ran: the report is full evidence, not first-failure
         assert [entry.exit_code for entry in result.test_results] == [3, 0]
+        assert result.commit_sha is None
 
     async def test_test_commands_are_skipped_when_the_driver_failed(self, tmp_path: Path) -> None:
         driver = RecordingDriver(

@@ -14,3 +14,27 @@ provider is invoked.
 
 This gate does not replace Runner sandboxing. The Runner must still enforce filesystem, process,
 network and secret restrictions so provider behavior cannot bypass the control-plane decision.
+
+## Worker start action
+
+`POST /api/v1/agent-actions/start-worker-task` is the internal HTTP trigger. The equivalent
+AgentTeams-native entry is the `start_assigned_task` tool at `POST /api/v1/mcp/worker`. A Worker
+provides only its assigned Task id, Worker id and coding-adapter id. RepoMesh derives a fresh Run,
+prepares the run-scoped Worktree, creates and publishes the immutable Context Bundle, materializes
+the coding package and enqueues one durable Runner task. Preparation failures persist `BLOCKED`;
+when Matrix is configured the same failure is also reported to the Repository Leader.
+
+Direct HTTP uses `REPOMESH_AGENT_ACTION_TOKEN`. In AgentTeams deployments,
+`REPOMESH_WORKER_TASK_CONTROL_URL` must be the full Higress MCP route and the route must inject
+`X-RepoMesh-Gateway-Token` matching `REPOMESH_MCP_GATEWAY_TOKEN` after validating the Worker's
+consumer key. This preserves AgentTeams per-Worker authorization without exposing the upstream
+RepoMesh credential to the Worker.
+
+For local-only validation without Higress, set
+`REPOMESH_DIRECT_WORKER_MCP_ENABLED=true`, keep `REPOMESH_ENVIRONMENT` as `development` or `test`,
+and point `REPOMESH_WORKER_TASK_CONTROL_URL` directly at RepoMesh. Production refuses this mode.
+
+After a successful coding turn, the Runner validates every changed path, runs all Task Spec test
+commands, stages only the validated changed files and creates a Commit as `RepoMesh Worker`. The
+terminal event and Task result evidence include the full `commitSha`. Failed tests, forbidden paths
+or Git errors never produce a Commit.

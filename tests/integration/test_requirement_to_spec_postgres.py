@@ -53,6 +53,7 @@ from repomesh.modules.task_orchestration import (
     PostgresTaskStore,
     TaskOrchestrator,
 )
+from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage
 from repomesh.persistence import Database
 
 POSTGRES_URL = os.getenv("REPOMESH_TEST_POSTGRES_URL")
@@ -90,11 +91,22 @@ class RecordingMessenger:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
 
-    async def send_task(self, room_id: str, body: str, *, transaction_id: str) -> str:
+    async def send_task(
+        self, room_id: str, body: str, *, transaction_id: str, **kwargs
+    ) -> str:
         self.messages.append(
             {"room_id": room_id, "body": json.loads(body), "transaction_id": transaction_id}
         )
         return f"$event-{len(self.messages)}"
+
+
+class RecordingTaskPublisher:
+    async def publish(self, task, **kwargs):
+        return PublishedTaskPackage(
+            kwargs["team_name"],
+            f"teams/{kwargs['team_name']}/shared/tasks/{task.id}",
+            "sha256:verified",
+        )
 
 
 @pytest.mark.asyncio
@@ -226,7 +238,9 @@ async def test_requirement_discovery_to_worker_spec_package_on_postgres() -> Non
             collaborations,
             messenger,
         )
-        orchestrator = TaskOrchestrator(directory, topologies, tasks, collaboration)
+        orchestrator = TaskOrchestrator(
+            directory, topologies, tasks, collaboration, RecordingTaskPublisher()
+        )
         repository_task = await orchestrator.assign(
             AssignTaskCommand(
                 organization_id=organization_id,

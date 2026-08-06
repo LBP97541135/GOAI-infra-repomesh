@@ -297,7 +297,7 @@ async def test_bypass_argv_still_answers_control_requests(tmp_path, fake_factory
 
     assert result.status is DriverResultStatus.SUCCEEDED
     assert "bypassPermissions" not in factory.spawned_specs[0].arguments
-    assert bypass_arguments == ("--permission-mode", "default")
+    assert bypass_arguments == ("--permission-mode", "manual")
     assert factory.spawned_specs[0].arguments == (*PROFILE.base_arguments, *bypass_arguments)
     # The callback channel is alive: the tool call was decided by the policy.
     assert policy.calls == [("Bash", {"command": "ls -la"})]
