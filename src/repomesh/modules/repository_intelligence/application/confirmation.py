@@ -61,6 +61,17 @@ def _format_autocard(card: AutoCard) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class RepositoryPlan:
+    """Structured change plan produced by the Team Manager."""
+
+    changed_apis: tuple[str, ...] = ()
+    changed_modules: tuple[str, ...] = ()
+    depends_on: tuple[str, ...] = ()
+    impacts: tuple[str, ...] = ()
+    risk: str = "medium"  # low / medium / high
+
+
+@dataclass(frozen=True, slots=True)
 class ConfirmationResult:
     """Result of a single Repository Manager confirmation."""
 
@@ -69,6 +80,7 @@ class ConfirmationResult:
     confidence: float = 0.0
     reason: str = ""
     plan_summary: str = ""
+    plan: RepositoryPlan | None = None
     missing_dependencies: list[str] = field(default_factory=list)
 
 
@@ -135,6 +147,11 @@ def _build_confirmation_prompt(
         '  "confidence": 0.0 to 1.0,\n'
         '  "reason": "one sentence explanation citing specific evidence",\n'
         '  "plan_summary": "if REQUIRED or MAYBE, brief description of the change",\n'
+        '  "changed_apis": ["API endpoints that will be modified or added"],\n'
+        '  "changed_modules": ["modules/packages/directories that will be modified"],\n'
+        '  "depends_on": ["other services/repos whose APIs this repo calls"],\n'
+        '  "impacts": ["other services/repos that call this repo APIs and may break"],\n'
+        '  "risk": "low" or "medium" or "high",\n'
         '  "missing_dependencies": ["repos you depend on that are NOT in the candidate list"]\n'
         "}"
     )
@@ -214,12 +231,24 @@ def _parse_confirmation(raw: str, repo_name: str) -> ConfirmationResult:
     if status not in ("REQUIRED", "MAYBE", "EXCLUDED"):
         status = "REQUIRED"
 
+    # Parse structured plan (only for non-excluded repos)
+    plan: RepositoryPlan | None = None
+    if status != "EXCLUDED":
+        plan = RepositoryPlan(
+            changed_apis=tuple(data.get("changed_apis", [])),
+            changed_modules=tuple(data.get("changed_modules", [])),
+            depends_on=tuple(data.get("depends_on", [])),
+            impacts=tuple(data.get("impacts", [])),
+            risk=str(data.get("risk", "medium")),
+        )
+
     return ConfirmationResult(
         repository=repo_name,
         status=status,
         confidence=max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
         reason=data.get("reason", ""),
         plan_summary=data.get("plan_summary", ""),
+        plan=plan,
         missing_dependencies=data.get("missing_dependencies", []) if status != "EXCLUDED" else [],
     )
 

@@ -1,0 +1,204 @@
+{
+  "engineering_spec": "This project addresses the failure of notification emails in booking and cancellation flows. The root cause is suspected to be in the notification service's email sending logic and/or the way other services invoke it. The fix involves auditing and correcting the notification call logic across all affected services, ensuring proper exception handling, and verifying the notification service's email API works correctly. Key changes include: (1) fixing the notification service's email sending implementation, (2) correcting the invocation of the notification service from preserve, cancel, order, and other related services, (3) ensuring all services handle notification failures gracefully without breaking the main business flow, and (4) adding or updating tests to verify email delivery. Acceptance criteria: after the fix, booking and cancellation flows successfully trigger email notifications; no exceptions are thrown due to notification failures; all services correctly call the notification service with the required payloads; and the notification service reliably sends emails via the configured mail API.",
+  "contracts": [
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-preserve-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "The notification service will accept email notification requests with a valid payload (recipient, subject, body) and return a success response (e.g., 200 OK) upon successful email dispatch. It will handle invalid payloads with a 400 error. The preserve service will call this endpoint when a booking is made and will handle any errors gracefully without failing the booking transaction."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-cancel-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "The notification service will accept email notification requests for cancellation events. The cancel service will invoke this endpoint after a cancellation is processed, and will not propagate notification failures to the user. The notification service will return a success response if the email is sent, or an error response if it fails, which the cancel service will log and ignore."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-preserve-other-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "The notification service will accept email requests from the preserve-other service for both preserve and cancel operations. The preserve-other service will call this endpoint with the correct email details and handle any exceptions by logging them without affecting the main operation."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-order-service",
+      "interface": "POST /api/v1/notifications/order",
+      "agreement": "The notification service will provide an order-specific notification endpoint that accepts order details and sends appropriate emails. The order service will call this endpoint during order creation and cancellation, and will handle failures gracefully. The notification service will ensure the email is sent or return an error that the order service can log."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-order-other-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "The notification service will accept email requests from the order-other service for order-related notifications. The order-other service will call this endpoint with the correct payload and handle any errors without breaking the order flow."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-rebook-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "If the rebook service sends notifications, it will use the notification service's email endpoint. The notification service will accept these requests and return success/failure. The rebook service will handle failures gracefully."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-wait-order-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "If the wait-order service sends notifications, it will use the notification service's email endpoint. The notification service will accept these requests and return success/failure. The wait-order service will handle failures gracefully."
+    },
+    {
+      "producer": "ts-notification-service",
+      "consumer": "ts-execute-service",
+      "interface": "POST /api/v1/notifications/email",
+      "agreement": "If the execute service sends notifications, it will use the notification service's email endpoint. The notification service will accept these requests and return success/failure. The execute service will handle failures gracefully."
+    }
+  ],
+  "task_dag": [
+    {
+      "repository": "ts-notification-service",
+      "instruction": "Investigate and fix the email sending logic in the notification service. Ensure the email API endpoints (/api/v1/notifications/email and /api/v1/notifications/order) correctly send emails, handle exceptions, and return appropriate responses. Update the service to be robust against mail API failures. Add tests for email sending.",
+      "depends_on": [],
+      "parallelizable_with": []
+    },
+    {
+      "repository": "ts-preserve-service",
+      "instruction": "Inspect and fix the notification email sending logic in the booking (preserve) flow. Ensure correct invocation of the notification service's email endpoint, handle exceptions gracefully, and verify that the email is sent after a successful booking. Update tests.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-cancel-service",
+        "ts-preserve-other-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-rebook-service",
+        "ts-wait-order-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-cancel-service",
+      "instruction": "Inspect and fix the email notification logic in the cancellation flow. Correct the call to the notification service's email endpoint, handle exceptions properly, and ensure cancellation emails are sent. Update tests.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-preserve-other-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-rebook-service",
+        "ts-wait-order-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-preserve-other-service",
+      "instruction": "Inspect and fix the email sending logic in the order preservation flow. Ensure correct invocation of the notification service's email endpoint for both preserve and cancel operations, handle exceptions, and verify email delivery. Update tests.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-rebook-service",
+        "ts-wait-order-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-order-service",
+      "instruction": "Inspect and fix the notification call logic in order creation and cancellation flows. Ensure correct invocation of the notification service's order notification endpoint, handle exceptions, and verify emails are sent. Update tests.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-preserve-other-service",
+        "ts-order-other-service",
+        "ts-rebook-service",
+        "ts-wait-order-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-order-other-service",
+      "instruction": "Inspect and fix the notification email sending logic in order creation and cancellation flows. Ensure correct calls to the notification service's email endpoint, handle exceptions, and verify email delivery. Update tests.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-preserve-other-service",
+        "ts-order-service",
+        "ts-rebook-service",
+        "ts-wait-order-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-rebook-service",
+      "instruction": "Investigate the rebooking flow to determine if it calls the notification service. If it does, fix the email sending logic to correctly invoke the notification service and handle exceptions. If not, no changes are needed. Update tests if applicable.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-preserve-other-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-wait-order-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-wait-order-service",
+      "instruction": "Investigate the wait order service's notification calls. If it sends emails on order placement or cancellation, fix the email sending logic to correctly invoke the notification service and handle exceptions. If not, no changes are needed. Update tests if applicable.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-preserve-other-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-rebook-service",
+        "ts-execute-service"
+      ]
+    },
+    {
+      "repository": "ts-execute-service",
+      "instruction": "Investigate the notification sending logic in the execute service. If it sends emails for order execution, fix the email sending call to correctly invoke the notification service and handle exceptions. If not, no changes are needed. Update tests if applicable.",
+      "depends_on": [
+        "ts-notification-service"
+      ],
+      "parallelizable_with": [
+        "ts-preserve-service",
+        "ts-cancel-service",
+        "ts-preserve-other-service",
+        "ts-order-service",
+        "ts-order-other-service",
+        "ts-rebook-service",
+        "ts-wait-order-service"
+      ]
+    }
+  ],
+  "execution_batches": [
+    [
+      "ts-notification-service"
+    ],
+    [
+      "ts-cancel-service",
+      "ts-execute-service",
+      "ts-order-other-service",
+      "ts-order-service",
+      "ts-preserve-other-service",
+      "ts-preserve-service",
+      "ts-rebook-service",
+      "ts-wait-order-service"
+    ]
+  ]
+}
