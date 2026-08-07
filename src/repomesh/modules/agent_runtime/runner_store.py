@@ -10,7 +10,17 @@ from sqlalchemy.types import Uuid
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
+from .contracts import ActiveWorkerDispatch
+
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
+TERMINAL_DISPATCH_STATUSES = frozenset({"completed", "failed", "interrupted", "input_required"})
+"""Statuses a dispatch never leaves: the Runner has stopped working on that run."""
+
+ACTIVE_DISPATCH_STATUSES = frozenset({"queued", "leased", "accepted"})
+"""Statuses where the execution plane still owns the run and may still produce a result."""
+
+_TERMINAL_EVENT_TYPES = frozenset(f"runner.{status}" for status in TERMINAL_DISPATCH_STATUSES)
 
 
 class RunnerDispatchRecord(Base):
@@ -134,6 +144,37 @@ class PostgresRunnerGatewayStore:
         async with self._database.transaction() as session:
             return await session.get(RunnerDispatchRecord, run_id)
 
+    async def get_active_dispatch_for_task(
+        self, task_id: UUID, *, worker_agent_id: UUID
+    ) -> ActiveWorkerDispatch | None:
+        """Return the newest dispatch that still owns this Worker's execution of the Task.
+
+        Terminal dispatches are ignored: a finished run must not stop the Worker from starting a
+        new attempt.
+        """
+
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(RunnerDispatchRecord)
+                .where(
+                    RunnerDispatchRecord.task_id == task_id,
+                    RunnerDispatchRecord.worker_agent_id == worker_agent_id,
+                    RunnerDispatchRecord.status.in_(sorted(ACTIVE_DISPATCH_STATUSES)),
+                )
+                .order_by(RunnerDispatchRecord.created_at.desc())
+                .limit(1)
+            )
+            if record is None:
+                return None
+            return ActiveWorkerDispatch(
+                run_id=record.run_id,
+                task_id=record.task_id,
+                worker_agent_id=record.worker_agent_id,
+                attempt=record.attempt,
+                status=record.status,
+                task_payload=dict(record.task_payload),
+            )
+
     async def record_event(self, event: dict[str, object]) -> bool:
         event_id = UUID(str(event["eventId"]))
         run_id = UUID(str(event["runId"]))
@@ -158,12 +199,7 @@ class PostgresRunnerGatewayStore:
                 if event_type == "runner.accepted":
                     dispatch.status = "accepted"
                     dispatch.lease_until = None
-                elif event_type in {
-                    "runner.completed",
-                    "runner.failed",
-                    "runner.interrupted",
-                    "runner.input_required",
-                }:
+                elif event_type in _TERMINAL_EVENT_TYPES:
                     dispatch.status = event_type.removeprefix("runner.")
                     dispatch.lease_until = None
                     dispatch.completed_at = datetime.now(UTC)

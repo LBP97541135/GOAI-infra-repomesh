@@ -1,5 +1,7 @@
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -17,7 +19,14 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalView,
     AgentRole,
 )
+from repomesh.modules.agent_runtime.contracts import ActiveWorkerDispatch
+from repomesh.modules.agent_runtime.runner_store import (
+    ACTIVE_DISPATCH_STATUSES,
+    PostgresRunnerGatewayStore,
+)
 from repomesh.modules.task_orchestration.contracts import TaskStatus, TaskView
+from repomesh.persistence import Database
+from repomesh.persistence.base import ALL_SCHEMAS
 from repomesh_runner.contracts import RunnerTask
 
 from .test_task_projection import scenario
@@ -68,6 +77,186 @@ def command_for(task: RunnerTask) -> DispatchWorkerTaskCommand:
     )
 
 
+class DispatchStoreFake:
+    """In-memory stand-in for the durable runner dispatch table."""
+
+    def __init__(self) -> None:
+        self.dispatches: list[ActiveWorkerDispatch] = []
+
+    def enqueue(self, task: RunnerTask) -> None:
+        assert task.worker_agent_id is not None
+        self.dispatches.append(
+            ActiveWorkerDispatch(
+                run_id=task.run_id,
+                task_id=task.task_id,
+                worker_agent_id=task.worker_agent_id,
+                attempt=task.attempt,
+                status="queued",
+                task_payload=task.to_wire(),
+            )
+        )
+
+    def finish(self, run_id: UUID, status: str = "completed") -> None:
+        self.dispatches = [
+            replace(dispatch, status=status) if dispatch.run_id == run_id else dispatch
+            for dispatch in self.dispatches
+        ]
+
+    async def get_active_dispatch_for_task(
+        self, task_id: UUID, *, worker_agent_id: UUID
+    ) -> ActiveWorkerDispatch | None:
+        for dispatch in reversed(self.dispatches):
+            if (
+                dispatch.task_id == task_id
+                and dispatch.worker_agent_id == worker_agent_id
+                and dispatch.status in ACTIVE_DISPATCH_STATUSES
+            ):
+                return dispatch
+        return None
+
+
+class TasksStub:
+    def __init__(self, task_view: TaskView) -> None:
+        self.task_view = task_view
+
+    async def get_view(self, task_id):
+        return self.task_view if task_id == self.task_view.id else None
+
+
+class DirectoryStub:
+    def __init__(self, task_view: TaskView) -> None:
+        self.task_view = task_view
+
+    async def get_view(self, agent_id):
+        return AgentPrincipalView(
+            id=agent_id,
+            organization_id=self.task_view.organization_id,
+            role=AgentRole.WORKER,
+            leader_agent_id=self.task_view.assigned_by_agent_id,
+            repository_id=self.task_view.repository_id,
+            responsibility_paths=("src/**",),
+            agentteams_resource_name="pricing-worker",
+            status=AgentPrincipalStatus.ACTIVE,
+        )
+
+
+class PackagesStub:
+    def __init__(self, package) -> None:
+        self.package = package
+
+    async def execute(self, command):
+        return self.package
+
+
+class CapabilitiesStub:
+    def __init__(self, capabilities) -> None:
+        self.capabilities = capabilities
+
+    async def execute(self, agent_id, *, task_features):
+        return self.capabilities
+
+
+class RepositoriesStub:
+    async def get(self, repository_id):
+        return type("Repository", (), {"url": "https://example.test/pricing.git"})()
+
+
+class WorkspacesStub:
+    def __init__(self) -> None:
+        self.prepared = 0
+
+    async def prepare(self, **kwargs):
+        self.prepared += 1
+        return type("Workspace", (), {"base_sha": "abc123"})()
+
+
+class BundlesStub:
+    def __init__(self) -> None:
+        self.published: list[object] = []
+
+    async def execute(self, bundle, *, permission_layers):
+        self.published.append(bundle)
+
+
+class ExecutionStub:
+    """Replace the dispatch pipeline and record the resulting run in the dispatch store."""
+
+    def __init__(self, runner_task: RunnerTask, store: DispatchStoreFake) -> None:
+        self._runner_task = runner_task
+        self._store = store
+        self.commands: list[DispatchWorkerTaskCommand] = []
+
+    async def execute(self, command: DispatchWorkerTaskCommand) -> WorkerExecutionStarted:
+        self.commands.append(command)
+        task = replace(self._runner_task, run_id=command.run_id)
+        self._store.enqueue(task)
+        return WorkerExecutionStarted(task)
+
+
+@dataclass(frozen=True, slots=True)
+class AssignedTaskHarness:
+    service: StartAssignedWorkerTask
+    task_view: TaskView
+    store: DispatchStoreFake
+    workspaces: WorkspacesStub
+    bundles: BundlesStub
+    execution: ExecutionStub
+    states: StateStub
+
+    def command(self, worker_agent_id: UUID | None = None) -> StartAssignedWorkerTaskCommand:
+        return StartAssignedWorkerTaskCommand(
+            task_id=self.task_view.id,
+            worker_agent_id=worker_agent_id or self.task_view.assignee_agent_id,
+            adapter_id="claude-code",
+        )
+
+
+def assigned_task_harness(tmp_path: Path) -> AssignedTaskHarness:
+    projection, package, capabilities = scenario(tmp_path)
+    runner_task = RunnerTaskProjector().project(projection)
+    task_view = TaskView(
+        id=package.task_id,
+        organization_id=projection.organization_id,
+        project_id=package.project_id,
+        repository_id=package.repository_id,
+        parent_task_id=None,
+        assigned_by_agent_id=uuid4(),
+        assignee_agent_id=package.worker_agent_id,
+        title="Pricing",
+        instruction=package.instruction,
+        acceptance=package.acceptance,
+        status=TaskStatus.ASSIGNED,
+        result_summary=None,
+        version=1,
+    )
+    store = DispatchStoreFake()
+    workspaces = WorkspacesStub()
+    bundles = BundlesStub()
+    execution = ExecutionStub(runner_task, store)
+    states = StateStub()
+    return AssignedTaskHarness(
+        service=StartAssignedWorkerTask(
+            DirectoryStub(task_view),
+            TasksStub(task_view),
+            PackagesStub(package),
+            CapabilitiesStub(capabilities),
+            RepositoriesStub(),
+            workspaces,
+            bundles,
+            execution,
+            states,
+            None,
+            store,
+        ),
+        task_view=task_view,
+        store=store,
+        workspaces=workspaces,
+        bundles=bundles,
+        execution=execution,
+        states=states,
+    )
+
+
 @pytest.mark.asyncio
 async def test_start_action_transitions_before_dispatch(tmp_path: Path) -> None:
     projection, _, _ = scenario(tmp_path)
@@ -101,96 +290,107 @@ async def test_dispatch_failure_blocks_and_reports_to_leader(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_assigned_task_derives_run_workspace_and_context_bundle(tmp_path: Path) -> None:
-    projection, package, capabilities = scenario(tmp_path)
+    harness = assigned_task_harness(tmp_path)
+
+    result = await harness.service.execute(harness.command())
+
+    dispatched = harness.execution.commands[0]
+    published = harness.bundles.published[0]
+    assert harness.states.started is True
+    assert published.run_id == dispatched.run_id
+    assert published.id == dispatched.bundle_id
+    assert published.workspace_id is not None
+    assert result.task.run_id == dispatched.run_id
+
+
+@pytest.mark.asyncio
+async def test_repeated_start_reuses_the_in_flight_run(tmp_path: Path) -> None:
+    harness = assigned_task_harness(tmp_path)
+
+    first = await harness.service.execute(harness.command())
+    second = await harness.service.execute(harness.command())
+
+    assert second.task.run_id == first.task.run_id
+    assert second.task.workspace == first.task.workspace
+    assert second.task.context_bundle == first.task.context_bundle
+    assert second.status is TaskStatus.IN_PROGRESS
+    assert len(harness.execution.commands) == 1
+    assert len(harness.store.dispatches) == 1
+    assert harness.workspaces.prepared == 1
+    assert len(harness.bundles.published) == 1
+
+
+@pytest.mark.asyncio
+async def test_start_after_a_terminal_dispatch_creates_a_new_run(tmp_path: Path) -> None:
+    harness = assigned_task_harness(tmp_path)
+    first = await harness.service.execute(harness.command())
+    harness.store.finish(first.task.run_id)
+
+    second = await harness.service.execute(harness.command())
+
+    assert second.task.run_id != first.task.run_id
+    assert len(harness.execution.commands) == 2
+    assert harness.workspaces.prepared == 2
+
+
+@pytest.mark.asyncio
+async def test_in_flight_run_is_never_handed_to_another_worker(tmp_path: Path) -> None:
+    harness = assigned_task_harness(tmp_path)
+    await harness.service.execute(harness.command())
+
+    with pytest.raises(WorkerExecutionStartError, match="not assigned to this task"):
+        await harness.service.execute(harness.command(worker_agent_id=uuid4()))
+
+    assert len(harness.execution.commands) == 1
+    assert harness.workspaces.prepared == 1
+
+
+@pytest.mark.asyncio
+async def test_active_dispatch_query_ignores_terminal_runs(tmp_path: Path) -> None:
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path / 'dispatch.db'}",
+        schema_translate_map={schema: None for schema in ALL_SCHEMAS},
+    )
+    await database.create_all_for_tests()
+    store = PostgresRunnerGatewayStore(database)
+    projection, package, _ = scenario(tmp_path)
     runner_task = RunnerTaskProjector().project(projection)
-    task_view = TaskView(
-        id=package.task_id,
-        organization_id=projection.organization_id,
-        project_id=package.project_id,
-        repository_id=package.repository_id,
-        parent_task_id=None,
-        assigned_by_agent_id=uuid4(),
-        assignee_agent_id=package.worker_agent_id,
-        title="Pricing",
-        instruction=package.instruction,
-        acceptance=package.acceptance,
-        status=TaskStatus.ASSIGNED,
-        result_summary=None,
-        version=1,
+    await store.enqueue(runner_task.to_wire())
+
+    active = await store.get_active_dispatch_for_task(
+        runner_task.task_id, worker_agent_id=package.worker_agent_id
     )
+    assert active is not None
+    assert active.run_id == runner_task.run_id
+    assert active.status == "queued"
+    assert active.task_payload["runId"] == str(runner_task.run_id)
 
-    class Tasks:
-        async def get_view(self, task_id):
-            return task_view
+    assert (
+        await store.get_active_dispatch_for_task(runner_task.task_id, worker_agent_id=uuid4())
+    ) is None
 
-    class Directory:
-        async def get_view(self, agent_id):
-            return AgentPrincipalView(
-                id=agent_id,
-                organization_id=task_view.organization_id,
-                role=AgentRole.WORKER,
-                leader_agent_id=task_view.assigned_by_agent_id,
-                repository_id=task_view.repository_id,
-                responsibility_paths=("src/**",),
-                agentteams_resource_name="pricing-worker",
-                status=AgentPrincipalStatus.ACTIVE,
-            )
-
-    class Packages:
-        async def execute(self, command):
-            return package
-
-    class Capabilities:
-        async def execute(self, agent_id, *, task_features):
-            return capabilities
-
-    class Repositories:
-        async def get(self, repository_id):
-            return type("Repository", (), {"url": "https://example.test/pricing.git"})()
-
-    class Workspaces:
-        async def prepare(self, **kwargs):
-            return type("Workspace", (), {"base_sha": "abc123"})()
-
-    class Bundles:
-        published = None
-
-        async def execute(self, bundle, *, permission_layers):
-            self.published = bundle
-
-    class Execution:
-        command = None
-
-        async def execute(self, command):
-            self.command = command
-            return WorkerExecutionStarted(runner_task)
-
-    states = StateStub()
-    bundles = Bundles()
-    execution = Execution()
-    result = await StartAssignedWorkerTask(
-        Directory(),
-        Tasks(),
-        Packages(),
-        Capabilities(),
-        Repositories(),
-        Workspaces(),
-        bundles,
-        execution,
-        states,
-    ).execute(
-        StartAssignedWorkerTaskCommand(
-            task_id=task_view.id,
-            worker_agent_id=task_view.assignee_agent_id,
-            adapter_id="claude-code",
+    assert await store.record_event(_completed_event(runner_task)) is True
+    assert (
+        await store.get_active_dispatch_for_task(
+            runner_task.task_id, worker_agent_id=package.worker_agent_id
         )
-    )
+    ) is None
+    await database.dispose()
 
-    assert states.started is True
-    assert bundles.published.run_id == execution.command.run_id
-    assert bundles.published.id == execution.command.bundle_id
-    assert bundles.published.workspace_id is not None
-    assert result.task is runner_task
+
+def _completed_event(task: RunnerTask) -> dict[str, object]:
+    return {
+        "eventId": str(uuid4()),
+        "eventType": "runner.completed",
+        "organizationId": str(task.organization_id),
+        "projectId": str(task.project_id),
+        "taskId": str(task.task_id),
+        "runId": str(task.run_id),
+        "attempt": task.attempt,
+        "sequence": 1,
+        "occurredAt": datetime.now(UTC).isoformat(),
+        "payload": {"summary": "done"},
+    }
 
 
 @pytest.mark.asyncio

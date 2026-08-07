@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from repomesh.modules.context.contracts import ExecutionContextGrant
@@ -51,3 +53,25 @@ class StartAssignedWorkerTaskCommand:
     adapter_id: str
     base_revision: str = "main"
     task_features: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveWorkerDispatch:
+    """A Runner dispatch the execution plane has not finished yet.
+
+    ``task_payload`` is the stored ``runtime.v1`` task envelope, so callers can recover the run's
+    workspace and context binding without re-deriving them.
+    """
+
+    run_id: UUID
+    task_id: UUID
+    worker_agent_id: UUID
+    attempt: int
+    status: str
+    task_payload: Mapping[str, object]
+
+
+class WorkerDispatchReader(Protocol):
+    async def get_active_dispatch_for_task(
+        self, task_id: UUID, *, worker_agent_id: UUID
+    ) -> ActiveWorkerDispatch | None: ...

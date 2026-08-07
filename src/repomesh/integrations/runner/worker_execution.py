@@ -1,12 +1,14 @@
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from repomesh.integrations.workspace import GitWorktreeManager
 from repomesh.modules.agent_directory.contracts import AgentPrincipalReader, AgentRole
 from repomesh.modules.agent_runtime.contracts import (
     DispatchWorkerTaskCommand,
     StartAssignedWorkerTaskCommand,
+    WorkerDispatchReader,
 )
 from repomesh.modules.capability_management import ResolveAgentCapabilities
 from repomesh.modules.context.application import PublishContextBundle
@@ -24,8 +26,11 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskStatus,
 )
 from repomesh_runner.contracts import RunnerTask
+from repomesh_runner.wire import WireError, parse_runner_task
 
 from .dispatch import DispatchWorkerTask
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +100,7 @@ class StartAssignedWorkerTask:
         execution: StartWorkerTaskExecution,
         states: TaskExecutionStateGateway,
         reporter: TaskReportGateway | None = None,
+        dispatches: WorkerDispatchReader | None = None,
     ) -> None:
         self._directory = directory
         self._tasks = tasks
@@ -106,6 +112,7 @@ class StartAssignedWorkerTask:
         self._execution = execution
         self._states = states
         self._reporter = reporter
+        self._dispatches = dispatches
 
     async def execute(self, command: StartAssignedWorkerTaskCommand) -> WorkerExecutionStarted:
         principal = await self._directory.get_view(command.worker_agent_id)
@@ -120,6 +127,9 @@ class StartAssignedWorkerTask:
             raise WorkerExecutionStartError(f"task not found: {command.task_id}")
         if task.assignee_agent_id != command.worker_agent_id:
             raise WorkerExecutionStartError("worker is not assigned to this task")
+        in_flight = await self._in_flight_run(task.id, command.worker_agent_id)
+        if in_flight is not None:
+            return in_flight
         run_id = uuid4()
         await self._states.start(task.id, agent_id=command.worker_agent_id)
         try:
@@ -194,3 +204,36 @@ class StartAssignedWorkerTask:
                 task_features=command.task_features,
             )
         )
+
+    async def _in_flight_run(
+        self, task_id: UUID, worker_agent_id: UUID
+    ) -> WorkerExecutionStarted | None:
+        """Return the run the execution plane is already performing for this Task, if any.
+
+        A Worker that triggers the start action several times for one Task must not receive a
+        second Worktree, Context Bundle and Runner dispatch. Only non-terminal dispatches are
+        reused; once a run has finished, a repeated start is a new attempt.
+        """
+
+        if self._dispatches is None:
+            return None
+        dispatch = await self._dispatches.get_active_dispatch_for_task(
+            task_id, worker_agent_id=worker_agent_id
+        )
+        if dispatch is None:
+            return None
+        try:
+            runner_task = parse_runner_task(dispatch.task_payload)
+        except WireError as error:
+            raise WorkerExecutionStartError(
+                f"in-flight run {dispatch.run_id} carries an unreadable dispatch payload: {error}"
+            ) from error
+        _logger.info(
+            "Reusing in-flight worker run instead of dispatching again: "
+            "task_id=%s run_id=%s attempt=%s dispatch_status=%s",
+            task_id,
+            dispatch.run_id,
+            dispatch.attempt,
+            dispatch.status,
+        )
+        return WorkerExecutionStarted(runner_task)
