@@ -14,7 +14,7 @@
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `application/plan_execution_bridge.py` | 新增 | PlanExecutionBridge 对接层 |
-| `application/__init__.py` | 修改 | 导出 PlanExecutionBridge + MaterializationResult |
+| `application/__init__.py` | 修改 | 导出 confirmation/plan_integration/plan_execution_bridge 的全部公开类型 |
 | `api/models.py` | 修改 | 新增 Confirmation/Integration/Materialize 的 Pydantic models |
 | `api/router.py` | 修改 | 新增 3 个 API 端点 |
 | `bootstrap/container.py` | 修改 | 新增 4 个工厂方法 + topology adapter |
