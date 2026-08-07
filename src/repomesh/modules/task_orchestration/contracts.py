@@ -30,6 +30,31 @@ class TaskView:
     version: int
 
 
+class ExecutionPlanStatus(StrEnum):
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedRepositoryTaskView:
+    repository_id: UUID
+    title: str
+    instruction: str
+    acceptance: tuple[str, ...]
+    leader_task_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionPlanView:
+    id: UUID
+    organization_id: UUID
+    project_id: UUID
+    status: ExecutionPlanStatus
+    current_batch_index: int
+    batches: tuple[tuple[PlannedRepositoryTaskView, ...], ...]
+
+
 @dataclass(frozen=True, slots=True)
 class PublishedTaskPackage:
     team_name: str
@@ -80,6 +105,10 @@ class ProjectTaskProgress:
     succeeded: int
     failed: int
     cancelled: int
+
+
+class TaskAssignmentGateway(Protocol):
+    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView: ...
 
 
 class TaskReportGateway(Protocol):

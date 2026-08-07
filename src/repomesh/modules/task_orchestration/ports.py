@@ -1,7 +1,7 @@
 from typing import Protocol
 from uuid import UUID
 
-from repomesh.modules.task_orchestration.domain import Task
+from repomesh.modules.task_orchestration.domain import ExecutionPlan, Task
 
 
 class TaskStore(Protocol):
@@ -22,3 +22,17 @@ class TaskStore(Protocol):
     async def update(self, task: Task, *, expected_version: int) -> None: ...
 
     async def list_by_project(self, project_id: UUID) -> tuple[Task, ...]: ...
+
+    async def list_by_parent(self, parent_task_id: UUID) -> tuple[Task, ...]: ...
+
+
+class ExecutionPlanStore(Protocol):
+    async def add(self, plan: ExecutionPlan, *, idempotency_key: str) -> None: ...
+
+    async def get(self, plan_id: UUID) -> ExecutionPlan | None: ...
+
+    async def get_by_idempotency_key(self, idempotency_key: str) -> ExecutionPlan | None: ...
+
+    async def update(self, plan: ExecutionPlan, *, expected_version: int) -> None: ...
+
+    async def find_by_leader_task(self, leader_task_id: UUID) -> ExecutionPlan | None: ...
