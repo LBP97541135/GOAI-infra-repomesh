@@ -4,14 +4,39 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 
 from repomesh.modules.repository_intelligence.application import (
+    ConfirmationService,
+    PlanIntegrationService,
     RegisterRepository,
     RepositoryDiscoveryService,
     make_llm_client,
 )
+from repomesh.modules.repository_intelligence.application.confirmation import (
+    ConfirmationResult,
+    ConfirmationSummary,
+    RepositoryPlan,
+)
+from repomesh.modules.repository_intelligence.application.plan_integration import (
+    ContractSpec,
+    IntegratedPlan,
+    TaskNode,
+)
 from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
-from .models import DiscoveryCandidate, DiscoveryRequest, RepositoryCreate, RepositoryView
+from .models import (
+    ConfirmationRequest,
+    ConfirmationResultView,
+    ConfirmationSummaryView,
+    ContractSpecView,
+    DiscoveryCandidate,
+    DiscoveryRequest,
+    IntegratedPlanView,
+    IntegrationRequest,
+    MaterializeRequest,
+    RepositoryCreate,
+    RepositoryView,
+    TaskNodeView,
+)
 
 router = APIRouter(tags=["repository-intelligence"])
 
@@ -47,40 +72,4 @@ async def register_repository(
         languages=tuple(body.languages),
         auto_card=_build_auto_card(body.auto_card),
     )
-    await RegisterRepository(catalog).execute(profile)
-    return profile
-
-
-@router.get("/repositories", response_model=list[RepositoryView])
-async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfile]:
-    return await catalog.list()
-
-
-@router.post("/discovery", response_model=list[DiscoveryCandidate])
-async def discover_repositories(
-    body: DiscoveryRequest, catalog: CatalogDependency
-) -> list[DiscoveryCandidate]:
-    client = make_llm_client(
-        os.environ.get("DEEPSEEK_API_KEY"),
-        base_url=os.environ.get("REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        model=os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat"),
-    )
-    service = RepositoryDiscoveryService(catalog, llm_client=client)
-    evidence = await service.discover(
-        body.requirement,
-        limit=body.limit,
-        entry_point=body.entry_point,
-    )
-    profiles = {profile.id: profile for profile in await catalog.list()}
-    return [
-        DiscoveryCandidate(
-            repository_id=item.repository_id,
-            repository_name=profiles[item.repository_id].name,
-            score=item.score,
-            matched_terms=item.matched_terms,
-            rationale=item.rationale,
-            is_entry_point=item.is_entry_point,
-        )
-        for item in evidence
-        if item.repository_id in profiles
-    ]
+    await RegisterRepository(cat
