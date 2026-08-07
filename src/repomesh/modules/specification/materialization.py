@@ -103,8 +103,11 @@ class BuildCodingAgentPackage:
         self, command: BuildCodingAgentPackageCommand
     ) -> CodingAgentPackage:
         worker = await self._directory.get_view(command.worker_agent_id)
-        if worker is None or worker.role is not AgentRole.WORKER:
-            raise SpecificationDenied("coding package requires a worker agent")
+        if worker is None or worker.role not in {
+            AgentRole.WORKER,
+            AgentRole.REPOSITORY_LEADER,
+        }:
+            raise SpecificationDenied("coding package requires an execution agent")
         task = await self._tasks.get_view(command.task_id)
         if task is None:
             raise SpecificationNotFound(f"task not found: {command.task_id}")
@@ -114,12 +117,17 @@ class BuildCodingAgentPackage:
             or task.repository_id != command.repository_id
             or task.assignee_agent_id != command.worker_agent_id
         ):
-            raise SpecificationDenied("worker is not assigned to this task")
+            raise SpecificationDenied("execution agent is not assigned to this task")
         topology = await self._topologies.get_view(command.project_id)
+        coding_action = (
+            AuthorizationAction.DIRECT_CODING_EXECUTE
+            if worker.role is AgentRole.REPOSITORY_LEADER
+            else AuthorizationAction.CODING_EXECUTE
+        )
         decision = self._authorizer.authorize(
             worker,
             AuthorizationRequest(
-                action=AuthorizationAction.CODING_EXECUTE,
+                action=coding_action,
                 organization_id=command.organization_id,
                 project_id=command.project_id,
                 repository_id=command.repository_id,

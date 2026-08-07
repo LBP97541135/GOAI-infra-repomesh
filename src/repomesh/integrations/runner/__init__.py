@@ -12,6 +12,7 @@ from .task_projection import (
     RunnerTaskProjector,
 )
 from .worker_execution import (
+    AssessAssignedWorkerTask,
     StartAssignedWorkerTask,
     StartWorkerTaskExecution,
     WorkerExecutionStarted,
@@ -21,6 +22,7 @@ from .worker_execution import (
 __all__ = [
     "MaterializedRunnerContext",
     "DispatchWorkerTask",
+    "AssessAssignedWorkerTask",
     "DispatchWorkerTaskCommand",
     "RunnerContextMaterializer",
     "RunnerControlGateway",

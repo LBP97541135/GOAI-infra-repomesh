@@ -1,7 +1,11 @@
 from dataclasses import dataclass, field, replace
 from uuid import UUID
 
-from repomesh.modules.task_orchestration.contracts import TaskStatus, TaskView
+from repomesh.modules.task_orchestration.contracts import (
+    TaskExecutionMode,
+    TaskStatus,
+    TaskView,
+)
 from repomesh.shared.domain import new_id
 
 
@@ -34,6 +38,7 @@ class Task:
     title: str
     instruction: str
     acceptance: tuple[str, ...]
+    execution_mode: TaskExecutionMode = TaskExecutionMode.GOVERNED_WORKER
     parent_task_id: UUID | None = None
     id: UUID = field(default_factory=new_id)
     status: TaskStatus = TaskStatus.ASSIGNED
@@ -88,6 +93,7 @@ class Task:
             title=self.title,
             instruction=self.instruction,
             acceptance=self.acceptance,
+            execution_mode=self.execution_mode,
             status=self.status,
             result_summary=self.result_summary,
             version=self.version,

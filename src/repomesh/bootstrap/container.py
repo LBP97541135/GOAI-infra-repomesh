@@ -134,6 +134,7 @@ class ApplicationContainer:
             StartWorkerTaskExecution,
         )
         from repomesh.integrations.workspace import GitWorktreeManager
+        from repomesh.modules.agent_runtime.preflight_store import PostgresWorkerPreflightStore
         from repomesh.modules.context.application import PublishContextBundle
         from repomesh.modules.task_orchestration import TaskExecutionState
 
@@ -153,6 +154,21 @@ class ApplicationContainer:
             GitWorktreeManager(settings.runner_workspace_root),
             PublishContextBundle(self.context_store),
             execution,
+            states,
+            PostgresWorkerPreflightStore(self.database),
+            self.task_report_gateway,
+        )
+
+    def worker_preflight_service(self):
+        from repomesh.integrations.runner import AssessAssignedWorkerTask
+        from repomesh.modules.agent_runtime.preflight_store import PostgresWorkerPreflightStore
+        from repomesh.modules.task_orchestration import TaskExecutionState
+
+        states = TaskExecutionState(self.agent_directory, self.task_store)
+        return AssessAssignedWorkerTask(
+            self.agent_directory,
+            self.task_store,
+            PostgresWorkerPreflightStore(self.database),
             states,
             self.task_report_gateway,
         )

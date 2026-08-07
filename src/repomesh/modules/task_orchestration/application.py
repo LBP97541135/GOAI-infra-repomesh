@@ -21,6 +21,7 @@ from repomesh.modules.task_orchestration.contracts import (
     PublishedTaskPackage,
     ReportTaskCommand,
     TaskAssignmentPublisher,
+    TaskExecutionMode,
     TaskStatus,
     TaskView,
 )
@@ -68,6 +69,12 @@ class TaskOrchestrator:
         if topology is None or topology.organization_id != command.organization_id:
             raise TaskDenied("project topology does not exist")
         self._validate_membership(assigner, assignee, command.repository_id, topology)
+        execution_mode = command.execution_mode or (
+            TaskExecutionMode.GOVERNED_WORKER
+            if assignee.role is AgentRole.WORKER
+            else TaskExecutionMode.COORDINATION
+        )
+        self._validate_execution_mode(execution_mode, assignee)
         if command.parent_task_id is not None:
             parent = await self._tasks.get(command.parent_task_id)
             if parent is None:
@@ -90,6 +97,7 @@ class TaskOrchestrator:
             title=command.title.strip(),
             instruction=command.instruction.strip(),
             acceptance=tuple(item.strip() for item in command.acceptance),
+            execution_mode=execution_mode,
         )
         await self._tasks.add(
             task,
@@ -243,13 +251,22 @@ class TaskOrchestrator:
         if published is not None:
             return (
                 "A verified RepoMesh task package is ready. Do not edit code directly in this "
-                "chat session. Call the MCP tool "
-                "repomesh-task-control.start_assigned_task with:\n"
+                "chat session. First inspect the package and call "
+                "repomesh-task-control.assess_assigned_task. Only after a ready decision may "
+                "you call repomesh-task-control.start_assigned_task with:\n"
                 f'{{"task_id":"{task.id}","worker_agent_id":"{task.assignee_agent_id}"}}\n\n'
                 f"Task package: {published.task_path}\n"
                 f"Content hash: {published.content_hash}\n"
                 "RepoMesh Runner will prepare the isolated workspace, invoke the configured "
                 "coding-agent adapter, run verification, and persist the result."
+            )
+        if task.execution_mode is TaskExecutionMode.DIRECT_RUN:
+            acceptance = "\n".join(f"- {item}" for item in task.acceptance)
+            return (
+                f"{task.instruction}\n\nAcceptance criteria:\n{acceptance}\n\n"
+                "This task uses direct_run. Review the approved Task Specification, then invoke "
+                "the RepoMesh direct-run API. The Runner still enforces context, path, test, and "
+                "commit controls; no Worker conversation is created."
             )
         acceptance = "\n".join(f"- {item}" for item in task.acceptance)
         return (
@@ -264,6 +281,21 @@ class TaskOrchestrator:
             '  "summary": "what changed, tests run, or the blocking question"\n'
             "}"
         )
+
+    @staticmethod
+    def _validate_execution_mode(
+        execution_mode: TaskExecutionMode, assignee: AgentPrincipalView
+    ) -> None:
+        if execution_mode is TaskExecutionMode.GOVERNED_WORKER:
+            if assignee.role is not AgentRole.WORKER:
+                raise TaskDenied("governed_worker tasks must be assigned to a Worker")
+            return
+        if execution_mode is TaskExecutionMode.DIRECT_RUN:
+            if assignee.role is not AgentRole.REPOSITORY_LEADER:
+                raise TaskDenied("direct_run tasks must be assigned to a Repository Leader")
+            return
+        if assignee.role is AgentRole.WORKER:
+            raise TaskDenied("Worker tasks use governed_worker mode by default")
 
     @staticmethod
     def _fingerprint(command: AssignTaskCommand) -> str:

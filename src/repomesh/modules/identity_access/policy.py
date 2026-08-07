@@ -97,6 +97,7 @@ ROLE_AUTHORIZATION_POLICIES = {
                 AuthorizationAction.TEAM_MANAGE,
                 AuthorizationAction.TASK_MANAGE,
                 AuthorizationAction.REPOSITORY_READ,
+                AuthorizationAction.DIRECT_CODING_EXECUTE,
                 AuthorizationAction.TEST_RUN,
                 AuthorizationAction.COLLABORATION_MESSAGE,
                 AuthorizationAction.PULL_REQUEST_CREATE,

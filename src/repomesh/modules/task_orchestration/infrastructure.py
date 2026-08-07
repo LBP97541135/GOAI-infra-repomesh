@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
-from repomesh.modules.task_orchestration.contracts import TaskStatus
+from repomesh.modules.task_orchestration.contracts import TaskExecutionMode, TaskStatus
 from repomesh.modules.task_orchestration.domain import Task, TaskConflict
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
@@ -31,6 +31,7 @@ class TaskRecord(Base):
     title: Mapped[str] = mapped_column(String(500))
     instruction: Mapped[str] = mapped_column(Text)
     acceptance: Mapped[list[str]] = mapped_column(JSON_DOCUMENT)
+    execution_mode: Mapped[str] = mapped_column(String(30))
     status: Mapped[str] = mapped_column(String(30), index=True)
     result_summary: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer)
@@ -162,6 +163,7 @@ class PostgresTaskStore:
             "title": task.title,
             "instruction": task.instruction,
             "acceptance": list(task.acceptance),
+            "execution_mode": task.execution_mode.value,
             "status": task.status.value,
             "result_summary": task.result_summary,
             "version": task.version,
@@ -180,6 +182,7 @@ class PostgresTaskStore:
             title=record.title,
             instruction=record.instruction,
             acceptance=tuple(record.acceptance),
+            execution_mode=TaskExecutionMode(record.execution_mode),
             status=TaskStatus(record.status),
             result_summary=record.result_summary,
             version=record.version,

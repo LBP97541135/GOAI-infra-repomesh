@@ -5,6 +5,7 @@ from .contracts import (
     AssignTaskCommand,
     ProjectTaskProgress,
     ReportTaskCommand,
+    TaskExecutionMode,
     TaskStatus,
     TaskView,
 )
@@ -24,5 +25,6 @@ __all__ = [
     "TaskOrchestrator",
     "TaskExecutionState",
     "TaskStatus",
+    "TaskExecutionMode",
     "TaskView",
 ]

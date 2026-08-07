@@ -11,6 +11,7 @@ from repomesh.settings import get_settings
 from .models import (
     CodingRunCreate,
     CodingRunView,
+    DirectTaskStartCreate,
     RunEventView,
     WorkerTaskStartCreate,
     WorkerTaskStartView,
@@ -57,6 +58,40 @@ async def start_worker_task(body: WorkerTaskStartCreate, request: Request) -> Wo
             StartAssignedWorkerTaskCommand(
                 task_id=body.task_id,
                 worker_agent_id=body.worker_agent_id,
+                adapter_id=body.adapter_id,
+                base_revision=body.base_revision,
+                task_features=body.task_features,
+            )
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    workspace = started.task.workspace
+    if workspace is None:
+        raise HTTPException(status_code=500, detail="runner task has no prepared workspace")
+    return WorkerTaskStartView(
+        task_id=started.task.task_id,
+        run_id=started.task.run_id,
+        status=started.status.value,
+        workspace_id=workspace.workspace_id,
+        workspace_path=workspace.path,
+        base_sha=workspace.base_sha,
+    )
+
+
+@router.post(
+    "/agent-actions/start-direct-task",
+    response_model=WorkerTaskStartView,
+    status_code=202,
+)
+async def start_direct_task(
+    body: DirectTaskStartCreate, request: Request
+) -> WorkerTaskStartView:
+    _authorize_agent_action(request)
+    try:
+        started = await request.app.state.container.worker_execution_service().execute_direct(
+            StartAssignedWorkerTaskCommand(
+                task_id=body.task_id,
+                worker_agent_id=body.repository_leader_agent_id,
                 adapter_id=body.adapter_id,
                 base_revision=body.base_revision,
                 task_features=body.task_features,

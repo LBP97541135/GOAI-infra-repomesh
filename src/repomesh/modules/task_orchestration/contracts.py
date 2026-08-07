@@ -13,6 +13,12 @@ class TaskStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class TaskExecutionMode(StrEnum):
+    COORDINATION = "coordination"
+    GOVERNED_WORKER = "governed_worker"
+    DIRECT_RUN = "direct_run"
+
+
 @dataclass(frozen=True, slots=True)
 class TaskView:
     id: UUID
@@ -28,6 +34,7 @@ class TaskView:
     status: TaskStatus
     result_summary: str | None
     version: int
+    execution_mode: TaskExecutionMode = TaskExecutionMode.GOVERNED_WORKER
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +67,7 @@ class AssignTaskCommand:
     instruction: str
     acceptance: tuple[str, ...]
     parent_task_id: UUID | None = None
+    execution_mode: TaskExecutionMode | None = None
 
 
 @dataclass(frozen=True, slots=True)

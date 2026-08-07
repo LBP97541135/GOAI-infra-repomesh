@@ -21,6 +21,7 @@ class AuthorizationAction(StrEnum):
     REPOSITORY_READ = "repository.read"
     REPOSITORY_WRITE = "repository.write"
     CODING_EXECUTE = "coding.execute"
+    DIRECT_CODING_EXECUTE = "coding.execute.direct"
     TEST_RUN = "test.run"
     COLLABORATION_MESSAGE = "collaboration.message"
     PULL_REQUEST_CREATE = "pull_request.create"

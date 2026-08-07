@@ -35,6 +35,7 @@ from repomesh.modules.task_orchestration import (
     AssignTaskCommand,
     InMemoryTaskStore,
     ReportTaskCommand,
+    TaskExecutionMode,
     TaskOrchestrator,
     TaskStatus,
 )
@@ -316,6 +317,40 @@ async def test_replayed_assignment_does_not_send_twice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_direct_run_must_be_explicit_and_is_assigned_to_repository_leader() -> None:
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        _,
+        orchestrator,
+        _,
+        _,
+    ) = await build_flow()
+
+    task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            assigned_by_agent_id=organization_leader.id,
+            assignee_agent_id=repository_team.leader.id,
+            title="Direct maintenance task",
+            instruction="Run the approved narrow change without a Worker session.",
+            acceptance=("Tests pass",),
+            execution_mode=TaskExecutionMode.DIRECT_RUN,
+        ),
+        idempotency_key="explicit-direct-run",
+    )
+
+    assert task.execution_mode is TaskExecutionMode.DIRECT_RUN
+    assert task.assignee_agent_id == repository_team.leader.id
+
+
+@pytest.mark.asyncio
 async def test_assignment_retry_recovers_failed_matrix_delivery() -> None:
     messenger = FailOnceMessenger()
     (
@@ -391,6 +426,8 @@ async def test_matrix_task_report_is_authenticated_processed_and_deduplicated() 
         ),
         idempotency_key="inbound-worker-task",
     )
+    assert repository_task.execution_mode is TaskExecutionMode.COORDINATION
+    assert worker_task.execution_mode is TaskExecutionMode.GOVERNED_WORKER
     topology = await topologies.get_view(project_id)
     assert topology is not None
     room_id = topology.repository_teams[0].room_id

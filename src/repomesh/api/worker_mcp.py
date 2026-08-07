@@ -4,12 +4,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
-from repomesh.modules.agent_runtime.contracts import StartAssignedWorkerTaskCommand
+from repomesh.modules.agent_runtime.contracts import (
+    AssessAssignedWorkerTaskCommand,
+    StartAssignedWorkerTaskCommand,
+    WorkerPreflightDecision,
+)
 from repomesh.settings import get_settings
 
 router = APIRouter(tags=["worker-mcp"])
 
-TOOL_NAME = "start_assigned_task"
+START_TOOL_NAME = "start_assigned_task"
+ASSESS_TOOL_NAME = "assess_assigned_task"
 
 
 @router.post("/api/v1/mcp/worker")
@@ -29,15 +34,20 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     if method == "notifications/initialized":
         return _result(request_id, {})
     if method == "tools/list":
-        return _result(request_id, {"tools": [_tool_definition()]})
+        return _result(request_id, {"tools": _tool_definitions()})
     if method != "tools/call":
         return _error(request_id, -32601, "method not found")
     params = body.get("params")
-    if not isinstance(params, dict) or params.get("name") != TOOL_NAME:
+    if not isinstance(params, dict) or params.get("name") not in {
+        START_TOOL_NAME,
+        ASSESS_TOOL_NAME,
+    }:
         return _error(request_id, -32602, "unknown tool")
     arguments = params.get("arguments")
     if not isinstance(arguments, dict):
         return _error(request_id, -32602, "tool arguments must be an object")
+    if params.get("name") == ASSESS_TOOL_NAME:
+        return await _assess(request, request_id, arguments)
     try:
         started = await request.app.state.container.worker_execution_service().execute(
             StartAssignedWorkerTaskCommand(
@@ -98,9 +108,46 @@ def _authorize(request: Request) -> None:
         raise HTTPException(status_code=401, detail="invalid MCP credentials")
 
 
-def _tool_definition() -> dict[str, Any]:
-    return {
-        "name": TOOL_NAME,
+async def _assess(
+    request: Request, request_id: object, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        assessment = await request.app.state.container.worker_preflight_service().execute(
+            AssessAssignedWorkerTaskCommand(
+                task_id=UUID(str(arguments["task_id"])),
+                worker_agent_id=UUID(str(arguments["worker_agent_id"])),
+                decision=WorkerPreflightDecision(str(arguments["decision"])),
+                spec_understood=bool(arguments["spec_understood"]),
+                scope_sufficient=bool(arguments["scope_sufficient"]),
+                tests_defined=bool(arguments["tests_defined"]),
+                dependencies_ready=bool(arguments["dependencies_ready"]),
+                notes=str(arguments["notes"]),
+            )
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        return _result(
+            request_id,
+            {"content": [{"type": "text", "text": str(error)}], "isError": True},
+        )
+    payload = {
+        "task_id": str(assessment.task_id),
+        "worker_agent_id": str(assessment.worker_agent_id),
+        "decision": assessment.decision.value,
+        "revision": assessment.revision,
+        "notes": assessment.notes,
+    }
+    return _result(
+        request_id,
+        {
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+            "structuredContent": payload,
+        },
+    )
+
+
+def _tool_definitions() -> list[dict[str, Any]]:
+    return [{
+        "name": START_TOOL_NAME,
         "description": "Start the current RepoMesh task assigned to this Worker.",
         "inputSchema": {
             "type": "object",
@@ -114,7 +161,31 @@ def _tool_definition() -> dict[str, Any]:
             "required": ["task_id", "worker_agent_id"],
             "additionalProperties": False,
         },
-    }
+    }, {
+        "name": ASSESS_TOOL_NAME,
+        "description": (
+            "Assess the assigned Task Specification, scope, tests, and dependencies before "
+            "starting any coding execution."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "format": "uuid"},
+                "worker_agent_id": {"type": "string", "format": "uuid"},
+                "decision": {"type": "string", "enum": ["ready", "question", "blocked"]},
+                "spec_understood": {"type": "boolean"},
+                "scope_sufficient": {"type": "boolean"},
+                "tests_defined": {"type": "boolean"},
+                "dependencies_ready": {"type": "boolean"},
+                "notes": {"type": "string", "minLength": 1},
+            },
+            "required": [
+                "task_id", "worker_agent_id", "decision", "spec_understood",
+                "scope_sufficient", "tests_defined", "dependencies_ready", "notes",
+            ],
+            "additionalProperties": False,
+        },
+    }]
 
 
 def _result(request_id: object, result: dict[str, Any]) -> dict[str, Any]:

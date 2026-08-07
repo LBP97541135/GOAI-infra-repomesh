@@ -1,6 +1,8 @@
 from repomesh.integrations.workspace import GitWorktreeManager
+from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.agent_runtime.contracts import DispatchWorkerTaskCommand
 from repomesh.modules.capability_management import ResolveAgentCapabilities
+from repomesh.modules.capability_management.contracts import AgentCapabilityBundle
 from repomesh.modules.context.application import GetExecutionContextGrant
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification import (
@@ -55,8 +57,16 @@ class DispatchWorkerTask:
             run_id=command.run_id,
             agent_id=command.worker_agent_id,
         )
-        capabilities = await self._capabilities.execute(
-            command.worker_agent_id, task_features=command.task_features
+        capabilities = (
+            AgentCapabilityBundle(
+                role=AgentRole.REPOSITORY_LEADER,
+                skills=(),
+                mcp_servers=(),
+            )
+            if command.execution_mode == "direct_run"
+            else await self._capabilities.execute(
+                command.worker_agent_id, task_features=command.task_features
+            )
         )
         workspace = await self._workspaces.prepare(
             repository_id=command.repository_id,
