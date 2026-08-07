@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
+from uuid import UUID
 
 from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.ports.agent_team import (
@@ -17,7 +18,14 @@ from repomesh.modules.collaboration.ports import CollaborationMessageStore
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
+from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
 from repomesh.modules.project.ports import ProjectTopologyStore
+from repomesh.modules.repository_intelligence.application import (
+    PlanExecutionBridge,
+    PlanIntegrationService,
+)
+from repomesh.modules.repository_intelligence.application.confirmation import ConfirmationService
+from repomesh.modules.repository_intelligence.application.discovery import LLMClient
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification import BuildCodingAgentPackage, SpecificationService
 from repomesh.modules.specification.ports import SpecificationStore
@@ -106,6 +114,34 @@ class ApplicationContainer:
             self.task_store,
             self.specification_store,
             PolicyAuthorizationGateway(),
+        )
+
+    def topology_reader(self) -> ProjectTopologyReader:
+        """Adapt ProjectTopologyStore to ProjectTopologyReader."""
+
+        store = self.project_topology_store
+
+        class _Adapter:
+            async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
+                topology = await store.get(project_id)
+                return topology.to_view() if topology else None
+
+        return _Adapter()
+
+    async def confirmation_service(self, llm_client: LLMClient) -> ConfirmationService:
+        profiles = await self.repository_catalog.list()
+        by_name = {p.name: p for p in profiles}
+        return ConfirmationService(llm_client, by_name)
+
+    def plan_integration_service(self, llm_client: LLMClient) -> PlanIntegrationService:
+        return PlanIntegrationService(llm_client)
+
+    def plan_execution_bridge(self) -> PlanExecutionBridge:
+        return PlanExecutionBridge(
+            specifications=self.specification_service(),
+            tasks=None,
+            topologies=self.topology_reader(),
+            catalog=self.repository_catalog,
         )
 
     def runner_gateway(self):
