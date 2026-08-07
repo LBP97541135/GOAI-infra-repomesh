@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from repomesh.modules.repository_intelligence.application import (
     ConfirmationService,
+    ExecutionPlaneUnavailable,
     PlanIntegrationService,
     RegisterRepository,
     RepositoryDiscoveryService,
@@ -248,13 +249,16 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
         execution_batches=[list(b) for b in body.execution_batches],
     )
 
-    result = await bridge.materialize(
-        plan=plan,
-        requirement=body.requirement,
-        project_id=body.project_id,
-        leader_agent_id=body.leader_agent_id,
-        idempotency_prefix=body.idempotency_prefix,
-    )
+    try:
+        result = await bridge.materialize(
+            plan=plan,
+            requirement=body.requirement,
+            project_id=body.project_id,
+            leader_agent_id=body.leader_agent_id,
+            idempotency_prefix=body.idempotency_prefix,
+        )
+    except ExecutionPlaneUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
     return MaterializeResponse(
         engineering_spec_id=result.engineering_spec.id,

@@ -10,9 +10,13 @@ and materialises it into the *specification* and *task_orchestration* modules:
 
 Only the first batch is assigned when the plan starts: the execution plan owns
 batch progression, so later batches are assigned by *task_orchestration* once
-the Runner reports the previous batch as terminal.  When no execution plane is
-configured (no Matrix messenger, therefore no task orchestrator) the bridge
-still creates the specifications and reports every repository as skipped.
+the Runner reports the previous batch as terminal.
+
+Fail-closed: when no execution plane is configured (no Matrix messenger,
+therefore no task orchestrator) ``materialize`` raises
+:class:`ExecutionPlaneUnavailable` **before any side effect** instead of
+silently creating specs-only output — a 200 response whose ``task_ids`` is
+empty proved indistinguishable from success in live use.
 """
 
 from __future__ import annotations
@@ -42,6 +46,10 @@ from repomesh.telemetry import SpanAttributes, traced
 from .plan_integration import IntegratedPlan, TaskNode
 
 _logger = logging.getLogger(__name__)
+
+
+class ExecutionPlaneUnavailable(RuntimeError):
+    """The task orchestration plane is not configured; materialization refused."""
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +173,20 @@ class PlanExecutionBridge:
 
         Returns:
             :class:`MaterializationResult` with created specs and tasks.
+
+        Raises:
+            ExecutionPlaneUnavailable: when no task orchestrator is configured.
+                Raised before any spec is created so a refused materialization
+                leaves no partial state behind.
         """
+
+        # --- 0. Fail closed before any side effect ----------------------------
+        if self._plans is None:
+            raise ExecutionPlaneUnavailable(
+                "task orchestration plane is not configured (no assignment "
+                "gateway — is the Matrix messenger set up?); refusing to "
+                "materialize a plan whose tasks cannot be assigned"
+            )
 
         # --- 1. Load topology --------------------------------------------------
         topology = await self._topologies.get_view(project_id)
@@ -233,34 +254,30 @@ class PlanExecutionBridge:
         skipped: list[str] = []
         plan_id: UUID | None = None
 
-        if self._plans is None:
-            _logger.info("TaskOrchestrator not available, skipping task assignment")
-            skipped.extend(t.repository for t in plan.task_dag)
-        else:
-            batches = self._plan_batches(
-                plan,
-                name_to_repo_id=name_to_repo_id,
-                teamed_repository_ids=set(repo_id_to_team),
-                skipped=skipped,
+        batches = self._plan_batches(
+            plan,
+            name_to_repo_id=name_to_repo_id,
+            teamed_repository_ids=set(repo_id_to_team),
+            skipped=skipped,
+        )
+        if batches:
+            started = await self._plans.start_plan(
+                organization_id=org_id,
+                project_id=project_id,
+                created_by_agent_id=leader_agent_id,
+                batches=batches,
+                idempotency_key=f"{idempotency_prefix}-plan",
             )
-            if batches:
-                started = await self._plans.start_plan(
-                    organization_id=org_id,
-                    project_id=project_id,
-                    created_by_agent_id=leader_agent_id,
-                    batches=batches,
-                    idempotency_key=f"{idempotency_prefix}-plan",
-                )
-                plan_id = started.plan.id
-                tasks_created.extend(started.tasks)
-                _logger.info(
-                    "Started execution plan %s with %d batch(es), current batch %d",
-                    started.plan.id,
-                    len(started.plan.batches),
-                    started.plan.current_batch_index,
-                )
-            else:
-                _logger.info("No executable repository in the plan, nothing to schedule")
+            plan_id = started.plan.id
+            tasks_created.extend(started.tasks)
+            _logger.info(
+                "Started execution plan %s with %d batch(es), current batch %d",
+                started.plan.id,
+                len(started.plan.batches),
+                started.plan.current_batch_index,
+            )
+        else:
+            _logger.info("No executable repository in the plan, nothing to schedule")
 
         span = trace.get_current_span()
         span.set_attribute(SpanAttributes.PROJECT_ID, str(project_id))

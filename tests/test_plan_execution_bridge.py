@@ -9,6 +9,8 @@ from uuid import UUID, uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pytest  # noqa: E402
+
 from repomesh.bootstrap.container import AdvanceExecutionPlanStarter  # noqa: E402
 from repomesh.modules.agent_directory.contracts import (  # noqa: E402
     AgentPrincipalStatus,
@@ -21,6 +23,7 @@ from repomesh.modules.project.contracts import (  # noqa: E402
     RepositoryTeamView,
 )
 from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (  # noqa: E402
+    ExecutionPlaneUnavailable,
     MaterializationResult,
     PlanExecutionBridge,
     StartedExecutionPlan,
@@ -406,26 +409,28 @@ class TestPlanExecutionBridge:
         assert [planned.repository_id for planned in batches[0]] == [self.repo_id]
         assert result.skipped_repos == ["ts-unknown-service"]
 
-    async def test_skip_mode_without_task_orchestrator(self):
-        """No execution plane configured → specs only, every repo skipped."""
+    async def test_materialize_without_task_orchestrator_fails_closed(self):
+        """No execution plane configured → refuse before any side effect.
+
+        The former "specs only" skip mode returned a 200-shaped result whose
+        ``task_ids`` was empty — indistinguishable from success in live use.
+        """
         specs = StubSpecService()
         topo = StubTopologyReader(self.topology)
 
         bridge = PlanExecutionBridge(specs, None, topo, self.catalog)
         plan = _make_plan(["ts-order-service"])
 
-        result = await bridge.materialize(
-            plan=plan,
-            requirement="test",
-            project_id=self.project_id,
-            leader_agent_id=self.leader_id,
-            idempotency_prefix="test-skip",
-        )
+        with pytest.raises(ExecutionPlaneUnavailable):
+            await bridge.materialize(
+                plan=plan,
+                requirement="test",
+                project_id=self.project_id,
+                leader_agent_id=self.leader_id,
+                idempotency_prefix="test-skip",
+            )
 
-        assert len(specs.calls) == 1
-        assert result.skipped_repos == ["ts-order-service"]
-        assert result.plan_id is None
-        assert result.tasks == []
+        assert specs.calls == []  # fail-closed means no partial state either
 
     async def test_idempotency_keys_unique(self):
         specs = StubSpecService()

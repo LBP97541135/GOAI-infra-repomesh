@@ -9,6 +9,7 @@ from .discovery import (
     RepositoryDiscoveryService,
 )
 from .plan_execution_bridge import (
+    ExecutionPlaneUnavailable,
     MaterializationResult,
     PlanExecutionBridge,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "ConfirmationService",
     "ConfirmationSummary",
     "ContractSpec",
+    "ExecutionPlaneUnavailable",
     "IntegratedPlan",
     "LLMClient",
     "MaterializationResult",
