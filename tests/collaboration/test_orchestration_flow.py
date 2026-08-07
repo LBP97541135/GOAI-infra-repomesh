@@ -3,6 +3,10 @@ from uuid import uuid4
 
 import pytest
 
+from repomesh.integrations.agentteams.governed_assignment import (
+    CreateGovernedWorkerTask,
+    CreateGovernedWorkerTaskCommand,
+)
 from repomesh.integrations.agentteams.project_topology import ReconcileProjectAgentTopology
 from repomesh.modules.agent_directory.application import (
     CreateAgent,
@@ -24,6 +28,8 @@ from repomesh.modules.collaboration import (
     SendCollaborationMessage,
     SendCollaborationMessageCommand,
 )
+from repomesh.modules.context.application import ContextPublicationGateway
+from repomesh.modules.context.infrastructure import InMemoryContextStore
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project import (
     CreateProjectAgentTopology,
@@ -31,6 +37,11 @@ from repomesh.modules.project import (
     RepositoryTeamAssignment,
 )
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
+from repomesh.modules.specification import (
+    InMemorySpecificationStore,
+    SpecificationService,
+    SpecificationStatus,
+)
 from repomesh.modules.task_orchestration import (
     AssignTaskCommand,
     InMemoryTaskStore,
@@ -348,6 +359,66 @@ async def test_direct_run_must_be_explicit_and_is_assigned_to_repository_leader(
 
     assert task.execution_mode is TaskExecutionMode.DIRECT_RUN
     assert task.assignee_agent_id == repository_team.leader.id
+
+
+@pytest.mark.asyncio
+async def test_repository_leader_freezes_spec_before_assigning_governed_worker() -> None:
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        _,
+        orchestrator,
+        directory,
+        topologies,
+    ) = await build_flow()
+    parent = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            assigned_by_agent_id=organization_leader.id,
+            assignee_agent_id=repository_team.leader.id,
+            title="Pricing repository change",
+            instruction="Prepare the repository implementation.",
+            acceptance=("Repository integration passes",),
+        ),
+        idempotency_key="prepared-parent",
+    )
+    specification_store = InMemorySpecificationStore()
+    specifications = SpecificationService(
+        directory,
+        topologies,
+        specification_store,
+        ContextPublicationGateway(InMemoryContextStore()),
+        PolicyAuthorizationGateway(),
+    )
+
+    result = await CreateGovernedWorkerTask(orchestrator, specifications).execute(
+        CreateGovernedWorkerTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            parent_task_id=parent.id,
+            leader_agent_id=repository_team.leader.id,
+            worker_agent_id=repository_team.workers[0].id,
+            title="Implement pricing API",
+            goal="Update pricing without breaking existing clients.",
+            acceptance=("Pricing tests pass",),
+            tests=("pytest tests/pricing",),
+            allowed_paths=("src/pricing/**", "tests/pricing/**"),
+        ),
+        idempotency_key="prepared-worker",
+    )
+
+    stored = await specification_store.get(result.specification_id)
+    assert stored is not None
+    assert stored.status is SpecificationStatus.FROZEN
+    assert stored.task_id == result.task.id
+    assert result.task.execution_mode is TaskExecutionMode.GOVERNED_WORKER
 
 
 @pytest.mark.asyncio

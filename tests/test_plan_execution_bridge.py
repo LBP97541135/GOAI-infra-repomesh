@@ -30,6 +30,7 @@ from repomesh.modules.specification.contracts import (  # noqa: E402
 )
 from repomesh.modules.specification.domain import SpecificationStatus  # noqa: E402
 from repomesh.modules.task_orchestration.contracts import (  # noqa: E402
+    TaskExecutionMode,
     TaskStatus,
     TaskView,
 )
@@ -260,6 +261,9 @@ class TestPlanExecutionBridge:
         cmd = tasks.calls[0][0]
         assert cmd.repository_id == self.repo_id
         assert cmd.assignee_agent_id == self.team_leader_id
+        assert cmd.execution_mode is TaskExecutionMode.COORDINATION
+        assert "Engineering Spec:" in cmd.instruction
+        assert "Split implementation into governed Worker tasks" in cmd.instruction
         assert len(result.skipped_repos) == 0
 
     async def test_task_skipped_when_repo_not_in_catalog(self):

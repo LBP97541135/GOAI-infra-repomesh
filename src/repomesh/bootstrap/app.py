@@ -16,6 +16,11 @@ from repomesh.integrations.agentteams.task_publishing import (
     AgentTeamsTaskPublisher,
 )
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
+from repomesh.integrations.scm import GitHubAdapter
+from repomesh.integrations.scm.github_auth import (
+    GitHubAppTokenProvider,
+    private_key_file_loader,
+)
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.collaboration import (
     PostgresCollaborationMessageStore,
@@ -74,12 +79,21 @@ def build_default_container() -> ApplicationContainer:
     resources: tuple[AsyncCloseable, ...] = (
         (control_plane, messenger) if messenger is not None else (control_plane,)
     )
+    scm_adapter = None
+    if settings.github_app_id and settings.github_app_private_key_file:
+        token_provider = GitHubAppTokenProvider(
+            settings.github_app_id,
+            private_key_file_loader(settings.github_app_private_key_file),
+        )
+        scm_adapter = GitHubAdapter(token_provider)
+        resources = (*resources, token_provider, scm_adapter)
     agent_directory = PostgresAgentDirectory(database)
     topology_store = PostgresProjectTopologyStore(database)
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
     background_services = ()
     task_report_gateway = None
+    task_assigner = None
     if messenger is not None:
         collaboration = SendCollaborationMessage(
             agent_directory,
@@ -96,6 +110,7 @@ def build_default_container() -> ApplicationContainer:
             task_publisher,
         )
         task_report_gateway = tasks
+        task_assigner = tasks
         inbound = ProcessMatrixTaskReport(
             agent_directory,
             topology_store,
@@ -122,6 +137,8 @@ def build_default_container() -> ApplicationContainer:
         external_resources=resources,
         background_services=background_services,
         task_report_gateway=task_report_gateway,
+        task_assigner=task_assigner,
+        scm_adapter=scm_adapter,
     )
 
 

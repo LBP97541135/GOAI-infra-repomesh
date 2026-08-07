@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from uuid import UUID
 
+from repomesh.integrations.scm.contracts import SCMAdapter
 from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
@@ -29,6 +30,7 @@ from repomesh.modules.repository_intelligence.application.discovery import LLMCl
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification import BuildCodingAgentPackage, SpecificationService
 from repomesh.modules.specification.ports import SpecificationStore
+from repomesh.modules.task_orchestration import TaskOrchestrator
 from repomesh.modules.task_orchestration.contracts import TaskReportGateway
 from repomesh.modules.task_orchestration.ports import TaskStore
 from repomesh.persistence import Database
@@ -71,6 +73,8 @@ class ApplicationContainer:
     external_resources: tuple[AsyncCloseable, ...] = ()
     background_services: tuple[BackgroundService, ...] = ()
     task_report_gateway: TaskReportGateway | None = None
+    task_assigner: TaskOrchestrator | None = None
+    scm_adapter: SCMAdapter | None = None
 
     def capability_assembler(self) -> PresetCapabilityAssembler:
         return PresetCapabilityAssembler()
@@ -136,12 +140,57 @@ class ApplicationContainer:
     def plan_integration_service(self, llm_client: LLMClient) -> PlanIntegrationService:
         return PlanIntegrationService(llm_client)
 
+    def delivery_service(self):
+        from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
+
+        return DeliveryService(PostgresChangeSetStore(self.database))
+
+    def scm_webhook_event_store(self):
+        from repomesh.integrations.scm.webhook_store import (
+            PostgresSCMWebhookEventStore,
+        )
+
+        return PostgresSCMWebhookEventStore(self.database)
+
+    def changeset_scm_coordinator(self):
+        from repomesh.integrations.scm import (
+            ChangeSetSCMCoordinator,
+            GitBranchPublisher,
+        )
+
+        if self.scm_adapter is None:
+            raise RuntimeError("SCM adapter is not configured")
+        return ChangeSetSCMCoordinator(
+            self.delivery_service(),
+            self.repository_catalog,
+            self.scm_adapter,
+            GitBranchPublisher(get_settings().runner_workspace_root),
+        )
+
     def plan_execution_bridge(self) -> PlanExecutionBridge:
+        if self.task_assigner is None:
+            raise RuntimeError(
+                "Task orchestration is unavailable; configure AgentTeams messaging first"
+            )
         return PlanExecutionBridge(
             specifications=self.specification_service(),
-            tasks=None,
+            tasks=self.task_assigner,
             topologies=self.topology_reader(),
             catalog=self.repository_catalog,
+        )
+
+    def governed_worker_task_service(self):
+        from repomesh.integrations.agentteams.governed_assignment import (
+            CreateGovernedWorkerTask,
+        )
+
+        if self.task_assigner is None:
+            raise RuntimeError(
+                "Task orchestration is unavailable; configure AgentTeams messaging first"
+            )
+        return CreateGovernedWorkerTask(
+            self.task_assigner,
+            self.specification_service(),
         )
 
     def runner_gateway(self):

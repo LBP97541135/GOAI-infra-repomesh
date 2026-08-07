@@ -28,6 +28,7 @@ from repomesh.modules.specification.contracts import (
 )
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
+    TaskExecutionMode,
     TaskView,
 )
 
@@ -107,7 +108,7 @@ class PlanExecutionBridge:
     def __init__(
         self,
         specifications: SpecificationCreator,
-        tasks: TaskAssigner | None,
+        tasks: TaskAssigner,
         topologies: ProjectTopologyReader,
         catalog: RepositoryCatalog,
     ) -> None:
@@ -189,7 +190,7 @@ class PlanExecutionBridge:
                         f"changes on {contract.interface}",
                     ),
                     scope=(contract.producer, contract.consumer),
-                    dependencies=(),
+                    dependencies=(f"engineering-spec:{eng_spec.id}",),
                     interface_changes=(contract.interface,),
                 ),
                 idempotency_key=f"{idempotency_prefix}-contract-{i}",
@@ -204,57 +205,67 @@ class PlanExecutionBridge:
         tasks_created: list[TaskView] = []
         skipped: list[str] = []
 
-        if self._tasks is None:
-            _logger.info("TaskOrchestrator not available, skipping task assignment")
-            skipped.extend(t.repository for t in plan.task_dag)
-        else:
-            for batch_index, batch in enumerate(plan.execution_batches):
-                for repo_name in batch:
-                    # Find the matching task node
-                    task_node = self._find_task(plan, repo_name)
-                    if task_node is None:
-                        _logger.warning("No task node for %s, skipping", repo_name)
-                        skipped.append(repo_name)
-                        continue
+        contract_ids_by_repo: dict[str, list[UUID]] = {}
+        for contract, specification in zip(plan.contracts, contract_specs, strict=True):
+            contract_ids_by_repo.setdefault(contract.producer, []).append(specification.id)
+            contract_ids_by_repo.setdefault(contract.consumer, []).append(specification.id)
 
-                    # Resolve repo name → repository_id → leader_agent_id
-                    repo_id = name_to_repo_id.get(repo_name)
-                    if repo_id is None:
-                        _logger.warning(
-                            "Repository %s not found in catalog, skipping task",
-                            repo_name,
-                        )
-                        skipped.append(repo_name)
-                        continue
+        execution_batches = plan.execution_batches or [
+            [task.repository for task in plan.task_dag]
+        ]
+        for batch_index, batch in enumerate(execution_batches):
+            for repo_name in batch:
+                task_node = self._find_task(plan, repo_name)
+                if task_node is None:
+                    _logger.warning("No task node for %s, skipping", repo_name)
+                    skipped.append(repo_name)
+                    continue
 
-                    team = repo_id_to_team.get(repo_id)
-                    if team is None:
-                        _logger.warning(
-                            "Repository %s (id=%s) has no team in topology, skipping",
-                            repo_name, repo_id,
-                        )
-                        skipped.append(repo_name)
-                        continue
-
-                    task = await self._tasks.assign(
-                        AssignTaskCommand(
-                            organization_id=org_id,
-                            project_id=project_id,
-                            repository_id=repo_id,
-                            assigned_by_agent_id=leader_agent_id,
-                            assignee_agent_id=team.leader_agent_id,
-                            title=f"Implement changes for {repo_name}",
-                            instruction=task_node.instruction
-                            or f"Implement changes for {repo_name}",
-                            acceptance=self._derive_task_acceptance(task_node),
-                        ),
-                        idempotency_key=f"{idempotency_prefix}-task-{repo_name}-b{batch_index}",
+                repo_id = name_to_repo_id.get(repo_name)
+                if repo_id is None:
+                    _logger.warning(
+                        "Repository %s not found in catalog, skipping task", repo_name
                     )
-                    tasks_created.append(task)
-                    _logger.info(
-                        "Assigned task %s for %s (batch %d)",
-                        task.id, repo_name, batch_index,
+                    skipped.append(repo_name)
+                    continue
+
+                team = repo_id_to_team.get(repo_id)
+                if team is None:
+                    _logger.warning(
+                        "Repository %s (id=%s) has no team in topology, skipping",
+                        repo_name,
+                        repo_id,
                     )
+                    skipped.append(repo_name)
+                    continue
+
+                instruction = self._task_instruction(
+                    task_node,
+                    batch_index=batch_index,
+                    engineering_spec_id=eng_spec.id,
+                    contract_spec_ids=tuple(contract_ids_by_repo.get(repo_name, ())),
+                )
+                task = await self._tasks.assign(
+                    AssignTaskCommand(
+                        organization_id=org_id,
+                        project_id=project_id,
+                        repository_id=repo_id,
+                        assigned_by_agent_id=leader_agent_id,
+                        assignee_agent_id=team.leader_agent_id,
+                        title=f"Implement changes for {repo_name}",
+                        instruction=instruction,
+                        acceptance=self._derive_task_acceptance(task_node),
+                        execution_mode=TaskExecutionMode.COORDINATION,
+                    ),
+                    idempotency_key=f"{idempotency_prefix}-task-{repo_name}-b{batch_index}",
+                )
+                tasks_created.append(task)
+                _logger.info(
+                    "Assigned task %s for %s (batch %d)",
+                    task.id,
+                    repo_name,
+                    batch_index,
+                )
 
         return MaterializationResult(
             engineering_spec=eng_spec,
@@ -262,6 +273,38 @@ class PlanExecutionBridge:
             tasks=tasks_created,
             skipped_repos=skipped,
         )
+
+    @staticmethod
+    def _task_instruction(
+        task_node: TaskNode,
+        *,
+        batch_index: int,
+        engineering_spec_id: UUID,
+        contract_spec_ids: tuple[UUID, ...],
+    ) -> str:
+        lines = [
+            task_node.instruction or f"Implement changes for {task_node.repository}",
+            "",
+            f"Execution batch: {batch_index + 1}",
+            f"Engineering Spec: {engineering_spec_id}",
+        ]
+        if task_node.depends_on:
+            lines.append(f"Upstream repositories: {', '.join(task_node.depends_on)}")
+        if contract_spec_ids:
+            lines.append(
+                "Contract Specs: " + ", ".join(str(item) for item in contract_spec_ids)
+            )
+        lines.extend(
+            (
+                "",
+                "Repository Leader responsibilities:",
+                "1. Review the project and contract context.",
+                "2. Create the repository-level Specification.",
+                "3. Split implementation into governed Worker tasks.",
+                "4. Integrate Worker results and report repository completion.",
+            )
+        )
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Private helpers

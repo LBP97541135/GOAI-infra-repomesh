@@ -106,6 +106,9 @@ def test_worker_mcp_can_be_explicitly_enabled_for_local_direct_mode(
             )
         assert response.status_code == 200
         assert response.json()["result"]["tools"][0]["name"] == "start_assigned_task"
+        assert "prepare_governed_worker_task" in {
+            tool["name"] for tool in response.json()["result"]["tools"]
+        }
     finally:
         get_settings.cache_clear()
 

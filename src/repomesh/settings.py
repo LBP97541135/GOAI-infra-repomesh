@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
     capability_root: Path = Path(".")
+    github_webhook_secret: str | None = None
+    github_app_id: int | None = None
+    github_app_private_key_file: Path | None = None
 
 
 @lru_cache

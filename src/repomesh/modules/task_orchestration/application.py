@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from uuid import UUID
 
@@ -49,7 +50,13 @@ class TaskOrchestrator:
         self._collaboration = collaboration
         self._publisher = publisher
 
-    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
+    async def assign(
+        self,
+        command: AssignTaskCommand,
+        *,
+        idempotency_key: str,
+        prepare: Callable[[TaskView], Awaitable[None]] | None = None,
+    ) -> TaskView:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
@@ -58,6 +65,8 @@ class TaskOrchestrator:
             task, previous_fingerprint = existing
             if fingerprint != previous_fingerprint:
                 raise TaskConflict("idempotency key was used for a different task")
+            if prepare is not None:
+                await prepare(task.to_view())
             await self._deliver_assignment(task, key)
             return task.to_view()
 
@@ -104,6 +113,8 @@ class TaskOrchestrator:
             idempotency_key=key,
             request_fingerprint=fingerprint,
         )
+        if prepare is not None:
+            await prepare(task.to_view())
         await self._deliver_assignment(task, key)
         return task.to_view()
 

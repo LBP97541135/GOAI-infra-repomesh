@@ -4,6 +4,9 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
+from repomesh.integrations.agentteams.governed_assignment import (
+    CreateGovernedWorkerTaskCommand,
+)
 from repomesh.modules.agent_runtime.contracts import (
     AssessAssignedWorkerTaskCommand,
     StartAssignedWorkerTaskCommand,
@@ -15,6 +18,7 @@ router = APIRouter(tags=["worker-mcp"])
 
 START_TOOL_NAME = "start_assigned_task"
 ASSESS_TOOL_NAME = "assess_assigned_task"
+PREPARE_WORKER_TASK_TOOL_NAME = "prepare_governed_worker_task"
 
 
 @router.post("/api/v1/mcp/worker")
@@ -41,6 +45,7 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(params, dict) or params.get("name") not in {
         START_TOOL_NAME,
         ASSESS_TOOL_NAME,
+        PREPARE_WORKER_TASK_TOOL_NAME,
     }:
         return _error(request_id, -32602, "unknown tool")
     arguments = params.get("arguments")
@@ -48,6 +53,8 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
         return _error(request_id, -32602, "tool arguments must be an object")
     if params.get("name") == ASSESS_TOOL_NAME:
         return await _assess(request, request_id, arguments)
+    if params.get("name") == PREPARE_WORKER_TASK_TOOL_NAME:
+        return await _prepare_worker_task(request, request_id, arguments)
     try:
         started = await request.app.state.container.worker_execution_service().execute(
             StartAssignedWorkerTaskCommand(
@@ -145,6 +152,56 @@ async def _assess(
     )
 
 
+async def _prepare_worker_task(
+    request: Request, request_id: object, arguments: dict[str, Any]
+) -> dict[str, Any]:
+    try:
+        result = await request.app.state.container.governed_worker_task_service().execute(
+            CreateGovernedWorkerTaskCommand(
+                organization_id=UUID(str(arguments["organization_id"])),
+                project_id=UUID(str(arguments["project_id"])),
+                repository_id=UUID(str(arguments["repository_id"])),
+                parent_task_id=UUID(str(arguments["parent_task_id"])),
+                leader_agent_id=UUID(str(arguments["leader_agent_id"])),
+                worker_agent_id=UUID(str(arguments["worker_agent_id"])),
+                title=str(arguments["title"]),
+                goal=str(arguments["goal"]),
+                acceptance=tuple(str(item) for item in arguments["acceptance"]),
+                constraints=tuple(str(item) for item in arguments.get("constraints") or ()),
+                tests=tuple(str(item) for item in arguments.get("tests") or ()),
+                dependencies=tuple(
+                    str(item) for item in arguments.get("dependencies") or ()
+                ),
+                allowed_paths=tuple(
+                    str(item) for item in arguments.get("allowed_paths") or ()
+                ),
+                interface_changes=tuple(
+                    str(item) for item in arguments.get("interface_changes") or ()
+                ),
+            ),
+            idempotency_key=str(arguments["idempotency_key"]),
+        )
+    except (KeyError, TypeError, ValueError, RuntimeError) as error:
+        return _result(
+            request_id,
+            {"content": [{"type": "text", "text": str(error)}], "isError": True},
+        )
+    payload = {
+        "task_id": str(result.task.id),
+        "specification_id": str(result.specification_id),
+        "worker_agent_id": str(result.task.assignee_agent_id),
+        "execution_mode": result.task.execution_mode.value,
+        "status": result.task.status.value,
+    }
+    return _result(
+        request_id,
+        {
+            "content": [{"type": "text", "text": json.dumps(payload)}],
+            "structuredContent": payload,
+        },
+    )
+
+
 def _tool_definitions() -> list[dict[str, Any]]:
     return [{
         "name": START_TOOL_NAME,
@@ -159,6 +216,42 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "task_features": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["task_id", "worker_agent_id"],
+            "additionalProperties": False,
+        },
+    }, {
+        "name": PREPARE_WORKER_TASK_TOOL_NAME,
+        "description": (
+            "Repository Leader only: create and freeze a Task Specification, then assign "
+            "the governed task to a Worker."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "organization_id": {"type": "string", "format": "uuid"},
+                "project_id": {"type": "string", "format": "uuid"},
+                "repository_id": {"type": "string", "format": "uuid"},
+                "parent_task_id": {"type": "string", "format": "uuid"},
+                "leader_agent_id": {"type": "string", "format": "uuid"},
+                "worker_agent_id": {"type": "string", "format": "uuid"},
+                "title": {"type": "string", "minLength": 1},
+                "goal": {"type": "string", "minLength": 1},
+                "acceptance": {
+                    "type": "array", "items": {"type": "string"}, "minItems": 1,
+                },
+                "constraints": {"type": "array", "items": {"type": "string"}},
+                "tests": {"type": "array", "items": {"type": "string"}},
+                "dependencies": {"type": "array", "items": {"type": "string"}},
+                "allowed_paths": {"type": "array", "items": {"type": "string"}},
+                "interface_changes": {
+                    "type": "array", "items": {"type": "string"},
+                },
+                "idempotency_key": {"type": "string", "minLength": 1},
+            },
+            "required": [
+                "organization_id", "project_id", "repository_id", "parent_task_id",
+                "leader_agent_id", "worker_agent_id", "title", "goal", "acceptance",
+                "idempotency_key",
+            ],
             "additionalProperties": False,
         },
     }, {
