@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,7 @@ from repomesh.modules.task_orchestration.domain import (
     TaskConflict,
 )
 from repomesh.modules.task_orchestration.infrastructure import (
+    ExecutionPlanRecord,
     PostgresExecutionPlanStore,
     PostgresTaskStore,
 )
@@ -42,6 +44,7 @@ def build_plan(repository_id) -> ExecutionPlan:
                     title="Deliver pricing",
                     instruction="Implement the approved scope.",
                     acceptance=("Tests pass",),
+                    tests=("uv run pytest -q tests/pricing",),
                 ),
             ),
         ),
@@ -68,10 +71,51 @@ async def test_plan_store_persists_batches_and_indexes_leader_tasks(
     assert replay == assigned
     assert bound == assigned
     assert stored.batches[0][0].repository_id == repository_id
+    assert stored.batches[0][0].tests == ("uv run pytest -q tests/pricing",)
     assert await store.find_by_leader_task(uuid4()) is None
 
     with pytest.raises(TaskConflict, match="version changed"):
         await store.update(assigned.complete(), expected_version=plan.version)
+
+
+@pytest.mark.asyncio
+async def test_plan_store_reads_batches_persisted_before_verification_commands(
+    database: Database,
+) -> None:
+    store = PostgresExecutionPlanStore(database)
+    plan_id = uuid4()
+    now = datetime.now(UTC)
+    async with database.transaction() as session:
+        session.add(
+            ExecutionPlanRecord(
+                id=plan_id,
+                organization_id=uuid4(),
+                project_id=uuid4(),
+                created_by_agent_id=uuid4(),
+                status=ExecutionPlanStatus.IN_PROGRESS.value,
+                current_batch_index=0,
+                batches=[
+                    [
+                        {
+                            "repository_id": str(uuid4()),
+                            "title": "Deliver pricing",
+                            "instruction": "Implement the approved scope.",
+                            "acceptance": ["Tests pass"],
+                            "leader_task_id": None,
+                        }
+                    ]
+                ],
+                idempotency_key="legacy-plan",
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    stored = await store.get(plan_id)
+
+    assert stored is not None
+    assert stored.batches[0][0].tests == ()
 
 
 @pytest.mark.asyncio

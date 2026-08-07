@@ -14,6 +14,7 @@ from .contracts import (
     ProjectTaskProgress,
     ReportTaskCommand,
     TaskAssignmentGateway,
+    TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "TaskOrchestrationError",
     "TaskOrchestrator",
     "TaskExecutionState",
+    "TaskSpecificationAuthor",
     "TaskStatus",
     "TaskStore",
     "TaskView",

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import pytest
@@ -20,6 +21,7 @@ from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
     ExecutionPlanStatus,
     TaskStatus,
+    TaskView,
 )
 from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
@@ -79,8 +81,46 @@ class RecordingAssigner:
         return task.to_view()
 
 
+@dataclass(frozen=True)
+class SpecificationCall:
+    task: TaskView
+    allowed_paths: tuple[str, ...]
+    tests: tuple[str, ...]
+    idempotency_key: str
+
+
+class RecordingSpecificationAuthor:
+    """Stand in for the Specification module while recording the execution permits."""
+
+    def __init__(self) -> None:
+        self.calls: list[SpecificationCall] = []
+
+    async def ensure_approved(
+        self,
+        task: TaskView,
+        *,
+        allowed_paths: tuple[str, ...],
+        tests: tuple[str, ...],
+        idempotency_key: str,
+    ) -> None:
+        self.calls.append(
+            SpecificationCall(
+                task=task,
+                allowed_paths=allowed_paths,
+                tests=tests,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+
 class Environment:
-    def __init__(self, repository_count: int = 1) -> None:
+    def __init__(
+        self,
+        repository_count: int = 1,
+        *,
+        with_spec_author: bool = True,
+        worker_paths: tuple[str, ...] = ("src/**",),
+    ) -> None:
         self.organization_id = uuid4()
         self.project_id = uuid4()
         self.organization_leader_id = uuid4()
@@ -126,7 +166,7 @@ class Environment:
                     role=AgentRole.WORKER,
                     leader_agent_id=leader_id,
                     repository_id=repository_id,
-                    responsibility_paths=("src/**",),
+                    responsibility_paths=worker_paths,
                     agentteams_resource_name=f"worker-{index}",
                     status=AgentPrincipalStatus.ACTIVE,
                 )
@@ -157,14 +197,26 @@ class Environment:
         self.tasks = InMemoryTaskStore()
         self.plans = InMemoryExecutionPlanStore()
         self.assigner = RecordingAssigner(self.tasks)
+        self.spec_author = RecordingSpecificationAuthor() if with_spec_author else None
         self.decomposer = DecomposeRepositoryTask(
-            self.directory, self.topologies, self.tasks, self.assigner
+            self.directory, self.topologies, self.tasks, self.assigner, self.spec_author
         )
         self.advancer = AdvanceExecutionPlan(
             self.plans, self.tasks, self.assigner, self.decomposer
         )
 
-    def plan(self, batches: tuple[tuple[int, ...], ...]) -> ExecutionPlan:
+    @property
+    def recorded_specifications(self) -> list[SpecificationCall]:
+        assert self.spec_author is not None
+        return self.spec_author.calls
+
+    def plan(
+        self,
+        batches: tuple[tuple[int, ...], ...],
+        *,
+        tests: dict[int, tuple[str, ...]] | None = None,
+    ) -> ExecutionPlan:
+        verification = tests or {}
         return ExecutionPlan(
             organization_id=self.organization_id,
             project_id=self.project_id,
@@ -176,6 +228,7 @@ class Environment:
                         title=f"Deliver repository {index}",
                         instruction=f"Implement the approved scope for repository {index}.",
                         acceptance=("Tests pass",),
+                        tests=verification.get(index, ()),
                     )
                     for index in batch
                 )
@@ -253,6 +306,70 @@ async def test_decompose_reuses_an_in_flight_worker_task() -> None:
 
     assert second == first
     assert len(environment.assigner.commands) == assignments_after_first
+
+
+@pytest.mark.asyncio
+async def test_decompose_authors_the_execution_permit_of_the_new_worker_task() -> None:
+    environment = Environment()
+    repository_task = await environment.assign_repository_task()
+
+    worker_tasks = await environment.decomposer.execute(
+        repository_task.id,
+        idempotency_key="decompose",
+        tests=("uv run pytest -q tests/checkout",),
+    )
+
+    assert len(environment.recorded_specifications) == 1
+    call = environment.recorded_specifications[0]
+    assert call.task == worker_tasks[0]
+    assert call.allowed_paths == ("src/**",)
+    assert call.tests == ("uv run pytest -q tests/checkout",)
+    assert call.idempotency_key == f"decompose:spec:{environment.worker_ids[0]}"
+
+
+@pytest.mark.asyncio
+async def test_decompose_replay_heals_the_permit_of_an_in_flight_worker_task() -> None:
+    environment = Environment()
+    repository_task = await environment.assign_repository_task()
+    first = await environment.decomposer.execute(
+        repository_task.id, idempotency_key="decompose-1", tests=("uv run pytest -q",)
+    )
+    assignments_after_first = len(environment.assigner.commands)
+
+    second = await environment.decomposer.execute(
+        repository_task.id, idempotency_key="decompose-2", tests=("uv run pytest -q",)
+    )
+
+    assert second == first
+    assert len(environment.assigner.commands) == assignments_after_first
+    assert len(environment.recorded_specifications) == 2
+    healed = environment.recorded_specifications[1]
+    assert healed.task == first[0]
+    assert healed.tests == ("uv run pytest -q",)
+    assert healed.idempotency_key == f"decompose-2:spec:{environment.worker_ids[0]}"
+
+
+@pytest.mark.asyncio
+async def test_decompose_without_a_specification_author_keeps_assigning() -> None:
+    environment = Environment(with_spec_author=False)
+    repository_task = await environment.assign_repository_task()
+
+    worker_tasks = await environment.decomposer.execute(
+        repository_task.id, idempotency_key="decompose"
+    )
+
+    assert len(worker_tasks) == 1
+    assert worker_tasks[0].assignee_agent_id == environment.worker_ids[0]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_without_responsibility_paths_may_touch_the_whole_repository() -> None:
+    environment = Environment(worker_paths=())
+    repository_task = await environment.assign_repository_task()
+
+    await environment.decomposer.execute(repository_task.id, idempotency_key="decompose")
+
+    assert environment.recorded_specifications[0].allowed_paths == ("**",)
 
 
 @pytest.mark.asyncio
@@ -382,6 +499,40 @@ async def test_next_batch_starts_only_after_every_leader_task_of_the_batch_succe
     assert next_worker.assignee_agent_id == environment.worker_ids[2]
     keys = [key for _, key in environment.assigner.commands]
     assert f"{plan.id}:b1:{environment.repository_ids[2]}" in keys
+
+
+@pytest.mark.asyncio
+async def test_every_batch_permits_its_worker_with_the_verification_of_that_batch() -> None:
+    environment = Environment(repository_count=2)
+    plan = environment.plan(
+        ((0,), (1,)),
+        tests={0: ("uv run pytest tests/checkout",), 1: ("uv run pytest tests/billing",)},
+    )
+
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert len(environment.recorded_specifications) == 1
+    first = environment.recorded_specifications[0]
+    assert first.task.assignee_agent_id == environment.worker_ids[0]
+    assert first.tests == ("uv run pytest tests/checkout",)
+    assert first.idempotency_key == (
+        f"plan-start:b0:{environment.repository_ids[0]}:decompose"
+        f":spec:{environment.worker_ids[0]}"
+    )
+
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker_task = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker_task.id, TaskStatus.SUCCEEDED, "Checkout delivered.")
+    await environment.advancer.on_task_terminal(worker_task.id)
+
+    assert len(environment.recorded_specifications) == 2
+    second = environment.recorded_specifications[1]
+    assert second.task.assignee_agent_id == environment.worker_ids[1]
+    assert second.tests == ("uv run pytest tests/billing",)
+    assert second.idempotency_key == (
+        f"{plan.id}:b1:{environment.repository_ids[1]}:decompose"
+        f":spec:{environment.worker_ids[1]}"
+    )
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,7 @@ from repomesh.modules.task_orchestration.contracts import (
     ReportTaskCommand,
     TaskAssignmentGateway,
     TaskAssignmentPublisher,
+    TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
 )
@@ -325,14 +326,20 @@ class DecomposeRepositoryTask:
         topologies: ProjectTopologyReader,
         tasks: TaskStore,
         assigner: TaskAssignmentGateway,
+        spec_author: TaskSpecificationAuthor | None = None,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
         self._tasks = tasks
         self._assigner = assigner
+        self._spec_author = spec_author
 
     async def execute(
-        self, repository_task_id: UUID, *, idempotency_key: str
+        self,
+        repository_task_id: UUID,
+        *,
+        idempotency_key: str,
+        tests: tuple[str, ...] = (),
     ) -> tuple[TaskView, ...]:
         key = idempotency_key.strip()
         if not key:
@@ -360,7 +367,12 @@ class DecomposeRepositoryTask:
             for child in children
         )
         if in_flight:
-            return tuple(child.to_view() for child in children)
+            # A replay must still heal a Worker task whose execution permit is missing.
+            views = tuple(child.to_view() for child in children)
+            for child, view in zip(children, views, strict=True):
+                if child.status not in FINAL_TASK_STATUSES:
+                    await self._ensure_specification(view, tests=tests, key=key)
+            return views
 
         worker_task = await self._assigner.assign(
             AssignTaskCommand(
@@ -376,7 +388,24 @@ class DecomposeRepositoryTask:
             ),
             idempotency_key=f"{key}:worker:{worker_agent_id}",
         )
+        await self._ensure_specification(worker_task, tests=tests, key=key)
         return (worker_task,)
+
+    async def _ensure_specification(
+        self, worker_task: TaskView, *, tests: tuple[str, ...], key: str
+    ) -> None:
+        """Produce the execution permit in the same motion as the executable task."""
+        if self._spec_author is None:
+            return
+        worker = await self._directory.get_view(worker_task.assignee_agent_id)
+        if worker is None or worker.status is not AgentPrincipalStatus.ACTIVE:
+            raise TaskDenied("worker agent is missing or disabled")
+        await self._spec_author.ensure_approved(
+            worker_task,
+            allowed_paths=tuple(worker.responsibility_paths) or ("**",),
+            tests=tests,
+            idempotency_key=f"{key}:spec:{worker_task.assignee_agent_id}",
+        )
 
     async def repository_team(
         self, project_id: UUID, repository_id: UUID
@@ -488,6 +517,7 @@ class AdvanceExecutionPlan:
                 idempotency_key=(
                     f"{key_prefix}:b{batch_index}:{planned.repository_id}:decompose"
                 ),
+                tests=planned.tests,
             )
         return assigned
 

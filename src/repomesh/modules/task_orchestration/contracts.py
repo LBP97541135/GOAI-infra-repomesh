@@ -43,6 +43,7 @@ class PlannedRepositoryTaskView:
     instruction: str
     acceptance: tuple[str, ...]
     leader_task_id: UUID | None
+    tests: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +110,19 @@ class ProjectTaskProgress:
 
 class TaskAssignmentGateway(Protocol):
     async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView: ...
+
+
+class TaskSpecificationAuthor(Protocol):
+    """Ensure the approved, frozen Task Specification a Worker task needs before execution."""
+
+    async def ensure_approved(
+        self,
+        task: TaskView,
+        *,
+        allowed_paths: tuple[str, ...],
+        tests: tuple[str, ...],
+        idempotency_key: str,
+    ) -> None: ...
 
 
 class TaskReportGateway(Protocol):

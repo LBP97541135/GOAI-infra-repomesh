@@ -109,6 +109,8 @@ class PlannedRepositoryTask:
     instruction: str
     acceptance: tuple[str, ...]
     leader_task_id: UUID | None = None
+    tests: tuple[str, ...] = ()
+    """Verification commands the Worker must run before reporting this task."""
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -126,6 +128,7 @@ class PlannedRepositoryTask:
             instruction=self.instruction,
             acceptance=self.acceptance,
             leader_task_id=self.leader_task_id,
+            tests=self.tests,
         )
 
 
