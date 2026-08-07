@@ -36,6 +36,7 @@ from repomesh_runner.drivers.base import (
     ProtocolDriver,
 )
 from repomesh_runner.drivers.supervision import resolve_binary
+from repomesh_runner.observer import OtelDriverObserver, compose_observers, otel_task_observer
 from repomesh_runner.profiles import CliProfile, get_profile
 
 _RESULT_STATUS = {
@@ -172,6 +173,12 @@ class DriverExecutor:
         profile_resolver: Callable[[str], CliProfile] = get_profile,
         binary_resolver: Callable[[tuple[str, ...]], str | None] = resolve_binary,
         observer: Callable[[DriverEvent], None] | None = None,
+        # A *per task* observer (the OTel one is stateful: it owns the root span
+        # and the open tool spans), built fresh for every execute() and fanned
+        # out to alongside ``observer``. Returning None from the factory — which
+        # is what ``otel_task_observer`` does with tracing off — skips the whole
+        # path, so the untraced deployment pays nothing.
+        task_observer_factory: Callable[[RunnerTask], OtelDriverObserver | None] | None = None,
         # Default None is permissive on purpose: the platform has not decided
         # how the context/coding package is materialized into the workspace, so
         # there is nothing to hash against yet. This is the refusal seam that
@@ -183,6 +190,7 @@ class DriverExecutor:
         self._profile_resolver = profile_resolver
         self._binary_resolver = binary_resolver
         self._observer = observer or (lambda event: None)
+        self._task_observer_factory = task_observer_factory
         self._context_verifier = context_verifier
 
     async def execute(self, task: RunnerTask) -> RunnerExecutionResult:
@@ -209,8 +217,33 @@ class DriverExecutor:
             resume_session_id=task.resume_session_id if profile.resumable else None,
             extra_arguments=profile.permission_arguments.get(task.permissions.mode, ()),
         )
-        result = await driver.execute(request, profile, self._observer)
+        result = await self._run_driver(driver, request, profile, task)
         return await self._collect_evidence(task, workspace, result)
+
+    async def _run_driver(
+        self,
+        driver: ProtocolDriver,
+        request: DriverRequest,
+        profile: CliProfile,
+        task: RunnerTask,
+    ) -> DriverResult:
+        """Run the driver, wrapped in this task's observation scope if any.
+
+        The scope brackets ``driver.execute`` only — evidence collection has its
+        own instrumentation seam and must not hang off the agent span.
+        """
+
+        task_observer = (
+            self._task_observer_factory(task) if self._task_observer_factory is not None else None
+        )
+        if task_observer is None:
+            return await driver.execute(request, profile, self._observer)
+        with task_observer:
+            result = await driver.execute(
+                request, profile, compose_observers(self._observer, task_observer)
+            )
+            task_observer.record_result(result)
+            return result
 
     def _verify_context(self, task: RunnerTask) -> RunnerExecutionResult | None:
         if self._context_verifier is None:
@@ -490,4 +523,5 @@ def build_default_executor(workspace_root: Path) -> DriverExecutor:
         },
         workspace_root=workspace_root,
         context_verifier=WorkspaceContextVerifier(),
+        task_observer_factory=otel_task_observer,
     )
