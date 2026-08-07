@@ -32,6 +32,7 @@ from repomesh.modules.task_orchestration import PostgresTaskStore, TaskOrchestra
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import get_settings
+from repomesh_runner.telemetry import setup_tracing
 
 
 @asynccontextmanager
@@ -127,6 +128,7 @@ def build_default_container() -> ApplicationContainer:
 
 def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     settings = get_settings()
+    setup_tracing(settings.otlp_endpoint, service_name=settings.otlp_service_name)
     application = FastAPI(
         title=settings.app_name,
         version="0.1.0",

@@ -29,6 +29,7 @@ from .executor import build_default_executor
 from .runtime_env import RunnerRuntimeEnv, RuntimeEnvError, load_runtime_env
 from .state_store import TaskLedger
 from .task_source import HttpLongPollTaskSource, TaskSource
+from .telemetry import setup_tracing
 
 _logger = logging.getLogger(__name__)
 
@@ -143,6 +144,13 @@ def run(environ: Mapping[str, str] = os.environ, argv: Sequence[str] | None = No
     except RuntimeEnvError as error:
         print(f"repomesh-runner: {error}", file=sys.stderr)
         return EXIT_ENVIRONMENT
+
+    # Optional and outside the runtime contract: load_runtime_env ignores unknown
+    # variables, and without an endpoint this is a no-op.
+    setup_tracing(
+        environ.get("REPOMESH_OTLP_ENDPOINT"),
+        service_name=environ.get("REPOMESH_OTLP_SERVICE_NAME") or "repomesh-runner",
+    )
 
     _logger.info(
         "starting runner: workspace_root=%s state_dir=%s labels=%s",

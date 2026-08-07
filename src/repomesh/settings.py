@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
     capability_root: Path = Path(".")
+    # OTLP/HTTP collector base URL (e.g. a local AgentScope Studio). None keeps
+    # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.
+    otlp_endpoint: str | None = None
+    otlp_service_name: str = "repomesh-api"
 
 
 @lru_cache
