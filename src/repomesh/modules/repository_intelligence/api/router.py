@@ -226,6 +226,7 @@ async def integrate_plan(body: IntegrationRequest) -> IntegratedPlanView:
                 instruction=t.instruction,
                 depends_on=t.depends_on,
                 parallelizable_with=t.parallelizable_with,
+                tests=list(t.tests),
             )
             for t in plan.task_dag
         ],
@@ -256,6 +257,7 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
                 instruction=t.instruction,
                 depends_on=t.depends_on,
                 parallelizable_with=t.parallelizable_with,
+                tests=tuple(t.tests),
             )
             for t in body.task_dag
         ],

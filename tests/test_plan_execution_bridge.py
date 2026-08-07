@@ -176,8 +176,9 @@ def _make_plan(
     repos: list[str],
     contracts: list[ContractSpec] | None = None,
     batches: list[list[str]] | None = None,
+    tests: tuple[str, ...] = (),
 ) -> IntegratedPlan:
-    dag = [TaskNode(repository=r, instruction=f"change {r}") for r in repos]
+    dag = [TaskNode(repository=r, instruction=f"change {r}", tests=tests) for r in repos]
     return IntegratedPlan(
         engineering_spec="Test engineering spec",
         contracts=contracts or [],
@@ -293,6 +294,44 @@ class TestPlanExecutionBridge:
         assert planned.leader_task_id is None
         assert len(result.skipped_repos) == 0
         assert result.plan_id == UUID(int=7777)
+
+    async def test_planned_task_carries_the_verification_commands(self):
+        """The task DAG's tests reach the plan: they become the Runner commands."""
+        specs = StubSpecService()
+        plans = StubPlanStarter()
+        topo = StubTopologyReader(self.topology)
+
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
+        plan = _make_plan(["ts-order-service"], tests=("python scripts/run_tests.py",))
+
+        await bridge.materialize(
+            plan=plan,
+            requirement="test",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="test-tests",
+        )
+
+        batches = plans.calls[0][3]
+        assert batches[0][0].tests == ("python scripts/run_tests.py",)
+
+    async def test_planned_task_without_verification_commands_stays_empty(self):
+        """A plan whose DAG carries no commands still materialises."""
+        specs = StubSpecService()
+        plans = StubPlanStarter()
+        topo = StubTopologyReader(self.topology)
+
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
+
+        await bridge.materialize(
+            plan=_make_plan(["ts-order-service"]),
+            requirement="test",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="test-no-tests",
+        )
+
+        assert plans.calls[0][3][0][0].tests == ()
 
     async def test_task_skipped_when_repo_not_in_catalog(self):
         """Repo name not in catalog → skipped."""
@@ -625,10 +664,14 @@ class ExecutionEnvironment:
         )
 
     async def materialize(
-        self, batches: list[list[str]], *, idempotency_prefix: str = "bridge"
+        self,
+        batches: list[list[str]],
+        *,
+        idempotency_prefix: str = "bridge",
+        tests: tuple[str, ...] = (),
     ) -> MaterializationResult:
         return await self.bridge.materialize(
-            plan=_make_plan(self.repository_names, batches=batches),
+            plan=_make_plan(self.repository_names, batches=batches, tests=tests),
             requirement="deliver the approved scope",
             project_id=self.project_id,
             leader_agent_id=self.organization_leader_id,
@@ -687,6 +730,21 @@ async def test_materialize_result_reports_the_assigned_leader_and_worker_tasks()
     leader_task_id = stored.batches[0][0].leader_task_id
     workers = await environment.tasks.list_by_parent(leader_task_id)
     assert {task.id for task in result.tasks} == {leader_task_id, workers[0].id}
+
+
+async def test_materialize_stores_the_verification_commands_on_the_planned_task() -> None:
+    """The composition root carries ``tests`` into the execution plan aggregate."""
+
+    environment = ExecutionEnvironment(["ts-a"])
+
+    result = await environment.materialize(
+        [["ts-a"]], tests=("python scripts/run_tests.py",)
+    )
+
+    assert result.plan_id is not None
+    stored = await environment.plans.get(result.plan_id)
+    assert stored is not None
+    assert stored.batches[0][0].tests == ("python scripts/run_tests.py",)
 
 
 async def test_materialize_is_idempotent_for_the_same_prefix() -> None:

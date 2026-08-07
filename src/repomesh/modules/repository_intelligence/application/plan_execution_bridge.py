@@ -321,6 +321,7 @@ class PlanExecutionBridge:
                         or f"Implement changes for {repo_name}",
                         acceptance=self._derive_task_acceptance(task_node),
                         leader_task_id=None,
+                        tests=task_node.tests,
                     )
                 )
                 _logger.info("Planned repository task for %s (batch %d)", repo_name, batch_index)

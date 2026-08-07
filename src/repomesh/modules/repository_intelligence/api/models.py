@@ -116,6 +116,8 @@ class TaskNodeView(BaseModel):
     instruction: str
     depends_on: tuple[str, ...] = ()
     parallelizable_with: tuple[str, ...] = ()
+    tests: list[str] = Field(default_factory=list)
+    """Verification commands the Worker runs; they become the Runner test commands."""
 
 
 class IntegratedPlanView(BaseModel):

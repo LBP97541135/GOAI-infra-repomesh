@@ -30,7 +30,16 @@ from repomesh.modules.repository_intelligence.application.plan_execution_bridge 
     StartedExecutionPlan,
 )
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
-from repomesh.modules.specification import BuildCodingAgentPackage, SpecificationService
+from repomesh.modules.specification import (
+    ApproveSpecificationCommand,
+    BuildCodingAgentPackage,
+    CreateSpecificationCommand,
+    PublishSpecificationContextCommand,
+    SpecificationKind,
+    SpecificationService,
+    SpecificationStatus,
+    SubmitSpecificationCommand,
+)
 from repomesh.modules.specification.ports import SpecificationStore
 from repomesh.modules.task_orchestration import (
     AdvanceExecutionPlan,
@@ -98,6 +107,7 @@ class AdvanceExecutionPlanStarter:
                         title=planned.title,
                         instruction=planned.instruction,
                         acceptance=planned.acceptance,
+                        tests=planned.tests,
                     )
                     for planned in batch
                 )
@@ -122,6 +132,97 @@ class AdvanceExecutionPlanStarter:
                 for child in await self._tasks.list_by_parent(leader.id):
                     assigned.append(child.to_view())
         return tuple(assigned)
+
+
+class ApprovedTaskSpecificationAuthor:
+    """Create, approve, freeze and publish the Task Spec a Worker task executes under.
+
+    ``start_assigned_task`` refuses to run a Worker task without an approved
+    (or frozen) ``SpecificationKind.TASK`` bound to that task, and it reads the
+    Runner's test commands out of the spec.  Producing that permit needs the
+    specification service, which *task_orchestration* may not import, so the
+    composition root adapts it to the published ``TaskSpecificationAuthor`` port.
+
+    The four steps mirror the manual ritual proven by
+    ``scripts/run-live-worker-e2e.py``: create → submit → approve(freeze) →
+    publish.  Steps the stored specification already went through are skipped,
+    and a task that already holds a permit is left alone entirely -- a second
+    approved spec for the same task would make ``start_assigned_task`` fail with
+    "multiple approved task specifications found", so the guard is keyed on the
+    task rather than only on the caller's idempotency key.
+    """
+
+    def __init__(
+        self, specifications: SpecificationService, stored: SpecificationStore
+    ) -> None:
+        self._specifications = specifications
+        self._stored = stored
+
+    async def ensure_approved(
+        self,
+        task: TaskView,
+        *,
+        allowed_paths: tuple[str, ...],
+        tests: tuple[str, ...],
+        idempotency_key: str,
+    ) -> None:
+        if await self._has_permit(task):
+            return
+        # The repository leader that assigned the Worker task owns its spec.
+        owner_agent_id = task.assigned_by_agent_id
+        current = await self._specifications.create(
+            CreateSpecificationCommand(
+                organization_id=task.organization_id,
+                project_id=task.project_id,
+                repository_id=task.repository_id,
+                task_id=task.id,
+                kind=SpecificationKind.TASK,
+                title=self._title(task),
+                created_by_agent_id=owner_agent_id,
+                goal=task.instruction,
+                acceptance=task.acceptance,
+                tests=self._clean(tests),
+                allowed_paths=self._clean(allowed_paths),
+            ),
+            idempotency_key=idempotency_key,
+        )
+        if current.status is SpecificationStatus.DRAFT:
+            current = await self._specifications.submit(
+                SubmitSpecificationCommand(current.id, owner_agent_id, current.revision)
+            )
+        if current.status is SpecificationStatus.IN_REVIEW:
+            current = await self._specifications.approve(
+                ApproveSpecificationCommand(
+                    current.id, owner_agent_id, current.revision, freeze=True
+                )
+            )
+            # Publishing is the last step, and it has no idempotency key of its
+            # own: only publish the approval this call produced.
+            await self._specifications.publish_to_context(
+                PublishSpecificationContextCommand(current.id, owner_agent_id)
+            )
+
+    async def _has_permit(self, task: TaskView) -> bool:
+        """Report whether *task* already has the permit the Runner path requires."""
+
+        return any(
+            specification.kind is SpecificationKind.TASK
+            and specification.task_id == task.id
+            and specification.repository_id == task.repository_id
+            and specification.status
+            in {SpecificationStatus.APPROVED, SpecificationStatus.FROZEN}
+            for specification in await self._stored.list_by_project(task.project_id)
+        )
+
+    @staticmethod
+    def _title(task: TaskView) -> str:
+        return f"Task spec: {task.title}".strip()[:500]
+
+    @staticmethod
+    def _clean(values: Sequence[str]) -> tuple[str, ...]:
+        """Drop blanks: specification content rejects empty list entries."""
+
+        return tuple(value.strip() for value in values if value.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +334,9 @@ class ApplicationContainer:
             self.topology_reader(),
             self.task_store,
             assigner,
+            spec_author=ApprovedTaskSpecificationAuthor(
+                self.specification_service(), self.specification_store
+            ),
         )
         return AdvanceExecutionPlan(
             self.execution_plan_store(),

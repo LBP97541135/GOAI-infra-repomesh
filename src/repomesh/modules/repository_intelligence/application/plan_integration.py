@@ -55,6 +55,13 @@ class TaskNode:
     instruction: str
     depends_on: tuple[str, ...] = ()
     parallelizable_with: tuple[str, ...] = ()
+    tests: tuple[str, ...] = ()
+    """Verification commands the Worker must run before reporting this task.
+
+    They travel down to the Task Specification the Worker executes under and
+    become the Runner's ``test_commands``.  The integration LLM does not emit
+    them yet, so the caller supplies them when materialising a plan.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +93,7 @@ class IntegratedPlan:
                     "instruction": t.instruction,
                     "depends_on": list(t.depends_on),
                     "parallelizable_with": list(t.parallelizable_with),
+                    "tests": list(t.tests),
                 }
                 for t in self.task_dag
             ],

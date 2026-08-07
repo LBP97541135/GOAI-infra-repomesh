@@ -7,11 +7,13 @@ One chain test wires the real components of the loop together:
 → ``AdvanceExecutionPlan.on_task_terminal`` → next batch.
 
 Only the outside world is faked: the agent directory, the project topology, the
-repository catalog, the specification service and Matrix chat delivery.  Task and
-execution-plan state lives in a real SQLite-backed store, and the Runner events
-travel through the real gateway store, so the seam this workstream exists to
-prove -- a Runner result advancing the plan without any further manual call --
-is exercised against real objects.
+repository catalog, the project-level specification creation the bridge performs
+and Matrix chat delivery.  Task and execution-plan state lives in a real
+SQLite-backed store, the Task Specifications are written by the real
+``SpecificationService`` through the container's ``ApprovedTaskSpecificationAuthor``,
+and the Runner events travel through the real gateway store, so the seam this
+workstream exists to prove -- a Runner result advancing the plan without any
+further manual call -- is exercised against real objects.
 """
 
 from __future__ import annotations
@@ -24,7 +26,10 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 
-from repomesh.bootstrap.container import AdvanceExecutionPlanStarter
+from repomesh.bootstrap.container import (
+    AdvanceExecutionPlanStarter,
+    ApprovedTaskSpecificationAuthor,
+)
 from repomesh.integrations.runner.gateway import RunnerControlGateway
 from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalStatus,
@@ -37,6 +42,9 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationMessageView,
     SendCollaborationMessageCommand,
 )
+from repomesh.modules.context.application import ContextPublicationGateway
+from repomesh.modules.context.infrastructure import PostgresContextStore
+from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTeamRuntimeStatus,
@@ -52,12 +60,17 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     TaskNode,
 )
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.specification import (
+    PostgresSpecificationStore,
+    SpecificationKind,
+    SpecificationService,
+)
 from repomesh.modules.specification.contracts import (
     CreateSpecificationCommand,
     SpecificationVersionView,
     SpecificationView,
 )
-from repomesh.modules.specification.domain import SpecificationStatus
+from repomesh.modules.specification.domain import Specification, SpecificationStatus
 from repomesh.modules.task_orchestration.application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
@@ -86,6 +99,7 @@ from repomesh_runner.contracts import (
 
 CONTENT_HASH = "sha256:" + "a" * 64
 REPOSITORY_NAMES = ("repo-a", "repo-b")
+TEST_COMMANDS = ("python scripts/run_tests.py",)
 
 # ---------------------------------------------------------------------------
 # Fakes for everything outside the loop under test
@@ -301,8 +315,22 @@ class LoopEnvironment:
             self.publisher,
         )
         self.states = TaskExecutionState(self.directory, self.tasks)
+        self.specification_store = PostgresSpecificationStore(database)
+        self.specification_service = SpecificationService(
+            self.directory,
+            self.topologies,
+            self.specification_store,
+            ContextPublicationGateway(PostgresContextStore(database)),
+            PolicyAuthorizationGateway(),
+        )
         self.decomposer = DecomposeRepositoryTask(
-            self.directory, self.topologies, self.tasks, self.orchestrator
+            self.directory,
+            self.topologies,
+            self.tasks,
+            self.orchestrator,
+            spec_author=ApprovedTaskSpecificationAuthor(
+                self.specification_service, self.specification_store
+            ),
         )
         self.advancer = AdvanceExecutionPlan(
             self.plans, self.tasks, self.orchestrator, self.decomposer
@@ -328,11 +356,16 @@ class LoopEnvironment:
             engineering_spec="Deliver the approved cross-repository scope.",
             contracts=[],
             task_dag=[
-                TaskNode(repository="repo-a", instruction="Publish the new pricing endpoint."),
+                TaskNode(
+                    repository="repo-a",
+                    instruction="Publish the new pricing endpoint.",
+                    tests=TEST_COMMANDS,
+                ),
                 TaskNode(
                     repository="repo-b",
                     instruction="Consume the new pricing endpoint.",
                     depends_on=("repo-a",),
+                    tests=TEST_COMMANDS,
                 ),
             ],
             execution_batches=[["repo-a"], ["repo-b"]],
@@ -363,6 +396,19 @@ class LoopEnvironment:
         children = await self.tasks.list_by_parent(leader_task_id)
         assert len(children) == 1
         return children[0]
+
+    async def task_specification(self, task_id: UUID) -> Specification:
+        """The execution permit ``start_assigned_task`` looks up for a Worker task."""
+
+        stored = await self.specification_store.list_by_project(self.project_id)
+        bound = [
+            specification
+            for specification in stored
+            if specification.kind is SpecificationKind.TASK
+            and specification.task_id == task_id
+        ]
+        assert len(bound) == 1
+        return bound[0]
 
     async def report_runner_result(
         self, worker_task: Task, *, event_type: str, summary: str
@@ -514,6 +560,18 @@ async def test_runner_results_drive_the_plan_from_the_first_batch_to_completion(
         assert first_worker.status is TaskStatus.ASSIGNED
         assert await _repository_tasks(loop, loop.repository_ids[1]) == ()
 
+        # --- the Worker task already carries its execution permit -------
+        # Without this the Worker's start_assigned_task call fails with
+        # SpecificationNotFound, which is exactly what live verification hit.
+        first_specification = await loop.task_specification(first_worker.id)
+        assert first_specification.status is SpecificationStatus.FROZEN
+        assert first_specification.repository_id == loop.repository_ids[0]
+        assert first_specification.owner_agent_id == loop.leader_ids[0]
+        content = first_specification.current_version.content
+        assert content.goal == first_worker.instruction
+        assert content.tests == TEST_COMMANDS
+        assert content.allowed_paths == ("src/**",)
+
         # --- the Runner reports repo-a, and nothing else is called ------
         await loop.report_runner_result(
             first_worker, event_type="runner.completed", summary="pricing endpoint published"
@@ -539,6 +597,13 @@ async def test_runner_results_drive_the_plan_from_the_first_batch_to_completion(
         second_worker = await loop.worker_task(second_leader_task_id)
         assert second_worker.assignee_agent_id == loop.worker_ids[1]
         assert second_worker.status is TaskStatus.ASSIGNED
+
+        # --- and the advanced batch produced its permit too -------------
+        second_specification = await loop.task_specification(second_worker.id)
+        assert second_specification.status is SpecificationStatus.FROZEN
+        assert second_specification.repository_id == loop.repository_ids[1]
+        assert second_specification.owner_agent_id == loop.leader_ids[1]
+        assert second_specification.current_version.content.tests == TEST_COMMANDS
 
         # --- finishing the last batch completes the plan ----------------
         await loop.report_runner_result(
@@ -633,6 +698,10 @@ async def test_decomposing_a_live_leader_task_again_reuses_the_worker_task(
     assert [task.id for task in replayed] == [worker_task.id]
     assert len(await loop.tasks.list_by_parent(leader_task_id)) == 1
     assert len(loop.publisher.published) == published_before
+    # Healing the permit on replay must not mint a second Task Specification.
+    assert (await loop.task_specification(worker_task.id)).status is (
+        SpecificationStatus.FROZEN
+    )
 
 
 async def _repository_tasks(loop: LoopEnvironment, repository_id: UUID) -> tuple[Task, ...]:
