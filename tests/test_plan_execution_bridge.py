@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID, uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from repomesh.bootstrap.container import AdvanceExecutionPlanStarter  # noqa: E402
+from repomesh.modules.agent_directory.contracts import (  # noqa: E402
+    AgentPrincipalStatus,
+    AgentPrincipalView,
+    AgentRole,
+)
 from repomesh.modules.project.contracts import (  # noqa: E402
     ProjectAgentTopologyView,
     ProjectTeamRuntimeStatus,
@@ -16,6 +23,7 @@ from repomesh.modules.project.contracts import (  # noqa: E402
 from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (  # noqa: E402
     MaterializationResult,
     PlanExecutionBridge,
+    StartedExecutionPlan,
 )
 from repomesh.modules.repository_intelligence.application.plan_integration import (  # noqa: E402
     ContractSpec,
@@ -29,9 +37,22 @@ from repomesh.modules.specification.contracts import (  # noqa: E402
     SpecificationView,
 )
 from repomesh.modules.specification.domain import SpecificationStatus  # noqa: E402
+from repomesh.modules.task_orchestration.application import (  # noqa: E402
+    AdvanceExecutionPlan,
+    DecomposeRepositoryTask,
+)
 from repomesh.modules.task_orchestration.contracts import (  # noqa: E402
+    AssignTaskCommand,
+    ExecutionPlanStatus,
+    ExecutionPlanView,
+    PlannedRepositoryTaskView,
     TaskStatus,
     TaskView,
+)
+from repomesh.modules.task_orchestration.domain import Task  # noqa: E402
+from repomesh.modules.task_orchestration.infrastructure import (  # noqa: E402
+    InMemoryExecutionPlanStore,
+    InMemoryTaskStore,
 )
 
 # ---------------------------------------------------------------------------
@@ -72,33 +93,34 @@ class StubSpecService:
         return _make_spec_view(command, self._counter)
 
 
-def _make_task_view(cmd, counter: int) -> TaskView:
-    return TaskView(
-        id=UUID(int=counter),
-        organization_id=cmd.organization_id,
-        project_id=cmd.project_id,
-        repository_id=cmd.repository_id,
-        parent_task_id=None,
-        assigned_by_agent_id=cmd.assigned_by_agent_id,
-        assignee_agent_id=cmd.assignee_agent_id,
-        title=cmd.title,
-        instruction=cmd.instruction,
-        acceptance=cmd.acceptance,
-        status=TaskStatus.ASSIGNED,
-        result_summary=None,
-        version=1,
-    )
+class StubPlanStarter:
+    """Record what the bridge would hand to task_orchestration."""
 
-
-class StubTaskOrchestrator:
     def __init__(self) -> None:
         self.calls: list = []
-        self._counter = 1000
 
-    async def assign(self, command, *, idempotency_key):
-        self._counter += 1
-        self.calls.append((command, idempotency_key))
-        return _make_task_view(command, self._counter)
+    async def start_plan(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        created_by_agent_id: UUID,
+        batches: Sequence[Sequence[PlannedRepositoryTaskView]],
+        idempotency_key: str,
+    ) -> StartedExecutionPlan:
+        self.calls.append((organization_id, project_id, created_by_agent_id, batches,
+                           idempotency_key))
+        return StartedExecutionPlan(
+            plan=ExecutionPlanView(
+                id=UUID(int=7777),
+                organization_id=organization_id,
+                project_id=project_id,
+                status=ExecutionPlanStatus.IN_PROGRESS,
+                current_batch_index=0,
+                batches=tuple(tuple(batch) for batch in batches),
+            ),
+            tasks=(),
+        )
 
 
 class StubTopologyReader:
@@ -153,13 +175,14 @@ def _make_topology(
 def _make_plan(
     repos: list[str],
     contracts: list[ContractSpec] | None = None,
+    batches: list[list[str]] | None = None,
 ) -> IntegratedPlan:
     dag = [TaskNode(repository=r, instruction=f"change {r}") for r in repos]
     return IntegratedPlan(
         engineering_spec="Test engineering spec",
         contracts=contracts or [],
         task_dag=dag,
-        execution_batches=[repos],
+        execution_batches=batches if batches is not None else [repos],
     )
 
 
@@ -187,10 +210,10 @@ class TestPlanExecutionBridge:
 
     async def test_creates_engineering_spec(self):
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = _make_plan(["ts-order-service"])
 
         await bridge.materialize(
@@ -208,10 +231,10 @@ class TestPlanExecutionBridge:
 
     async def test_creates_contract_specs(self):
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = _make_plan(
             ["ts-a", "ts-b"],
             contracts=[
@@ -239,13 +262,13 @@ class TestPlanExecutionBridge:
         assert "ts-a" in contract_cmd.title
         assert "ts-b" in contract_cmd.title
 
-    async def test_task_assignment_with_name_to_uuid_mapping(self):
-        """Repo name resolves to UUID via catalog + topology → Task created."""
+    async def test_planned_task_with_name_to_uuid_mapping(self):
+        """Repo name resolves to UUID via catalog + topology → planned task."""
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = _make_plan(["ts-order-service"])
 
         result = await bridge.materialize(
@@ -256,19 +279,28 @@ class TestPlanExecutionBridge:
             idempotency_prefix="test-004",
         )
 
-        assert len(tasks.calls) == 1
-        cmd = tasks.calls[0][0]
-        assert cmd.repository_id == self.repo_id
-        assert cmd.assignee_agent_id == self.team_leader_id
+        assert len(plans.calls) == 1
+        org_id, project_id, created_by, batches, key = plans.calls[0]
+        assert org_id == self.org_id
+        assert project_id == self.project_id
+        assert created_by == self.leader_id
+        assert key == "test-004-plan"
+        assert len(batches) == 1
+        planned = batches[0][0]
+        assert planned.repository_id == self.repo_id
+        assert planned.title == "Implement changes for ts-order-service"
+        assert planned.instruction == "change ts-order-service"
+        assert planned.leader_task_id is None
         assert len(result.skipped_repos) == 0
+        assert result.plan_id == UUID(int=7777)
 
     async def test_task_skipped_when_repo_not_in_catalog(self):
         """Repo name not in catalog → skipped."""
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = _make_plan(["ts-unknown-service"])
 
         result = await bridge.materialize(
@@ -280,13 +312,14 @@ class TestPlanExecutionBridge:
         )
 
         assert len(specs.calls) == 1
-        assert len(tasks.calls) == 0
+        assert len(plans.calls) == 0
         assert "ts-unknown-service" in result.skipped_repos
+        assert result.plan_id is None
 
     async def test_task_skipped_when_repo_not_in_topology(self):
         """Repo in catalog but not in topology → skipped."""
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
         extra_repo_id = uuid4()
@@ -295,7 +328,7 @@ class TestPlanExecutionBridge:
             "ts-extra-service": extra_repo_id,  # in catalog but not in topology
         })
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, catalog_with_extra)
+        bridge = PlanExecutionBridge(specs, plans, topo, catalog_with_extra)
         plan = _make_plan(["ts-extra-service"])
 
         result = await bridge.materialize(
@@ -306,15 +339,61 @@ class TestPlanExecutionBridge:
             idempotency_prefix="test-005",
         )
 
-        assert len(tasks.calls) == 0
+        assert len(plans.calls) == 0
         assert "ts-extra-service" in result.skipped_repos
+
+    async def test_unexecutable_repo_is_filtered_out_of_the_plan(self):
+        """A batch keeps only the repositories the platform can execute."""
+        specs = StubSpecService()
+        plans = StubPlanStarter()
+        topo = StubTopologyReader(self.topology)
+
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
+        plan = _make_plan(
+            ["ts-order-service", "ts-unknown-service"],
+            batches=[["ts-order-service", "ts-unknown-service"]],
+        )
+
+        result = await bridge.materialize(
+            plan=plan,
+            requirement="test",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="test-filter",
+        )
+
+        batches = plans.calls[0][3]
+        assert len(batches) == 1
+        assert [planned.repository_id for planned in batches[0]] == [self.repo_id]
+        assert result.skipped_repos == ["ts-unknown-service"]
+
+    async def test_skip_mode_without_task_orchestrator(self):
+        """No execution plane configured → specs only, every repo skipped."""
+        specs = StubSpecService()
+        topo = StubTopologyReader(self.topology)
+
+        bridge = PlanExecutionBridge(specs, None, topo, self.catalog)
+        plan = _make_plan(["ts-order-service"])
+
+        result = await bridge.materialize(
+            plan=plan,
+            requirement="test",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="test-skip",
+        )
+
+        assert len(specs.calls) == 1
+        assert result.skipped_repos == ["ts-order-service"]
+        assert result.plan_id is None
+        assert result.tasks == []
 
     async def test_idempotency_keys_unique(self):
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = _make_plan(
             ["ts-a", "ts-b"],
             contracts=[
@@ -335,10 +414,10 @@ class TestPlanExecutionBridge:
 
     async def test_empty_plan(self):
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = IntegratedPlan(
             engineering_spec="",
             contracts=[],
@@ -346,7 +425,7 @@ class TestPlanExecutionBridge:
             execution_batches=[],
         )
 
-        await bridge.materialize(
+        result = await bridge.materialize(
             plan=plan,
             requirement="empty",
             project_id=self.project_id,
@@ -356,17 +435,18 @@ class TestPlanExecutionBridge:
 
         # Engineering spec still created (even if empty)
         assert len(specs.calls) == 1
-        assert len(tasks.calls) == 0
+        assert len(plans.calls) == 0
+        assert result.plan_id is None
 
     async def test_topology_not_found_raises(self):
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
 
         class NullTopology:
             async def get_view(self, project_id):
                 return None
 
-        bridge = PlanExecutionBridge(specs, tasks, NullTopology(), self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, NullTopology(), self.catalog)
         plan = _make_plan(["ts-a"])
 
         try:
@@ -383,10 +463,10 @@ class TestPlanExecutionBridge:
 
     async def test_materialization_result_structure(self):
         specs = StubSpecService()
-        tasks = StubTaskOrchestrator()
+        plans = StubPlanStarter()
         topo = StubTopologyReader(self.topology)
 
-        bridge = PlanExecutionBridge(specs, tasks, topo, self.catalog)
+        bridge = PlanExecutionBridge(specs, plans, topo, self.catalog)
         plan = _make_plan(["ts-order-service"])
 
         result = await bridge.materialize(
@@ -402,3 +482,219 @@ class TestPlanExecutionBridge:
         assert isinstance(result.contract_specs, list)
         assert isinstance(result.tasks, list)
         assert isinstance(result.skipped_repos, list)
+        assert result.plan_id is not None
+
+
+# ---------------------------------------------------------------------------
+# Advancer-backed path (real task_orchestration application services)
+# ---------------------------------------------------------------------------
+
+
+class FakeAgentDirectory:
+    def __init__(self, principals: tuple[AgentPrincipalView, ...]) -> None:
+        self._principals = {principal.id: principal for principal in principals}
+
+    async def get_view(self, agent_id: UUID) -> AgentPrincipalView | None:
+        return self._principals.get(agent_id)
+
+
+class RecordingAssigner:
+    """Persist assignments like TaskOrchestrator does, without chat delivery."""
+
+    def __init__(self, tasks: InMemoryTaskStore) -> None:
+        self._tasks = tasks
+        self.commands: list[tuple[AssignTaskCommand, str]] = []
+
+    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
+        self.commands.append((command, idempotency_key))
+        if existing := await self._tasks.get_by_idempotency_key(idempotency_key):
+            return existing[0].to_view()
+        task = Task(
+            organization_id=command.organization_id,
+            project_id=command.project_id,
+            repository_id=command.repository_id,
+            parent_task_id=command.parent_task_id,
+            assigned_by_agent_id=command.assigned_by_agent_id,
+            assignee_agent_id=command.assignee_agent_id,
+            title=command.title,
+            instruction=command.instruction,
+            acceptance=command.acceptance,
+        )
+        await self._tasks.add(
+            task, idempotency_key=idempotency_key, request_fingerprint="sha256:test"
+        )
+        return task.to_view()
+
+
+class ExecutionEnvironment:
+    """Bridge wired to the real execution plan services through in-memory stores."""
+
+    def __init__(self, repository_names: list[str]) -> None:
+        self.organization_id = uuid4()
+        self.project_id = uuid4()
+        self.organization_leader_id = uuid4()
+        self.repository_names = repository_names
+        self.repository_ids: list[UUID] = []
+        self.leader_ids: list[UUID] = []
+        self.worker_ids: list[UUID] = []
+        principals = [
+            AgentPrincipalView(
+                id=self.organization_leader_id,
+                organization_id=self.organization_id,
+                role=AgentRole.ORGANIZATION_LEADER,
+                leader_agent_id=None,
+                repository_id=None,
+                responsibility_paths=(),
+                agentteams_resource_name="org-leader",
+                status=AgentPrincipalStatus.ACTIVE,
+            )
+        ]
+        teams: list[RepositoryTeamView] = []
+        for index, _name in enumerate(repository_names):
+            repository_id = uuid4()
+            leader_id = uuid4()
+            worker_id = uuid4()
+            self.repository_ids.append(repository_id)
+            self.leader_ids.append(leader_id)
+            self.worker_ids.append(worker_id)
+            principals.append(
+                AgentPrincipalView(
+                    id=leader_id,
+                    organization_id=self.organization_id,
+                    role=AgentRole.REPOSITORY_LEADER,
+                    leader_agent_id=self.organization_leader_id,
+                    repository_id=repository_id,
+                    responsibility_paths=(),
+                    agentteams_resource_name=f"repo-leader-{index}",
+                    status=AgentPrincipalStatus.ACTIVE,
+                )
+            )
+            principals.append(
+                AgentPrincipalView(
+                    id=worker_id,
+                    organization_id=self.organization_id,
+                    role=AgentRole.WORKER,
+                    leader_agent_id=leader_id,
+                    repository_id=repository_id,
+                    responsibility_paths=("src/**",),
+                    agentteams_resource_name=f"worker-{index}",
+                    status=AgentPrincipalStatus.ACTIVE,
+                )
+            )
+            teams.append(
+                RepositoryTeamView(
+                    id=uuid4(),
+                    project_id=self.project_id,
+                    repository_id=repository_id,
+                    leader_agent_id=leader_id,
+                    worker_agent_ids=(worker_id,),
+                    agentteams_team_name=f"team-{index}",
+                    runtime_status=ProjectTeamRuntimeStatus.READY,
+                    room_id=f"!team-{index}:matrix.local",
+                    leader_room_id=f"!leader-{index}:matrix.local",
+                )
+            )
+        self.topologies = StubTopologyReader(
+            ProjectAgentTopologyView(
+                id=uuid4(),
+                organization_id=self.organization_id,
+                project_id=self.project_id,
+                organization_leader_id=self.organization_leader_id,
+                repository_teams=tuple(teams),
+            )
+        )
+        self.catalog = StubCatalog(dict(zip(repository_names, self.repository_ids, strict=True)))
+        self.directory = FakeAgentDirectory(tuple(principals))
+        self.tasks = InMemoryTaskStore()
+        self.plans = InMemoryExecutionPlanStore()
+        self.assigner = RecordingAssigner(self.tasks)
+        self.advancer = AdvanceExecutionPlan(
+            self.plans,
+            self.tasks,
+            self.assigner,
+            DecomposeRepositoryTask(
+                self.directory, self.topologies, self.tasks, self.assigner
+            ),
+        )
+        self.specs = StubSpecService()
+        self.bridge = PlanExecutionBridge(
+            self.specs,
+            AdvanceExecutionPlanStarter(self.advancer, self.tasks),
+            self.topologies,
+            self.catalog,
+        )
+
+    async def materialize(
+        self, batches: list[list[str]], *, idempotency_prefix: str = "bridge"
+    ) -> MaterializationResult:
+        return await self.bridge.materialize(
+            plan=_make_plan(self.repository_names, batches=batches),
+            requirement="deliver the approved scope",
+            project_id=self.project_id,
+            leader_agent_id=self.organization_leader_id,
+            idempotency_prefix=idempotency_prefix,
+        )
+
+
+async def test_materialize_starts_a_plan_and_assigns_only_the_first_batch() -> None:
+    environment = ExecutionEnvironment(["ts-a", "ts-b"])
+
+    result = await environment.materialize([["ts-a"], ["ts-b"]])
+
+    assert result.plan_id is not None
+    stored = await environment.plans.get(result.plan_id)
+    assert stored is not None
+    assert stored.status is ExecutionPlanStatus.IN_PROGRESS
+    assert stored.current_batch_index == 0
+    leader_task_id = stored.batches[0][0].leader_task_id
+    assert leader_task_id is not None
+    # The second batch stays unassigned until the Runner reports batch 0.
+    assert stored.batches[1][0].leader_task_id is None
+    assert all(
+        command.repository_id != environment.repository_ids[1]
+        for command, _ in environment.assigner.commands
+    )
+
+
+async def test_materialize_decomposes_the_first_batch_into_worker_tasks() -> None:
+    environment = ExecutionEnvironment(["ts-a"])
+
+    result = await environment.materialize([["ts-a"]])
+
+    assert result.plan_id is not None
+    stored = await environment.plans.get(result.plan_id)
+    assert stored is not None
+    leader_task_id = stored.batches[0][0].leader_task_id
+    assert leader_task_id is not None
+    leader_task = await environment.tasks.get(leader_task_id)
+    assert leader_task is not None
+    assert leader_task.assignee_agent_id == environment.leader_ids[0]
+    assert leader_task.assigned_by_agent_id == environment.organization_leader_id
+    assert leader_task.title == "Implement changes for ts-a"
+    workers = await environment.tasks.list_by_parent(leader_task_id)
+    assert len(workers) == 1
+    assert workers[0].assignee_agent_id == environment.worker_ids[0]
+    assert workers[0].status is TaskStatus.ASSIGNED
+
+
+async def test_materialize_result_reports_the_assigned_leader_and_worker_tasks() -> None:
+    environment = ExecutionEnvironment(["ts-a"])
+
+    result = await environment.materialize([["ts-a"]])
+
+    stored = await environment.plans.get(result.plan_id)
+    assert stored is not None
+    leader_task_id = stored.batches[0][0].leader_task_id
+    workers = await environment.tasks.list_by_parent(leader_task_id)
+    assert {task.id for task in result.tasks} == {leader_task_id, workers[0].id}
+
+
+async def test_materialize_is_idempotent_for_the_same_prefix() -> None:
+    environment = ExecutionEnvironment(["ts-a"])
+
+    first = await environment.materialize([["ts-a"]], idempotency_prefix="tt-009")
+    assignments = len(environment.assigner.commands)
+    replay = await environment.materialize([["ts-a"]], idempotency_prefix="tt-009")
+
+    assert replay.plan_id == first.plan_id
+    assert len(environment.assigner.commands) == assignments

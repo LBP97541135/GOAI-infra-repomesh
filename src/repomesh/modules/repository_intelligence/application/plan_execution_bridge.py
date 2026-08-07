@@ -5,16 +5,20 @@ and materialises it into the *specification* and *task_orchestration* modules:
 
 - Engineering Spec → ``SpecificationService.create(kind=ENGINEERING)``
 - Each Contract   → ``SpecificationService.create(kind=CONTRACT)``
-- Each TaskNode   → ``TaskOrchestrator.assign()``
+- The batched task DAG → one execution plan started through
+  :class:`ExecutionPlanStarter`
 
-The bridge is intentionally **non-blocking** in MVP: all tasks are assigned
-up-front.  Batch-level wait logic (wait for batch N to finish before
-assigning batch N+1) is left for a later iteration.
+Only the first batch is assigned when the plan starts: the execution plan owns
+batch progression, so later batches are assigned by *task_orchestration* once
+the Runner reports the previous batch as terminal.  When no execution plane is
+configured (no Matrix messenger, therefore no task orchestrator) the bridge
+still creates the specifications and reports every repository as skipped.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import UUID
@@ -27,7 +31,8 @@ from repomesh.modules.specification.contracts import (
     SpecificationView,
 )
 from repomesh.modules.task_orchestration.contracts import (
-    AssignTaskCommand,
+    ExecutionPlanView,
+    PlannedRepositoryTaskView,
     TaskView,
 )
 
@@ -37,7 +42,7 @@ _logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Protocols (decouple from SpecificationService / TaskOrchestrator)
+# Protocols (decouple from SpecificationService / AdvanceExecutionPlan)
 # ---------------------------------------------------------------------------
 
 
@@ -49,12 +54,30 @@ class SpecificationCreator(Protocol):
     ) -> SpecificationView: ...
 
 
-class TaskAssigner(Protocol):
-    """Subset of TaskOrchestrator needed by the bridge."""
+@dataclass(frozen=True, slots=True)
+class StartedExecutionPlan:
+    """The execution plan created for a materialised :class:`IntegratedPlan`."""
 
-    async def assign(
-        self, command: AssignTaskCommand, *, idempotency_key: str
-    ) -> TaskView: ...
+    plan: ExecutionPlanView
+    tasks: tuple[TaskView, ...] = ()
+
+
+class ExecutionPlanStarter(Protocol):
+    """Start a batched execution plan owned by *task_orchestration*.
+
+    The composition root adapts ``AdvanceExecutionPlan`` to this port so the
+    bridge never has to build another module's aggregate.
+    """
+
+    async def start_plan(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        created_by_agent_id: UUID,
+        batches: Sequence[Sequence[PlannedRepositoryTaskView]],
+        idempotency_key: str,
+    ) -> StartedExecutionPlan: ...
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +93,7 @@ class MaterializationResult:
     contract_specs: list[SpecificationView] = field(default_factory=list)
     tasks: list[TaskView] = field(default_factory=list)
     skipped_repos: list[str] = field(default_factory=list)
+    plan_id: UUID | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +118,7 @@ class PlanExecutionBridge:
 
     Usage::
 
-        bridge = PlanExecutionBridge(specs, tasks, topologies)
+        bridge = PlanExecutionBridge(specs, plans, topologies, catalog)
         result = await bridge.materialize(
             plan=plan,
             requirement="fix notification email bug",
@@ -107,12 +131,12 @@ class PlanExecutionBridge:
     def __init__(
         self,
         specifications: SpecificationCreator,
-        tasks: TaskAssigner | None,
+        plans: ExecutionPlanStarter | None,
         topologies: ProjectTopologyReader,
         catalog: RepositoryCatalog,
     ) -> None:
         self._specs = specifications
-        self._tasks = tasks
+        self._plans = plans
         self._topologies = topologies
         self._catalog = catalog
 
@@ -200,72 +224,109 @@ class PlanExecutionBridge:
                 cs.id, contract.producer, contract.consumer,
             )
 
-        # --- 4. Assign Tasks ---------------------------------------------------
+        # --- 4. Start the execution plan --------------------------------------
         tasks_created: list[TaskView] = []
         skipped: list[str] = []
+        plan_id: UUID | None = None
 
-        if self._tasks is None:
+        if self._plans is None:
             _logger.info("TaskOrchestrator not available, skipping task assignment")
             skipped.extend(t.repository for t in plan.task_dag)
         else:
-            for batch_index, batch in enumerate(plan.execution_batches):
-                for repo_name in batch:
-                    # Find the matching task node
-                    task_node = self._find_task(plan, repo_name)
-                    if task_node is None:
-                        _logger.warning("No task node for %s, skipping", repo_name)
-                        skipped.append(repo_name)
-                        continue
-
-                    # Resolve repo name → repository_id → leader_agent_id
-                    repo_id = name_to_repo_id.get(repo_name)
-                    if repo_id is None:
-                        _logger.warning(
-                            "Repository %s not found in catalog, skipping task",
-                            repo_name,
-                        )
-                        skipped.append(repo_name)
-                        continue
-
-                    team = repo_id_to_team.get(repo_id)
-                    if team is None:
-                        _logger.warning(
-                            "Repository %s (id=%s) has no team in topology, skipping",
-                            repo_name, repo_id,
-                        )
-                        skipped.append(repo_name)
-                        continue
-
-                    task = await self._tasks.assign(
-                        AssignTaskCommand(
-                            organization_id=org_id,
-                            project_id=project_id,
-                            repository_id=repo_id,
-                            assigned_by_agent_id=leader_agent_id,
-                            assignee_agent_id=team.leader_agent_id,
-                            title=f"Implement changes for {repo_name}",
-                            instruction=task_node.instruction
-                            or f"Implement changes for {repo_name}",
-                            acceptance=self._derive_task_acceptance(task_node),
-                        ),
-                        idempotency_key=f"{idempotency_prefix}-task-{repo_name}-b{batch_index}",
-                    )
-                    tasks_created.append(task)
-                    _logger.info(
-                        "Assigned task %s for %s (batch %d)",
-                        task.id, repo_name, batch_index,
-                    )
+            batches = self._plan_batches(
+                plan,
+                name_to_repo_id=name_to_repo_id,
+                teamed_repository_ids=set(repo_id_to_team),
+                skipped=skipped,
+            )
+            if batches:
+                started = await self._plans.start_plan(
+                    organization_id=org_id,
+                    project_id=project_id,
+                    created_by_agent_id=leader_agent_id,
+                    batches=batches,
+                    idempotency_key=f"{idempotency_prefix}-plan",
+                )
+                plan_id = started.plan.id
+                tasks_created.extend(started.tasks)
+                _logger.info(
+                    "Started execution plan %s with %d batch(es), current batch %d",
+                    started.plan.id,
+                    len(started.plan.batches),
+                    started.plan.current_batch_index,
+                )
+            else:
+                _logger.info("No executable repository in the plan, nothing to schedule")
 
         return MaterializationResult(
             engineering_spec=eng_spec,
             contract_specs=contract_specs,
             tasks=tasks_created,
             skipped_repos=skipped,
+            plan_id=plan_id,
         )
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _plan_batches(
+        self,
+        plan: IntegratedPlan,
+        *,
+        name_to_repo_id: dict[str, UUID],
+        teamed_repository_ids: set[UUID],
+        skipped: list[str],
+    ) -> tuple[tuple[PlannedRepositoryTaskView, ...], ...]:
+        """Translate the batched task DAG into planned repository tasks.
+
+        Repositories the platform cannot execute (unknown to the catalog, or
+        without a repository team in the project topology) are logged and
+        collected in *skipped* instead of entering the execution plan: an
+        execution plan must only contain assignable work.
+        """
+
+        batches: list[tuple[PlannedRepositoryTaskView, ...]] = []
+        for batch_index, batch in enumerate(plan.execution_batches):
+            planned: list[PlannedRepositoryTaskView] = []
+            for repo_name in batch:
+                task_node = self._find_task(plan, repo_name)
+                if task_node is None:
+                    _logger.warning("No task node for %s, skipping", repo_name)
+                    skipped.append(repo_name)
+                    continue
+
+                repo_id = name_to_repo_id.get(repo_name)
+                if repo_id is None:
+                    _logger.warning(
+                        "Repository %s not found in catalog, skipping task", repo_name
+                    )
+                    skipped.append(repo_name)
+                    continue
+
+                if repo_id not in teamed_repository_ids:
+                    _logger.warning(
+                        "Repository %s (id=%s) has no team in topology, skipping",
+                        repo_name,
+                        repo_id,
+                    )
+                    skipped.append(repo_name)
+                    continue
+
+                planned.append(
+                    PlannedRepositoryTaskView(
+                        repository_id=repo_id,
+                        title=f"Implement changes for {repo_name}",
+                        instruction=task_node.instruction
+                        or f"Implement changes for {repo_name}",
+                        acceptance=self._derive_task_acceptance(task_node),
+                        leader_task_id=None,
+                    )
+                )
+                _logger.info("Planned repository task for %s (batch %d)", repo_name, batch_index)
+            if planned:
+                batches.append(tuple(planned))
+        return tuple(batches)
 
     @staticmethod
     def _find_task(plan: IntegratedPlan, repo_name: str) -> TaskNode | None:

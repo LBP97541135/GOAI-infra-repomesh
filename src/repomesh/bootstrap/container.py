@@ -1,6 +1,6 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import UUID
 
 from repomesh.modules.agent_directory.ports import AgentDirectory
@@ -26,11 +26,27 @@ from repomesh.modules.repository_intelligence.application import (
 )
 from repomesh.modules.repository_intelligence.application.confirmation import ConfirmationService
 from repomesh.modules.repository_intelligence.application.discovery import LLMClient
+from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (
+    StartedExecutionPlan,
+)
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification import BuildCodingAgentPackage, SpecificationService
 from repomesh.modules.specification.ports import SpecificationStore
-from repomesh.modules.task_orchestration.contracts import TaskReportGateway
-from repomesh.modules.task_orchestration.ports import TaskStore
+from repomesh.modules.task_orchestration import (
+    AdvanceExecutionPlan,
+    DecomposeRepositoryTask,
+    ExecutionPlan,
+    PlannedRepositoryTask,
+    PostgresExecutionPlanStore,
+)
+from repomesh.modules.task_orchestration.contracts import (
+    ExecutionPlanView,
+    PlannedRepositoryTaskView,
+    TaskAssignmentGateway,
+    TaskReportGateway,
+    TaskView,
+)
+from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import get_settings
@@ -48,6 +64,64 @@ class BackgroundService(Protocol):
     async def start(self) -> None: ...
 
     async def close(self) -> None: ...
+
+
+class AdvanceExecutionPlanStarter:
+    """Adapt ``AdvanceExecutionPlan`` to the plan bridge's starter port.
+
+    The bridge owns repository-intelligence concerns and may only speak the
+    published task-orchestration contracts, so building the execution plan
+    aggregate belongs to the composition root.
+    """
+
+    def __init__(self, advancer: AdvanceExecutionPlan, tasks: TaskStore) -> None:
+        self._advancer = advancer
+        self._tasks = tasks
+
+    async def start_plan(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        created_by_agent_id: UUID,
+        batches: Sequence[Sequence[PlannedRepositoryTaskView]],
+        idempotency_key: str,
+    ) -> StartedExecutionPlan:
+        plan = ExecutionPlan(
+            organization_id=organization_id,
+            project_id=project_id,
+            created_by_agent_id=created_by_agent_id,
+            batches=tuple(
+                tuple(
+                    PlannedRepositoryTask(
+                        repository_id=planned.repository_id,
+                        title=planned.title,
+                        instruction=planned.instruction,
+                        acceptance=planned.acceptance,
+                    )
+                    for planned in batch
+                )
+                for batch in batches
+            ),
+        )
+        view = await self._advancer.start(plan, idempotency_key=idempotency_key)
+        return StartedExecutionPlan(plan=view, tasks=await self._assigned_tasks(view))
+
+    async def _assigned_tasks(self, view: ExecutionPlanView) -> tuple[TaskView, ...]:
+        """Read back the leader tasks the plan assigned and their Worker children."""
+
+        assigned: list[TaskView] = []
+        for batch in view.batches:
+            for planned in batch:
+                if planned.leader_task_id is None:
+                    continue
+                leader = await self._tasks.get(planned.leader_task_id)
+                if leader is None:
+                    continue
+                assigned.append(leader.to_view())
+                for child in await self._tasks.list_by_parent(leader.id):
+                    assigned.append(child.to_view())
+        return tuple(assigned)
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,10 +210,47 @@ class ApplicationContainer:
     def plan_integration_service(self, llm_client: LLMClient) -> PlanIntegrationService:
         return PlanIntegrationService(llm_client)
 
+    def task_assignment_gateway(self) -> TaskAssignmentGateway | None:
+        """The composed TaskOrchestrator assigns and receives task reports.
+
+        It only exists once the AgentTeams messenger is configured, so every
+        execution-plane service derived from it stays optional.
+        """
+
+        if self.task_report_gateway is None:
+            return None
+        return cast(TaskAssignmentGateway, self.task_report_gateway)
+
+    def execution_plan_store(self) -> ExecutionPlanStore:
+        return PostgresExecutionPlanStore(self.database)
+
+    def execution_plan_advancer(self) -> AdvanceExecutionPlan | None:
+        assigner = self.task_assignment_gateway()
+        if assigner is None:
+            return None
+        decomposer = DecomposeRepositoryTask(
+            self.agent_directory,
+            self.topology_reader(),
+            self.task_store,
+            assigner,
+        )
+        return AdvanceExecutionPlan(
+            self.execution_plan_store(),
+            self.task_store,
+            assigner,
+            decomposer,
+        )
+
+    def execution_plan_starter(self) -> AdvanceExecutionPlanStarter | None:
+        advancer = self.execution_plan_advancer()
+        if advancer is None:
+            return None
+        return AdvanceExecutionPlanStarter(advancer, self.task_store)
+
     def plan_execution_bridge(self) -> PlanExecutionBridge:
         return PlanExecutionBridge(
             specifications=self.specification_service(),
-            tasks=None,
+            plans=self.execution_plan_starter(),
             topologies=self.topology_reader(),
             catalog=self.repository_catalog,
         )
@@ -147,7 +258,12 @@ class ApplicationContainer:
     def runner_gateway(self):
         from repomesh.integrations.runner.gateway import RunnerControlGateway
 
-        return RunnerControlGateway(PostgresRunnerGatewayStore(self.database), self.task_store)
+        advancer = self.execution_plan_advancer()
+        return RunnerControlGateway(
+            PostgresRunnerGatewayStore(self.database),
+            self.task_store,
+            advancer.on_task_terminal if advancer is not None else None,
+        )
 
     def worker_task_dispatcher(self):
         from repomesh.integrations.runner import DispatchWorkerTask, RunnerContextMaterializer
@@ -191,6 +307,7 @@ class ApplicationContainer:
             execution,
             states,
             self.task_report_gateway,
+            dispatches=PostgresRunnerGatewayStore(self.database),
         )
 
     async def close(self) -> None:

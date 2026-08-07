@@ -134,3 +134,30 @@ class MaterializeRequest(BaseModel):
     project_id: UUID
     leader_agent_id: UUID
     idempotency_prefix: str = Field(default="manual")
+
+
+class MaterializeResponse(BaseModel):
+    engineering_spec_id: UUID
+    contract_spec_ids: list[UUID] = Field(default_factory=list)
+    task_ids: list[UUID] = Field(default_factory=list)
+    skipped_repos: list[str] = Field(default_factory=list)
+    plan_id: UUID | None = None
+
+
+class WorkerTaskStatusView(BaseModel):
+    task_id: UUID
+    status: str
+
+
+class PlannedTaskStatusView(BaseModel):
+    repository_id: UUID
+    leader_task_id: UUID | None = None
+    leader_status: str | None = None
+    worker_tasks: list[WorkerTaskStatusView] = Field(default_factory=list)
+
+
+class ExecutionPlanStatusView(BaseModel):
+    plan_id: UUID
+    status: str
+    current_batch_index: int
+    batches: list[list[PlannedTaskStatusView]] = Field(default_factory=list)
