@@ -26,4 +26,111 @@ class RepositoryCreate(BaseModel):
     url: HttpUrl
     description: str = Field(default="", max_length=4000)
     topics: list[str] = Field(default_factory=list)
-    languages: list[str] = Fie
+    languages: list[str] = Field(default_factory=list)
+    auto_card: AutoCardCreate | None = None
+
+
+class RepositoryView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    url: str
+    description: str
+    topics: tuple[str, ...]
+    languages: tuple[str, ...]
+    auto_card: AutoCardView | None = None
+
+
+class DiscoveryRequest(BaseModel):
+    requirement: str = Field(min_length=3, max_length=20_000)
+    limit: int = Field(default=5, ge=1, le=50)
+    entry_point: str | None = None
+
+
+class DiscoveryCandidate(BaseModel):
+    repository_id: UUID
+    repository_name: str
+    score: float
+    matched_terms: tuple[str, ...]
+    rationale: str
+    is_entry_point: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Confirmation / Integration / Bridge models
+# ---------------------------------------------------------------------------
+
+
+class ConfirmationRequest(BaseModel):
+    requirement: str = Field(min_length=3, max_length=20_000)
+    candidate_repos: list[str] = Field(min_length=1)
+    discovery_evidence: dict[str, list] = Field(default_factory=dict)
+    limit: int = Field(default=15, ge=1, le=50)
+
+
+class RepositoryPlanView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    changed_apis: tuple[str, ...] = ()
+    changed_modules: tuple[str, ...] = ()
+    depends_on: tuple[str, ...] = ()
+    impacts: tuple[str, ...] = ()
+    risk: str = "medium"
+
+
+class ConfirmationResultView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    repository: str
+    status: str
+    confidence: float
+    reason: str
+    plan_summary: str
+    plan: RepositoryPlanView | None = None
+    missing_dependencies: list[str] = Field(default_factory=list)
+
+
+class ConfirmationSummaryView(BaseModel):
+    required: list[ConfirmationResultView]
+    maybe: list[ConfirmationResultView]
+    excluded: list[ConfirmationResultView]
+    supplemented_repos: list[str]
+    final_repos: list[str]
+
+
+class IntegrationRequest(BaseModel):
+    requirement: str = Field(min_length=3, max_length=20_000)
+    confirmation: ConfirmationSummaryView
+
+
+class ContractSpecView(BaseModel):
+    producer: str
+    consumer: str
+    interface: str
+    agreement: str
+
+
+class TaskNodeView(BaseModel):
+    repository: str
+    instruction: str
+    depends_on: tuple[str, ...] = ()
+    parallelizable_with: tuple[str, ...] = ()
+
+
+class IntegratedPlanView(BaseModel):
+    engineering_spec: str
+    contracts: list[ContractSpecView]
+    task_dag: list[TaskNodeView]
+    execution_batches: list[list[str]]
+
+
+class MaterializeRequest(BaseModel):
+    engineering_spec: str = ""
+    contracts: list[ContractSpecView] = Field(default_factory=list)
+    task_dag: list[TaskNodeView] = Field(default_factory=list)
+    execution_batches: list[list[str]] = Field(default_factory=list)
+    requirement: str = ""
+    project_id: UUID
+    leader_agent_id: UUID
+    idempotency_prefix: str = Field(default="manual")
