@@ -74,16 +74,22 @@ def traced(name: str) -> Callable[[_F], _F]:
             @functools.wraps(fn)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 tracer = trace.get_tracer("repomesh")
-                with tracer.start_as_current_span(span_name):
-                    return await fn(*args, **kwargs)
+                # Studio renders spans without an explicit status as UNSET,
+                # indistinguishable from "never finished" — mark success.
+                with tracer.start_as_current_span(span_name) as span:
+                    result = await fn(*args, **kwargs)
+                    span.set_status(trace.StatusCode.OK)
+                    return result
 
             return async_wrapper  # type: ignore[return-value]
 
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             tracer = trace.get_tracer("repomesh")
-            with tracer.start_as_current_span(span_name):
-                return fn(*args, **kwargs)
+            with tracer.start_as_current_span(span_name) as span:
+                result = fn(*args, **kwargs)
+                span.set_status(trace.StatusCode.OK)
+                return result
 
         return wrapper  # type: ignore[return-value]
 

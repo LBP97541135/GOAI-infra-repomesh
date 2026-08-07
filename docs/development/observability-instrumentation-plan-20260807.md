@@ -29,7 +29,10 @@
 
 - 能力：Projects/Runs 组织、运行时可视化、**OpenTelemetry Trace 视图**、评测统计、内置 copilot「Friday」
 - **只接收 Trace**，没有 Metrics/Logs
-- OTLP/HTTP 在 `3000`（与 Web UI 同端口），OTLP/gRPC 在 `4317`（`OTEL_GRPC_PORT`）
+- OTLP/HTTP 在 `3000`（与 Web UI 同端口），OTLP/gRPC 在 `4317`。
+  **实测修正（见 `studio-verification-20260807.md`）**：3000/4317 只是默认值，端口冲突时
+  会**静默漂移且不落盘**（本机实测漂到 3001），部署必须显式 `PORT=`；
+  `OTEL_GRPC_PORT` 是改端口不是开关，gRPC 无条件启动
 - 遵循 OpenTelemetry GenAI 语义约定 v1.38.0 + AgentScope 扩展约定
 - **不绑定 AgentScope**：任何 OTLP Exporter 都能上报
 
@@ -290,6 +293,10 @@ spec_env = {
 
 hook 配置（`~/.claude/settings.json`）烘进 worker 镜像。
 
+**实测注意**：`OTEL_RESOURCE_ATTRIBUTES` 的 Resource 属性 Studio 会入库但 **UI 完全不显示**——
+关键关联 id（run_id/task_id 等）必须**同时**写成 span 属性才能在界面上看到
+（线 B 的 `OtelDriverObserver` 已按此实现）。
+
 同时 `build_default_executor`（`src/repomesh_runner/executor.py:476`）要补 observer——
 **它现在没传 observer，`DriverExecutor` 的 observer 在生产里是彻底的 no-op**：
 
@@ -400,7 +407,7 @@ return DriverExecutor(
 |---|---|
 | L3「在项目入口加 `agentscope.init(studio_url=...)`，和狼人杀项目一样」 | **跑不通**。本项目无 AgentScope Agent，改为 LoongSuite JS / Pilot |
 | L3「LoongSuite 自动捕获 LLM 调用」 | Python 版捕获不到（`DeepSeekClient` 是裸 httpx，CLI 侧是 Node 进程）；需 JS 版 + 手写规划侧 span |
-| iframe `localhost:3000/session/{agent_name}` | Studio 信息架构是 Projects/Runs/Trace/Evaluation，未见此路由；且 `3000` 同时是 UI 与 OTLP/HTTP 端口，与 Grafana 的 3000 会撞。**接入前先跑起来抄真实 URL** |
+| iframe `localhost:3000/session/{agent_name}` | **已实测确认不存在**：SPA catch-all 静默重定向到 `/overview`（HTTP 仍 200，curl 看不出错）。且 **Studio 没有单 trace 深链**——trace 详情是纯 React state，地址栏不变，iframe 只能嵌 `/tracing` 列表页；要做「点 run 看这条 trace」必须自建前端走 tRPC `getTrace`。详见 `studio-verification-20260807.md` 第 4/5 节 |
 | L1「SQLite + FastAPI」 | 代码里是 **Postgres**（`PostgresRunnerGatewayStore`；`runtime-planes.md` 明写 PostgreSQL is the fact source） |
 | 阶段三「让 Team 更新状态」 | 流向反了。状态由 Runner 发事件 → `RunnerControlGateway._write_back()` → Postgres，Worker 全程不碰业务库 |
 
@@ -431,6 +438,8 @@ return DriverExecutor(
   接生产前必须确认配置
 - 凭据不得进入 trace：`runtime-planes.md` 已规定凭据不得序列化进 Runtime v1 消息、
   context 文件、Matrix 消息与日志，span 属性同此约束
+- **Studio 监听 `0.0.0.0`**（实测），而 trace 里含完整 prompt 与模型输出——
+  开发机需防火墙拦外部入站，不得在共享网络裸跑
 
 ---
 
