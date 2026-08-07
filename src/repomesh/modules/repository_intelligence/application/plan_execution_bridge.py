@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import UUID
 
+from opentelemetry import trace
+
 from repomesh.modules.project.contracts import ProjectTopologyReader
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification.contracts import (
@@ -35,6 +37,7 @@ from repomesh.modules.task_orchestration.contracts import (
     PlannedRepositoryTaskView,
     TaskView,
 )
+from repomesh.telemetry import SpanAttributes, traced
 
 from .plan_integration import IntegratedPlan, TaskNode
 
@@ -140,6 +143,7 @@ class PlanExecutionBridge:
         self._topologies = topologies
         self._catalog = catalog
 
+    @traced("planning.materialize")
     async def materialize(
         self,
         plan: IntegratedPlan,
@@ -258,6 +262,11 @@ class PlanExecutionBridge:
             else:
                 _logger.info("No executable repository in the plan, nothing to schedule")
 
+        span = trace.get_current_span()
+        span.set_attribute(SpanAttributes.PROJECT_ID, str(project_id))
+        span.set_attribute("repomesh.materialize.contract_spec_count", len(contract_specs))
+        span.set_attribute("repomesh.materialize.task_count", len(tasks_created))
+        span.set_attribute("repomesh.materialize.skipped_repos", list(skipped))
         return MaterializationResult(
             engineering_spec=eng_spec,
             contract_specs=contract_specs,

@@ -239,6 +239,8 @@ class ApplicationContainer:
     context_store: ContextStore
     specification_store: SpecificationStore
     mock_coding_agent_factory: Callable[[str], CodingAgent]
+    # Planning LLM adapter; None selects the deterministic keyword fallback paths.
+    llm_client: LLMClient | None = None
     agent_team_control_plane: AgentTeamControlPlane | None = None
     agent_team_messenger: AgentTeamMessenger | None = None
     agentteams_probe: ReadinessProbe | None = None

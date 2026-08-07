@@ -1,4 +1,3 @@
-import os
 from collections.abc import Mapping, Sequence
 from typing import Annotated
 from uuid import UUID
@@ -10,7 +9,6 @@ from repomesh.modules.repository_intelligence.application import (
     PlanIntegrationService,
     RegisterRepository,
     RepositoryDiscoveryService,
-    make_llm_client,
 )
 from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
@@ -94,13 +92,9 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
 
 @router.post("/discovery", response_model=list[DiscoveryCandidate])
 async def discover_repositories(
-    body: DiscoveryRequest, catalog: CatalogDependency
+    body: DiscoveryRequest, catalog: CatalogDependency, request: Request
 ) -> list[DiscoveryCandidate]:
-    client = make_llm_client(
-        os.environ.get("DEEPSEEK_API_KEY"),
-        base_url=os.environ.get("REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        model=os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat"),
-    )
+    client = request.app.state.container.llm_client
     service = RepositoryDiscoveryService(catalog, llm_client=client)
     evidence = await service.discover(
         body.requirement,
@@ -122,16 +116,6 @@ async def discover_repositories(
     ]
 
 
-def _make_llm_client():  # noqa: ANN202
-    return make_llm_client(
-        os.environ.get("DEEPSEEK_API_KEY"),
-        base_url=os.environ.get(
-            "REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
-        ),
-        model=os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat"),
-    )
-
-
 def _confirmation_summary_to_view(
     summary: ConfirmationSummary,
 ) -> ConfirmationSummaryView:
@@ -150,7 +134,7 @@ async def confirm_repositories(
 ) -> ConfirmationSummaryView:
     """Phase 2: Team Managers confirm involvement and produce plans."""
     catalog = request.app.state.container.repository_catalog
-    llm = _make_llm_client()
+    llm = request.app.state.container.llm_client
 
     profiles = {p.name: p for p in await catalog.list()}
 
@@ -175,9 +159,9 @@ async def confirm_repositories(
 
 
 @router.post("/integration", response_model=IntegratedPlanView)
-async def integrate_plan(body: IntegrationRequest) -> IntegratedPlanView:
+async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
     """Phase 3: Leader integrates per-repo plans into a project-level plan."""
-    llm = _make_llm_client()
+    llm = request.app.state.container.llm_client
 
     def _to_result(v: ConfirmationResultView) -> ConfirmationResult:  # noqa: ANN202
         plan = None

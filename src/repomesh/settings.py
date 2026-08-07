@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +34,14 @@ class Settings(BaseSettings):
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.
     otlp_endpoint: str | None = None
     otlp_service_name: str = "repomesh-api"
+    # Planning LLM. The bare DEEPSEEK_API_KEY alias predates these settings and is
+    # kept so existing .env files keep working.
+    deepseek_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "REPOMESH_DEEPSEEK_API_KEY"),
+    )
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
+    deepseek_model: str = "deepseek-chat"
 
 
 @lru_cache

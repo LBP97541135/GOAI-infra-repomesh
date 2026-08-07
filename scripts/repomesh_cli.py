@@ -45,12 +45,12 @@ _SRC_DIR = _PROJECT_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from repomesh.integrations.llm import make_llm_client  # noqa: E402
 from repomesh.modules.repository_intelligence.application import (  # noqa: E402
     RepositoryDiscoveryService,
     RequirementAnalyzer,
     extract_entry_repo_name,
     load_requirement,
-    make_llm_client,
     scan_org,
     scan_repo,
 )

@@ -20,12 +20,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from opentelemetry import trace
+
 from repomesh.modules.repository_intelligence.domain import (
     AutoCard,
     RepositoryProfile,
 )
+from repomesh.telemetry import traced
 
 _logger = logging.getLogger(__name__)
+
+_tracer = trace.get_tracer("repomesh.planning")
 
 
 def _format_autocard(card: AutoCard) -> str:
@@ -282,6 +287,7 @@ class ConfirmationService:
         self._llm = llm_client
         self._profiles = profiles_by_name
 
+    @traced("planning.confirmation")
     def confirm(
         self,
         candidate_names: list[str],
@@ -325,8 +331,14 @@ class ConfirmationService:
                 discovery_rationale=rationale,
                 discovery_confidence=conf,
             )
-            raw = self._llm.chat(messages, temperature=0.0)
-            result = _parse_confirmation(raw, name)
+            with _tracer.start_as_current_span(
+                f"confirm {name}",
+                attributes={"repomesh.repository_name": name},
+            ) as repo_span:
+                raw = self._llm.chat(messages, temperature=0.0)
+                result = _parse_confirmation(raw, name)
+                repo_span.set_attribute("repomesh.confirmation.status", result.status)
+                repo_span.set_attribute("repomesh.confirmation.confidence", result.confidence)
             results.append(result)
 
             _logger.info(

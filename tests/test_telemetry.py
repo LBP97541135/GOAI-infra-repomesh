@@ -1,9 +1,8 @@
 """Tests for the shared telemetry bootstrap (step 0 of the observability plan).
 
-The global TracerProvider can only be installed once per process, so the enable
-test lives at the end of this file and installs it for good. No other test in the
-suite reads the provider, and the no-op tests above run against the untouched
-proxy provider first (pytest executes tests in file order).
+The global TracerProvider can only be installed once per process, so these tests
+never assert that tracing is *off* — another test file may already have installed
+a provider. They only assert the return values and the install-once semantics.
 """
 
 from repomesh_runner.telemetry import SpanAttributes, setup_tracing, tracing_enabled
@@ -29,10 +28,11 @@ def test_attribute_names_are_a_frozen_contract() -> None:
         assert getattr(SpanAttributes, constant) == value
 
 
-def test_setup_tracing_without_endpoint_is_a_noop() -> None:
+def test_setup_tracing_without_endpoint_reports_disabled() -> None:
+    # No global-state assertion here: whether tracing is currently enabled
+    # depends on which test files ran before this one.
     assert setup_tracing(None, service_name="repomesh-test") is False
     assert setup_tracing("", service_name="repomesh-test") is False
-    assert tracing_enabled() is False
 
 
 def test_setup_tracing_installs_the_sdk_provider_exactly_once() -> None:

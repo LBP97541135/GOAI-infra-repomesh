@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
+from opentelemetry import trace
 
 from repomesh.modules.repository_intelligence.domain import (
     DiscoveryEvidence,
@@ -16,51 +16,13 @@ from repomesh.modules.repository_intelligence.domain import (
     tokenize,
 )
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
+from repomesh.telemetry import traced
 
 _logger = logging.getLogger(__name__)
 
 
 class LLMClient(Protocol):
     def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str: ...
-
-
-@dataclass(frozen=True, slots=True)
-class DeepSeekConfig:
-    api_key: str
-    base_url: str = "https://api.deepseek.com/v1"
-    model: str = "deepseek-chat"
-    timeout_seconds: float = 60.0
-
-
-class DeepSeekClient:
-    def __init__(self, config: DeepSeekConfig) -> None:
-        self._config = config
-
-    def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str:
-        response = httpx.post(
-            f"{self._config.base_url.rstrip('/')}/chat/completions",
-            headers={"Authorization": f"Bearer {self._config.api_key}"},
-            json={
-                "model": self._config.model,
-                "messages": messages,
-                "temperature": temperature,
-            },
-            timeout=self._config.timeout_seconds,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return str(payload["choices"][0]["message"]["content"])
-
-
-def make_llm_client(
-    api_key: str | None,
-    *,
-    base_url: str = "https://api.deepseek.com/v1",
-    model: str = "deepseek-chat",
-) -> LLMClient | None:
-    if not api_key:
-        return None
-    return DeepSeekClient(DeepSeekConfig(api_key=api_key, base_url=base_url, model=model))
 
 
 class RepositoryDiscoveryService:
@@ -73,6 +35,7 @@ class RepositoryDiscoveryService:
         self._catalog = catalog
         self._llm = llm_client
 
+    @traced("planning.discovery")
     async def discover(
         self,
         requirement: str,
@@ -84,8 +47,12 @@ class RepositoryDiscoveryService:
         profiles = await self._catalog.list()
         by_name = {profile.name: profile for profile in profiles}
         results = self._discover_with_llm(requirement, profiles) if self._llm else []
+        llm_used = bool(results)
         if not results:
             results = self._discover_with_keywords(requirement, profiles, keywords or [])
+        span = trace.get_current_span()
+        span.set_attribute("repomesh.discovery.llm_used", llm_used)
+        span.set_attribute("repomesh.discovery.candidate_count", len(results))
 
         evidence_by_name = {
             by_id.name: evidence

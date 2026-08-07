@@ -14,13 +14,21 @@ installed, ``opentelemetry.trace`` keeps its no-op proxy provider, and every
 therefore never need their own enabled/disabled check.
 """
 
+import functools
+import inspect
 import logging
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+from opentelemetry import trace
 
 _logger = logging.getLogger(__name__)
 
-__all__ = ["SpanAttributes", "setup_tracing", "tracing_enabled"]
+__all__ = ["SpanAttributes", "setup_tracing", "traced", "tracing_enabled"]
 
 _TRACES_PATH = "/v1/traces"
+
+_F = TypeVar("_F", bound=Callable[..., Any])
 
 
 class SpanAttributes:
@@ -45,10 +53,41 @@ class SpanAttributes:
 def tracing_enabled() -> bool:
     """True when a real SDK TracerProvider is installed (``setup_tracing`` ran)."""
 
-    from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
 
     return isinstance(trace.get_tracer_provider(), TracerProvider)
+
+
+def traced(name: str) -> Callable[[_F], _F]:
+    """Wrap a sync or async callable in a span named ``name``.
+
+    Keeps business methods down to one annotation line; result attributes are
+    added inside the method via ``trace.get_current_span().set_attribute(...)``.
+    Exceptions are recorded and set the span status to ERROR (the context
+    manager's defaults). With tracing off the no-op tracer makes this near-free.
+    """
+
+    def decorate(fn: _F) -> _F:
+        span_name = name
+        if inspect.iscoroutinefunction(fn):
+
+            @functools.wraps(fn)
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                tracer = trace.get_tracer("repomesh")
+                with tracer.start_as_current_span(span_name):
+                    return await fn(*args, **kwargs)
+
+            return async_wrapper  # type: ignore[return-value]
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            tracer = trace.get_tracer("repomesh")
+            with tracer.start_as_current_span(span_name):
+                return fn(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorate
 
 
 def setup_tracing(endpoint: str | None, *, service_name: str) -> bool:

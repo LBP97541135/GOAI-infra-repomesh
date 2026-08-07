@@ -16,6 +16,7 @@ from repomesh.integrations.agentteams.task_publishing import (
     AgentTeamsTaskPublisher,
 )
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
+from repomesh.integrations.llm import make_llm_client
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.collaboration import (
     PostgresCollaborationMessageStore,
@@ -116,6 +117,11 @@ def build_default_container() -> ApplicationContainer:
         context_store=PostgresContextStore(database),
         specification_store=PostgresSpecificationStore(database),
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),
+        llm_client=make_llm_client(
+            settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+            model=settings.deepseek_model,
+        ),
         agent_team_control_plane=control_plane,
         agent_team_messenger=messenger,
         agentteams_probe=control_plane,

@@ -20,11 +20,14 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from opentelemetry import trace
+
 from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
     ConfirmationSummary,
     RepositoryPlan,
 )
+from repomesh.telemetry import traced
 
 _logger = logging.getLogger(__name__)
 
@@ -244,6 +247,9 @@ def _parse_integrated_plan(raw: str, repo_names: list[str]) -> IntegratedPlan:
         data = json.loads(json_text)
     except (json.JSONDecodeError, ValueError):
         _logger.warning("Failed to parse integrated plan, using fallback")
+        # A fallback DAG is a silent quality downgrade; make it visible on the
+        # planning.integration span instead of only in the log stream.
+        trace.get_current_span().set_attribute("repomesh.plan_fallback", True)
         return _fallback_plan(repo_names)
 
     # Parse contracts (filter out any that reference repos not in the confirmed list)
@@ -365,6 +371,7 @@ class PlanIntegrationService:
     def __init__(self, llm_client: LLMClient) -> None:
         self._llm = llm_client
 
+    @traced("planning.integration")
     def integrate(
         self,
         requirement: str,
@@ -394,4 +401,9 @@ class PlanIntegrationService:
         messages = _build_integration_prompt(requirement, all_results)
         raw = self._llm.chat(messages, temperature=0.1)
 
-        return _parse_integrated_plan(raw, repo_names)
+        plan = _parse_integrated_plan(raw, repo_names)
+        span = trace.get_current_span()
+        span.set_attribute("repomesh.integration.task_count", len(plan.task_dag))
+        span.set_attribute("repomesh.integration.contract_count", len(plan.contracts))
+        span.set_attribute("repomesh.integration.batch_count", len(plan.execution_batches))
+        return plan

@@ -5,11 +5,8 @@ from .confirmation import (
     RepositoryPlan,
 )
 from .discovery import (
-    DeepSeekClient,
-    DeepSeekConfig,
     LLMClient,
     RepositoryDiscoveryService,
-    make_llm_client,
 )
 from .plan_execution_bridge import (
     MaterializationResult,
@@ -36,8 +33,6 @@ __all__ = [
     "ConfirmationService",
     "ConfirmationSummary",
     "ContractSpec",
-    "DeepSeekClient",
-    "DeepSeekConfig",
     "IntegratedPlan",
     "LLMClient",
     "MaterializationResult",
@@ -53,7 +48,6 @@ __all__ = [
     "infer_languages",
     "infer_name",
     "load_requirement",
-    "make_llm_client",
     "parse_user_input",
     "scan_org",
     "scan_repo",
