@@ -91,6 +91,28 @@ class ExecutionPlanStarter(Protocol):
     ) -> StartedExecutionPlan: ...
 
 
+class PlanSnapshotWriter(Protocol):
+    """Subset of PlanSnapshotStore needed by the bridge for DAG observability."""
+
+    async def next_version(self, project_id: UUID) -> int: ...
+
+    async def save(
+        self,
+        *,
+        project_id: UUID,
+        plan_version: int,
+        engineering_spec: str,
+        contracts: list[dict],
+        task_dag: list[dict],
+        execution_batches: list[list[str]],
+        graph_edges: list[dict],
+        created_by_agent_id: UUID | None = ...,
+        execution_plan_id: UUID | None = ...,
+        requirement_text: str | None = ...,
+        integration_method: str | None = ...,
+    ) -> object: ...
+
+
 # ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
@@ -145,11 +167,13 @@ class PlanExecutionBridge:
         plans: ExecutionPlanStarter | None,
         topologies: ProjectTopologyReader,
         catalog: RepositoryCatalog,
+        snapshot_store: PlanSnapshotWriter | None = None,
     ) -> None:
         self._specs = specifications
         self._plans = plans
         self._topologies = topologies
         self._catalog = catalog
+        self._snapshots = snapshot_store
 
     @traced("planning.materialize")
     async def materialize(
@@ -281,9 +305,38 @@ class PlanExecutionBridge:
 
         span = trace.get_current_span()
         span.set_attribute(SpanAttributes.PROJECT_ID, str(project_id))
-        span.set_attribute("repomesh.materialize.contract_spec_count", len(contract_specs))
+        span.set_attribute(
+            "repomesh.materialize.contract_spec_count", len(contract_specs)
+        )
         span.set_attribute("repomesh.materialize.task_count", len(tasks_created))
         span.set_attribute("repomesh.materialize.skipped_repos", list(skipped))
+
+        # --- 5. Save plan snapshot (if store configured) ---------------------
+        if self._snapshots is not None:
+            try:
+                version = await self._snapshots.next_version(project_id)
+                await self._snapshots.save(
+                    project_id=project_id,
+                    plan_version=version,
+                    engineering_spec=plan.engineering_spec or requirement,
+                    contracts=[
+                        c.to_dict() if hasattr(c, "to_dict") else dict(c)
+                        for c in plan.contracts
+                    ],
+                    task_dag=[
+                        t.to_dict() if hasattr(t, "to_dict") else dict(t)
+                        for t in plan.task_dag
+                    ],
+                    execution_batches=[list(b) for b in plan.execution_batches],
+                    graph_edges=[],
+                    created_by_agent_id=leader_agent_id,
+                    execution_plan_id=plan_id,
+                    requirement_text=requirement,
+                    integration_method="llm_only",
+                )
+            except Exception:
+                _logger.warning("Failed to save plan snapshot", exc_info=True)
+
         return MaterializationResult(
             engineering_spec=eng_spec,
             contract_specs=contract_specs,

@@ -27,6 +27,10 @@ from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationSummary,
     RepositoryPlan,
 )
+from repomesh.modules.repository_intelligence.application.dependency_graph import (
+    DependencyGraphService,
+    GraphEdge,
+)
 from repomesh.telemetry import traced
 
 _logger = logging.getLogger(__name__)
@@ -212,6 +216,97 @@ def _build_integration_prompt(
     ]
 
 
+def _build_graph_assisted_prompt(
+    requirement: str,
+    results: list[ConfirmationResult],
+    edges: list[GraphEdge],
+    batches: list[list[str]],
+    cyclic_repos: list[str],
+) -> list[dict[str, str]]:
+    """Build prompt for graph-assisted integration.
+
+    The graph provides deterministic edges and batches.
+    The LLM only writes: Engineering Spec, Contract details, Task instructions.
+    """
+
+    plan_lines: list[str] = []
+    for r in results:
+        if r.status == "EXCLUDED" or r.plan is None:
+            continue
+        plan_lines.append(f"### {r.repository} ({r.status})")
+        plan_lines.append(f"  summary: {r.plan_summary}")
+        if r.plan.changed_apis:
+            plan_lines.append(f"  changed_apis: {', '.join(r.plan.changed_apis)}")
+        if r.plan.changed_modules:
+            plan_lines.append(f"  changed_modules: {', '.join(r.plan.changed_modules)}")
+        plan_lines.append(f"  risk: {r.plan.risk}")
+        plan_lines.append("")
+
+    plans_text = "\n".join(plan_lines)
+
+    edge_lines: list[str] = []
+    for e in edges:
+        tag = "confirmed" if e.confidence == "confirmed" else "possible"
+        edge_lines.append(f"  {e.consumer} → {e.producer} ({tag})")
+    edges_text = "\n".join(edge_lines) if edge_lines else "  (no edges found)"
+
+    batch_lines: list[str] = []
+    for i, batch in enumerate(batches, 1):
+        batch_lines.append(f"  Batch {i}: {', '.join(batch)}")
+    batches_text = "\n".join(batch_lines)
+
+    cycle_warning = ""
+    if cyclic_repos:
+        cycle_warning = (
+            f"\n**WARNING**: Circular dependency detected among: "
+            f"{', '.join(cyclic_repos)}. They are placed in the same batch "
+            f"and may need coordinated changes.\n"
+        )
+
+    system = (
+        "You are the Project Manager integrating repository "
+        "change plans into a project-level plan.\n\n"
+        "The dependency graph has ALREADY determined:\n"
+        "- Which repositories depend on which (edges below)\n"
+        "- The execution order (batches below)\n\n"
+        "You ONLY need to write:\n"
+        "1. **Engineering Spec**: project-level description of the change.\n"
+        "2. **Contracts**: For each edge that genuinely needs a contract "
+        "(based on the specific APIs being changed), write the interface "
+        "agreement. You may skip edges where the dependency is unrelated.\n"
+        "3. **Task DAG instructions**: For each repo, write a concrete "
+        "instruction describing what to change.\n\n"
+        "Return ONLY a JSON object (no markdown fences):\n"
+        "{\n"
+        '  "engineering_spec": "detailed project-level plan",\n'
+        '  "contracts": [\n'
+        '    {"producer": "repo A", "consumer": "repo B", '
+        '"interface": "API name", "agreement": "what is agreed"}\n'
+        "  ],\n"
+        '  "task_dag": [\n'
+        '    {"repository": "repo name", "instruction": "what to change", '
+        '"depends_on": [], "parallelizable_with": []}\n'
+        "  ]\n"
+        "}"
+    )
+
+    user = (
+        f"## Requirement\n\n{requirement}\n\n"
+        f"## Repository Plans\n\n{plans_text}\n\n"
+        f"## Graph-Derived Dependencies (authoritative)\n\n{edges_text}\n\n"
+        f"## Execution Batches (authoritative)\n\n{batches_text}\n"
+        f"{cycle_warning}\n"
+        f"## Task\n\n"
+        f"Write the Engineering Spec, Contract details for edges that need "
+        f"them, and per-repo instructions."
+    )
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Response parsing
 # ---------------------------------------------------------------------------
@@ -368,8 +463,13 @@ class PlanIntegrationService:
         print(plan.execution_batches)
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        graph: DependencyGraphService | None = None,
+    ) -> None:
         self._llm = llm_client
+        self._graph = graph
 
     @traced("planning.integration")
     def integrate(
@@ -379,13 +479,9 @@ class PlanIntegrationService:
     ) -> IntegratedPlan:
         """Integrate confirmed repository plans into a complete project plan.
 
-        Args:
-            requirement: The original feature requirement text.
-            summary: The confirmation summary from the Team Manager phase.
-
-        Returns:
-            An :class:`IntegratedPlan` with engineering spec, contracts,
-            and task DAG.
+        When a DependencyGraphService is available, the graph provides
+        deterministic edges and topological ordering — the LLM only writes
+        semantic content. When no graph is available, falls back to pure LLM.
         """
 
         all_results = summary.required + summary.maybe
@@ -398,12 +494,45 @@ class PlanIntegrationService:
             )
 
         repo_names = [r.repository for r in all_results if r.status != "EXCLUDED"]
-        messages = _build_integration_prompt(requirement, all_results)
-        raw = self._llm.chat(messages, temperature=0.1)
 
-        plan = _parse_integrated_plan(raw, repo_names)
+        if self._graph is not None:
+            plan = self._integrate_with_graph(requirement, all_results, repo_names)
+        else:
+            messages = _build_integration_prompt(requirement, all_results)
+            raw = self._llm.chat(messages, temperature=0.1)
+            plan = _parse_integrated_plan(raw, repo_names)
+
         span = trace.get_current_span()
         span.set_attribute("repomesh.integration.task_count", len(plan.task_dag))
         span.set_attribute("repomesh.integration.contract_count", len(plan.contracts))
         span.set_attribute("repomesh.integration.batch_count", len(plan.execution_batches))
         return plan
+
+    # ------------------------------------------------------------------
+    # Graph-assisted integration
+    # ------------------------------------------------------------------
+
+    def _integrate_with_graph(
+        self,
+        requirement: str,
+        results: list[ConfirmationResult],
+        repo_names: list[str],
+    ) -> IntegratedPlan:
+        """Use graph for structure, LLM for semantic content."""
+
+        edges = self._graph.edges_in(repo_names)  # type: ignore[union-attr]
+        topo = self._graph.topological_batches(repo_names)  # type: ignore[union-attr]
+        batches = topo.batches
+
+        messages = _build_graph_assisted_prompt(
+            requirement, results, edges, batches, topo.cyclic_repos
+        )
+        raw = self._llm.chat(messages, temperature=0.1)
+        llm_plan = _parse_integrated_plan(raw, repo_names)
+
+        return IntegratedPlan(
+            engineering_spec=llm_plan.engineering_spec,
+            contracts=llm_plan.contracts,
+            task_dag=llm_plan.task_dag,
+            execution_batches=batches if batches else llm_plan.execution_batches,
+        )

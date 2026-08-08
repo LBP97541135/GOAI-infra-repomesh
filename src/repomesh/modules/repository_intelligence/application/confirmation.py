@@ -28,6 +28,8 @@ from repomesh.modules.repository_intelligence.domain import (
 )
 from repomesh.telemetry import traced
 
+from .dependency_graph import DependencyGraphService, GraphEdge
+
 _logger = logging.getLogger(__name__)
 
 _tracer = trace.get_tracer("repomesh.planning")
@@ -116,6 +118,7 @@ def _build_confirmation_prompt(
     *,
     discovery_rationale: str = "",
     discovery_confidence: float = 0.0,
+    reverse_deps: list[GraphEdge] | None = None,
 ) -> list[dict[str, str]]:
     """Build chat messages for a single Repository Manager confirmation.
 
@@ -173,12 +176,27 @@ def _build_confirmation_prompt(
             f"find evidence to contradict it, lean towards REQUIRED or MAYBE."
         )
 
+    # Include reverse dependencies from graph (if available)
+    graph_context = ""
+    if reverse_deps:
+        lines: list[str] = []
+        for edge in reverse_deps:
+            tag = "confirmed" if edge.confidence == "confirmed" else "possible"
+            lines.append(f"  - {edge.consumer} ({tag}: {edge.match_reason})")
+        graph_context = (
+            "\n\n## Reverse Dependencies (graph-derived, not guessed)\n"
+            "These repos depend on yours — if you change your API, "
+            "they may be affected:\n"
+            + "\n".join(lines)
+        )
+
     user = (
         f"## Your Repository: {profile.name}\n\n"
         f"{card_text}\n\n"
         f"## Requirement\n\n{requirement}\n\n"
         f"## All Candidates Flagged by Discovery\n\n{candidates_str}\n"
-        f"{pm_context}\n\n"
+        f"{pm_context}"
+        f"{graph_context}\n\n"
         f"## Task\n\n"
         f"Does YOUR repository ({profile.name}) need code changes for this "
         f"requirement? Return the JSON object now."
@@ -283,9 +301,11 @@ class ConfirmationService:
         self,
         llm_client: LLMClient,
         profiles_by_name: dict[str, RepositoryProfile],
+        graph: DependencyGraphService | None = None,
     ) -> None:
         self._llm = llm_client
         self._profiles = profiles_by_name
+        self._graph = graph
 
     @traced("planning.confirmation")
     def confirm(
@@ -330,6 +350,9 @@ class ConfirmationService:
                 candidate_names,
                 discovery_rationale=rationale,
                 discovery_confidence=conf,
+                reverse_deps=self._graph.reverse_dependencies(name)
+                if self._graph
+                else [],
             )
             with _tracer.start_as_current_span(
                 f"confirm {name}",

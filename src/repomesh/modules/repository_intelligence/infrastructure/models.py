@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, String, Text, func
+from sqlalchemy import JSON, DateTime, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -30,4 +30,3 @@ class RepositoryRecord(Base):
 
     metadata_payload: Mapped[dict[str, Any]] = mapped_column(
         "metadata", JSON_DOCUMENT, default=dict
-    )
