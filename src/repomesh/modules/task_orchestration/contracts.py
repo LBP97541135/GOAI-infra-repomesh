@@ -51,6 +51,7 @@ class ExecutionPlanView:
     id: UUID
     organization_id: UUID
     project_id: UUID
+    created_by_agent_id: UUID
     status: ExecutionPlanStatus
     current_batch_index: int
     batches: tuple[tuple[PlannedRepositoryTaskView, ...], ...]

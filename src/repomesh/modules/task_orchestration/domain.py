@@ -205,6 +205,7 @@ class ExecutionPlan:
             id=self.id,
             organization_id=self.organization_id,
             project_id=self.project_id,
+            created_by_agent_id=self.created_by_agent_id,
             status=self.status,
             current_batch_index=self.current_batch_index,
             batches=tuple(

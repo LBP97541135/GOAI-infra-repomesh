@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
 from uuid import UUID
 
@@ -437,11 +438,13 @@ class AdvanceExecutionPlan:
         tasks: TaskStore,
         assigner: TaskAssignmentGateway,
         decomposer: DecomposeRepositoryTask,
+        on_plan_completed: Callable[[ExecutionPlanView], Awaitable[None]] | None = None,
     ) -> None:
         self._plans = plans
         self._tasks = tasks
         self._assigner = assigner
         self._decomposer = decomposer
+        self._on_plan_completed = on_plan_completed
 
     async def start(self, plan: ExecutionPlan, *, idempotency_key: str) -> ExecutionPlanView:
         key = idempotency_key.strip()
@@ -466,7 +469,12 @@ class AdvanceExecutionPlan:
         if leader_task.status not in FINAL_TASK_STATUSES:
             return
         plan = await self._plans.find_by_leader_task(leader_task.id)
-        if plan is None or plan.status is not ExecutionPlanStatus.IN_PROGRESS:
+        if plan is None:
+            return
+        if plan.status is ExecutionPlanStatus.COMPLETED:
+            await self._notify_plan_completed(plan.to_view())
+            return
+        if plan.status is not ExecutionPlanStatus.IN_PROGRESS:
             return
         if leader_task.id not in plan.leader_task_ids(plan.current_batch_index):
             return
@@ -476,7 +484,9 @@ class AdvanceExecutionPlan:
         if not await self._batch_succeeded(plan):
             return
         if plan.is_last_batch:
-            await self._settle(plan, plan.complete())
+            completed = plan.complete()
+            if await self._settle(plan, completed):
+                await self._notify_plan_completed(completed.to_view())
             return
         advanced = plan.advance()
         if not await self._settle(plan, advanced):
@@ -564,3 +574,7 @@ class AdvanceExecutionPlan:
             # Another caller already moved this plan forward.
             return False
         return True
+
+    async def _notify_plan_completed(self, plan: ExecutionPlanView) -> None:
+        if self._on_plan_completed is not None:
+            await self._on_plan_completed(plan)

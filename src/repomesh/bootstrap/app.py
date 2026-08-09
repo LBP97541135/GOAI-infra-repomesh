@@ -17,6 +17,17 @@ from repomesh.integrations.agentteams.task_publishing import (
 )
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
 from repomesh.integrations.llm import make_llm_client
+from repomesh.integrations.scm import (
+    ChangeSetSCMCoordinator,
+    DeliveryReconciler,
+    GitHubAdapter,
+    GitHubObservationProcessor,
+    SCMObservationReplayWorker,
+)
+from repomesh.integrations.scm.github_auth import (
+    GitHubAppTokenProvider,
+    private_key_file_loader,
+)
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.collaboration import (
     PostgresCollaborationMessageStore,
@@ -25,6 +36,12 @@ from repomesh.modules.collaboration import (
     SendCollaborationMessage,
 )
 from repomesh.modules.context.infrastructure import PostgresContextStore
+from repomesh.modules.delivery import (
+    DeliveryService,
+    PostgresChangeSetStore,
+    PostgresSCMObservationStore,
+    SCMObservationService,
+)
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
 from repomesh.modules.repository_intelligence.infrastructure import PostgresRepositoryCatalog
@@ -76,10 +93,20 @@ def build_default_container() -> ApplicationContainer:
     resources: tuple[AsyncCloseable, ...] = (
         (control_plane, messenger) if messenger is not None else (control_plane,)
     )
+    scm_adapter = None
+    scm_token_provider = None
+    if settings.github_app_id and settings.github_app_private_key_file:
+        scm_token_provider = GitHubAppTokenProvider(
+            settings.github_app_id,
+            private_key_file_loader(settings.github_app_private_key_file),
+        )
+        scm_adapter = GitHubAdapter(scm_token_provider)
+        resources = (*resources, scm_adapter, scm_token_provider)
     agent_directory = PostgresAgentDirectory(database)
     topology_store = PostgresProjectTopologyStore(database)
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
+    repository_catalog = PostgresRepositoryCatalog(database)
     background_services = ()
     task_report_gateway = None
     if messenger is not None:
@@ -106,11 +133,38 @@ def build_default_container() -> ApplicationContainer:
             tasks,
         )
         background_services = (AgentTeamsMatrixInboundPoller(messenger, inbound),)
+    if settings.github_webhook_secret:
+        delivery = DeliveryService(PostgresChangeSetStore(database))
+        observations = SCMObservationService(PostgresSCMObservationStore(database))
+        processor = GitHubObservationProcessor(
+            observations,
+            delivery,
+            repository_catalog,
+            ChangeSetSCMCoordinator(delivery, repository_catalog, scm_adapter),
+        )
+        background_services = (
+            *background_services,
+            SCMObservationReplayWorker(
+                observations,
+                processor,
+                interval_seconds=settings.scm_observation_replay_interval_seconds,
+            ),
+        )
+    if scm_adapter is not None and settings.delivery_auto_enabled:
+        delivery = DeliveryService(PostgresChangeSetStore(database))
+        background_services = (
+            *background_services,
+            DeliveryReconciler(
+                delivery,
+                ChangeSetSCMCoordinator(delivery, repository_catalog, scm_adapter),
+                interval_seconds=settings.delivery_reconcile_interval_seconds,
+            ),
+        )
     return ApplicationContainer(
         database=database,
         agent_directory=agent_directory,
         project_topology_store=topology_store,
-        repository_catalog=PostgresRepositoryCatalog(database),
+        repository_catalog=repository_catalog,
         outbox_store=OutboxStore(database),
         task_store=task_store,
         collaboration_message_store=collaboration_store,
@@ -129,6 +183,8 @@ def build_default_container() -> ApplicationContainer:
         external_resources=resources,
         background_services=background_services,
         task_report_gateway=task_report_gateway,
+        scm_adapter=scm_adapter,
+        scm_token_provider=scm_token_provider,
     )
 
 

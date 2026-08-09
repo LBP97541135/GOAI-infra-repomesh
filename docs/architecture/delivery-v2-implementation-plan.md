@@ -1,0 +1,142 @@
+# Delivery v2 Implementation Plan
+
+## Objective
+
+Move RepoMesh from a synchronous GitHub delivery path to a replayable multi-repository delivery
+controller. GitHub API success means only that a command was accepted. RepoMesh advances durable
+delivery state only after a persisted SCM observation confirms the remote fact.
+
+## Ownership and boundaries
+
+- `modules/delivery` owns ChangeSets, candidate revisions, observation lifecycle, merge order,
+  governance facts, and rollback Saga state.
+- `integrations/scm` acquires provider facts and executes provider commands. It does not own
+  delivery truth.
+- `modules/review_validation` owns validation snapshots, `environment_hash`, expiry, and internal
+  review evidence.
+- `modules/task_orchestration` owns rework Task and ExecutionPlan attempts.
+- Coding agents never receive Push, PR, Merge, or Revert credentials.
+
+Cross-module imports target published `contracts.py` only.
+
+## Target control loop
+
+```text
+GitHub Webhook/Poller
+  -> append SCMObservation
+  -> claim observation with a replay lease
+  -> project the fact into ChangeSet state
+  -> evaluate validation, review, governance and dependency gates
+  -> append an idempotent SCM command
+  -> dispatch command to GitHub
+  -> wait for a new SCMObservation before advancing
+```
+
+## Target state
+
+ChangeSet:
+
+```text
+preparing <-> blocked
+preparing|blocked -> ready -> merging -> merged
+merging -> rolling_back -> rolled_back
+preparing|ready|blocked -> rolled_back
+any inconsistent external fact -> manual_intervention
+```
+
+Repository delivery uses separate axes:
+
+- `gate_status`: `waiting_candidate`, `waiting_ci`, `waiting_review`, `ready`, `blocked`, `stale`.
+- `merge_status`: `not_merged`, `merge_requested`, `merged`, `revert_requested`, `reverted`.
+
+## Durable data
+
+| Table | Responsibility |
+| --- | --- |
+| `delivery.change_sets` | ChangeSet state, merge cursor, rollback link and version |
+| `delivery.change_set_repositories` | Per-repository gate and merge state |
+| `delivery.candidate_revisions` | Append-only candidate SHA and Task/Run history |
+| `delivery.scm_observations` | Append-only provider facts and replay progress |
+| `delivery.scm_commands` | Idempotent Push/PR/Merge/Revert command journal |
+| `delivery.merge_decisions` | Head-bound governance authorization |
+| `delivery.recovery_plans` | Rollback Saga state |
+| `delivery.recovery_actions` | Revert, PR close and revalidation actions |
+
+## Stable delivery identity
+
+Persist the ChangeSet before publishing candidate branches. Use:
+
+```text
+repomesh/deliver/<change_set_id>/<repository_id>
+```
+
+A rework creates a new `CandidateRevision` on the same fast-forward-only branch and PR. The new
+head invalidates older CI, review, governance, and validation evidence. Failed Tasks and
+ExecutionPlans remain terminal; the long-lived ChangeSet requests a new attempt through the
+`CreateCIReworkTask` contract.
+
+## Delivery slices
+
+### PR-1: SCM observation foundation - implemented in this branch
+
+- Provider-neutral Observation contracts live in Delivery.
+- External identity is unique by provider, source, and external ID.
+- Raw JSON, payload SHA-256, routing hints, attempts, error evidence and timestamps are durable.
+- Processing uses optimistic versions, a five-minute lease and bounded retries.
+- Signed GitHub Webhooks persist before domain processing.
+- Failed and interrupted observations remain replayable after restart.
+- Unsupported signed GitHub events are retained and marked processed/ignored.
+
+### PR-2: Observation acquisition
+
+- Add GitHub Poller snapshots for PR, Check Run, Review, Merge and branch head.
+- Add pagination, ETag, rate-limit backoff and durable cursors.
+- Feed Poller and Webhook through the same Observation service.
+- Detect unauthorized merge and branch-head drift as durable facts.
+
+### PR-3: Merge command cursor
+
+- Split gate and merge status.
+- Add `scm_commands` and an outbox dispatcher.
+- Record `merge_requested`; do not record `merged` from the command response.
+- Advance `merge_cursor` only from a Merge Observation with the expected head SHA.
+- Pause and alert when GitHub reports an out-of-order or unauthorized merge.
+
+### PR-4: Governance
+
+- Add head-bound `READY`, `BLOCKED`, and `ROLLBACK_REQUIRED` decisions.
+- Require GitHub approval, stale-review dismissal, and an active governance decision.
+- Preflight required GitHub branch protection/ruleset configuration.
+
+### PR-5: Stable rework identity
+
+- Initiate the ChangeSet before branch publication.
+- Add append-only Candidate Revisions.
+- Implement `CreateCIReworkTask` through Task Orchestration contracts.
+- Update the existing PR with fast-forward-only candidate commits.
+
+### PR-6: Validation environment identity
+
+- Implement immutable Review and Validation snapshots.
+- Add canonical `environment_hash` inputs and configurable expiry.
+- Reject stale validation at every merge gate evaluation.
+
+### PR-7: Rollback Saga
+
+- Execute reverse-order Revert PRs without force-resetting shared history.
+- Require CI, review, governance and Merge Observation for each Revert.
+- Dispatch revert conflicts to a Worker Task.
+- Finish as `rolled_back` or `manual_intervention` with complete evidence.
+
+### PR-8: Live acceptance
+
+- Run the real composition root with PostgreSQL, AgentTeams, Runner and a GitHub App.
+- Validate success, rework, duplicate/out-of-order events, process restart, unauthorized merge,
+  partial merge and reverse rollback across at least two repositories.
+- Retain GitHub request IDs, observations, database rows and final SHAs as acceptance evidence.
+
+## Required quality gates
+
+Every slice must include behavior, contract, persistence and replay tests. Every external side
+effect requires an idempotency key or explicit retry policy. Before Push, run `ruff check .`,
+`pytest`, and verify one Alembic head.

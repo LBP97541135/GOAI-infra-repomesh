@@ -118,6 +118,7 @@ class StubPlanStarter:
                 id=UUID(int=7777),
                 organization_id=organization_id,
                 project_id=project_id,
+                created_by_agent_id=created_by_agent_id,
                 status=ExecutionPlanStatus.IN_PROGRESS,
                 current_batch_index=0,
                 batches=tuple(tuple(batch) for batch in batches),

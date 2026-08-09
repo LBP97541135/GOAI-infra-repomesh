@@ -55,6 +55,27 @@ def test_worker_start_action_requires_internal_token(
         get_settings.cache_clear()
 
 
+def test_delivery_reconciliation_requires_token_and_configured_scm(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app(application_container)) as client:
+            unauthorized = client.post(
+                f"/api/v1/delivery/change-sets/{uuid4()}/reconcile"
+            )
+            unavailable = client.post(
+                f"/api/v1/delivery/change-sets/{uuid4()}/reconcile",
+                headers={"Authorization": "Bearer internal-secret"},
+            )
+        assert unauthorized.status_code == 401
+        assert unavailable.status_code == 503
+        assert unavailable.json()["detail"] == "SCM adapter is not configured"
+    finally:
+        get_settings.cache_clear()
+
+
 def test_worker_mcp_initializes_with_gateway_token(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:

@@ -16,7 +16,7 @@ into an organization.
 | Collaboration | orchestration | questions, answers, published findings | business state hidden in chat |
 | Review And Validation | quality-delivery | reviews, test plans, snapshots, evidence | remote merge |
 | Change Control | project-planning | impact assessment and change decisions | silent task mutation |
-| Delivery | quality-delivery | ChangeSets, PRs, merge order, rollback | code generation |
+| Delivery | quality-delivery | ChangeSets, Push/PR, SCM approval facts, CI gates, merge order, rollback | code generation and internal review content |
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
 

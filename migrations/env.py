@@ -20,11 +20,19 @@ from repomesh.modules.context.infrastructure.models import (
     ContextObjectVersionRecord,
     ContextRelationRecord,
 )
+from repomesh.modules.delivery.infrastructure import (
+    ChangeSetRecord,
+    ChangeSetRepositoryRecord,
+    SCMObservationRecord,
+)
 from repomesh.modules.project.infrastructure import (
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
 )
-from repomesh.modules.repository_intelligence.infrastructure.models import RepositoryRecord
+from repomesh.modules.repository_intelligence.infrastructure.models import (
+    PlanSnapshotRecord,
+    RepositoryRecord,
+)
 from repomesh.modules.specification.infrastructure import (
     SpecificationRecord,
     SpecificationVersionRecord,
@@ -52,9 +60,13 @@ _REGISTERED_MODELS = (
     ContextDeltaRecord,
     ContextDeltaItemRecord,
     ContextAccessEventRecord,
+    ChangeSetRecord,
+    ChangeSetRepositoryRecord,
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
     RepositoryRecord,
+    PlanSnapshotRecord,
+    SCMObservationRecord,
     SpecificationRecord,
     SpecificationVersionRecord,
     TaskRecord,

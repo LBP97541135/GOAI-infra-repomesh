@@ -1,5 +1,5 @@
 name = "delivery"
 owner = "quality-delivery"
-status = "planned"
+status = "active"
 schema = "delivery"
 responsibilities = ["change sets", "pull request coordination", "merge plans", "rollback records"]
