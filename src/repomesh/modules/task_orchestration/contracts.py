@@ -11,6 +11,7 @@ class TaskStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SUPERSEDED = "superseded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +95,8 @@ class ReportTaskCommand:
     reporter_agent_id: UUID
     status: TaskStatus
     summary: str
+    plan_version: int = 1  # plan version the reporting agent was based on
+    plan_revision_needed: bool = False  # whether replanning is requested
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +130,23 @@ class TaskSpecificationAuthor(Protocol):
 
 class TaskReportGateway(Protocol):
     async def report(self, command: ReportTaskCommand, *, idempotency_key: str) -> TaskView: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SupersedeTaskCommand:
+    """Mark a task as SUPERSEDED by a newer plan version."""
+
+    task_id: UUID
+    reason: str = ""
+    superseded_by_task_id: UUID | None = None  # id of the replacing task, if any
+
+
+class TaskSuperseder(Protocol):
+    """Cancel or supersede a task that is executing or queued."""
+
+    async def supersede(
+        self, command: SupersedeTaskCommand, *, idempotency_key: str
+    ) -> TaskView: ...
 
 
 class TaskReader(Protocol):

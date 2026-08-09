@@ -22,6 +22,7 @@ from repomesh.modules.task_orchestration.contracts import (
     ProjectTaskProgress,
     PublishedTaskPackage,
     ReportTaskCommand,
+    SupersedeTaskCommand,
     TaskAssignmentGateway,
     TaskAssignmentPublisher,
     TaskSpecificationAuthor,
@@ -195,6 +196,27 @@ class TaskOrchestrator:
             ),
             idempotency_key=f"{idempotency_key}:message",
         )
+        return updated.to_view()
+
+    async def supersede(
+        self, command: SupersedeTaskCommand, *, idempotency_key: str
+    ) -> TaskView:
+        key = idempotency_key.strip()
+        if not key:
+            raise ValueError("idempotency_key is required")
+        task = await self._required_task(command.task_id)
+        reason = command.reason.strip()
+        # Idempotent replay: same supersede already persisted.
+        if (
+            task.status is TaskStatus.SUPERSEDED
+            and task.result_summary == (f"SUPERSEDED: {reason}" if reason else "SUPERSEDED")
+        ):
+            return task.to_view()
+        updated = task.supersede(
+            reason=reason,
+            superseded_by=command.superseded_by_task_id,
+        )
+        await self._tasks.update(updated, expected_version=task.version)
         return updated.to_view()
 
     async def progress(self, project_id: UUID) -> ProjectTaskProgress:

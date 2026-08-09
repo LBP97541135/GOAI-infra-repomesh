@@ -65,7 +65,7 @@ OutputValidation/
 
 | 维度 | Cerny 方法 | RepoMesh 方法 |
 |------|-----------|--------------|
-| 输入 | 代码 diff（commit 级精确 AST） | 自然语言需求（一句话） |
+| 输入 | 代码 diff（commit 级精确 AST） | 自然语言需求（需求文档/文本描述 + 智能交互追问） |
 | 分析对象 | 方法签名、参数类型、调用链 | 仓库级元数据（AutoCard） |
 | 输出 | 受影响的组件/方法 | 受影响的仓库列表 |
 | 调用关系来源 | AST 解析（但 feignClients 为空） | 静态提取 RestTemplate 调用（call_graph.json，90 条边） |
