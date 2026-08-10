@@ -62,6 +62,36 @@ REPOSITORIES = (
     },
 )
 
+if os.environ.get("SCENARIO_PROFILE") == "github-delivery":
+    REPOSITORIES = (
+        {
+            "name": "repomesh-e2e-api",
+            "url": "https://github.com/LBP97541135/repomesh-e2e-api",
+            "description": "Pricing API delivery fixture",
+            "top_dirs": ("src", "tests"),
+            "apis": ("calculate_quote",),
+            "team": "repomesh-e2e-api-team",
+            "leader": "repomesh-e2e-api-leader",
+            "workers": ("repomesh-e2e-api-worker-01",),
+            "paths": ("src/pricing.py", "tests/**"),
+            "room_id": "!SP8bGldufFsTO6EIy6:matrix-local.agentteams.io:18080",
+            "leader_room_id": "!F6gKL2fT52Vj8nxxlD:matrix-local.agentteams.io:18080",
+        },
+        {
+            "name": "repomesh-e2e-client",
+            "url": "https://github.com/LBP97541135/repomesh-e2e-client",
+            "description": "Checkout client delivery fixture",
+            "top_dirs": ("src", "tests"),
+            "apis": ("checkout_lines",),
+            "team": "repomesh-e2e-client-team",
+            "leader": "repomesh-e2e-client-leader",
+            "workers": ("repomesh-e2e-client-worker-01",),
+            "paths": ("src/checkout_view.py", "tests/**"),
+            "room_id": "!XJCLgFhjFMlTcXq59L:matrix-local.agentteams.io:18080",
+            "leader_room_id": "!uTt73EvibaukBqOCH6:matrix-local.agentteams.io:18080",
+        },
+    )
+
 
 async def main() -> None:
     container = build_default_container()

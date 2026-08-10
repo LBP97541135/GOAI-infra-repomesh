@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     agentteams_storage_secret_key: str | None = None
     agentteams_storage_bucket: str = "agentteams-storage"
     mcp_gateway_token: str | None = None
+    mcp_gateway_tokens: tuple[str, ...] = ()
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
     capability_root: Path = Path(".")
@@ -42,6 +43,18 @@ class Settings(BaseSettings):
     )
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     deepseek_model: str = "deepseek-chat"
+    github_app_id: int | None = None
+    github_app_private_key_file: Path | None = None
+    github_webhook_secret: str | None = None
+    delivery_auto_enabled: bool = False
+    delivery_base_branch: str = "main"
+    delivery_required_checks: tuple[str, ...] = ()
+    delivery_required_approvals: int = Field(default=1, ge=0)
+    delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
+    scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
+    scm_poll_interval_seconds: int = Field(default=60, ge=5)
+    scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)
+    scm_command_dispatch_interval_seconds: int = Field(default=5, ge=1)
 
 
 @lru_cache

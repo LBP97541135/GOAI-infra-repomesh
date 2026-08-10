@@ -52,6 +52,7 @@ class ExecutionPlanView:
     id: UUID
     organization_id: UUID
     project_id: UUID
+    created_by_agent_id: UUID
     status: ExecutionPlanStatus
     current_batch_index: int
     batches: tuple[tuple[PlannedRepositoryTaskView, ...], ...]
@@ -87,6 +88,20 @@ class AssignTaskCommand:
     instruction: str
     acceptance: tuple[str, ...]
     parent_task_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CreateCIReworkTaskCommand:
+    organization_id: UUID
+    project_id: UUID
+    change_set_id: UUID
+    repository_id: UUID
+    repository_manager_agent_id: UUID
+    worker_agent_id: UUID
+    parent_task_id: UUID
+    failed_head_sha: str
+    failure_summary: str
+    acceptance: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)

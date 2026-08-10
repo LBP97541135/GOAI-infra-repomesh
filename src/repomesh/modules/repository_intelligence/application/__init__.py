@@ -4,6 +4,7 @@ from .confirmation import (
     ConfirmationSummary,
     RepositoryPlan,
 )
+from .dependency_graph import DependencyGraphService, GraphEdge, TopoResult
 from .discovery import (
     LLMClient,
     RepositoryDiscoveryService,
@@ -34,8 +35,10 @@ __all__ = [
     "ConfirmationService",
     "ConfirmationSummary",
     "ContractSpec",
+    "DependencyGraphService",
     "ExecutionPlaneUnavailable",
     "IntegratedPlan",
+    "GraphEdge",
     "LLMClient",
     "MaterializationResult",
     "PlanExecutionBridge",
@@ -46,6 +49,7 @@ __all__ = [
     "RequirementAnalysis",
     "RequirementAnalyzer",
     "TaskNode",
+    "TopoResult",
     "extract_entry_repo_name",
     "infer_languages",
     "infer_name",

@@ -84,15 +84,17 @@ def _authorize(request: Request) -> None:
         and request.headers.get("Authorization")
         == f"Bearer {settings.agent_action_token}"
     )
-    gateway_token_valid = bool(
-        settings.mcp_gateway_token
-        and (
-            request.headers.get("X-RepoMesh-Gateway-Token") == settings.mcp_gateway_token
-            or request.headers.get("Authorization")
-            == f"Bearer {settings.mcp_gateway_token}"
-        )
-    )
-    if not settings.agent_action_token and not settings.mcp_gateway_token:
+    gateway_tokens = {
+        token.strip()
+        for token in (settings.mcp_gateway_token, *settings.mcp_gateway_tokens)
+        if token and token.strip()
+    }
+    presented_gateway_token = request.headers.get("X-RepoMesh-Gateway-Token")
+    authorization = request.headers.get("Authorization", "")
+    if authorization.startswith("Bearer "):
+        presented_gateway_token = authorization.removeprefix("Bearer ")
+    gateway_token_valid = presented_gateway_token in gateway_tokens
+    if not settings.agent_action_token and not gateway_tokens:
         raise HTTPException(status_code=503, detail="MCP authentication is not configured")
     if not action_token_valid and not gateway_token_valid:
         raise HTTPException(status_code=401, detail="invalid MCP credentials")

@@ -76,6 +76,8 @@ class RunnerControlGateway:
             "testResults": details.get("testResults", []),
             "commitSha": details.get("commitSha"),
             "runId": str(dispatch.run_id),
+            "workspacePath": dict(dispatch.task_payload.get("workspace") or {}).get("path"),
+            "baseSha": dict(dispatch.task_payload.get("workspace") or {}).get("baseSha"),
         }
         updated = task.report(status, json.dumps(evidence, ensure_ascii=False, sort_keys=True))
         await self._tasks.update(updated, expected_version=task.version)

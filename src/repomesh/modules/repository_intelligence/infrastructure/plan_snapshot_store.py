@@ -84,7 +84,7 @@ class PlanSnapshotStore:
         self, project_id: UUID
     ) -> PlanSnapshotRecord | None:
         """Get the highest-version snapshot for a project."""
-        async with self._database.session() as session:
+        async with self._database.sessions() as session:
             stmt = (
                 select(PlanSnapshotRecord)
                 .where(PlanSnapshotRecord.project_id == project_id)
