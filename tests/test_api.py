@@ -113,6 +113,27 @@ def test_worker_mcp_accepts_agentteams_bearer_gateway_token(
         get_settings.cache_clear()
 
 
+def test_worker_mcp_accepts_any_configured_agentteams_gateway_token(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    monkeypatch.delenv("REPOMESH_MCP_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setenv(
+        "REPOMESH_MCP_GATEWAY_TOKENS",
+        '["api-worker-key", "client-worker-key"]',
+    )
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.post(
+                "/api/v1/mcp/worker",
+                headers={"Authorization": "Bearer client-worker-key"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            )
+        assert response.status_code == 200
+    finally:
+        get_settings.cache_clear()
+
+
 def test_worker_mcp_can_be_explicitly_enabled_for_local_direct_mode(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:

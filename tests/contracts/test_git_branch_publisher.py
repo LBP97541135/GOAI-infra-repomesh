@@ -1,3 +1,4 @@
+import base64
 import subprocess
 from pathlib import Path
 
@@ -31,11 +32,36 @@ def repository(tmp_path: Path) -> tuple[Path, Path, str]:
 
 
 @pytest.mark.asyncio
+async def test_github_token_uses_basic_auth_without_modifying_remote(tmp_path: Path) -> None:
+    publisher = GitBranchPublisher(tmp_path, token_provider=lambda _: "installation-token")
+    environment = await publisher._git_environment(  # noqa: SLF001
+        type("Repository", (), {"owner": "acme", "name": "service"})()
+    )
+
+    expected = base64.b64encode(b"x-access-token:installation-token").decode()
+    assert environment is not None
+    assert environment["GIT_CONFIG_VALUE_0"] == f"Authorization: Basic {expected}"
+
+
+@pytest.mark.asyncio
 async def test_publishes_only_the_frozen_head(tmp_path: Path) -> None:
     remote, workspace, head = repository(tmp_path)
     publisher = GitBranchPublisher(tmp_path)
 
     result = await publisher.publish(
+        PublishBranchCommand(workspace, "repomesh/task-1", head)
+    )
+
+    assert result.remote_sha == head
+    assert git(remote, "rev-parse", "refs/heads/repomesh/task-1") == head
+
+
+@pytest.mark.asyncio
+async def test_publishes_one_branch_from_a_mirror_configured_remote(tmp_path: Path) -> None:
+    remote, workspace, head = repository(tmp_path)
+    git(workspace, "config", "remote.origin.mirror", "true")
+
+    result = await GitBranchPublisher(tmp_path).publish(
         PublishBranchCommand(workspace, "repomesh/task-1", head)
     )
 

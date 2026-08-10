@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     agentteams_storage_secret_key: str | None = None
     agentteams_storage_bucket: str = "agentteams-storage"
     mcp_gateway_token: str | None = None
+    mcp_gateway_tokens: tuple[str, ...] = ()
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
     capability_root: Path = Path(".")

@@ -51,8 +51,12 @@ class PlanDeliveryFinalizer:
         candidates, workspaces, tests = await self._candidates(plan)
         if not candidates:
             return
-        validation_snapshot_id = None
-        if self._validation is not None:
+        idempotency_key = f"execution-plan:{plan.id}:delivery"
+        existing = await self._delivery.get_by_idempotency_key(idempotency_key)
+        validation_snapshot_id = (
+            existing.validation_snapshot_id if existing is not None else None
+        )
+        if existing is None and self._validation is not None:
             snapshot = await self._validation.create(
                 CreateValidationSnapshotCommand(
                     organization_id=plan.organization_id,
@@ -76,7 +80,7 @@ class PlanDeliveryFinalizer:
                 validation_snapshot_id=validation_snapshot_id,
                 candidates=tuple(candidates),
             ),
-            idempotency_key=f"execution-plan:{plan.id}:delivery",
+            idempotency_key=idempotency_key,
         )
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
             if candidate.pull_request_number is not None:

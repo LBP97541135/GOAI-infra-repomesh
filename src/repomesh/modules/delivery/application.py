@@ -343,6 +343,10 @@ class DeliveryService:
         await self._store.add(change_set, idempotency_key=idempotency_key, fingerprint=fingerprint)
         return change_set.to_view()
 
+    async def get_by_idempotency_key(self, key: str) -> ChangeSetView | None:
+        existing = await self._store.get_by_idempotency_key(key)
+        return existing[0].to_view() if existing is not None else None
+
     async def observe_pull_request(self, command: PullRequestObservationCommand) -> ChangeSetView:
         return await self._update_repository(
             command.change_set_id,

@@ -47,6 +47,7 @@ async def test_resolves_installation_and_caches_short_lived_token() -> None:
         if request.method == "GET":
             return httpx.Response(200, json={"id": 77})
         assert json.loads(request.content)["permissions"] == {
+            "administration": "read",
             "checks": "read",
             "contents": "write",
             "pull_requests": "write",

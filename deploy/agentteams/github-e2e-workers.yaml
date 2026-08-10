@@ -1,0 +1,29 @@
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: repomesh-e2e-api-worker-01
+spec:
+  model: claude-sonnet-4-6
+  runtime: copaw
+  identity: Coding Worker for e2e-api
+  skills:
+    - git-delegation
+  mcpServers:
+    - name: repomesh-task-control
+      url: http://api:8000/api/v1/mcp/worker
+      transport: http
+---
+apiVersion: agentteams.io/v1beta1
+kind: Worker
+metadata:
+  name: repomesh-e2e-client-worker-01
+spec:
+  model: claude-sonnet-4-6
+  runtime: copaw
+  identity: Coding Worker for e2e-client
+  skills:
+    - git-delegation
+  mcpServers:
+    - name: repomesh-task-control
+      url: http://api:8000/api/v1/mcp/worker
+      transport: http

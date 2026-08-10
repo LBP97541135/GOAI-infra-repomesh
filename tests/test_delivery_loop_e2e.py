@@ -28,6 +28,10 @@ from repomesh.modules.delivery import DeliveryService, InMemoryChangeSetStore
 from repomesh.modules.delivery.contracts import ChangeSetStatus, ReviewState
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.infrastructure import InMemoryRepositoryCatalog
+from repomesh.modules.review_validation import (
+    InMemoryValidationSnapshotStore,
+    ValidationSnapshotService,
+)
 from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
@@ -267,6 +271,8 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
             url="https://github.com/acme/web",
         )
     )
+    validation_store = InMemoryValidationSnapshotStore()
+    validation = ValidationSnapshotService(validation_store)
     delivery = DeliveryService(InMemoryChangeSetStore())
     adapter = RecordingGitHubAdapter()
     coordinator = ChangeSetSCMCoordinator(
@@ -277,11 +283,17 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
         coordinator,
         tasks,
         PlanDeliveryPolicy(required_checks=("unit",), required_approvals=1),
+        validation,
     )
 
     await finalizer.handle(plan)
+    first_change_set, _ = await delivery.resolve_candidate(first_repository_id, first_head)
+    first_snapshot_id = first_change_set.validation_snapshot_id
+    await finalizer.handle(plan)
     change_set, _ = await delivery.resolve_candidate(first_repository_id, first_head)
     assert len(adapter.pull_requests) == 2
+    assert change_set.id == first_change_set.id
+    assert change_set.validation_snapshot_id == first_snapshot_id
     assert all(not command.draft for command in adapter.pull_requests)
     first_published = _git(
         first_remote, "rev-parse", adapter.pull_requests[0].head_branch, bare=True

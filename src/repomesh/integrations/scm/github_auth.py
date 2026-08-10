@@ -42,6 +42,7 @@ class GitHubAppTokenProvider:
         self._now = now or (lambda: datetime.now(UTC))
         self._refresh_skew = refresh_skew
         self._permissions = permissions or {
+            "administration": "read",
             "checks": "read",
             "contents": "write",
             "pull_requests": "write",

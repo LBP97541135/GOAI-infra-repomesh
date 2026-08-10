@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import inspect
 import os
 import re
@@ -56,6 +57,8 @@ class GitBranchPublisher:
         lease = f"--force-with-lease=refs/heads/{command.branch_name}:{expected_remote}"
         await self._run(
             workspace,
+            "-c",
+            "remote.origin.mirror=false",
             "push",
             lease,
             "origin",
@@ -105,11 +108,12 @@ class GitBranchPublisher:
         if not token:
             raise SCMConflict("GitHub installation token is unavailable for branch publication")
         environment = dict(os.environ)
+        basic_credential = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         environment.update(
             {
                 "GIT_CONFIG_COUNT": "1",
                 "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-                "GIT_CONFIG_VALUE_0": f"Authorization: Bearer {token}",
+                "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic_credential}",
             }
         )
         return environment
