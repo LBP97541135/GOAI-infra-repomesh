@@ -492,6 +492,12 @@ class RecoveryAction:
             if status is not self.status:
                 raise DeliveryConflict("completed recovery action cannot change status")
             return self
+        if self.status is RecoveryActionStatus.WAITING_WORKER and status not in {
+            RecoveryActionStatus.RUNNING,
+            RecoveryActionStatus.SUCCEEDED,
+            RecoveryActionStatus.FAILED,
+        }:
+            raise DeliveryConflict("waiting recovery action requires Worker resolution")
         return replace(self, status=status, detail=detail.strip() or self.detail)
 
     def to_view(self) -> RecoveryActionView:

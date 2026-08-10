@@ -39,6 +39,8 @@ ExecutionPlan completed
 - A successful Merge API response records only `MERGE_REQUESTED`; only a later GitHub observation
   records the merge commit and advances the ChangeSet.
 - Existing recovery plans prevent Merge until their actions finish.
+- Partial delivery runs a reverse-order recovery Saga; revert conflicts pause at a Worker task and
+  never release later rollback actions.
 - Webhook processing may request Merge only when `REPOMESH_DELIVERY_AUTO_ENABLED=true`.
 
 ## Required configuration

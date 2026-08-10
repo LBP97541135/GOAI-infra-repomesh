@@ -52,6 +52,7 @@ class RecoveryActionKind(StrEnum):
 class RecoveryActionStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
+    WAITING_WORKER = "waiting_worker"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     SKIPPED = "skipped"

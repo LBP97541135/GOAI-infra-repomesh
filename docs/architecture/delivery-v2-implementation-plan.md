@@ -144,12 +144,18 @@ ChangeSet is created. The snapshot binds every repository Head, test command/res
 version, review evidence, canonical environment hash and expiry time. Automatic merge evaluates it
 again on every gate check; a rework Head therefore invalidates the previous snapshot automatically.
 
-### PR-7: Rollback Saga
+### PR-7: Rollback Saga - orchestration implemented
 
 - Execute reverse-order Revert PRs without force-resetting shared history.
 - Require CI, review, governance and Merge Observation for each Revert.
 - Dispatch revert conflicts to a Worker Task.
 - Finish as `rolled_back` or `manual_intervention` with complete evidence.
+
+Recovery plans now execute as a restart-safe, strictly ordered Saga. Actions are planned in reverse
+merge order and only one action advances per pass. Revert conflicts enter `waiting_worker`, create a
+Worker repair task through the conflict gateway, and prevent later actions from running. Provider
+implementations use `RevertDeliveryGateway`; the live GitHub implementation and acceptance evidence
+are part of PR-8 composition.
 
 ### PR-8: Live acceptance
 
