@@ -10,12 +10,14 @@ from .contracts import (
     ChangeSetView,
     CIObservationCommand,
     EnqueueSCMCommand,
+    GovernanceDecisionKind,
     MergeGateDecision,
     MergeObservationCommand,
     PlanRecoveryCommand,
     PrepareChangeSetCommand,
     PullRequestObservationCommand,
     RecordedSCMObservation,
+    RecordGovernanceDecisionCommand,
     RecordMergeRequestedCommand,
     RecordRecoveryActionCommand,
     RecordSCMObservationCommand,
@@ -32,6 +34,7 @@ from .domain import (
     ChangeSet,
     DeliveryConflict,
     DeliveryNotFound,
+    GovernanceDecision,
     RecoveryAction,
     RecoveryPlan,
     RepositoryDelivery,
@@ -272,8 +275,9 @@ class SCMObservationService:
 
 
 class DeliveryService:
-    def __init__(self, store: ChangeSetStore) -> None:
+    def __init__(self, store: ChangeSetStore, *, require_governance: bool = False) -> None:
         self._store = store
+        self._require_governance = require_governance
 
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
@@ -371,6 +375,22 @@ class DeliveryService:
             lambda item: item.request_merge(command.head_sha),
         )
 
+    async def record_governance_decision(
+        self, command: RecordGovernanceDecisionCommand
+    ) -> ChangeSetView:
+        change_set = await self._required(command.change_set_id)
+        updated = change_set.record_governance(
+            GovernanceDecision(
+                repository_id=command.repository_id,
+                head_sha=command.head_sha.strip().lower(),
+                decision=command.decision,
+                decided_by_agent_id=command.decided_by_agent_id,
+                reason=command.reason.strip(),
+            )
+        )
+        await self._store.update(updated, expected_version=change_set.version)
+        return updated.to_view()
+
     async def evaluate_merge_gate(
         self, change_set_id: UUID, repository_id: UUID
     ) -> MergeGateDecision:
@@ -406,6 +426,21 @@ class DeliveryService:
                 for action in active.actions
             ):
                 reasons.append("an active recovery plan is incomplete")
+        if self._require_governance:
+            decision = next(
+                (
+                    item
+                    for item in reversed(change_set.governance_decisions)
+                    if item.repository_id == repository_id and item.head_sha == target.commit_sha
+                ),
+                None,
+            )
+            if decision is None:
+                reasons.append("head-bound governance decision is missing")
+            elif decision.decision is GovernanceDecisionKind.BLOCKED:
+                reasons.append(f"governance blocked delivery: {decision.reason}")
+            elif decision.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED:
+                reasons.append(f"governance requires rollback: {decision.reason}")
         return MergeGateDecision(
             change_set_id=change_set.id,
             repository_id=repository_id,

@@ -140,7 +140,10 @@ def build_default_container() -> ApplicationContainer:
         )
         background_services = (AgentTeamsMatrixInboundPoller(messenger, inbound),)
     if settings.github_webhook_secret or scm_adapter is not None:
-        delivery = DeliveryService(PostgresChangeSetStore(database))
+        delivery = DeliveryService(
+            PostgresChangeSetStore(database),
+            require_governance=settings.delivery_auto_enabled,
+        )
         observations = SCMObservationService(PostgresSCMObservationStore(database))
         commands = SCMCommandService(PostgresSCMCommandStore(database))
         coordinator = ChangeSetSCMCoordinator(
@@ -189,7 +192,7 @@ def build_default_container() -> ApplicationContainer:
                 ),
             )
     if scm_adapter is not None and settings.delivery_auto_enabled:
-        delivery = DeliveryService(PostgresChangeSetStore(database))
+        delivery = DeliveryService(PostgresChangeSetStore(database), require_governance=True)
         commands = SCMCommandService(PostgresSCMCommandStore(database))
         background_services = (
             *background_services,

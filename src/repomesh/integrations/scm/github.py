@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from .contracts import (
+    BranchProtectionObservation,
     CheckRunObservation,
     CreateDraftPullRequestCommand,
     MergePullRequestCommand,
@@ -79,6 +80,35 @@ class GitHubAdapter:
             repository, await self._request("GET", repository, f"/pulls/{number}")
         )
 
+    async def get_branch_protection(
+        self, repository: RepositoryRef, branch: str
+    ) -> BranchProtectionObservation:
+        payload = await self._request("GET", repository, f"/branches/{branch}/protection")
+        checks = payload.get("required_status_checks") or {}
+        contexts = tuple(
+            sorted(
+                {
+                    str(item.get("context") or "").strip().lower()
+                    for item in checks.get("checks", ())
+                    if item.get("context")
+                }
+                | {
+                    str(item).strip().lower()
+                    for item in checks.get("contexts", ())
+                    if str(item).strip()
+                }
+            )
+        )
+        reviews = payload.get("required_pull_request_reviews") or {}
+        return BranchProtectionObservation(
+            required_checks=contexts,
+            required_approvals=int(reviews.get("required_approving_review_count") or 0),
+            dismisses_stale_reviews=bool(reviews.get("dismiss_stale_reviews")),
+            requires_conversation_resolution=bool(
+                (payload.get("required_conversation_resolution") or {}).get("enabled")
+            ),
+        )
+
     async def list_check_runs(
         self, repository: RepositoryRef, head_sha: str
     ) -> tuple[CheckRunObservation, ...]:
@@ -103,9 +133,7 @@ class GitHubAdapter:
                         head_sha=str(item.get("head_sha") or normalized).lower(),
                         terminal=str(item.get("status") or "").lower() == "completed",
                         passed=conclusion in {"success", "neutral", "skipped"},
-                        summary=str(
-                            output.get("summary") or output.get("title") or conclusion
-                        ),
+                        summary=str(output.get("summary") or output.get("title") or conclusion),
                     )
                 )
             if len(items) < 100:
@@ -132,9 +160,7 @@ class GitHubAdapter:
                 observations.append(
                     PullRequestReviewObservation(
                         review_id=str(item["id"]),
-                        reviewer=str((item.get("user") or {}).get("login") or "")
-                        .strip()
-                        .lower(),
+                        reviewer=str((item.get("user") or {}).get("login") or "").strip().lower(),
                         head_sha=str(item.get("commit_id") or "").lower(),
                         state=SCMReviewState(state),
                         summary=str(item.get("body") or ""),

@@ -8,6 +8,8 @@ from .contracts import (
     ChangeSetStatus,
     ChangeSetView,
     CICheckObservationView,
+    GovernanceDecisionKind,
+    GovernanceDecisionView,
     RecoveryActionKind,
     RecoveryActionStatus,
     RecoveryActionView,
@@ -506,6 +508,35 @@ class RecoveryPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class GovernanceDecision:
+    repository_id: UUID
+    head_sha: str
+    decision: GovernanceDecisionKind
+    decided_by_agent_id: UUID
+    reason: str
+    id: UUID = field(default_factory=new_id)
+    decided_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        normalized = self.head_sha.strip().lower()
+        if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ValueError("governance decision head_sha must be a full Git object id")
+        if not self.reason.strip():
+            raise ValueError("governance decision reason is required")
+
+    def to_view(self) -> GovernanceDecisionView:
+        return GovernanceDecisionView(
+            id=self.id,
+            repository_id=self.repository_id,
+            head_sha=self.head_sha,
+            decision=self.decision,
+            decided_by_agent_id=self.decided_by_agent_id,
+            reason=self.reason,
+            decided_at=self.decided_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ChangeSet:
     organization_id: UUID
     project_id: UUID
@@ -516,6 +547,7 @@ class ChangeSet:
     id: UUID = field(default_factory=new_id)
     status: ChangeSetStatus = ChangeSetStatus.READY
     recovery_plans: tuple[RecoveryPlan, ...] = ()
+    governance_decisions: tuple[GovernanceDecision, ...] = ()
     version: int = 1
     merge_cursor: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -564,6 +596,29 @@ class ChangeSet:
             updated_at=datetime.now(UTC),
         )
 
+    def record_governance(self, decision: GovernanceDecision) -> "ChangeSet":
+        candidate = next(
+            (item for item in self.repositories if item.repository_id == decision.repository_id),
+            None,
+        )
+        if candidate is None:
+            raise DeliveryNotFound("governance repository is not in ChangeSet")
+        if decision.head_sha != candidate.commit_sha:
+            raise DeliveryConflict("governance decision does not match candidate head")
+        retained = tuple(
+            item
+            for item in self.governance_decisions
+            if not (
+                item.repository_id == decision.repository_id and item.head_sha == decision.head_sha
+            )
+        )
+        return replace(
+            self,
+            governance_decisions=(*retained, decision),
+            version=self.version + 1,
+            updated_at=datetime.now(UTC),
+        )
+
     def record_recovery_action(
         self,
         plan_id: UUID,
@@ -608,6 +663,7 @@ class ChangeSet:
             merge_cursor=self.merge_cursor,
             repositories=tuple(item.to_view() for item in self.repositories),
             recovery_plans=tuple(item.to_view() for item in self.recovery_plans),
+            governance_decisions=tuple(item.to_view() for item in self.governance_decisions),
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

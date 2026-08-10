@@ -63,6 +63,33 @@ class ReviewState(StrEnum):
     DISMISSED = "dismissed"
 
 
+class GovernanceDecisionKind(StrEnum):
+    READY = "ready"
+    BLOCKED = "blocked"
+    ROLLBACK_REQUIRED = "rollback_required"
+
+
+@dataclass(frozen=True, slots=True)
+class RecordGovernanceDecisionCommand:
+    change_set_id: UUID
+    repository_id: UUID
+    head_sha: str
+    decision: GovernanceDecisionKind
+    decided_by_agent_id: UUID
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class GovernanceDecisionView:
+    id: UUID
+    repository_id: UUID
+    head_sha: str
+    decision: GovernanceDecisionKind
+    decided_by_agent_id: UUID
+    reason: str
+    decided_at: datetime
+
+
 class SCMObservationSource(StrEnum):
     WEBHOOK = "webhook"
     POLLER = "poller"
@@ -319,6 +346,7 @@ class ChangeSetView:
     merge_cursor: int
     repositories: tuple[RepositoryDeliveryView, ...]
     recovery_plans: tuple[RecoveryPlanView, ...]
+    governance_decisions: tuple[GovernanceDecisionView, ...]
     created_at: datetime
     updated_at: datetime
 

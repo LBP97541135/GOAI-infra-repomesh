@@ -14,6 +14,7 @@ ExecutionPlan completed
   -> periodically reconcile PR, Check Run and Review snapshots from GitHub
   -> verify repository and exact candidate Head SHA
   -> evaluate CI, approval, recovery and dependency gates
+  -> require an active READY governance decision for the exact Head SHA
   -> append an idempotent Head-bound Merge command in dependency order
   -> lease and dispatch the command to GitHub
   -> persist MERGE_REQUESTED without claiming remote completion
@@ -30,6 +31,7 @@ ExecutionPlan completed
   `Retry-After`; repeated snapshots are content-addressed and harmless.
 - A changed remote branch, PR Head SHA or CI Head SHA fails closed.
 - A failed required check or requested-changes review blocks Merge.
+- A BLOCKED, ROLLBACK_REQUIRED, missing or stale governance decision blocks Merge.
 - A downstream repository waits until every upstream repository is merged.
 - GitHub remains the source of truth for PR and Merge state; RepoMesh stores governed observations.
 - A successful Merge API response records only `MERGE_REQUESTED`; only a later GitHub observation

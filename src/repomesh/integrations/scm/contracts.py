@@ -81,6 +81,14 @@ class PullRequestReviewObservation:
 
 
 @dataclass(frozen=True, slots=True)
+class BranchProtectionObservation:
+    required_checks: tuple[str, ...]
+    required_approvals: int
+    dismisses_stale_reviews: bool
+    requires_conversation_resolution: bool
+
+
+@dataclass(frozen=True, slots=True)
 class PublishBranchCommand:
     workspace: Path
     branch_name: str
@@ -116,6 +124,9 @@ class BranchPublisher(Protocol):
 
 
 class SCMAdapter(Protocol):
+    async def get_branch_protection(
+        self, repository: RepositoryRef, branch: str
+    ) -> BranchProtectionObservation: ...
     async def create_draft_pull_request(
         self, command: CreateDraftPullRequestCommand
     ) -> PullRequestObservation: ...

@@ -103,6 +103,37 @@ def test_webhook_signature_verification() -> None:
 
 
 @pytest.mark.asyncio
+async def test_branch_protection_is_normalized_for_delivery_preflight() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "required_status_checks": {
+                        "checks": [{"context": "Unit-Tests"}],
+                        "contexts": ["lint"],
+                    },
+                    "required_pull_request_reviews": {
+                        "required_approving_review_count": 2,
+                        "dismiss_stale_reviews": True,
+                    },
+                    "required_conversation_resolution": {"enabled": True},
+                },
+            )
+        )
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    protection = await adapter.get_branch_protection(repository(), "main")
+
+    assert protection.required_checks == ("lint", "unit-tests")
+    assert protection.required_approvals == 2
+    assert protection.dismisses_stale_reviews
+    assert protection.requires_conversation_resolution
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_merge_uses_frozen_head_sha_as_github_guard() -> None:
     requests: list[httpx.Request] = []
 

@@ -118,6 +118,20 @@ class ChangeSetSCMCoordinator:
             raise DeliveryNotFound(f"repository not in catalog: {command.repository_id}")
         if self._adapter is None:
             raise RuntimeError("SCM adapter is not configured")
+        protection_reader = getattr(self._adapter, "get_branch_protection", None)
+        if protection_reader is not None:
+            protection = await protection_reader(
+                parse_repository_ref(profile.url), command.base_branch
+            )
+            missing = set(candidate.required_checks) - set(protection.required_checks)
+            if missing:
+                raise SCMConflict(
+                    f"base branch protection is missing required checks: {sorted(missing)}"
+                )
+            if protection.required_approvals < candidate.required_approvals:
+                raise SCMConflict("base branch protection allows too few approvals")
+            if candidate.required_approvals and not protection.dismisses_stale_reviews:
+                raise SCMConflict("base branch protection must dismiss stale reviews")
         observation = await self._adapter.create_draft_pull_request(
             CreateDraftPullRequestCommand(
                 repository=parse_repository_ref(profile.url),

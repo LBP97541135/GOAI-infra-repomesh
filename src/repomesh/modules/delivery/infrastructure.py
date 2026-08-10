@@ -21,6 +21,7 @@ from repomesh.persistence.base import Base
 
 from .contracts import (
     ChangeSetStatus,
+    GovernanceDecisionKind,
     RecoveryActionKind,
     RecoveryActionStatus,
     RecoveryTrigger,
@@ -35,6 +36,7 @@ from .domain import (
     ChangeSet,
     CICheckObservation,
     DeliveryConflict,
+    GovernanceDecision,
     RecoveryAction,
     RecoveryPlan,
     RepositoryDelivery,
@@ -763,6 +765,18 @@ class PostgresChangeSetStore:
                 }
                 for plan in change_set.recovery_plans
             ],
+            "governance_decisions": [
+                {
+                    "id": str(item.id),
+                    "repository_id": str(item.repository_id),
+                    "head_sha": item.head_sha,
+                    "decision": item.decision.value,
+                    "decided_by_agent_id": str(item.decided_by_agent_id),
+                    "reason": item.reason,
+                    "decided_at": item.decided_at.isoformat(),
+                }
+                for item in change_set.governance_decisions
+            ],
         }
 
     @staticmethod
@@ -831,6 +845,18 @@ class PostgresChangeSetStore:
             )
             for plan in payload["recovery_plans"]
         )
+        governance = tuple(
+            GovernanceDecision(
+                id=UUID(str(item["id"])),
+                repository_id=UUID(str(item["repository_id"])),
+                head_sha=str(item["head_sha"]),
+                decision=GovernanceDecisionKind(str(item["decision"])),
+                decided_by_agent_id=UUID(str(item["decided_by_agent_id"])),
+                reason=str(item["reason"]),
+                decided_at=datetime.fromisoformat(str(item["decided_at"])),
+            )
+            for item in payload.get("governance_decisions", ())
+        )
         return ChangeSet(
             id=record.id,
             organization_id=record.organization_id,
@@ -845,6 +871,7 @@ class PostgresChangeSetStore:
             repositories=repositories,
             status=ChangeSetStatus(record.status),
             recovery_plans=plans,
+            governance_decisions=governance,
             version=record.version,
             merge_cursor=int(payload.get("merge_cursor", 0)),
             created_at=record.created_at,

@@ -326,7 +326,10 @@ class ApplicationContainer:
     def delivery_service(self):
         from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
 
-        return DeliveryService(PostgresChangeSetStore(self.database))
+        return DeliveryService(
+            PostgresChangeSetStore(self.database),
+            require_governance=get_settings().delivery_auto_enabled,
+        )
 
     def scm_webhook_event_store(self):
         return self.scm_observation_service()

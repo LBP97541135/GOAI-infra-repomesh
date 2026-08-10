@@ -111,11 +111,15 @@ until earlier merge orders are confirmed.
 - Advance `merge_cursor` only from a Merge Observation with the expected head SHA.
 - Pause and alert when GitHub reports an out-of-order or unauthorized merge.
 
-### PR-4: Governance
+### PR-4: Governance - implemented
 
 - Add head-bound `READY`, `BLOCKED`, and `ROLLBACK_REQUIRED` decisions.
 - Require GitHub approval, stale-review dismissal, and an active governance decision.
 - Preflight required GitHub branch protection/ruleset configuration.
+
+Automatic delivery requires a current decision for the exact repository candidate SHA. GitHub
+branch protection preflight verifies named checks, approval count and stale-review dismissal before
+RepoMesh opens the delivery PR.
 
 ### PR-5: Stable rework identity
 
