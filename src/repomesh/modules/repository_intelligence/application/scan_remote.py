@@ -201,6 +201,18 @@ async def scan_remote(
         except Exception:  # noqa: BLE001
             _logger.debug("Failed to fetch %s for %s", dep_file, repo_info.name)
 
+    # 3b. Scan Java source files for inter-service dependencies.
+    # pom.xml only reveals Maven (compile-time) deps; microservice
+    # call chains live in source code (RestTemplate, Feign, RabbitMQ).
+    java_files = _find_java_service_files(file_entries)
+    for java_path in java_files:
+        try:
+            content = await fetcher.fetch_file_content(repo_info.url, java_path)
+            if content is not None:
+                deps.extend(_extract_service_deps(content))
+        except Exception:  # noqa: BLE001
+            _logger.debug("Failed to fetch %s for %s", java_path, repo_info.name)
+
     # Deduplicate deps.
     seen: set[str] = set()
     unique_deps: list[str] = []
@@ -410,9 +422,63 @@ def _parse_go_mod(content: str) -> list[str]:
     return deps
 
 
-# ---------------------------------------------------------------------------
-# Low-signal scoring (adapted for remote: no exposed_apis)
-# ---------------------------------------------------------------------------
+#: Regex patterns for extracting inter-service dependencies from Java source.
+#: Matches patterns like: getServiceUrl("ts-notification-service"),
+#: @FeignClient(name="ts-order-service"), restTemplate...("ts-x-service"),
+#: RestTemplate call URL string literals containing ts-* names.
+_JAVA_SERVICE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # getServiceUrl("ts-xxx-service") or getServiceUrl("ts-xxx")
+    re.compile(r'getServiceUrl\s*\(\s*"(ts-[\w-]+)"\s*\)'),
+    # @FeignClient(name="ts-xxx-service", ...)
+    re.compile(r'@FeignClient\s*\([^)]*name\s*=\s*"(ts-[\w-]+)"'),
+    # "http://ts-xxx-service" or "ts-xxx-service" in restTemplate exchange
+    re.compile(r'"(ts-[\w-]+-service)"'),
+    # RabbitMQ routing key patterns: sendService.send("ts-xxx-...")
+    re.compile(r'\.send\s*\(\s*"(ts-[\w-]+)"'),
+)
+
+#: Java source files worth scanning (Service, Controller, Config, Client).
+_JAVA_SCAN_PATTERNS = (
+    "ServiceImpl.java",
+    "Service.java",
+    "Controller.java",
+    "Client.java",
+    "Config.java",
+)
+
+#: Maximum number of Java files to fetch per repo (rate-limit friendly).
+_MAX_JAVA_FILES_PER_REPO = 15
+
+
+def _find_java_service_files(entries: list[FileEntry]) -> list[str]:
+    """Find Java source files likely to contain inter-service calls."""
+
+    candidates: list[str] = []
+    for entry in entries:
+        if entry.is_dir:
+            continue
+        if not entry.path.endswith(".java"):
+            continue
+        # Only scan files matching known patterns (Service, Controller, etc.)
+        filename = entry.path.rsplit("/", 1)[-1]
+        if any(pat in filename for pat in _JAVA_SCAN_PATTERNS):
+            candidates.append(entry.path)
+        if len(candidates) >= _MAX_JAVA_FILES_PER_REPO:
+            break
+    return candidates
+
+
+def _extract_service_deps(java_content: str) -> list[str]:
+    """Extract ts-* service names referenced in Java source code.
+
+    This catches inter-service dependencies that pom.xml cannot reveal:
+    REST calls via RestTemplate, Feign clients, RabbitMQ routing, etc.
+    """
+
+    found: list[str] = []
+    for pattern in _JAVA_SERVICE_PATTERNS:
+        found.extend(pattern.findall(java_content))
+    return found
 
 
 def _compute_remote_low_signal(

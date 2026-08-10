@@ -68,6 +68,41 @@ class TestEdgeConstruction:
         assert len(edges) == 1
         assert edges[0].confidence == "possible"
 
+    def test_longest_match_preferred(self):
+        """When multiple repo names match a dep, the longest (most specific) wins.
+
+        E.g. dep="github.com/org/auth-service-client" with repos
+        ["auth", "auth-service"] → both are substrings, but
+        "auth-service" is longer → more specific → preferred.
+        """
+        profiles = [
+            _profile("auth"),
+            _profile("auth-service"),
+            _profile("my-app", deps=("github.com/org/auth-service-client",)),
+        ]
+        graph = DependencyGraphService(profiles)
+
+        # Only one edge should exist (best match only)
+        assert graph.edge_count == 1
+        edges = graph.forward_dependencies("my-app")
+        assert len(edges) == 1
+        # auth-service is longer → more specific → preferred over auth
+        assert edges[0].producer == "auth-service"
+
+    def test_exact_beats_substring(self):
+        """Exact match always wins over substring, regardless of name length."""
+        profiles = [
+            _profile("auth"),
+            _profile("auth-service"),
+            _profile("consumer", deps=("auth-service",)),
+        ]
+        graph = DependencyGraphService(profiles)
+
+        edges = graph.forward_dependencies("consumer")
+        assert len(edges) == 1
+        assert edges[0].confidence == "confirmed"
+        assert edges[0].producer == "auth-service"
+
     def test_external_dep_ignored(self):
         """Deps that don't match any repo name should be ignored."""
         profiles = [

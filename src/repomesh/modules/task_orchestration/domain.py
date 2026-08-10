@@ -27,7 +27,12 @@ class TaskNotFound(TaskOrchestrationError):
     pass
 
 
-FINAL_TASK_STATUSES = frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED, TaskStatus.CANCELLED})
+FINAL_TASK_STATUSES = frozenset({
+    TaskStatus.SUCCEEDED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+    TaskStatus.SUPERSEDED,
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +84,23 @@ class Task:
             self,
             status=status,
             result_summary=summary.strip(),
+            version=self.version + 1,
+        )
+
+    def supersede(
+        self, *, reason: str = "", superseded_by: UUID | None = None
+    ) -> "Task":
+        """Mark this task as superseded by a newer plan version."""
+        if self.status in FINAL_TASK_STATUSES:
+            raise TaskConflict(
+                f"a {self.status.value} task cannot be superseded"
+            )
+        return replace(
+            self,
+            status=TaskStatus.SUPERSEDED,
+            result_summary=(
+                f"SUPERSEDED: {reason}" if reason else "SUPERSEDED"
+            ),
             version=self.version + 1,
         )
 

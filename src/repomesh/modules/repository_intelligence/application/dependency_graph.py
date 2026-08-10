@@ -123,7 +123,9 @@ class DependencyGraphService:
     # Internal: graph construction
     # ------------------------------------------------------------------
 
-    def _build_edges(self, profiles: list[RepositoryProfile]) -> list[GraphEdge]:
+    def _build_edges(
+        self, profiles: list[RepositoryProfile]
+    ) -> list[GraphEdge]:
         """Extract directed edges from AutoCard.deps via name matching.
 
         Matching strategy (from-wide):
@@ -146,7 +148,7 @@ class DependencyGraphService:
                 if matched is None:
                     continue
 
-                key = (profile.name, matched)  # (consumer, producer)
+                key = (profile.name, matched[0])  # (consumer, producer_name)
                 if key in seen:
                     continue
                 seen.add(key)
@@ -158,45 +160,64 @@ class DependencyGraphService:
     def _match_dep_to_name(
         self, dep: str, consumer: str
     ) -> tuple[str, GraphEdge] | None:
-        """Match a dep string to a registered repo name.
+        """Match a dep string to the best registered repo name.
+
+        Collects all candidate matches, then picks the best one by:
+        1. Match tier — exact > substring > suffix
+        2. Name length — longer name is more specific (auth-service > auth)
 
         Returns (producer_name, GraphEdge) or None.
         """
         dep_lower = dep.lower().strip()
+        candidates: list[tuple[int, int, str, GraphEdge]] = []
 
-        # 1. Exact match
         for name in self._names:
-            if name.lower() == dep_lower and name != consumer:
-                return name, GraphEdge(
-                    producer=name,
-                    consumer=consumer,
-                    confidence="confirmed",
-                    match_reason=f"exact: dep == {name}",
-                )
-
-        # 2. Substring match (repo name appears inside dep)
-        for name in self._names:
+            if name == consumer:
+                continue
             name_lower = name.lower()
-            if name != consumer and name_lower in dep_lower:
-                return name, GraphEdge(
-                    producer=name,
-                    consumer=consumer,
-                    confidence="possible",
-                    match_reason=f"substring: '{name}' found in '{dep}'",
-                )
 
-        # 3. Suffix match (dep ends with repo name)
-        for name in self._names:
-            name_lower = name.lower()
-            if name != consumer and dep_lower.endswith(name_lower):
-                return name, GraphEdge(
-                    producer=name,
-                    consumer=consumer,
-                    confidence="possible",
-                    match_reason=f"suffix: dep ends with '{name}'",
-                )
+            # Tier 0: exact match (highest priority)
+            if name_lower == dep_lower:
+                candidates.append((
+                    0, len(name), name,
+                    GraphEdge(
+                        producer=name, consumer=consumer,
+                        confidence="confirmed",
+                        match_reason=f"exact: dep == {name}",
+                    ),
+                ))
+                continue
 
-        return None
+            # Tier 1: substring match (dep contains name)
+            if name_lower in dep_lower:
+                candidates.append((
+                    1, len(name), name,
+                    GraphEdge(
+                        producer=name, consumer=consumer,
+                        confidence="possible",
+                        match_reason=f"substring: '{name}' found in '{dep}'",
+                    ),
+                ))
+                continue
+
+            # Tier 2: suffix match (dep ends with name)
+            if dep_lower.endswith(name_lower):
+                candidates.append((
+                    2, len(name), name,
+                    GraphEdge(
+                        producer=name, consumer=consumer,
+                        confidence="possible",
+                        match_reason=f"suffix: dep ends with '{name}'",
+                    ),
+                ))
+
+        if not candidates:
+            return None
+
+        # Sort: lowest tier number first, then longest name first
+        candidates.sort(key=lambda c: (c[0], -c[1]))
+        best = candidates[0]
+        return best[2], best[3]
 
     def _index_forward(self) -> dict[str, list[GraphEdge]]:
         """consumer → [edges where this consumer depends on producers]."""
