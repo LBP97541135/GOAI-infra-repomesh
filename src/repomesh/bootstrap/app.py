@@ -141,6 +141,7 @@ def build_default_container() -> ApplicationContainer:
             delivery,
             repository_catalog,
             ChangeSetSCMCoordinator(delivery, repository_catalog, scm_adapter),
+            auto_merge=settings.delivery_auto_enabled,
         )
         background_services = (
             *background_services,

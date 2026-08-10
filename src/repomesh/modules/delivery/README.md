@@ -19,6 +19,10 @@ release evidence, and rollback records. Coding agents cannot push, open PRs, or 
 7. A repository can merge only after all of its upstream repositories are recorded as merged.
 8. The ChangeSet is delivered only when every repository is merged.
 
+GitHub accepting a Merge request moves a repository only to `merge_requested`. RepoMesh records
+`merged` and the merge commit SHA only after reconciliation observes the remote PR in the merged
+state. Replayed Webhooks cannot submit another Merge while that confirmation is pending.
+
 Merge is fail-closed. `evaluate_merge_gate` reports each blocker: missing CI or review evidence, unmerged
 upstream repositories, earlier CI failures, or incomplete recovery actions. An SCM integration may
 execute merge only after the gate returns `allowed=true`; dependency order is checked again when
@@ -39,6 +43,8 @@ ChangeSet at `REPOMESH_DELIVERY_RECONCILE_INTERVAL_SECONDS`; failures retry on t
 Automatic delivery is disabled until `REPOMESH_DELIVERY_AUTO_ENABLED=true`, at least one named
 `REPOMESH_DELIVERY_REQUIRED_CHECKS` entry, one required approval, a GitHub App, and a webhook
 secret are configured. This avoids treating an arbitrary green check as approval to merge.
+The Webhook observation processor also receives this flag explicitly; merely configuring a GitHub
+App does not grant it permission to request Merge.
 
 ## GitHub App credentials
 

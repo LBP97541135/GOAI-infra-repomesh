@@ -23,6 +23,7 @@ class RepositoryDeliveryStatus(StrEnum):
     REVIEW_PENDING = "review_pending"
     REVIEW_CHANGES_REQUESTED = "review_changes_requested"
     READY_TO_MERGE = "ready_to_merge"
+    MERGE_REQUESTED = "merge_requested"
     MERGED = "merged"
     COMPENSATION_PENDING = "compensation_pending"
     COMPENSATED = "compensated"
@@ -188,6 +189,13 @@ class MergeObservationCommand:
     change_set_id: UUID
     repository_id: UUID
     merge_sha: str
+
+
+@dataclass(frozen=True, slots=True)
+class RecordMergeRequestedCommand:
+    change_set_id: UUID
+    repository_id: UUID
+    head_sha: str
 
 
 @dataclass(frozen=True, slots=True)

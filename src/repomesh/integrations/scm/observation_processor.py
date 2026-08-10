@@ -37,11 +37,14 @@ class GitHubObservationProcessor:
         delivery: DeliveryService,
         catalog: RepositoryCatalog,
         coordinator: ChangeSetSCMCoordinator,
+        *,
+        auto_merge: bool = False,
     ) -> None:
         self._observations = observations
         self._delivery = delivery
         self._catalog = catalog
         self._coordinator = coordinator
+        self._auto_merge = auto_merge
 
     async def process(self, observation_id: UUID) -> ProcessedSCMObservation:
         claimed = await self._observations.claim(observation_id)
@@ -73,7 +76,7 @@ class GitHubObservationProcessor:
                 result = await self._coordinator.record_github_review(
                     change_set_id, repository_id, parsed
                 )
-            if self._coordinator.can_mutate:
+            if self._auto_merge and self._coordinator.can_mutate:
                 result = await self._coordinator.merge_ready_repositories(change_set_id)
             await self._observations.complete(observation_id)
             return ProcessedSCMObservation(

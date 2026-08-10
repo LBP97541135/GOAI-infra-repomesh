@@ -43,18 +43,20 @@ class SnapshotAdapter:
     async def get_pull_request(
         self, repository: RepositoryRef, number: int
     ) -> PullRequestObservation:
+        merged = self.merge_calls > 0
         return PullRequestObservation(
             provider=SCMProvider.GITHUB,
             repository=repository,
             number=number,
             url=f"https://github.com/acme/pricing/pull/{number}",
-            state=PullRequestState.OPEN,
+            state=PullRequestState.MERGED if merged else PullRequestState.OPEN,
             draft=False,
             head_branch="repomesh/pricing",
             head_sha=self.head_sha,
             base_branch="main",
             base_sha="b" * 40,
             mergeable=True,
+            merge_sha="d" * 40 if merged else None,
         )
 
     async def list_check_runs(
@@ -139,6 +141,8 @@ async def test_reconciler_recovers_missed_webhooks_after_service_restart() -> No
     reconciler = DeliveryReconciler(restarted_service, coordinator)
 
     await reconciler.run_once()
+    requested = await restarted_service.get(change_set_id)
+    assert requested.repositories[0].status.value == "merge_requested"
     await reconciler.run_once()
 
     recovered = await restarted_service.get(change_set_id)

@@ -96,6 +96,10 @@ ExecutionPlans remain terminal; the long-lived ChangeSet requests a new attempt 
 
 ### PR-3: Merge command cursor
 
+Partially implemented: repository delivery now persists `merge_requested` and waits for a later
+GitHub PR observation before recording `merged`. The durable `scm_commands` journal, Outbox
+dispatcher and ChangeSet-level merge cursor remain future work.
+
 - Split gate and merge status.
 - Add `scm_commands` and an outbox dispatcher.
 - Record `merge_requested`; do not record `merged` from the command response.

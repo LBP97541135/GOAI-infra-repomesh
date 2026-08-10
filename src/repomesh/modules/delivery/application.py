@@ -15,6 +15,7 @@ from .contracts import (
     PrepareChangeSetCommand,
     PullRequestObservationCommand,
     RecordedSCMObservation,
+    RecordMergeRequestedCommand,
     RecordRecoveryActionCommand,
     RecordSCMObservationCommand,
     RecoveryActionKind,
@@ -242,6 +243,15 @@ class DeliveryService:
             command.change_set_id,
             command.repository_id,
             lambda item: item.observe_merge(command.merge_sha),
+        )
+
+    async def record_merge_requested(
+        self, command: RecordMergeRequestedCommand
+    ) -> ChangeSetView:
+        return await self._update_repository(
+            command.change_set_id,
+            command.repository_id,
+            lambda item: item.request_merge(command.head_sha),
         )
 
     async def evaluate_merge_gate(

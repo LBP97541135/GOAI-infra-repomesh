@@ -14,8 +14,9 @@ ExecutionPlan completed
   -> periodically reconcile PR, Check Run and Review snapshots from GitHub
   -> verify repository and exact candidate Head SHA
   -> evaluate CI, approval, recovery and dependency gates
-  -> reconcile live PR state
-  -> merge in dependency order
+  -> submit a Head-bound Merge request in dependency order
+  -> persist MERGE_REQUESTED without claiming remote completion
+  -> reconcile live PR state until GitHub reports MERGED
   -> mark ChangeSet delivered
 ```
 
@@ -27,7 +28,10 @@ ExecutionPlan completed
 - A failed required check or requested-changes review blocks Merge.
 - A downstream repository waits until every upstream repository is merged.
 - GitHub remains the source of truth for PR and Merge state; RepoMesh stores governed observations.
+- A successful Merge API response records only `MERGE_REQUESTED`; only a later GitHub observation
+  records the merge commit and advances the ChangeSet.
 - Existing recovery plans prevent Merge until their actions finish.
+- Webhook processing may request Merge only when `REPOMESH_DELIVERY_AUTO_ENABLED=true`.
 
 ## Required configuration
 

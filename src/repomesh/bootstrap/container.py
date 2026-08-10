@@ -354,6 +354,7 @@ class ApplicationContainer:
             delivery,
             self.repository_catalog,
             ChangeSetSCMCoordinator(delivery, self.repository_catalog, self.scm_adapter),
+            auto_merge=get_settings().delivery_auto_enabled,
         )
 
     def changeset_scm_coordinator(self):

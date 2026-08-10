@@ -14,10 +14,12 @@ from repomesh.integrations.scm import (
     PlanDeliveryPolicy,
 )
 from repomesh.integrations.scm.contracts import (
+    CheckRunObservation,
     CreateDraftPullRequestCommand,
     MergePullRequestCommand,
     MergePullRequestResult,
     PullRequestObservation,
+    PullRequestReviewObservation,
     PullRequestState,
     RepositoryRef,
     SCMProvider,
@@ -95,24 +97,51 @@ class RecordingGitHubAdapter:
         self, repository: RepositoryRef, number: int
     ) -> PullRequestObservation:
         command = self.pull_requests[number - 1]
+        merged_index = next(
+            (
+                index
+                for index, merge in enumerate(self.merges, start=1)
+                if merge.number == number and merge.repository == repository
+            ),
+            None,
+        )
         return PullRequestObservation(
             provider=SCMProvider.GITHUB,
             repository=repository,
             number=number,
             url=f"https://github.com/{repository.owner}/{repository.name}/pull/{number}",
-            state=PullRequestState.OPEN,
+            state=(
+                PullRequestState.MERGED
+                if merged_index is not None
+                else PullRequestState.OPEN
+            ),
             draft=False,
             head_branch=command.head_branch,
             head_sha=command.expected_head_sha,
             base_branch=command.base_branch,
             base_sha="b" * 40,
             mergeable=True,
+            merge_sha=(
+                ("c" if merged_index == 1 else "d") * 40
+                if merged_index is not None
+                else None
+            ),
         )
 
     async def close_pull_request(
         self, repository: RepositoryRef, number: int, *, idempotency_key: str
     ) -> PullRequestObservation:
         raise NotImplementedError
+
+    async def list_check_runs(
+        self, repository: RepositoryRef, head_sha: str
+    ) -> tuple[CheckRunObservation, ...]:
+        return ()
+
+    async def list_pull_request_reviews(
+        self, repository: RepositoryRef, number: int
+    ) -> tuple[PullRequestReviewObservation, ...]:
+        return ()
 
     async def merge_pull_request(
         self, command: MergePullRequestCommand
@@ -293,7 +322,10 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
             ),
         )
 
-    completed = await coordinator.merge_ready_repositories(change_set.id)
+    requested = await coordinator.merge_ready_repositories(change_set.id)
+    assert requested.status is not ChangeSetStatus.DELIVERED
+    await coordinator.reconcile_and_merge(change_set.id)
+    completed = await coordinator.reconcile_and_merge(change_set.id)
 
     assert completed.status is ChangeSetStatus.DELIVERED
     assert [command.repository.name for command in adapter.merges] == ["api", "web"]

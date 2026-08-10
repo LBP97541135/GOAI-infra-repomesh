@@ -8,6 +8,14 @@ import pytest
 from fastapi import FastAPI
 
 from repomesh.api.scm_webhook import router
+from repomesh.integrations.scm.contracts import (
+    MergePullRequestCommand,
+    MergePullRequestResult,
+    PullRequestObservation,
+    PullRequestState,
+    RepositoryRef,
+    SCMProvider,
+)
 from repomesh.integrations.scm.delivery import ChangeSetSCMCoordinator
 from repomesh.integrations.scm.observation_processor import GitHubObservationProcessor
 from repomesh.modules.delivery import (
@@ -26,8 +34,36 @@ from repomesh.modules.repository_intelligence.infrastructure import InMemoryRepo
 from repomesh.settings import get_settings
 
 
+class MergeCapableAdapter:
+    def __init__(self) -> None:
+        self.merge_calls = 0
+
+    async def get_pull_request(
+        self, repository: RepositoryRef, number: int
+    ) -> PullRequestObservation:
+        return PullRequestObservation(
+            provider=SCMProvider.GITHUB,
+            repository=repository,
+            number=number,
+            url=f"https://github.com/acme/pricing/pull/{number}",
+            state=PullRequestState.OPEN,
+            draft=False,
+            head_branch="repomesh/routed",
+            head_sha="a" * 40,
+            base_branch="main",
+            base_sha="b" * 40,
+            mergeable=True,
+        )
+
+    async def merge_pull_request(
+        self, command: MergePullRequestCommand
+    ) -> MergePullRequestResult:
+        self.merge_calls += 1
+        return MergePullRequestResult(True, "d" * 40, "accepted")
+
+
 class Container:
-    def __init__(self, delivery, catalog, observations) -> None:
+    def __init__(self, delivery, catalog, observations, adapter=None, *, auto_merge=False) -> None:
         self._delivery = delivery
         self.repository_catalog = catalog
         self._observations = observations
@@ -35,7 +71,8 @@ class Container:
             observations,
             delivery,
             catalog,
-            ChangeSetSCMCoordinator(delivery, catalog, None),
+            ChangeSetSCMCoordinator(delivery, catalog, adapter),
+            auto_merge=auto_merge,
         )
 
     def delivery_service(self):
@@ -108,7 +145,8 @@ async def test_signed_check_run_routes_without_internal_ids(
     signature = hmac.new(b"webhook-secret", body, hashlib.sha256).hexdigest()
     app = FastAPI()
     observations = SCMObservationService(InMemorySCMObservationStore())
-    app.state.container = Container(delivery, catalog, observations)
+    adapter = MergeCapableAdapter()
+    app.state.container = Container(delivery, catalog, observations, adapter)
     app.include_router(router)
 
     async with httpx.AsyncClient(
@@ -132,3 +170,4 @@ async def test_signed_check_run_routes_without_internal_ids(
     assert observation.status.value == "processed"
     current = await delivery.get(change_set.id)
     assert current.repositories[0].status.value == "ready_to_merge"
+    assert adapter.merge_calls == 0

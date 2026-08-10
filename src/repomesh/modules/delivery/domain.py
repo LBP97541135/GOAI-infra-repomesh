@@ -290,13 +290,25 @@ class RepositoryDelivery:
         return RepositoryDeliveryStatus.READY_TO_MERGE
 
     def observe_merge(self, merge_sha: str) -> "RepositoryDelivery":
-        if self.status is not RepositoryDeliveryStatus.READY_TO_MERGE:
+        if self.status not in {
+            RepositoryDeliveryStatus.READY_TO_MERGE,
+            RepositoryDeliveryStatus.MERGE_REQUESTED,
+        }:
             raise DeliveryConflict("repository is not ready to merge")
         return replace(
             self,
             status=RepositoryDeliveryStatus.MERGED,
             merge_sha=merge_sha.strip().lower(),
         )
+
+    def request_merge(self, head_sha: str) -> "RepositoryDelivery":
+        if head_sha.strip().lower() != self.commit_sha:
+            raise DeliveryConflict("merge request head does not match candidate commit")
+        if self.status is RepositoryDeliveryStatus.MERGE_REQUESTED:
+            return self
+        if self.status is not RepositoryDeliveryStatus.READY_TO_MERGE:
+            raise DeliveryConflict("repository is not ready to request merge")
+        return replace(self, status=RepositoryDeliveryStatus.MERGE_REQUESTED)
 
     def to_view(self) -> RepositoryDeliveryView:
         return RepositoryDeliveryView(

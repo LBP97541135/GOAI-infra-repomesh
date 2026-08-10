@@ -9,6 +9,7 @@ from repomesh.modules.delivery.contracts import (
     CIObservationCommand,
     MergeObservationCommand,
     PullRequestObservationCommand,
+    RecordMergeRequestedCommand,
     RepositoryDeliveryStatus,
     ReviewObservationCommand,
     ReviewState,
@@ -175,7 +176,7 @@ class ChangeSetSCMCoordinator:
             raise ValueError("draft pull request cannot merge")
         if observation.mergeable is False:
             raise ValueError("pull request has conflicts")
-        result = await self._adapter.merge_pull_request(
+        await self._adapter.merge_pull_request(
             MergePullRequestCommand(
                 repository=parse_repository_ref(profile.url),
                 number=candidate.pull_request_number,
@@ -183,8 +184,12 @@ class ChangeSetSCMCoordinator:
                 commit_title=change_set.title,
             )
         )
-        return await self._delivery.observe_merge(
-            MergeObservationCommand(change_set_id, repository_id, result.merge_sha)
+        return await self._delivery.record_merge_requested(
+            RecordMergeRequestedCommand(
+                change_set_id,
+                repository_id,
+                candidate.commit_sha,
+            )
         )
 
     async def record_github_ci(
@@ -322,13 +327,16 @@ class ChangeSetSCMCoordinator:
                 )
 
             candidate = self._candidate(current, candidate.repository_id)
-            gate = await self._delivery.evaluate_merge_gate(
-                change_set_id, candidate.repository_id
-            )
             if pull_request.state is PullRequestState.MERGED:
                 if not pull_request.merge_sha:
                     raise SCMConflict("merged pull request has no merge commit SHA")
-                if not gate.allowed:
+                gate = await self._delivery.evaluate_merge_gate(
+                    change_set_id, candidate.repository_id
+                )
+                if (
+                    candidate.status is not RepositoryDeliveryStatus.MERGE_REQUESTED
+                    and not gate.allowed
+                ):
                     raise SCMConflict(
                         "remote pull request merged while RepoMesh merge gate was closed"
                     )
@@ -340,12 +348,17 @@ class ChangeSetSCMCoordinator:
                     )
                 )
                 continue
+            if candidate.status is RepositoryDeliveryStatus.MERGE_REQUESTED:
+                continue
             if (
                 pull_request.state is not PullRequestState.OPEN
                 or pull_request.draft
                 or pull_request.mergeable is False
             ):
                 continue
+            gate = await self._delivery.evaluate_merge_gate(
+                change_set_id, candidate.repository_id
+            )
             if gate.allowed:
                 current = await self.merge_when_allowed(
                     change_set_id, candidate.repository_id
