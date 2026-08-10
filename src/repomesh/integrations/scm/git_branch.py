@@ -37,9 +37,7 @@ class GitBranchPublisher:
             workspace, command.branch_name, environment=environment
         )
         expected_remote = (
-            command.expected_remote_sha.lower()
-            if command.expected_remote_sha
-            else "0" * 40
+            command.expected_remote_sha.lower() if command.expected_remote_sha else "0" * 40
         )
         if remote_before is not None and command.expected_remote_sha is None:
             if remote_before == head:
@@ -92,9 +90,7 @@ class GitBranchPublisher:
         if not _BRANCH.fullmatch(command.branch_name) or command.branch_name.endswith(".lock"):
             raise ValueError("branch_name is not a safe Git branch name")
 
-    async def _git_environment(
-        self, repository: RepositoryRef | None
-    ) -> dict[str, str] | None:
+    async def _git_environment(self, repository: RepositoryRef | None) -> dict[str, str] | None:
         if self._token_provider is None or repository is None:
             return None
         supplied = self._token_provider(repository)

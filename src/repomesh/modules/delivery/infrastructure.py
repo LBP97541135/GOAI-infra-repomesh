@@ -38,6 +38,7 @@ from .domain import (
     RepositoryDelivery,
     ReviewObservation,
     SCMObservation,
+    SCMPollCursor,
 )
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
@@ -119,6 +120,90 @@ class SCMObservationRecord(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class SCMPollCursorRecord(Base):
+    __tablename__ = "scm_poll_cursors"
+    __table_args__ = ({"schema": "delivery"},)
+
+    change_set_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("delivery.change_sets.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    repository_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str | None] = mapped_column(String(2000))
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class InMemorySCMPollCursorStore:
+    def __init__(self) -> None:
+        self.items: dict[tuple[UUID, UUID], SCMPollCursor] = {}
+
+    async def get(self, change_set_id: UUID, repository_id: UUID) -> SCMPollCursor | None:
+        return self.items.get((change_set_id, repository_id))
+
+    async def upsert(self, cursor: SCMPollCursor, *, expected_version: int | None) -> None:
+        key = (cursor.change_set_id, cursor.repository_id)
+        current = self.items.get(key)
+        if expected_version is None:
+            if current is not None:
+                raise DeliveryConflict("SCM poll cursor already exists")
+        elif current is None or current.version != expected_version:
+            raise DeliveryConflict("SCM poll cursor version changed")
+        self.items[key] = cursor
+
+
+class PostgresSCMPollCursorStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def get(self, change_set_id: UUID, repository_id: UUID) -> SCMPollCursor | None:
+        async with self._database.transaction() as session:
+            record = await session.get(SCMPollCursorRecord, (change_set_id, repository_id))
+        if record is None:
+            return None
+        return SCMPollCursor(
+            change_set_id=record.change_set_id,
+            repository_id=record.repository_id,
+            consecutive_failures=record.consecutive_failures,
+            last_polled_at=_aware(record.last_polled_at) if record.last_polled_at else None,
+            next_poll_at=_aware(record.next_poll_at),
+            last_error=record.last_error,
+            version=record.version,
+        )
+
+    async def upsert(self, cursor: SCMPollCursor, *, expected_version: int | None) -> None:
+        async with self._database.transaction() as session:
+            record = await session.get(
+                SCMPollCursorRecord,
+                (cursor.change_set_id, cursor.repository_id),
+            )
+            if expected_version is None:
+                if record is not None:
+                    raise DeliveryConflict("SCM poll cursor already exists")
+                session.add(
+                    SCMPollCursorRecord(
+                        change_set_id=cursor.change_set_id,
+                        repository_id=cursor.repository_id,
+                        consecutive_failures=cursor.consecutive_failures,
+                        last_polled_at=cursor.last_polled_at,
+                        next_poll_at=cursor.next_poll_at,
+                        last_error=cursor.last_error,
+                        version=cursor.version,
+                    )
+                )
+                return
+            if record is None or record.version != expected_version:
+                raise DeliveryConflict("SCM poll cursor version changed")
+            record.consecutive_failures = cursor.consecutive_failures
+            record.last_polled_at = cursor.last_polled_at
+            record.next_poll_at = cursor.next_poll_at
+            record.last_error = cursor.last_error
+            record.version = cursor.version
+
+
 class InMemorySCMObservationStore:
     def __init__(self) -> None:
         self.items: dict[UUID, SCMObservation] = {}
@@ -140,9 +225,7 @@ class InMemorySCMObservationStore:
         observation_id = self.identities.get((provider, source, external_id))
         return self.items.get(observation_id) if observation_id else None
 
-    async def update(
-        self, observation: SCMObservation, *, expected_version: int
-    ) -> None:
+    async def update(self, observation: SCMObservation, *, expected_version: int) -> None:
         current = self.items.get(observation.id)
         if current is None or current.version != expected_version:
             raise DeliveryConflict("SCM observation version changed")
@@ -200,9 +283,7 @@ class PostgresSCMObservationStore:
             )
         return self._hydrate_observation(record) if record else None
 
-    async def update(
-        self, observation: SCMObservation, *, expected_version: int
-    ) -> None:
+    async def update(self, observation: SCMObservation, *, expected_version: int) -> None:
         async with self._database.transaction() as session:
             record = await session.get(SCMObservationRecord, observation.id)
             if record is None or record.version != expected_version:
@@ -299,9 +380,7 @@ class InMemoryChangeSetStore:
         self.items: dict[UUID, ChangeSet] = {}
         self.keys: dict[str, tuple[UUID, str]] = {}
 
-    async def add(
-        self, change_set: ChangeSet, *, idempotency_key: str, fingerprint: str
-    ) -> None:
+    async def add(self, change_set: ChangeSet, *, idempotency_key: str, fingerprint: str) -> None:
         if idempotency_key in self.keys:
             raise DeliveryConflict("duplicate ChangeSet idempotency key")
         self.items[change_set.id] = change_set
@@ -320,9 +399,7 @@ class InMemoryChangeSetStore:
             raise DeliveryConflict("ChangeSet version changed")
         self.items[change_set.id] = change_set
 
-    async def find_by_candidate(
-        self, repository_id: UUID, head_sha: str
-    ) -> tuple[ChangeSet, ...]:
+    async def find_by_candidate(self, repository_id: UUID, head_sha: str) -> tuple[ChangeSet, ...]:
         normalized = head_sha.strip().lower()
         return tuple(
             change_set
@@ -342,9 +419,7 @@ class PostgresChangeSetStore:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    async def add(
-        self, change_set: ChangeSet, *, idempotency_key: str, fingerprint: str
-    ) -> None:
+    async def add(self, change_set: ChangeSet, *, idempotency_key: str, fingerprint: str) -> None:
         try:
             async with self._database.transaction() as session:
                 session.add(
@@ -361,9 +436,7 @@ class PostgresChangeSetStore:
                         updated_at=change_set.updated_at,
                     )
                 )
-                session.add_all(
-                    self._repository_records(change_set)
-                )
+                session.add_all(self._repository_records(change_set))
         except IntegrityError as error:
             raise DeliveryConflict("duplicate ChangeSet") from error
 
@@ -404,9 +477,7 @@ class PostgresChangeSetStore:
                 item.pull_request_number = candidate.pull_request_number
                 item.status = candidate.status.value
 
-    async def find_by_candidate(
-        self, repository_id: UUID, head_sha: str
-    ) -> tuple[ChangeSet, ...]:
+    async def find_by_candidate(self, repository_id: UUID, head_sha: str) -> tuple[ChangeSet, ...]:
         normalized = head_sha.strip().lower()
         async with self._database.transaction() as session:
             ids = (

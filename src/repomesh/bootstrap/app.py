@@ -21,6 +21,7 @@ from repomesh.integrations.scm import (
     ChangeSetSCMCoordinator,
     DeliveryReconciler,
     GitHubAdapter,
+    GitHubObservationPoller,
     GitHubObservationProcessor,
     SCMObservationReplayWorker,
 )
@@ -40,7 +41,9 @@ from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
     PostgresSCMObservationStore,
+    PostgresSCMPollCursorStore,
     SCMObservationService,
+    SCMPollCursorService,
 )
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
@@ -133,7 +136,7 @@ def build_default_container() -> ApplicationContainer:
             tasks,
         )
         background_services = (AgentTeamsMatrixInboundPoller(messenger, inbound),)
-    if settings.github_webhook_secret:
+    if settings.github_webhook_secret or scm_adapter is not None:
         delivery = DeliveryService(PostgresChangeSetStore(database))
         observations = SCMObservationService(PostgresSCMObservationStore(database))
         processor = GitHubObservationProcessor(
@@ -143,14 +146,31 @@ def build_default_container() -> ApplicationContainer:
             ChangeSetSCMCoordinator(delivery, repository_catalog, scm_adapter),
             auto_merge=settings.delivery_auto_enabled,
         )
-        background_services = (
-            *background_services,
-            SCMObservationReplayWorker(
-                observations,
-                processor,
-                interval_seconds=settings.scm_observation_replay_interval_seconds,
-            ),
-        )
+        if settings.github_webhook_secret:
+            background_services = (
+                *background_services,
+                SCMObservationReplayWorker(
+                    observations,
+                    processor,
+                    interval_seconds=settings.scm_observation_replay_interval_seconds,
+                ),
+            )
+        if scm_adapter is not None:
+            background_services = (
+                *background_services,
+                GitHubObservationPoller(
+                    delivery,
+                    observations,
+                    SCMPollCursorService(
+                        PostgresSCMPollCursorStore(database),
+                        interval_seconds=settings.scm_poll_interval_seconds,
+                    ),
+                    repository_catalog,
+                    scm_adapter,
+                    processor,
+                    scan_interval_seconds=settings.scm_poll_scan_interval_seconds,
+                ),
+            )
     if scm_adapter is not None and settings.delivery_auto_enabled:
         delivery = DeliveryService(PostgresChangeSetStore(database))
         background_services = (

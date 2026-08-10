@@ -10,11 +10,20 @@ from repomesh.modules.delivery import (
     DeliveryService,
     SCMObservationService,
 )
-from repomesh.modules.delivery.contracts import ChangeSetView
+from repomesh.modules.delivery.contracts import (
+    ChangeSetView,
+    MergeObservationCommand,
+    PullRequestObservationCommand,
+)
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
+from .contracts import PullRequestState, SCMConflict
 from .delivery import ChangeSetSCMCoordinator, parse_repository_ref
-from .github_events import parse_github_check_run, parse_github_pull_request_review
+from .github_events import (
+    parse_github_check_run,
+    parse_github_pull_request,
+    parse_github_pull_request_review,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +38,7 @@ class ProcessedSCMObservation:
 class GitHubObservationProcessor:
     """Project one durable GitHub fact into Delivery state."""
 
-    _SUPPORTED = {"check_run", "pull_request_review"}
+    _SUPPORTED = {"check_run", "pull_request", "pull_request_review"}
 
     def __init__(
         self,
@@ -54,11 +63,12 @@ class GitHubObservationProcessor:
             if claimed.provider != "github" or claimed.event_type not in self._SUPPORTED:
                 await self._observations.complete(observation_id)
                 return ProcessedSCMObservation(ignored=True, claimed=True)
-            parsed = (
-                parse_github_check_run(claimed.payload)
-                if claimed.event_type == "check_run"
-                else parse_github_pull_request_review(claimed.payload)
-            )
+            if claimed.event_type == "check_run":
+                parsed = parse_github_check_run(claimed.payload)
+            elif claimed.event_type == "pull_request":
+                parsed = parse_github_pull_request(claimed.payload)
+            else:
+                parsed = parse_github_pull_request_review(claimed.payload)
             if parsed is None:
                 await self._observations.complete(observation_id)
                 return ProcessedSCMObservation(ignored=True, claimed=True)
@@ -72,6 +82,31 @@ class GitHubObservationProcessor:
                 result = await self._coordinator.record_github_ci(
                     change_set_id, repository_id, parsed
                 )
+            elif claimed.event_type == "pull_request":
+                current = await self._delivery.get(change_set_id)
+                candidate = next(
+                    item for item in current.repositories if item.repository_id == repository_id
+                )
+                if parsed.head_sha != candidate.commit_sha:
+                    raise SCMConflict("remote PR head drifted from the ChangeSet candidate")
+                if parsed.state is PullRequestState.MERGED:
+                    if not parsed.merge_sha:
+                        raise SCMConflict("merged pull request has no merge commit SHA")
+                    result = await self._delivery.observe_merge(
+                        MergeObservationCommand(change_set_id, repository_id, parsed.merge_sha)
+                    )
+                elif parsed.state is PullRequestState.OPEN:
+                    result = await self._delivery.observe_pull_request(
+                        PullRequestObservationCommand(
+                            change_set_id,
+                            repository_id,
+                            parsed.number,
+                            parsed.url,
+                            parsed.head_sha,
+                        )
+                    )
+                else:
+                    raise SCMConflict("delivery pull request was closed without merge")
             else:
                 result = await self._coordinator.record_github_review(
                     change_set_id, repository_id, parsed
@@ -85,9 +120,7 @@ class GitHubObservationProcessor:
                 change_set=result,
             )
         except Exception as error:
-            await self._observations.fail(
-                observation_id, f"{type(error).__name__}: {error}"
-            )
+            await self._observations.fail(observation_id, f"{type(error).__name__}: {error}")
             raise
 
     async def _route(

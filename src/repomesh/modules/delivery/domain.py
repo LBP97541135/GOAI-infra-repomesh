@@ -20,7 +20,53 @@ from .contracts import (
     SCMObservationSource,
     SCMObservationStatus,
     SCMObservationView,
+    SCMPollCursorView,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SCMPollCursor:
+    change_set_id: UUID
+    repository_id: UUID
+    next_poll_at: datetime
+    consecutive_failures: int = 0
+    last_polled_at: datetime | None = None
+    last_error: str | None = None
+    version: int = 0
+
+    def succeed(self, now: datetime, interval_seconds: float) -> "SCMPollCursor":
+        return replace(
+            self,
+            consecutive_failures=0,
+            last_polled_at=now,
+            next_poll_at=now + timedelta(seconds=interval_seconds),
+            last_error=None,
+            version=self.version + 1,
+        )
+
+    def fail(
+        self, now: datetime, error: str, *, base_seconds: float, retry_after: int | None
+    ) -> "SCMPollCursor":
+        failures = self.consecutive_failures + 1
+        delay = retry_after or min(base_seconds * (2 ** (failures - 1)), 3600)
+        return replace(
+            self,
+            consecutive_failures=failures,
+            next_poll_at=now + timedelta(seconds=delay),
+            last_error=error[:2000],
+            version=self.version + 1,
+        )
+
+    def to_view(self) -> SCMPollCursorView:
+        return SCMPollCursorView(
+            change_set_id=self.change_set_id,
+            repository_id=self.repository_id,
+            consecutive_failures=self.consecutive_failures,
+            last_polled_at=self.last_polled_at,
+            next_poll_at=self.next_poll_at,
+            last_error=self.last_error,
+            version=self.version,
+        )
 
 
 class DeliveryError(Exception):
@@ -229,9 +275,9 @@ class RepositoryDelivery:
             passed=passed,
             summary=summary.strip(),
         )
-        checks = tuple(
-            item for item in self.ci_checks if item.check_name != normalized_name
-        ) + (observation,)
+        checks = tuple(item for item in self.ci_checks if item.check_name != normalized_name) + (
+            observation,
+        )
         updated = replace(
             self,
             ci_check_run_id=check_run_id.strip(),
@@ -261,9 +307,9 @@ class RepositoryDelivery:
             state=state,
             summary=summary.strip(),
         )
-        reviews = tuple(
-            item for item in self.reviews if item.reviewer != normalized_reviewer
-        ) + (observation,)
+        reviews = tuple(item for item in self.reviews if item.reviewer != normalized_reviewer) + (
+            observation,
+        )
         updated = replace(self, reviews=reviews)
         return replace(updated, status=updated._readiness_status())
 
@@ -280,9 +326,7 @@ class RepositoryDelivery:
             return RepositoryDeliveryStatus.CI_FAILED
         if any(item.state is ReviewState.CHANGES_REQUESTED for item in self.reviews):
             return RepositoryDeliveryStatus.REVIEW_CHANGES_REQUESTED
-        approvals = {
-            item.reviewer for item in self.reviews if item.state is ReviewState.APPROVED
-        }
+        approvals = {item.reviewer for item in self.reviews if item.state is ReviewState.APPROVED}
         if len(approvals) < self.required_approvals:
             return RepositoryDeliveryStatus.REVIEW_PENDING
         if not required and not self.ci_checks:

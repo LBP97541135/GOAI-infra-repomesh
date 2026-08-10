@@ -98,9 +98,7 @@ class GitHubAppTokenProvider:
         signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
         return f"{header}.{payload}.{self._urlsafe(signature)}"
 
-    async def _resolve_installation(
-        self, repository: RepositoryRef, app_jwt: str
-    ) -> int:
+    async def _resolve_installation(self, repository: RepositoryRef, app_jwt: str) -> int:
         payload = await self._request(
             "GET",
             repository,
@@ -110,9 +108,7 @@ class GitHubAppTokenProvider:
         try:
             return int(payload["id"])
         except (KeyError, TypeError, ValueError) as error:
-            raise SCMAuthenticationError(
-                "GitHub App installation response is invalid"
-            ) from error
+            raise SCMAuthenticationError("GitHub App installation response is invalid") from error
 
     async def _create_installation_token(
         self, repository: RepositoryRef, installation_id: int, app_jwt: str
@@ -128,9 +124,7 @@ class GitHubAppTokenProvider:
             value = str(payload["token"]).strip()
             expires_at = datetime.fromisoformat(str(payload["expires_at"]).replace("Z", "+00:00"))
         except (KeyError, TypeError, ValueError) as error:
-            raise SCMAuthenticationError(
-                "GitHub installation token response is invalid"
-            ) from error
+            raise SCMAuthenticationError("GitHub installation token response is invalid") from error
         if not value or expires_at.tzinfo is None:
             raise SCMAuthenticationError("GitHub installation token is invalid")
         return CachedInstallationToken(value, expires_at.astimezone(UTC))
@@ -185,8 +179,6 @@ def private_key_file_loader(path: Path) -> Callable[[], bytes]:
         try:
             return resolved.read_bytes()
         except OSError as error:
-            raise SCMAuthenticationError(
-                "GitHub App private key file is unavailable"
-            ) from error
+            raise SCMAuthenticationError("GitHub App private key file is unavailable") from error
 
     return load

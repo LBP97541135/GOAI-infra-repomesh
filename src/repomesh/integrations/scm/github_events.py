@@ -3,7 +3,13 @@ from typing import Any
 
 from repomesh.modules.delivery.contracts import ReviewState
 
-from .contracts import RepositoryRef, SCMConflict
+from .contracts import (
+    PullRequestObservation,
+    PullRequestState,
+    RepositoryRef,
+    SCMConflict,
+    SCMProvider,
+)
 
 _PASSING = {"success", "neutral", "skipped"}
 _FAILING = {
@@ -47,6 +53,39 @@ class GitHubReviewObservation:
     summary: str
 
 
+def parse_github_pull_request(payload: dict[str, Any]) -> PullRequestObservation:
+    pull_request = payload.get("pull_request")
+    repository = payload.get("repository")
+    if not isinstance(pull_request, dict) or not isinstance(repository, dict):
+        raise ValueError("GitHub pull_request payload is incomplete")
+    owner = (repository.get("owner") or {}).get("login")
+    name = repository.get("name")
+    head = pull_request.get("head") or {}
+    base = pull_request.get("base") or {}
+    if not owner or not name or not head.get("sha") or not base.get("sha"):
+        raise ValueError("GitHub pull_request binding is incomplete")
+    merged = bool(pull_request.get("merged_at") or pull_request.get("merged"))
+    state = PullRequestState.MERGED if merged else PullRequestState(str(pull_request["state"]))
+    return PullRequestObservation(
+        provider=SCMProvider.GITHUB,
+        repository=RepositoryRef.from_github(str(owner), str(name)),
+        number=int(pull_request["number"]),
+        url=str(pull_request.get("html_url") or ""),
+        state=state,
+        draft=bool(pull_request.get("draft")),
+        head_branch=str(head.get("ref") or ""),
+        head_sha=str(head["sha"]).lower(),
+        base_branch=str(base.get("ref") or ""),
+        base_sha=str(base["sha"]).lower(),
+        mergeable=pull_request.get("mergeable"),
+        merge_sha=(
+            str(pull_request.get("merge_commit_sha")).lower()
+            if merged and pull_request.get("merge_commit_sha")
+            else None
+        ),
+    )
+
+
 def parse_github_check_run(payload: dict[str, Any]) -> GitHubCIObservation:
     check = payload.get("check_run")
     repository = payload.get("repository")
@@ -64,9 +103,7 @@ def parse_github_check_run(payload: dict[str, Any]) -> GitHubCIObservation:
         check_name=str(check.get("name") or check["id"]).strip().lower(),
         head_sha=str(check["head_sha"]).lower(),
         status=str(check["status"]).lower(),
-        conclusion=(
-            str(check["conclusion"]).lower() if check.get("conclusion") else None
-        ),
+        conclusion=(str(check["conclusion"]).lower() if check.get("conclusion") else None),
         summary=summary,
     )
 

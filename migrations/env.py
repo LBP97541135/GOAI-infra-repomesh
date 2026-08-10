@@ -24,6 +24,7 @@ from repomesh.modules.delivery.infrastructure import (
     ChangeSetRecord,
     ChangeSetRepositoryRecord,
     SCMObservationRecord,
+    SCMPollCursorRecord,
 )
 from repomesh.modules.project.infrastructure import (
     ProjectAgentTopologyRecord,
@@ -67,6 +68,7 @@ _REGISTERED_MODELS = (
     RepositoryRecord,
     PlanSnapshotRecord,
     SCMObservationRecord,
+    SCMPollCursorRecord,
     SpecificationRecord,
     SpecificationVersionRecord,
     TaskRecord,

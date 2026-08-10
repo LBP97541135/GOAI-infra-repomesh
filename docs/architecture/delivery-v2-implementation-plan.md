@@ -87,12 +87,16 @@ ExecutionPlans remain terminal; the long-lived ChangeSet requests a new attempt 
 - Failed and interrupted observations remain replayable after restart.
 - Unsupported signed GitHub events are retained and marked processed/ignored.
 
-### PR-2: Observation acquisition
+### PR-2: Observation acquisition - implemented
 
-- Add GitHub Poller snapshots for PR, Check Run, Review, Merge and branch head.
-- Add pagination, ETag, rate-limit backoff and durable cursors.
+- Add GitHub Poller snapshots for PR, Check Run, Review and Merge facts.
+- Add pagination, content-addressed fact deduplication, rate-limit backoff and durable cursors.
 - Feed Poller and Webhook through the same Observation service.
-- Detect unauthorized merge and branch-head drift as durable facts.
+- Detect unauthorized merge, closed delivery PRs and branch-head drift as durable failed facts.
+
+GitHub conditional requests remain a provider-level optimization: correctness is provided by the
+durable cursor and content-addressed Observation identities, so a missing or discarded ETag cannot
+skip a fact.
 
 ### PR-3: Merge command cursor
 

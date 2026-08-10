@@ -77,6 +77,17 @@ class SCMObservationStatus(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SCMPollCursorView:
+    change_set_id: UUID
+    repository_id: UUID
+    consecutive_failures: int
+    last_polled_at: datetime | None
+    next_poll_at: datetime
+    last_error: str | None
+    version: int
+
+
+@dataclass(frozen=True, slots=True)
 class RecordSCMObservationCommand:
     provider: str
     source: SCMObservationSource

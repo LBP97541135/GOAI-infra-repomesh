@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     delivery_required_approvals: int = Field(default=1, ge=0)
     delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
     scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
+    scm_poll_interval_seconds: int = Field(default=60, ge=5)
+    scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)
 
 
 @lru_cache

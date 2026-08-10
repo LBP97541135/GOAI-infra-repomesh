@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from .domain import ChangeSet, SCMObservation
+from .domain import ChangeSet, SCMObservation, SCMPollCursor
 
 
 class ChangeSetStore(Protocol):
@@ -32,9 +32,7 @@ class SCMObservationStore(Protocol):
         self, provider: str, source: str, external_id: str
     ) -> SCMObservation | None: ...
 
-    async def update(
-        self, observation: SCMObservation, *, expected_version: int
-    ) -> None: ...
+    async def update(self, observation: SCMObservation, *, expected_version: int) -> None: ...
 
     async def list_replayable(
         self,
@@ -43,3 +41,9 @@ class SCMObservationStore(Protocol):
         max_attempts: int,
         limit: int,
     ) -> tuple[SCMObservation, ...]: ...
+
+
+class SCMPollCursorStore(Protocol):
+    async def get(self, change_set_id: UUID, repository_id: UUID) -> SCMPollCursor | None: ...
+
+    async def upsert(self, cursor: SCMPollCursor, *, expected_version: int | None) -> None: ...

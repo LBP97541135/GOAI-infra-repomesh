@@ -122,15 +122,11 @@ class ChangeSetSCMCoordinator:
                 expected_head_sha=candidate.commit_sha,
                 title=change_set.title,
                 body=command.body,
-                idempotency_key=(
-                    f"changeset:{change_set.id}:repository:{candidate.repository_id}"
-                ),
+                idempotency_key=(f"changeset:{change_set.id}:repository:{candidate.repository_id}"),
                 draft=command.draft,
             )
         )
-        return await self._record_observation(
-            change_set, candidate.repository_id, observation
-        )
+        return await self._record_observation(change_set, candidate.repository_id, observation)
 
     async def reconcile_pull_request(
         self,
@@ -152,9 +148,7 @@ class ChangeSetSCMCoordinator:
             raise ValueError("remote PR head SHA differs from the frozen ChangeSet candidate")
         return observation
 
-    async def merge_when_allowed(
-        self, change_set_id: UUID, repository_id: UUID
-    ) -> ChangeSetView:
+    async def merge_when_allowed(self, change_set_id: UUID, repository_id: UUID) -> ChangeSetView:
         if self._adapter is None:
             raise RuntimeError("SCM adapter is not configured")
         gate = await self._delivery.evaluate_merge_gate(change_set_id, repository_id)
@@ -253,13 +247,9 @@ class ChangeSetSCMCoordinator:
 
         current = await self._delivery.get(change_set_id)
         for candidate in sorted(current.repositories, key=lambda item: item.merge_order):
-            gate = await self._delivery.evaluate_merge_gate(
-                change_set_id, candidate.repository_id
-            )
+            gate = await self._delivery.evaluate_merge_gate(change_set_id, candidate.repository_id)
             if gate.allowed:
-                current = await self.merge_when_allowed(
-                    change_set_id, candidate.repository_id
-                )
+                current = await self.merge_when_allowed(change_set_id, candidate.repository_id)
         return current
 
     async def reconcile_and_merge(self, change_set_id: UUID) -> ChangeSetView:
@@ -281,13 +271,9 @@ class ChangeSetSCMCoordinator:
                 repository, candidate.pull_request_number
             )
             if pull_request.head_sha != candidate.commit_sha.lower():
-                raise SCMConflict(
-                    "remote PR head SHA differs from the frozen ChangeSet candidate"
-                )
+                raise SCMConflict("remote PR head SHA differs from the frozen ChangeSet candidate")
 
-            for check in await self._adapter.list_check_runs(
-                repository, candidate.commit_sha
-            ):
+            for check in await self._adapter.list_check_runs(repository, candidate.commit_sha):
                 if not check.terminal or check.head_sha != candidate.commit_sha.lower():
                     continue
                 current = await self._delivery.observe_ci(
@@ -356,13 +342,9 @@ class ChangeSetSCMCoordinator:
                 or pull_request.mergeable is False
             ):
                 continue
-            gate = await self._delivery.evaluate_merge_gate(
-                change_set_id, candidate.repository_id
-            )
+            gate = await self._delivery.evaluate_merge_gate(change_set_id, candidate.repository_id)
             if gate.allowed:
-                current = await self.merge_when_allowed(
-                    change_set_id, candidate.repository_id
-                )
+                current = await self.merge_when_allowed(change_set_id, candidate.repository_id)
         return current
 
     async def _repository_ref(self, repository_id: UUID) -> RepositoryRef:

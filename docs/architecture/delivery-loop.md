@@ -24,6 +24,8 @@ ExecutionPlan completed
 
 - A duplicate Runner completion, Push, PR request or webhook is idempotent.
 - Missed webhooks and process restarts recover from active GitHub reconciliation.
+- Polling uses durable per-repository cursors, pagination, exponential failure backoff and GitHub
+  `Retry-After`; repeated snapshots are content-addressed and harmless.
 - A changed remote branch, PR Head SHA or CI Head SHA fails closed.
 - A failed required check or requested-changes review blocks Merge.
 - A downstream repository waits until every upstream repository is merged.

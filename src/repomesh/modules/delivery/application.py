@@ -33,8 +33,56 @@ from .domain import (
     RecoveryPlan,
     RepositoryDelivery,
     SCMObservation,
+    SCMPollCursor,
 )
-from .ports import ChangeSetStore, SCMObservationStore
+from .ports import ChangeSetStore, SCMObservationStore, SCMPollCursorStore
+
+
+class SCMPollCursorService:
+    def __init__(self, store: SCMPollCursorStore, *, interval_seconds: float = 60) -> None:
+        self._store = store
+        self._interval_seconds = interval_seconds
+
+    async def due(self, change_set_id: UUID, repository_id: UUID) -> bool:
+        cursor = await self._store.get(change_set_id, repository_id)
+        return cursor is None or cursor.next_poll_at <= datetime.now(UTC)
+
+    async def succeed(self, change_set_id: UUID, repository_id: UUID) -> None:
+        now = datetime.now(UTC)
+        current = await self._store.get(change_set_id, repository_id)
+        if current is None:
+            current = SCMPollCursor(change_set_id, repository_id, now)
+            expected = None
+        else:
+            expected = current.version
+        await self._store.upsert(
+            current.succeed(now, self._interval_seconds), expected_version=expected
+        )
+
+    async def fail(
+        self,
+        change_set_id: UUID,
+        repository_id: UUID,
+        error: str,
+        *,
+        retry_after: int | None = None,
+    ) -> None:
+        now = datetime.now(UTC)
+        current = await self._store.get(change_set_id, repository_id)
+        if current is None:
+            current = SCMPollCursor(change_set_id, repository_id, now)
+            expected = None
+        else:
+            expected = current.version
+        await self._store.upsert(
+            current.fail(
+                now,
+                error,
+                base_seconds=self._interval_seconds,
+                retry_after=retry_after,
+            ),
+            expected_version=expected,
+        )
 
 
 class SCMObservationService:
@@ -53,9 +101,7 @@ class SCMObservationService:
         self._lease_timeout = lease_timeout
         self._max_attempts = max_attempts
 
-    async def record(
-        self, command: RecordSCMObservationCommand
-    ) -> RecordedSCMObservation:
+    async def record(self, command: RecordSCMObservationCommand) -> RecordedSCMObservation:
         existing = await self._store.get_by_identity(
             command.provider.strip().lower(), command.source.value, command.external_id.strip()
         )
@@ -131,9 +177,7 @@ class SCMObservationService:
         return observation
 
     @staticmethod
-    def _validate_duplicate(
-        existing: SCMObservation, command: RecordSCMObservationCommand
-    ) -> None:
+    def _validate_duplicate(existing: SCMObservation, command: RecordSCMObservationCommand) -> None:
         same = (
             existing.payload_hash == command.payload_hash.strip().lower()
             and existing.event_type == command.event_type.strip().lower()
@@ -141,9 +185,7 @@ class SCMObservationService:
             and existing.repository_id == command.repository_id
         )
         if not same:
-            raise DeliveryConflict(
-                "SCM observation identity was reused for another external fact"
-            )
+            raise DeliveryConflict("SCM observation identity was reused for another external fact")
 
 
 class DeliveryService:
@@ -170,9 +212,7 @@ class DeliveryService:
                 branch_name=item.branch_name,
                 depends_on=item.depends_on,
                 merge_order=order[item.repository_id],
-                required_checks=tuple(
-                    name.strip().lower() for name in item.required_checks
-                ),
+                required_checks=tuple(name.strip().lower() for name in item.required_checks),
                 required_approvals=item.required_approvals,
             )
             for item in command.candidates
@@ -185,14 +225,10 @@ class DeliveryService:
             validation_snapshot_id=command.validation_snapshot_id,
             repositories=repositories,
         )
-        await self._store.add(
-            change_set, idempotency_key=idempotency_key, fingerprint=fingerprint
-        )
+        await self._store.add(change_set, idempotency_key=idempotency_key, fingerprint=fingerprint)
         return change_set.to_view()
 
-    async def observe_pull_request(
-        self, command: PullRequestObservationCommand
-    ) -> ChangeSetView:
+    async def observe_pull_request(self, command: PullRequestObservationCommand) -> ChangeSetView:
         return await self._update_repository(
             command.change_set_id,
             command.repository_id,
@@ -245,9 +281,7 @@ class DeliveryService:
             lambda item: item.observe_merge(command.merge_sha),
         )
 
-    async def record_merge_requested(
-        self, command: RecordMergeRequestedCommand
-    ) -> ChangeSetView:
+    async def record_merge_requested(self, command: RecordMergeRequestedCommand) -> ChangeSetView:
         return await self._update_repository(
             command.change_set_id,
             command.repository_id,
@@ -281,8 +315,7 @@ class DeliveryService:
         if change_set.recovery_plans:
             active = change_set.recovery_plans[-1]
             if any(
-                action.status
-                not in {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+                action.status not in {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
                 for action in active.actions
             ):
                 reasons.append("an active recovery plan is incomplete")
@@ -330,9 +363,7 @@ class DeliveryService:
             raise DeliveryConflict("multiple active ChangeSets match repository and SHA")
         return active[0].to_view(), repository_id
 
-    async def record_recovery_action(
-        self, command: RecordRecoveryActionCommand
-    ) -> ChangeSetView:
+    async def record_recovery_action(self, command: RecordRecoveryActionCommand) -> ChangeSetView:
         change_set = await self._required(command.change_set_id)
         updated = change_set.record_recovery_action(
             command.recovery_plan_id,

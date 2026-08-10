@@ -23,6 +23,7 @@ from .observation_processor import (
     SCMObservationReplayWorker,
 )
 from .plan_delivery import PlanDeliveryFinalizer, PlanDeliveryPolicy
+from .poller import GitHubObservationPoller
 from .reconciler import DeliveryReconciler
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "GitHubAppTokenProvider",
     "GitHubCIObservation",
     "GitHubObservationProcessor",
+    "GitHubObservationPoller",
     "GitHubReviewObservation",
     "GitBranchPublisher",
     "OpenChangeSetPullRequestCommand",

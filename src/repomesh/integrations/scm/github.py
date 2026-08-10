@@ -83,48 +83,66 @@ class GitHubAdapter:
         self, repository: RepositoryRef, head_sha: str
     ) -> tuple[CheckRunObservation, ...]:
         normalized = self._full_sha(head_sha)
-        payload = await self._request(
-            "GET",
-            repository,
-            f"/commits/{normalized}/check-runs",
-            params={"filter": "latest", "per_page": "100"},
-        )
         observations = []
-        for item in payload.get("check_runs", []):
-            conclusion = str(item.get("conclusion") or "").lower()
-            output = item.get("output") or {}
-            observations.append(
-                CheckRunObservation(
-                    check_run_id=str(item["id"]),
-                    check_name=str(item["name"]).strip().lower(),
-                    head_sha=str(item.get("head_sha") or normalized).lower(),
-                    terminal=str(item.get("status") or "").lower() == "completed",
-                    passed=conclusion in {"success", "neutral", "skipped"},
-                    summary=str(output.get("summary") or output.get("title") or conclusion),
-                )
+        page = 1
+        while True:
+            payload = await self._request(
+                "GET",
+                repository,
+                f"/commits/{normalized}/check-runs",
+                params={"filter": "latest", "per_page": "100", "page": str(page)},
             )
+            items = payload.get("check_runs", [])
+            for item in items:
+                conclusion = str(item.get("conclusion") or "").lower()
+                output = item.get("output") or {}
+                observations.append(
+                    CheckRunObservation(
+                        check_run_id=str(item["id"]),
+                        check_name=str(item["name"]).strip().lower(),
+                        head_sha=str(item.get("head_sha") or normalized).lower(),
+                        terminal=str(item.get("status") or "").lower() == "completed",
+                        passed=conclusion in {"success", "neutral", "skipped"},
+                        summary=str(
+                            output.get("summary") or output.get("title") or conclusion
+                        ),
+                    )
+                )
+            if len(items) < 100:
+                break
+            page += 1
         return tuple(observations)
 
     async def list_pull_request_reviews(
         self, repository: RepositoryRef, number: int
     ) -> tuple[PullRequestReviewObservation, ...]:
-        payload = await self._request(
-            "GET", repository, f"/pulls/{number}/reviews", params={"per_page": "100"}
-        )
         observations = []
-        for item in payload:
-            state = str(item.get("state") or "").lower()
-            if state not in {value.value for value in SCMReviewState}:
-                continue
-            observations.append(
-                PullRequestReviewObservation(
-                    review_id=str(item["id"]),
-                    reviewer=str((item.get("user") or {}).get("login") or "").strip().lower(),
-                    head_sha=str(item.get("commit_id") or "").lower(),
-                    state=SCMReviewState(state),
-                    summary=str(item.get("body") or ""),
-                )
+        page = 1
+        while True:
+            payload = await self._request(
+                "GET",
+                repository,
+                f"/pulls/{number}/reviews",
+                params={"per_page": "100", "page": str(page)},
             )
+            for item in payload:
+                state = str(item.get("state") or "").lower()
+                if state not in {value.value for value in SCMReviewState}:
+                    continue
+                observations.append(
+                    PullRequestReviewObservation(
+                        review_id=str(item["id"]),
+                        reviewer=str((item.get("user") or {}).get("login") or "")
+                        .strip()
+                        .lower(),
+                        head_sha=str(item.get("commit_id") or "").lower(),
+                        state=SCMReviewState(state),
+                        summary=str(item.get("body") or ""),
+                    )
+                )
+            if len(payload) < 100:
+                break
+            page += 1
         return tuple(item for item in observations if item.reviewer and item.head_sha)
 
     async def close_pull_request(
@@ -142,9 +160,7 @@ class GitHubAdapter:
         )
         return self._observation(repository, payload)
 
-    async def merge_pull_request(
-        self, command: MergePullRequestCommand
-    ) -> MergePullRequestResult:
+    async def merge_pull_request(self, command: MergePullRequestCommand) -> MergePullRequestResult:
         sha = command.expected_head_sha.strip().lower()
         if len(sha) != 40 or any(char not in "0123456789abcdef" for char in sha):
             raise ValueError("expected_head_sha must be a full Git object id")
@@ -158,8 +174,7 @@ class GitHubAdapter:
                 "merge_method": "merge",
             },
             idempotency_key=(
-                f"merge:{command.repository.owner}:{command.repository.name}:"
-                f"{command.number}:{sha}"
+                f"merge:{command.repository.owner}:{command.repository.name}:{command.number}:{sha}"
             ),
         )
         merged = bool(payload.get("merged"))

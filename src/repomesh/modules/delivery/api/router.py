@@ -71,12 +71,8 @@ async def get_change_set(change_set_id: UUID, request: Request) -> dict:
 
 
 @router.get("/change-sets/{change_set_id}/repositories/{repository_id}/merge-gate")
-async def evaluate_merge_gate(
-    change_set_id: UUID, repository_id: UUID, request: Request
-) -> dict:
-    return asdict(
-        await _service(request).evaluate_merge_gate(change_set_id, repository_id)
-    )
+async def evaluate_merge_gate(change_set_id: UUID, repository_id: UUID, request: Request) -> dict:
+    return asdict(await _service(request).evaluate_merge_gate(change_set_id, repository_id))
 
 
 @router.post("/change-sets/{change_set_id}/pull-requests")
@@ -91,9 +87,7 @@ async def observe_pull_request(
 
 
 @router.post("/change-sets/{change_set_id}/ci")
-async def observe_ci(
-    change_set_id: UUID, body: CIObservationCreate, request: Request
-) -> dict:
+async def observe_ci(change_set_id: UUID, body: CIObservationCreate, request: Request) -> dict:
     return asdict(
         await _service(request).observe_ci(
             CIObservationCommand(change_set_id=change_set_id, **body.model_dump())
@@ -124,9 +118,7 @@ async def observe_merge(
 
 
 @router.post("/change-sets/{change_set_id}/recovery-plans")
-async def plan_recovery(
-    change_set_id: UUID, body: RecoveryPlanCreate, request: Request
-) -> dict:
+async def plan_recovery(change_set_id: UUID, body: RecoveryPlanCreate, request: Request) -> dict:
     return asdict(
         await _service(request).plan_recovery(
             PlanRecoveryCommand(change_set_id=change_set_id, **body.model_dump())
@@ -134,9 +126,7 @@ async def plan_recovery(
     )
 
 
-@router.post(
-    "/change-sets/{change_set_id}/recovery-plans/{recovery_plan_id}/actions/{action_id}"
-)
+@router.post("/change-sets/{change_set_id}/recovery-plans/{recovery_plan_id}/actions/{action_id}")
 async def record_recovery_action(
     change_set_id: UUID,
     recovery_plan_id: UUID,
