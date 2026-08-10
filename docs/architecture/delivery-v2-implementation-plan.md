@@ -98,14 +98,15 @@ GitHub conditional requests remain a provider-level optimization: correctness is
 durable cursor and content-addressed Observation identities, so a missing or discarded ETag cannot
 skip a fact.
 
-### PR-3: Merge command cursor
+### PR-3: Merge command cursor - implemented
 
-Partially implemented: repository delivery now persists `merge_requested` and waits for a later
-GitHub PR observation before recording `merged`. The durable `scm_commands` journal, Outbox
-dispatcher and ChangeSet-level merge cursor remain future work.
+Repository delivery persists `merge_requested` and waits for a later GitHub PR observation before
+recording `merged`. Merge side effects flow through the durable `scm_commands` journal and a
+lease-based dispatcher. ChangeSet persists a merge cursor and refuses to release later candidates
+until earlier merge orders are confirmed.
 
 - Split gate and merge status.
-- Add `scm_commands` and an outbox dispatcher.
+- Add `scm_commands` and an outbox-style dispatcher.
 - Record `merge_requested`; do not record `merged` from the command response.
 - Advance `merge_cursor` only from a Merge Observation with the expected head SHA.
 - Pause and alert when GitHub reports an out-of-order or unauthorized merge.

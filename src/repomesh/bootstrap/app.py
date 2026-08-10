@@ -23,6 +23,7 @@ from repomesh.integrations.scm import (
     GitHubAdapter,
     GitHubObservationPoller,
     GitHubObservationProcessor,
+    SCMCommandDispatcher,
     SCMObservationReplayWorker,
 )
 from repomesh.integrations.scm.github_auth import (
@@ -40,8 +41,10 @@ from repomesh.modules.context.infrastructure import PostgresContextStore
 from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
+    PostgresSCMCommandStore,
     PostgresSCMObservationStore,
     PostgresSCMPollCursorStore,
+    SCMCommandService,
     SCMObservationService,
     SCMPollCursorService,
 )
@@ -139,11 +142,18 @@ def build_default_container() -> ApplicationContainer:
     if settings.github_webhook_secret or scm_adapter is not None:
         delivery = DeliveryService(PostgresChangeSetStore(database))
         observations = SCMObservationService(PostgresSCMObservationStore(database))
+        commands = SCMCommandService(PostgresSCMCommandStore(database))
+        coordinator = ChangeSetSCMCoordinator(
+            delivery,
+            repository_catalog,
+            scm_adapter,
+            command_service=commands,
+        )
         processor = GitHubObservationProcessor(
             observations,
             delivery,
             repository_catalog,
-            ChangeSetSCMCoordinator(delivery, repository_catalog, scm_adapter),
+            coordinator,
             auto_merge=settings.delivery_auto_enabled,
         )
         if settings.github_webhook_secret:
@@ -158,6 +168,13 @@ def build_default_container() -> ApplicationContainer:
         if scm_adapter is not None:
             background_services = (
                 *background_services,
+                SCMCommandDispatcher(
+                    commands,
+                    delivery,
+                    repository_catalog,
+                    scm_adapter,
+                    interval_seconds=settings.scm_command_dispatch_interval_seconds,
+                ),
                 GitHubObservationPoller(
                     delivery,
                     observations,
@@ -173,11 +190,17 @@ def build_default_container() -> ApplicationContainer:
             )
     if scm_adapter is not None and settings.delivery_auto_enabled:
         delivery = DeliveryService(PostgresChangeSetStore(database))
+        commands = SCMCommandService(PostgresSCMCommandStore(database))
         background_services = (
             *background_services,
             DeliveryReconciler(
                 delivery,
-                ChangeSetSCMCoordinator(delivery, repository_catalog, scm_adapter),
+                ChangeSetSCMCoordinator(
+                    delivery,
+                    repository_catalog,
+                    scm_adapter,
+                    command_service=commands,
+                ),
                 interval_seconds=settings.delivery_reconcile_interval_seconds,
             ),
         )

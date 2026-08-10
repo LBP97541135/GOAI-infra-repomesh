@@ -17,11 +17,80 @@ from .contracts import (
     RepositoryDeliveryView,
     ReviewObservationView,
     ReviewState,
+    SCMCommandKind,
+    SCMCommandStatus,
+    SCMCommandView,
     SCMObservationSource,
     SCMObservationStatus,
     SCMObservationView,
     SCMPollCursorView,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SCMCommand:
+    change_set_id: UUID
+    repository_id: UUID
+    kind: SCMCommandKind
+    idempotency_key: str
+    payload: dict[str, object]
+    id: UUID = field(default_factory=new_id)
+    status: SCMCommandStatus = SCMCommandStatus.PENDING
+    attempts: int = 0
+    version: int = 1
+    last_error: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
+
+    def claim(self, now: datetime) -> "SCMCommand":
+        if self.status not in {SCMCommandStatus.PENDING, SCMCommandStatus.FAILED}:
+            raise DeliveryConflict("SCM command is not claimable")
+        return replace(
+            self,
+            status=SCMCommandStatus.PROCESSING,
+            attempts=self.attempts + 1,
+            claimed_at=now,
+            version=self.version + 1,
+        )
+
+    def accept(self, now: datetime) -> "SCMCommand":
+        if self.status is not SCMCommandStatus.PROCESSING:
+            raise DeliveryConflict("SCM command is not processing")
+        return replace(
+            self,
+            status=SCMCommandStatus.ACCEPTED,
+            completed_at=now,
+            last_error=None,
+            version=self.version + 1,
+        )
+
+    def fail(self, error: str) -> "SCMCommand":
+        if self.status is not SCMCommandStatus.PROCESSING:
+            raise DeliveryConflict("SCM command is not processing")
+        return replace(
+            self,
+            status=SCMCommandStatus.FAILED,
+            last_error=error[:2000],
+            version=self.version + 1,
+        )
+
+    def to_view(self) -> SCMCommandView:
+        return SCMCommandView(
+            id=self.id,
+            change_set_id=self.change_set_id,
+            repository_id=self.repository_id,
+            kind=self.kind,
+            idempotency_key=self.idempotency_key,
+            payload=self.payload,
+            status=self.status,
+            attempts=self.attempts,
+            version=self.version,
+            last_error=self.last_error,
+            created_at=self.created_at,
+            claimed_at=self.claimed_at,
+            completed_at=self.completed_at,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -448,6 +517,7 @@ class ChangeSet:
     status: ChangeSetStatus = ChangeSetStatus.READY
     recovery_plans: tuple[RecoveryPlan, ...] = ()
     version: int = 1
+    merge_cursor: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -471,11 +541,17 @@ class ChangeSet:
             for item in repositories
         ):
             status = ChangeSetStatus.BLOCKED
+        pending_orders = [
+            item.merge_order
+            for item in repositories
+            if item.status is not RepositoryDeliveryStatus.MERGED
+        ]
         return replace(
             self,
             repositories=repositories,
             status=status,
             version=self.version + 1,
+            merge_cursor=min(pending_orders, default=len(repositories)),
             updated_at=datetime.now(UTC),
         )
 
@@ -529,6 +605,7 @@ class ChangeSet:
             validation_snapshot_id=self.validation_snapshot_id,
             status=self.status,
             version=self.version,
+            merge_cursor=self.merge_cursor,
             repositories=tuple(item.to_view() for item in self.repositories),
             recovery_plans=tuple(item.to_view() for item in self.recovery_plans),
             created_at=self.created_at,

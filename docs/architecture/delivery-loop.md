@@ -14,7 +14,8 @@ ExecutionPlan completed
   -> periodically reconcile PR, Check Run and Review snapshots from GitHub
   -> verify repository and exact candidate Head SHA
   -> evaluate CI, approval, recovery and dependency gates
-  -> submit a Head-bound Merge request in dependency order
+  -> append an idempotent Head-bound Merge command in dependency order
+  -> lease and dispatch the command to GitHub
   -> persist MERGE_REQUESTED without claiming remote completion
   -> reconcile live PR state until GitHub reports MERGED
   -> mark ChangeSet delivered
@@ -23,6 +24,7 @@ ExecutionPlan completed
 ## Failure behavior
 
 - A duplicate Runner completion, Push, PR request or webhook is idempotent.
+- Merge commands survive restart and are reclaimed after an expired dispatch lease.
 - Missed webhooks and process restarts recover from active GitHub reconciliation.
 - Polling uses durable per-repository cursors, pagination, exponential failure backoff and GitHub
   `Retry-After`; repeated snapshots are content-addressed and harmless.

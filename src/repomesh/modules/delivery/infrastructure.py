@@ -26,6 +26,8 @@ from .contracts import (
     RecoveryTrigger,
     RepositoryDeliveryStatus,
     ReviewState,
+    SCMCommandKind,
+    SCMCommandStatus,
     SCMObservationSource,
     SCMObservationStatus,
 )
@@ -37,6 +39,7 @@ from .domain import (
     RecoveryPlan,
     RepositoryDelivery,
     ReviewObservation,
+    SCMCommand,
     SCMObservation,
     SCMPollCursor,
 )
@@ -135,6 +138,172 @@ class SCMPollCursorRecord(Base):
     next_poll_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_error: Mapped[str | None] = mapped_column(String(2000))
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SCMCommandRecord(Base):
+    __tablename__ = "scm_commands"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_scm_commands_idempotency"),
+        {"schema": "delivery"},
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    change_set_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("delivery.change_sets.id", ondelete="CASCADE"),
+        index=True,
+    )
+    repository_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(200))
+    payload: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    attempts: Mapped[int] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer)
+    last_error: Mapped[str | None] = mapped_column(String(2000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InMemorySCMCommandStore:
+    def __init__(self) -> None:
+        self.items: dict[UUID, SCMCommand] = {}
+        self.keys: dict[str, UUID] = {}
+
+    async def add(self, command: SCMCommand) -> None:
+        if command.idempotency_key in self.keys:
+            raise DeliveryConflict("duplicate SCM command")
+        self.items[command.id] = command
+        self.keys[command.idempotency_key] = command.id
+
+    async def get(self, command_id: UUID) -> SCMCommand | None:
+        return self.items.get(command_id)
+
+    async def get_by_idempotency_key(self, key: str) -> SCMCommand | None:
+        command_id = self.keys.get(key)
+        return self.items.get(command_id) if command_id else None
+
+    async def update(self, command: SCMCommand, *, expected_version: int) -> None:
+        current = self.items.get(command.id)
+        if current is None or current.version != expected_version:
+            raise DeliveryConflict("SCM command version changed")
+        self.items[command.id] = command
+
+    async def list_dispatchable(
+        self, *, stale_before: datetime, max_attempts: int, limit: int
+    ) -> tuple[SCMCommand, ...]:
+        values = (
+            item
+            for item in self.items.values()
+            if item.attempts < max_attempts
+            and (
+                item.status in {SCMCommandStatus.PENDING, SCMCommandStatus.FAILED}
+                or (
+                    item.status is SCMCommandStatus.PROCESSING
+                    and item.claimed_at is not None
+                    and item.claimed_at <= stale_before
+                )
+            )
+        )
+        return tuple(sorted(values, key=lambda item: item.created_at)[:limit])
+
+
+class PostgresSCMCommandStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def add(self, command: SCMCommand) -> None:
+        try:
+            async with self._database.transaction() as session:
+                session.add(self._record(command))
+        except IntegrityError as error:
+            raise DeliveryConflict("duplicate SCM command") from error
+
+    async def get(self, command_id: UUID) -> SCMCommand | None:
+        async with self._database.transaction() as session:
+            record = await session.get(SCMCommandRecord, command_id)
+        return self._hydrate(record) if record else None
+
+    async def get_by_idempotency_key(self, key: str) -> SCMCommand | None:
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(SCMCommandRecord).where(SCMCommandRecord.idempotency_key == key)
+            )
+        return self._hydrate(record) if record else None
+
+    async def update(self, command: SCMCommand, *, expected_version: int) -> None:
+        async with self._database.transaction() as session:
+            record = await session.get(SCMCommandRecord, command.id)
+            if record is None or record.version != expected_version:
+                raise DeliveryConflict("SCM command version changed")
+            record.status = command.status.value
+            record.attempts = command.attempts
+            record.version = command.version
+            record.last_error = command.last_error
+            record.claimed_at = command.claimed_at
+            record.completed_at = command.completed_at
+
+    async def list_dispatchable(
+        self, *, stale_before: datetime, max_attempts: int, limit: int
+    ) -> tuple[SCMCommand, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(SCMCommandRecord)
+                    .where(
+                        SCMCommandRecord.attempts < max_attempts,
+                        or_(
+                            SCMCommandRecord.status.in_(
+                                (SCMCommandStatus.PENDING.value, SCMCommandStatus.FAILED.value)
+                            ),
+                            (
+                                (SCMCommandRecord.status == SCMCommandStatus.PROCESSING.value)
+                                & (SCMCommandRecord.claimed_at <= stale_before)
+                            ),
+                        ),
+                    )
+                    .order_by(SCMCommandRecord.created_at)
+                    .limit(limit)
+                )
+            ).all()
+        return tuple(self._hydrate(record) for record in records)
+
+    @staticmethod
+    def _record(command: SCMCommand) -> SCMCommandRecord:
+        return SCMCommandRecord(
+            id=command.id,
+            change_set_id=command.change_set_id,
+            repository_id=command.repository_id,
+            kind=command.kind.value,
+            idempotency_key=command.idempotency_key,
+            payload=command.payload,
+            status=command.status.value,
+            attempts=command.attempts,
+            version=command.version,
+            last_error=command.last_error,
+            created_at=command.created_at,
+            claimed_at=command.claimed_at,
+            completed_at=command.completed_at,
+        )
+
+    @staticmethod
+    def _hydrate(record: SCMCommandRecord) -> SCMCommand:
+        return SCMCommand(
+            id=record.id,
+            change_set_id=record.change_set_id,
+            repository_id=record.repository_id,
+            kind=SCMCommandKind(record.kind),
+            idempotency_key=record.idempotency_key,
+            payload=record.payload,
+            status=SCMCommandStatus(record.status),
+            attempts=record.attempts,
+            version=record.version,
+            last_error=record.last_error,
+            created_at=_aware(record.created_at),
+            claimed_at=_aware(record.claimed_at) if record.claimed_at else None,
+            completed_at=_aware(record.completed_at) if record.completed_at else None,
+        )
 
 
 class InMemorySCMPollCursorStore:
@@ -532,6 +701,7 @@ class PostgresChangeSetStore:
                 if change_set.validation_snapshot_id is not None
                 else None
             ),
+            "merge_cursor": change_set.merge_cursor,
             "repositories": [
                 {
                     "repository_id": str(item.repository_id),
@@ -676,6 +846,7 @@ class PostgresChangeSetStore:
             status=ChangeSetStatus(record.status),
             recovery_plans=plans,
             version=record.version,
+            merge_cursor=int(payload.get("merge_cursor", 0)),
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

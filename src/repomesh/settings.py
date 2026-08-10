@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)
+    scm_command_dispatch_interval_seconds: int = Field(default=5, ge=1)
 
 
 @lru_cache

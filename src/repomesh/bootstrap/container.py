@@ -157,9 +157,7 @@ class ApprovedTaskSpecificationAuthor:
     task rather than only on the caller's idempotency key.
     """
 
-    def __init__(
-        self, specifications: SpecificationService, stored: SpecificationStore
-    ) -> None:
+    def __init__(self, specifications: SpecificationService, stored: SpecificationStore) -> None:
         self._specifications = specifications
         self._stored = stored
 
@@ -214,8 +212,7 @@ class ApprovedTaskSpecificationAuthor:
             specification.kind is SpecificationKind.TASK
             and specification.task_id == task.id
             and specification.repository_id == task.repository_id
-            and specification.status
-            in {SpecificationStatus.APPROVED, SpecificationStatus.FROZEN}
+            and specification.status in {SpecificationStatus.APPROVED, SpecificationStatus.FROZEN}
             for specification in await self._stored.list_by_project(task.project_id)
         )
 
@@ -342,6 +339,11 @@ class ApplicationContainer:
 
         return SCMObservationService(PostgresSCMObservationStore(self.database))
 
+    def scm_command_service(self):
+        from repomesh.modules.delivery import PostgresSCMCommandStore, SCMCommandService
+
+        return SCMCommandService(PostgresSCMCommandStore(self.database))
+
     def github_observation_processor(self):
         from repomesh.integrations.scm import (
             ChangeSetSCMCoordinator,
@@ -370,6 +372,7 @@ class ApplicationContainer:
                 get_settings().runner_workspace_root,
                 token_provider=self.scm_token_provider,
             ),
+            command_service=self.scm_command_service(),
         )
 
     def plan_delivery_finalizer(self):

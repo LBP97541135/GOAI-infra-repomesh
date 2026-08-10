@@ -1,7 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -9,6 +9,7 @@ from .contracts import (
     ChangeSetStatus,
     ChangeSetView,
     CIObservationCommand,
+    EnqueueSCMCommand,
     MergeGateDecision,
     MergeObservationCommand,
     PlanRecoveryCommand,
@@ -23,6 +24,8 @@ from .contracts import (
     RecoveryTrigger,
     RepositoryDeliveryStatus,
     ReviewObservationCommand,
+    SCMCommandStatus,
+    SCMCommandView,
     SCMObservationView,
 )
 from .domain import (
@@ -32,10 +35,90 @@ from .domain import (
     RecoveryAction,
     RecoveryPlan,
     RepositoryDelivery,
+    SCMCommand,
     SCMObservation,
     SCMPollCursor,
 )
-from .ports import ChangeSetStore, SCMObservationStore, SCMPollCursorStore
+from .ports import ChangeSetStore, SCMCommandStore, SCMObservationStore, SCMPollCursorStore
+
+
+class SCMCommandService:
+    def __init__(
+        self,
+        store: SCMCommandStore,
+        *,
+        lease_seconds: int = 300,
+        max_attempts: int = 8,
+    ) -> None:
+        self._store = store
+        self._lease = timedelta(seconds=lease_seconds)
+        self._max_attempts = max_attempts
+
+    async def enqueue(self, command: EnqueueSCMCommand) -> SCMCommandView:
+        existing = await self._store.get_by_idempotency_key(command.idempotency_key)
+        if existing is not None:
+            if (
+                existing.change_set_id != command.change_set_id
+                or existing.repository_id != command.repository_id
+                or existing.kind is not command.kind
+                or existing.payload != command.payload
+            ):
+                raise DeliveryConflict("SCM command idempotency key changed meaning")
+            return existing.to_view()
+        created = SCMCommand(
+            change_set_id=command.change_set_id,
+            repository_id=command.repository_id,
+            kind=command.kind,
+            idempotency_key=command.idempotency_key,
+            payload=command.payload,
+        )
+        try:
+            await self._store.add(created)
+        except DeliveryConflict:
+            existing = await self._store.get_by_idempotency_key(command.idempotency_key)
+            if existing is None:
+                raise
+            return existing.to_view()
+        return created.to_view()
+
+    async def claim(self, command_id: UUID) -> SCMCommandView | None:
+        current = await self._required(command_id)
+        now = datetime.now(UTC)
+        if current.status.value == "processing":
+            if current.claimed_at is None or current.claimed_at > now - self._lease:
+                return None
+            current = replace(current, status=SCMCommandStatus.FAILED)
+        if current.status.value == "accepted" or current.attempts >= self._max_attempts:
+            return None
+        updated = current.claim(now)
+        await self._store.update(updated, expected_version=current.version)
+        return updated.to_view()
+
+    async def accept(self, command_id: UUID) -> SCMCommandView:
+        current = await self._required(command_id)
+        updated = current.accept(datetime.now(UTC))
+        await self._store.update(updated, expected_version=current.version)
+        return updated.to_view()
+
+    async def fail(self, command_id: UUID, error: str) -> SCMCommandView:
+        current = await self._required(command_id)
+        updated = current.fail(error)
+        await self._store.update(updated, expected_version=current.version)
+        return updated.to_view()
+
+    async def list_dispatchable(self, *, limit: int = 100) -> tuple[SCMCommandView, ...]:
+        items = await self._store.list_dispatchable(
+            stale_before=datetime.now(UTC) - self._lease,
+            max_attempts=self._max_attempts,
+            limit=limit,
+        )
+        return tuple(item.to_view() for item in items)
+
+    async def _required(self, command_id: UUID) -> SCMCommand:
+        current = await self._store.get(command_id)
+        if current is None:
+            raise DeliveryNotFound(f"SCM command not found: {command_id}")
+        return current
 
 
 class SCMPollCursorService:
@@ -305,6 +388,10 @@ class DeliveryService:
             upstream = self._repository(change_set, dependency)
             if upstream.status is not RepositoryDeliveryStatus.MERGED:
                 reasons.append(f"upstream repository is not merged: {dependency}")
+        if target.merge_order > change_set.merge_cursor and not any(
+            reason.startswith("upstream repository") for reason in reasons
+        ):
+            reasons.append(f"merge cursor is waiting at order {change_set.merge_cursor}")
         earlier = (
             item
             for item in change_set.repositories

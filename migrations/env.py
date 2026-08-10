@@ -23,6 +23,7 @@ from repomesh.modules.context.infrastructure.models import (
 from repomesh.modules.delivery.infrastructure import (
     ChangeSetRecord,
     ChangeSetRepositoryRecord,
+    SCMCommandRecord,
     SCMObservationRecord,
     SCMPollCursorRecord,
 )
@@ -69,6 +70,7 @@ _REGISTERED_MODELS = (
     PlanSnapshotRecord,
     SCMObservationRecord,
     SCMPollCursorRecord,
+    SCMCommandRecord,
     SpecificationRecord,
     SpecificationVersionRecord,
     TaskRecord,

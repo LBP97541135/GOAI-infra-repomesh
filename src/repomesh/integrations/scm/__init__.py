@@ -1,5 +1,6 @@
 """Source-control provider adapters."""
 
+from .command_dispatcher import SCMCommandDispatcher
 from .contracts import BranchPublisher, SCMAdapter
 from .delivery import (
     ChangeSetSCMCoordinator,
@@ -43,6 +44,7 @@ __all__ = [
     "ProcessedSCMObservation",
     "PublishChangeSetPullRequestCommand",
     "SCMAdapter",
+    "SCMCommandDispatcher",
     "SCMObservationReplayWorker",
     "parse_repository_ref",
     "private_key_file_loader",

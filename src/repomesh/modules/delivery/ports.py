@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from .domain import ChangeSet, SCMObservation, SCMPollCursor
+from .domain import ChangeSet, SCMCommand, SCMObservation, SCMPollCursor
 
 
 class ChangeSetStore(Protocol):
@@ -47,3 +47,17 @@ class SCMPollCursorStore(Protocol):
     async def get(self, change_set_id: UUID, repository_id: UUID) -> SCMPollCursor | None: ...
 
     async def upsert(self, cursor: SCMPollCursor, *, expected_version: int | None) -> None: ...
+
+
+class SCMCommandStore(Protocol):
+    async def add(self, command: SCMCommand) -> None: ...
+
+    async def get(self, command_id: UUID) -> SCMCommand | None: ...
+
+    async def get_by_idempotency_key(self, key: str) -> SCMCommand | None: ...
+
+    async def update(self, command: SCMCommand, *, expected_version: int) -> None: ...
+
+    async def list_dispatchable(
+        self, *, stale_before: datetime, max_attempts: int, limit: int
+    ) -> tuple[SCMCommand, ...]: ...

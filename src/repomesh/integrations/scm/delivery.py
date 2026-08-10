@@ -3,16 +3,18 @@ from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID
 
-from repomesh.modules.delivery import DeliveryNotFound, DeliveryService
+from repomesh.modules.delivery import DeliveryNotFound, DeliveryService, SCMCommandService
 from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     CIObservationCommand,
+    EnqueueSCMCommand,
     MergeObservationCommand,
     PullRequestObservationCommand,
     RecordMergeRequestedCommand,
     RepositoryDeliveryStatus,
     ReviewObservationCommand,
     ReviewState,
+    SCMCommandKind,
 )
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
@@ -65,11 +67,13 @@ class ChangeSetSCMCoordinator:
         catalog: RepositoryCatalog,
         adapter: SCMAdapter | None,
         branch_publisher: BranchPublisher | None = None,
+        command_service: SCMCommandService | None = None,
     ) -> None:
         self._delivery = delivery
         self._catalog = catalog
         self._adapter = adapter
         self._branch_publisher = branch_publisher
+        self._command_service = command_service
 
     @property
     def can_mutate(self) -> bool:
@@ -170,6 +174,23 @@ class ChangeSetSCMCoordinator:
             raise ValueError("draft pull request cannot merge")
         if observation.mergeable is False:
             raise ValueError("pull request has conflicts")
+        if self._command_service is not None:
+            await self._command_service.enqueue(
+                EnqueueSCMCommand(
+                    change_set_id=change_set.id,
+                    repository_id=candidate.repository_id,
+                    kind=SCMCommandKind.MERGE_PULL_REQUEST,
+                    idempotency_key=(
+                        f"merge:{change_set.id}:{candidate.repository_id}:{candidate.commit_sha}"
+                    ),
+                    payload={
+                        "pull_request_number": candidate.pull_request_number,
+                        "expected_head_sha": candidate.commit_sha,
+                        "commit_title": change_set.title,
+                    },
+                )
+            )
+            return change_set
         await self._adapter.merge_pull_request(
             MergePullRequestCommand(
                 repository=parse_repository_ref(profile.url),

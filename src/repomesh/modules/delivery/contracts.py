@@ -76,6 +76,43 @@ class SCMObservationStatus(StrEnum):
     FAILED = "failed"
 
 
+class SCMCommandKind(StrEnum):
+    MERGE_PULL_REQUEST = "merge_pull_request"
+
+
+class SCMCommandStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    ACCEPTED = "accepted"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True, slots=True)
+class EnqueueSCMCommand:
+    change_set_id: UUID
+    repository_id: UUID
+    kind: SCMCommandKind
+    idempotency_key: str
+    payload: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class SCMCommandView:
+    id: UUID
+    change_set_id: UUID
+    repository_id: UUID
+    kind: SCMCommandKind
+    idempotency_key: str
+    payload: dict[str, object]
+    status: SCMCommandStatus
+    attempts: int
+    version: int
+    last_error: str | None
+    created_at: datetime
+    claimed_at: datetime | None
+    completed_at: datetime | None
+
+
 @dataclass(frozen=True, slots=True)
 class SCMPollCursorView:
     change_set_id: UUID
@@ -279,6 +316,7 @@ class ChangeSetView:
     validation_snapshot_id: UUID | None
     status: ChangeSetStatus
     version: int
+    merge_cursor: int
     repositories: tuple[RepositoryDeliveryView, ...]
     recovery_plans: tuple[RecoveryPlanView, ...]
     created_at: datetime
