@@ -90,6 +90,20 @@ class AssignTaskCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class CreateCIReworkTaskCommand:
+    organization_id: UUID
+    project_id: UUID
+    change_set_id: UUID
+    repository_id: UUID
+    repository_manager_agent_id: UUID
+    worker_agent_id: UUID
+    parent_task_id: UUID
+    failed_head_sha: str
+    failure_summary: str
+    acceptance: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ReportTaskCommand:
     task_id: UUID
     reporter_agent_id: UUID

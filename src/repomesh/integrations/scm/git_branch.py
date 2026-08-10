@@ -45,6 +45,13 @@ class GitBranchPublisher:
             raise SCMConflict("remote branch already exists and no lease SHA was supplied")
         if remote_before != (None if expected_remote == "0" * 40 else expected_remote):
             raise SCMConflict("remote branch changed after the delivery candidate was frozen")
+        if remote_before is not None:
+            try:
+                await self._run(workspace, "merge-base", "--is-ancestor", remote_before, head)
+            except SCMConflict as error:
+                raise SCMConflict(
+                    "candidate update is not a fast-forward of the published branch"
+                ) from error
 
         lease = f"--force-with-lease=refs/heads/{command.branch_name}:{expected_remote}"
         await self._run(

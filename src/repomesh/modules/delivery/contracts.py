@@ -204,6 +204,28 @@ class RepositoryCandidateInput:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordCandidateRevisionCommand:
+    change_set_id: UUID
+    repository_id: UUID
+    task_id: UUID
+    previous_head_sha: str
+    new_head_sha: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRevisionView:
+    id: UUID
+    repository_id: UUID
+    task_id: UUID
+    sequence: int
+    head_sha: str
+    previous_head_sha: str | None
+    reason: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class PrepareChangeSetCommand:
     organization_id: UUID
     project_id: UUID
@@ -347,6 +369,7 @@ class ChangeSetView:
     repositories: tuple[RepositoryDeliveryView, ...]
     recovery_plans: tuple[RecoveryPlanView, ...]
     governance_decisions: tuple[GovernanceDecisionView, ...]
+    candidate_revisions: tuple[CandidateRevisionView, ...]
     created_at: datetime
     updated_at: datetime
 

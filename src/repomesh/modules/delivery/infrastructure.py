@@ -33,6 +33,7 @@ from .contracts import (
     SCMObservationStatus,
 )
 from .domain import (
+    CandidateRevision,
     ChangeSet,
     CICheckObservation,
     DeliveryConflict,
@@ -777,6 +778,19 @@ class PostgresChangeSetStore:
                 }
                 for item in change_set.governance_decisions
             ],
+            "candidate_revisions": [
+                {
+                    "id": str(item.id),
+                    "repository_id": str(item.repository_id),
+                    "task_id": str(item.task_id),
+                    "sequence": item.sequence,
+                    "head_sha": item.head_sha,
+                    "previous_head_sha": item.previous_head_sha,
+                    "reason": item.reason,
+                    "created_at": item.created_at.isoformat(),
+                }
+                for item in change_set.candidate_revisions
+            ],
         }
 
     @staticmethod
@@ -857,6 +871,21 @@ class PostgresChangeSetStore:
             )
             for item in payload.get("governance_decisions", ())
         )
+        revisions = tuple(
+            CandidateRevision(
+                id=UUID(str(item["id"])),
+                repository_id=UUID(str(item["repository_id"])),
+                task_id=UUID(str(item["task_id"])),
+                sequence=int(item["sequence"]),
+                head_sha=str(item["head_sha"]),
+                previous_head_sha=(
+                    str(item["previous_head_sha"]) if item.get("previous_head_sha") else None
+                ),
+                reason=str(item["reason"]),
+                created_at=datetime.fromisoformat(str(item["created_at"])),
+            )
+            for item in payload.get("candidate_revisions", ())
+        )
         return ChangeSet(
             id=record.id,
             organization_id=record.organization_id,
@@ -872,6 +901,7 @@ class PostgresChangeSetStore:
             status=ChangeSetStatus(record.status),
             recovery_plans=plans,
             governance_decisions=governance,
+            candidate_revisions=revisions,
             version=record.version,
             merge_cursor=int(payload.get("merge_cursor", 0)),
             created_at=record.created_at,

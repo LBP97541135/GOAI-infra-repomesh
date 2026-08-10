@@ -16,6 +16,7 @@ from .contracts import (
     PlanRecoveryCommand,
     PrepareChangeSetCommand,
     PullRequestObservationCommand,
+    RecordCandidateRevisionCommand,
     RecordedSCMObservation,
     RecordGovernanceDecisionCommand,
     RecordMergeRequestedCommand,
@@ -31,6 +32,7 @@ from .contracts import (
     SCMObservationView,
 )
 from .domain import (
+    CandidateRevision,
     ChangeSet,
     DeliveryConflict,
     DeliveryNotFound,
@@ -311,6 +313,17 @@ class DeliveryService:
             title=command.title.strip(),
             validation_snapshot_id=command.validation_snapshot_id,
             repositories=repositories,
+            candidate_revisions=tuple(
+                CandidateRevision(
+                    repository_id=item.repository_id,
+                    task_id=item.task_id,
+                    sequence=0,
+                    head_sha=item.commit_sha,
+                    previous_head_sha=None,
+                    reason="initial candidate",
+                )
+                for item in repositories
+            ),
         )
         await self._store.add(change_set, idempotency_key=idempotency_key, fingerprint=fingerprint)
         return change_set.to_view()
@@ -387,6 +400,20 @@ class DeliveryService:
                 decided_by_agent_id=command.decided_by_agent_id,
                 reason=command.reason.strip(),
             )
+        )
+        await self._store.update(updated, expected_version=change_set.version)
+        return updated.to_view()
+
+    async def record_candidate_revision(
+        self, command: RecordCandidateRevisionCommand
+    ) -> ChangeSetView:
+        change_set = await self._required(command.change_set_id)
+        updated = change_set.record_candidate_revision(
+            command.repository_id,
+            command.task_id,
+            command.previous_head_sha,
+            command.new_head_sha,
+            command.reason,
         )
         await self._store.update(updated, expected_version=change_set.version)
         return updated.to_view()

@@ -26,10 +26,12 @@ from .observation_processor import (
 from .plan_delivery import PlanDeliveryFinalizer, PlanDeliveryPolicy
 from .poller import GitHubObservationPoller
 from .reconciler import DeliveryReconciler
+from .rework import CIReworkTaskCreator
 
 __all__ = [
     "BranchPublisher",
     "ChangeSetSCMCoordinator",
+    "CIReworkTaskCreator",
     "DeliveryReconciler",
     "GitHubAdapter",
     "GitHubAppTokenProvider",

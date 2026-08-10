@@ -121,12 +121,17 @@ Automatic delivery requires a current decision for the exact repository candidat
 branch protection preflight verifies named checks, approval count and stale-review dismissal before
 RepoMesh opens the delivery PR.
 
-### PR-5: Stable rework identity
+### PR-5: Stable rework identity - implemented
 
 - Initiate the ChangeSet before branch publication.
 - Add append-only Candidate Revisions.
 - Implement `CreateCIReworkTask` through Task Orchestration contracts.
 - Update the existing PR with fast-forward-only candidate commits.
+
+Every ChangeSet now carries append-only Candidate Revision history. A rework keeps the ChangeSet,
+delivery branch and PR number, binds the new head to a new Task, and clears CI, review and
+governance evidence from the previous head. `CIReworkTaskCreator` creates the Worker assignment
+through the Task Orchestration contract with a stable idempotency key.
 
 ### PR-6: Validation environment identity
 

@@ -5,6 +5,7 @@ from uuid import UUID
 from repomesh.shared.domain import new_id
 
 from .contracts import (
+    CandidateRevisionView,
     ChangeSetStatus,
     ChangeSetView,
     CICheckObservationView,
@@ -425,6 +426,35 @@ class RepositoryDelivery:
             raise DeliveryConflict("repository is not ready to request merge")
         return replace(self, status=RepositoryDeliveryStatus.MERGE_REQUESTED)
 
+    def revise(
+        self, task_id: UUID, previous_head_sha: str, new_head_sha: str
+    ) -> "RepositoryDelivery":
+        if self.status is RepositoryDeliveryStatus.MERGED:
+            raise DeliveryConflict("merged candidate cannot be revised")
+        if previous_head_sha.strip().lower() != self.commit_sha:
+            raise DeliveryConflict("candidate revision is based on a stale head")
+        normalized = new_head_sha.strip().lower()
+        if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
+            raise ValueError("new candidate head must be a full Git object id")
+        if normalized == self.commit_sha:
+            raise DeliveryConflict("candidate revision must change the head SHA")
+        return replace(
+            self,
+            task_id=task_id,
+            base_sha=self.commit_sha,
+            commit_sha=normalized,
+            status=(
+                RepositoryDeliveryStatus.PR_OPEN
+                if self.pull_request_number is not None
+                else RepositoryDeliveryStatus.PENDING
+            ),
+            ci_check_run_id=None,
+            ci_summary=None,
+            ci_checks=(),
+            reviews=(),
+            merge_sha=None,
+        )
+
     def to_view(self) -> RepositoryDeliveryView:
         return RepositoryDeliveryView(
             repository_id=self.repository_id,
@@ -537,6 +567,30 @@ class GovernanceDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateRevision:
+    repository_id: UUID
+    task_id: UUID
+    sequence: int
+    head_sha: str
+    previous_head_sha: str | None
+    reason: str
+    id: UUID = field(default_factory=new_id)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def to_view(self) -> CandidateRevisionView:
+        return CandidateRevisionView(
+            id=self.id,
+            repository_id=self.repository_id,
+            task_id=self.task_id,
+            sequence=self.sequence,
+            head_sha=self.head_sha,
+            previous_head_sha=self.previous_head_sha,
+            reason=self.reason,
+            created_at=self.created_at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ChangeSet:
     organization_id: UUID
     project_id: UUID
@@ -548,6 +602,7 @@ class ChangeSet:
     status: ChangeSetStatus = ChangeSetStatus.READY
     recovery_plans: tuple[RecoveryPlan, ...] = ()
     governance_decisions: tuple[GovernanceDecision, ...] = ()
+    candidate_revisions: tuple[CandidateRevision, ...] = ()
     version: int = 1
     merge_cursor: int = 0
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -619,6 +674,53 @@ class ChangeSet:
             updated_at=datetime.now(UTC),
         )
 
+    def record_candidate_revision(
+        self,
+        repository_id: UUID,
+        task_id: UUID,
+        previous_head_sha: str,
+        new_head_sha: str,
+        reason: str,
+    ) -> "ChangeSet":
+        candidate = next(
+            (item for item in self.repositories if item.repository_id == repository_id), None
+        )
+        if candidate is None:
+            raise DeliveryNotFound("revision repository is not in ChangeSet")
+        revised = candidate.revise(task_id, previous_head_sha, new_head_sha)
+        sequence = 1 + max(
+            (
+                item.sequence
+                for item in self.candidate_revisions
+                if item.repository_id == repository_id
+            ),
+            default=0,
+        )
+        revision = CandidateRevision(
+            repository_id=repository_id,
+            task_id=task_id,
+            sequence=sequence,
+            head_sha=revised.commit_sha,
+            previous_head_sha=candidate.commit_sha,
+            reason=reason.strip() or "candidate rework",
+        )
+        repositories = tuple(
+            revised if item.repository_id == repository_id else item for item in self.repositories
+        )
+        return replace(
+            self,
+            repositories=repositories,
+            candidate_revisions=(*self.candidate_revisions, revision),
+            status=ChangeSetStatus.DELIVERING,
+            merge_cursor=min(
+                item.merge_order
+                for item in repositories
+                if item.status is not RepositoryDeliveryStatus.MERGED
+            ),
+            version=self.version + 1,
+            updated_at=datetime.now(UTC),
+        )
+
     def record_recovery_action(
         self,
         plan_id: UUID,
@@ -664,6 +766,7 @@ class ChangeSet:
             repositories=tuple(item.to_view() for item in self.repositories),
             recovery_plans=tuple(item.to_view() for item in self.recovery_plans),
             governance_decisions=tuple(item.to_view() for item in self.governance_decisions),
+            candidate_revisions=tuple(item.to_view() for item in self.candidate_revisions),
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
