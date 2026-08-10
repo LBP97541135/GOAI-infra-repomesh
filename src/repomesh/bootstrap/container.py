@@ -326,10 +326,21 @@ class ApplicationContainer:
     def delivery_service(self):
         from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
 
+        validation = self.validation_snapshot_service()
         return DeliveryService(
             PostgresChangeSetStore(self.database),
             require_governance=get_settings().delivery_auto_enabled,
+            require_validation=get_settings().delivery_auto_enabled,
+            validation_reader=validation,
         )
+
+    def validation_snapshot_service(self):
+        from repomesh.modules.review_validation import (
+            PostgresValidationSnapshotStore,
+            ValidationSnapshotService,
+        )
+
+        return ValidationSnapshotService(PostgresValidationSnapshotStore(self.database))
 
     def scm_webhook_event_store(self):
         return self.scm_observation_service()
@@ -395,6 +406,7 @@ class ApplicationContainer:
                 required_checks=settings.delivery_required_checks,
                 required_approvals=settings.delivery_required_approvals,
             ),
+            validation=self.validation_snapshot_service(),
         )
 
     def task_assignment_gateway(self) -> TaskAssignmentGateway | None:

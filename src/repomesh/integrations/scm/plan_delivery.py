@@ -12,6 +12,11 @@ from repomesh.modules.delivery.contracts import (
     PrepareChangeSetCommand,
     RepositoryCandidateInput,
 )
+from repomesh.modules.review_validation import (
+    CreateValidationSnapshotCommand,
+    ValidationSnapshotService,
+    ValidationTestInput,
+)
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanView, TaskStatus
 from repomesh.modules.task_orchestration.ports import TaskStore
 
@@ -34,23 +39,41 @@ class PlanDeliveryFinalizer:
         coordinator: ChangeSetSCMCoordinator,
         tasks: TaskStore,
         policy: PlanDeliveryPolicy,
+        validation: ValidationSnapshotService | None = None,
     ) -> None:
         self._delivery = delivery
         self._coordinator = coordinator
         self._tasks = tasks
         self._policy = policy
+        self._validation = validation
 
     async def handle(self, plan: ExecutionPlanView) -> None:
-        candidates, workspaces = await self._candidates(plan)
+        candidates, workspaces, tests = await self._candidates(plan)
         if not candidates:
             return
+        validation_snapshot_id = None
+        if self._validation is not None:
+            snapshot = await self._validation.create(
+                CreateValidationSnapshotCommand(
+                    organization_id=plan.organization_id,
+                    project_id=plan.project_id,
+                    specification_version_id=None,
+                    candidate_heads={item.repository_id: item.commit_sha for item in candidates},
+                    tests=tuple(tests),
+                    environment={
+                        "runner_protocol": "v1",
+                        "execution_plan": str(plan.id),
+                    },
+                )
+            )
+            validation_snapshot_id = snapshot.id
         change_set = await self._delivery.prepare(
             PrepareChangeSetCommand(
                 organization_id=plan.organization_id,
                 project_id=plan.project_id,
                 created_by_agent_id=plan.created_by_agent_id,
                 title=f"RepoMesh delivery {str(plan.id)[:8]}",
-                validation_snapshot_id=None,
+                validation_snapshot_id=validation_snapshot_id,
                 candidates=tuple(candidates),
             ),
             idempotency_key=f"execution-plan:{plan.id}:delivery",
@@ -74,9 +97,14 @@ class PlanDeliveryFinalizer:
 
     async def _candidates(
         self, plan: ExecutionPlanView
-    ) -> tuple[list[RepositoryCandidateInput], dict[UUID, Path]]:
+    ) -> tuple[
+        list[RepositoryCandidateInput],
+        dict[UUID, Path],
+        list[ValidationTestInput],
+    ]:
         candidates: list[RepositoryCandidateInput] = []
         workspaces: dict[UUID, Path] = {}
+        tests: list[ValidationTestInput] = []
         earlier_repositories: list[UUID] = []
         for batch in plan.batches:
             current_repositories = [item.repository_id for item in batch]
@@ -112,8 +140,27 @@ class PlanDeliveryFinalizer:
                     )
                 )
                 workspaces[planned.repository_id] = workspace
+                raw_tests = evidence.get("testResults") or ()
+                if not isinstance(raw_tests, list) or not raw_tests:
+                    raise ValueError("Runner evidence has no test results")
+                for result in raw_tests:
+                    if not isinstance(result, dict):
+                        raise ValueError("Runner test evidence is malformed")
+                    tests.append(
+                        ValidationTestInput(
+                            repository_id=planned.repository_id,
+                            command=str(result.get("command") or "").strip(),
+                            exit_code=int(result.get("exitCode", -1)),
+                            summary=str(
+                                result.get("stderr")
+                                or result.get("stdout")
+                                or result.get("summary")
+                                or ""
+                            ),
+                        )
+                    )
             earlier_repositories.extend(current_repositories)
-        return candidates, workspaces
+        return candidates, workspaces, tests
 
     @staticmethod
     def _evidence(raw: str | None) -> dict[str, object]:

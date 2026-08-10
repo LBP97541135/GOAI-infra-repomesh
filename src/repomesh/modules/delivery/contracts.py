@@ -380,3 +380,9 @@ class MergeGateDecision:
     repository_id: UUID
     allowed: bool
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationEvidenceDecision:
+    valid: bool
+    reasons: tuple[str, ...]

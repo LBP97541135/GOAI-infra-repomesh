@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from .contracts import ValidationEvidenceDecision
 from .domain import ChangeSet, SCMCommand, SCMObservation, SCMPollCursor
 
 
@@ -61,3 +62,12 @@ class SCMCommandStore(Protocol):
     async def list_dispatchable(
         self, *, stale_before: datetime, max_attempts: int, limit: int
     ) -> tuple[SCMCommand, ...]: ...
+
+
+class ValidationSnapshotReader(Protocol):
+    async def validate_for_delivery(
+        self,
+        snapshot_id: UUID,
+        project_id: UUID,
+        candidate_heads: dict[UUID, str],
+    ) -> ValidationEvidenceDecision: ...

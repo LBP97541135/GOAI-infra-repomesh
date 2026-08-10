@@ -44,7 +44,13 @@ from .domain import (
     SCMObservation,
     SCMPollCursor,
 )
-from .ports import ChangeSetStore, SCMCommandStore, SCMObservationStore, SCMPollCursorStore
+from .ports import (
+    ChangeSetStore,
+    SCMCommandStore,
+    SCMObservationStore,
+    SCMPollCursorStore,
+    ValidationSnapshotReader,
+)
 
 
 class SCMCommandService:
@@ -277,9 +283,18 @@ class SCMObservationService:
 
 
 class DeliveryService:
-    def __init__(self, store: ChangeSetStore, *, require_governance: bool = False) -> None:
+    def __init__(
+        self,
+        store: ChangeSetStore,
+        *,
+        require_governance: bool = False,
+        require_validation: bool = False,
+        validation_reader: ValidationSnapshotReader | None = None,
+    ) -> None:
         self._store = store
         self._require_governance = require_governance
+        self._require_validation = require_validation
+        self._validation_reader = validation_reader
 
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
@@ -468,6 +483,18 @@ class DeliveryService:
                 reasons.append(f"governance blocked delivery: {decision.reason}")
             elif decision.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED:
                 reasons.append(f"governance requires rollback: {decision.reason}")
+        if self._require_validation:
+            if change_set.validation_snapshot_id is None:
+                reasons.append("validation snapshot is missing")
+            elif self._validation_reader is None:
+                reasons.append("validation snapshot reader is unavailable")
+            else:
+                validation = await self._validation_reader.validate_for_delivery(
+                    change_set.validation_snapshot_id,
+                    change_set.project_id,
+                    {item.repository_id: item.commit_sha for item in change_set.repositories},
+                )
+                reasons.extend(validation.reasons)
         return MergeGateDecision(
             change_set_id=change_set.id,
             repository_id=repository_id,

@@ -51,6 +51,10 @@ from repomesh.modules.delivery import (
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
 from repomesh.modules.repository_intelligence.infrastructure import PostgresRepositoryCatalog
+from repomesh.modules.review_validation import (
+    PostgresValidationSnapshotStore,
+    ValidationSnapshotService,
+)
 from repomesh.modules.specification import PostgresSpecificationStore
 from repomesh.modules.task_orchestration import PostgresTaskStore, TaskOrchestrator
 from repomesh.persistence import Database
@@ -140,9 +144,12 @@ def build_default_container() -> ApplicationContainer:
         )
         background_services = (AgentTeamsMatrixInboundPoller(messenger, inbound),)
     if settings.github_webhook_secret or scm_adapter is not None:
+        validation = ValidationSnapshotService(PostgresValidationSnapshotStore(database))
         delivery = DeliveryService(
             PostgresChangeSetStore(database),
             require_governance=settings.delivery_auto_enabled,
+            require_validation=settings.delivery_auto_enabled,
+            validation_reader=validation,
         )
         observations = SCMObservationService(PostgresSCMObservationStore(database))
         commands = SCMCommandService(PostgresSCMCommandStore(database))
@@ -192,7 +199,13 @@ def build_default_container() -> ApplicationContainer:
                 ),
             )
     if scm_adapter is not None and settings.delivery_auto_enabled:
-        delivery = DeliveryService(PostgresChangeSetStore(database), require_governance=True)
+        validation = ValidationSnapshotService(PostgresValidationSnapshotStore(database))
+        delivery = DeliveryService(
+            PostgresChangeSetStore(database),
+            require_governance=True,
+            require_validation=True,
+            validation_reader=validation,
+        )
         commands = SCMCommandService(PostgresSCMCommandStore(database))
         background_services = (
             *background_services,

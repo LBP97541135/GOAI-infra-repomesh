@@ -133,11 +133,16 @@ delivery branch and PR number, binds the new head to a new Task, and clears CI, 
 governance evidence from the previous head. `CIReworkTaskCreator` creates the Worker assignment
 through the Task Orchestration contract with a stable idempotency key.
 
-### PR-6: Validation environment identity
+### PR-6: Validation environment identity - implemented
 
 - Implement immutable Review and Validation snapshots.
 - Add canonical `environment_hash` inputs and configurable expiry.
 - Reject stale validation at every merge gate evaluation.
+
+Completed plans now produce an immutable Validation Snapshot from Runner test evidence before the
+ChangeSet is created. The snapshot binds every repository Head, test command/result, optional Spec
+version, review evidence, canonical environment hash and expiry time. Automatic merge evaluates it
+again on every gate check; a rework Head therefore invalidates the previous snapshot automatically.
 
 ### PR-7: Rollback Saga
 

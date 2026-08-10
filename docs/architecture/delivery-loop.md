@@ -6,6 +6,7 @@ credentials.
 ```text
 ExecutionPlan completed
   -> collect frozen Runner commit/base/workspace evidence
+  -> freeze test results, candidate Heads and environment into a Validation Snapshot
   -> create idempotent multi-repository ChangeSet
   -> platform Push with GitHub App installation token
   -> create ready Pull Requests
@@ -32,6 +33,7 @@ ExecutionPlan completed
 - A changed remote branch, PR Head SHA or CI Head SHA fails closed.
 - A failed required check or requested-changes review blocks Merge.
 - A BLOCKED, ROLLBACK_REQUIRED, missing or stale governance decision blocks Merge.
+- Failed, expired, missing or Head-mismatched validation evidence blocks Merge.
 - A downstream repository waits until every upstream repository is merged.
 - GitHub remains the source of truth for PR and Merge state; RepoMesh stores governed observations.
 - A successful Merge API response records only `MERGE_REQUESTED`; only a later GitHub observation

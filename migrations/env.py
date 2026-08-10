@@ -35,6 +35,7 @@ from repomesh.modules.repository_intelligence.infrastructure.models import (
     PlanSnapshotRecord,
     RepositoryRecord,
 )
+from repomesh.modules.review_validation.infrastructure import ValidationSnapshotRecord
 from repomesh.modules.specification.infrastructure import (
     SpecificationRecord,
     SpecificationVersionRecord,
@@ -68,6 +69,7 @@ _REGISTERED_MODELS = (
     ProjectRepositoryTeamRecord,
     RepositoryRecord,
     PlanSnapshotRecord,
+    ValidationSnapshotRecord,
     SCMObservationRecord,
     SCMPollCursorRecord,
     SCMCommandRecord,
