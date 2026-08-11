@@ -20,6 +20,7 @@ import type {
   GateCheck,
   RepoDiff,
   RepoGate,
+  RepositoryEnv,
 } from "./types";
 
 const ACTION_LABEL: Record<DecisionAction, string> = {
@@ -141,6 +142,35 @@ export function approvalFromContract(
 function deriveApproval(data: DeliveryData): ApprovalInfo | null {
   if (!data.aggregate) return null;
   return approvalFromContract(data.aggregate, data.decisions.items, data.overlay?.approvalAuthority ?? undefined);
+}
+
+/** 环境窗（CONS-43）的单仓切片。v0.1 交付聚合是轮次粒度，本函数只做**切片与标签
+ *  拼接**——`gate_display` 原样透传（§5 是唯一映射实现），diffstat 为 null 时只列
+ *  文件名不编行数（§6.3）。 */
+export function repositoryEnvFromAggregate(agg: DeliveryAggregate, repositoryId: string): RepositoryEnv | null {
+  const info = agg.repositories.find((r) => r.repository_id === repositoryId);
+  if (!info) return null;
+
+  const csRepos = (agg.change_set?.repositories ?? []).slice().sort((a, b) => a.merge_order - b.merge_order);
+  const mine = csRepos.find((r) => r.repository_id === repositoryId) ?? null;
+  const runs = agg.diffs.filter((d) => d.repository_id === repositoryId);
+
+  return {
+    repositoryName: info.name,
+    gateDisplay: mine?.gate_display ?? null,
+    prLabel: mine ? prLabel(mine) : null,
+    prUrl: mine?.pull_request_url ?? null,
+    // §6.4 追认：合并请求发出后 merge_gate 为 null，不能当成「不允许」
+    mergeAllowed: mine?.merge_gate?.allowed ?? null,
+    changedFiles: runs.flatMap((r) => r.changed_files.map((path) => ({ path }))),
+    commitShas: runs.map((r) => shortSha(r.commit_sha)),
+    validationSnapshotId: agg.validation_snapshot?.id ?? null,
+    siblings: csRepos.map((r) => ({
+      name: agg.repositories.find((x) => x.repository_id === r.repository_id)?.name ?? r.repository_id.slice(0, 8),
+      gate: r.gate_display,
+      isCurrent: r.repository_id === repositoryId,
+    })),
+  };
 }
 
 /** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。

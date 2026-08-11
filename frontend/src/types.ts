@@ -192,3 +192,19 @@ export interface PresentationOverlay {
   stagingNote: string | null;
   envProcesses: string[];
 }
+
+/** 环境窗（CONS-43）的单仓切片：轮次粒度的交付聚合切到本仓作用域。
+ *  gate 相关字段原样透传读模型，前端不映射。 */
+export interface RepositoryEnv {
+  repositoryName: string;
+  gateDisplay: GateDisplay | null;
+  prLabel: string | null;
+  prUrl: string | null;
+  /** null = 合并请求已发出或已过（§6.4 追认），**不等于**「不允许」 */
+  mergeAllowed: boolean | null;
+  changedFiles: Array<{ path: string }>;
+  commitShas: string[];
+  validationSnapshotId: string | null;
+  /** CHANGESET 中各仓位置（按 merge_order），标出当前所在仓 */
+  siblings: Array<{ name: string; gate: GateDisplay; isCurrent: boolean }>;
+}

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import type {
+  GateDisplay,
   RepositoryPlanView,
   RoomListItemView,
   RoomStreamItemView,
   RoomStreamPage,
 } from "../api/contract";
+import type { RepositoryEnv } from "../types";
 import { eventTime } from "../viewmodel";
 
 /** 活体房间视图（CONS-43 骨架）。版式按原型 `#v-room`：
@@ -139,9 +141,23 @@ function PlanPaper({ plan }: { plan: RepositoryPlanView }) {
   );
 }
 
-/** 单仓悬浮环境窗。骨架阶段只出结构与作用域声明——变更/CHANGESET/基线来自 v0.1
- *  交付聚合（轮次粒度），需 issue 详情页与轮次打通后才能取到本仓切片，此前不填假数。 */
-function EnvFloat({ repositoryName }: { repositoryName: string }) {
+const GATE_SKIN: Record<GateDisplay, string> = {
+  open: "text-olive",
+  blocked: "text-salmon",
+  running: "text-bluegray",
+  waiting: "text-tx2",
+};
+
+const GATE_LABEL: Record<GateDisplay, string> = {
+  open: "可合并",
+  blocked: "门禁受阻",
+  running: "门禁运行中",
+  waiting: "等待中",
+};
+
+/** 单仓悬浮环境窗：轮次粒度的交付聚合切到本仓。
+ *  §6.3 diffstat 为 null，所以只列变更文件名、**不编 ± 行数**（原型里的 +412 是设计稿）。 */
+function EnvFloat({ repositoryName, env }: { repositoryName: string; env: RepositoryEnv | null }) {
   const [min, setMin] = useState(false);
 
   return (
@@ -152,19 +168,85 @@ function EnvFloat({ repositoryName }: { repositoryName: string }) {
           {min ? "▸" : "▾"}
         </button>
       </div>
-      {!min && (
-        <div className="px-3 py-2.5">
-          <div className="microlabel pb-1.5">作用域</div>
-          <p className="text-[11.5px] leading-[1.6] text-tx2">
-            本窗为<b className="text-tx">单仓</b>作用域，只呈现当前房间所属仓库的环境。
+
+      {!min &&
+        (env === null ? (
+          <p className="px-3 py-2.5 text-[11.5px] leading-[1.6] text-[#6b6046]">
+            本仓环境未接入：该 issue 尚无轮次，或本仓不在当前轮次的交付聚合内。
           </p>
-          <div className="microlabel pt-3 pb-1.5">变更 · CHANGESET · 基线</div>
-          <p className="text-[11.5px] leading-[1.6] text-[#6b6046]">
-            数据来自 v0.1 交付聚合（轮次粒度的 diffs / change_set / repositories），需 issue
-            详情页与轮次打通后才能取本仓切片。骨架阶段不填占位数字。
-          </p>
-        </div>
-      )}
+        ) : (
+          <div className="px-3 py-2.5">
+            <div className="microlabel pb-1.5">状态</div>
+            <div className="flex items-baseline gap-2 font-mono text-[11.5px]">
+              {/* gate_display 原样透传，前端不映射 */}
+              <span className={env.gateDisplay ? GATE_SKIN[env.gateDisplay] : "text-tx2"}>
+                {env.gateDisplay ? GATE_LABEL[env.gateDisplay] : "未进入变更集"}
+              </span>
+              {env.mergeAllowed === null && env.gateDisplay && (
+                <span className="text-[10px] text-[#6b6046]">合并请求已发出</span>
+              )}
+            </div>
+
+            <div className="microlabel pt-3 pb-1">变更</div>
+            {env.changedFiles.length === 0 ? (
+              <p className="text-[11px] text-[#6b6046]">尚无变更</p>
+            ) : (
+              <>
+                {env.changedFiles.slice(0, 8).map((f) => (
+                  <div key={f.path} className="truncate pl-1 font-mono text-[10.5px] text-tx2" title={f.path}>
+                    {f.path}
+                  </div>
+                ))}
+                {env.changedFiles.length > 8 && (
+                  <div className="pl-1 text-[10.5px] text-[#6b6046]">+{env.changedFiles.length - 8} 个文件</div>
+                )}
+                {/* §6.3：diffstat 无源，不编 ± 行数 */}
+                <div className="pt-1 pl-1 text-[10px] text-[#6b6046]">± 行数未接入（diffstat 无源）</div>
+              </>
+            )}
+            {env.commitShas.length > 0 && (
+              <div className="pt-1 pl-1 font-mono text-[10.5px] text-[#6b6046]">± {env.commitShas.join(" · ")}</div>
+            )}
+
+            <div className="microlabel pt-3 pb-1">CHANGESET · 本仓位置</div>
+            {env.siblings.length === 0 ? (
+              <p className="text-[11px] text-[#6b6046]">本轮无变更集</p>
+            ) : (
+              env.siblings.map((s) => (
+                <div
+                  key={s.name}
+                  className={`flex items-baseline gap-2 px-1 py-0.5 font-mono text-[11px] ${
+                    s.isCurrent ? "bg-[#241c10]" : ""
+                  }`}
+                >
+                  <span className={s.isCurrent ? "text-tx" : "text-tx2"}>{s.name}</span>
+                  <span className={`ml-auto text-[10.5px] ${GATE_SKIN[s.gate]}`}>{GATE_LABEL[s.gate]}</span>
+                  {s.isCurrent && <span className="text-[10px] text-amber">◂ 当前</span>}
+                </div>
+              ))
+            )}
+
+            <div className="microlabel pt-3 pb-1">环境</div>
+            <div className="flex items-baseline gap-2 px-1 font-mono text-[11px]">
+              <span className="text-tx2">PR</span>
+              <span className="ml-auto text-[10.5px] text-tx">
+                {env.prUrl ? (
+                  <a className="underline hover:text-amber-hi" href={env.prUrl} target="_blank" rel="noreferrer">
+                    {env.prLabel}
+                  </a>
+                ) : (
+                  (env.prLabel ?? "—")
+                )}
+              </span>
+            </div>
+            <div className="flex items-baseline gap-2 px-1 pb-1 font-mono text-[11px]">
+              <span className="text-tx2">基线快照</span>
+              <span className="ml-auto truncate text-[10.5px] text-[#6b6046]">
+                {env.validationSnapshotId ? env.validationSnapshotId.slice(0, 8) : "未接入"}
+              </span>
+            </div>
+          </div>
+        ))}
     </aside>
   );
 }
@@ -173,6 +255,7 @@ export function RoomView({
   room,
   stream,
   plan,
+  env,
   sourceNote,
   onBack,
   onToast,
@@ -181,6 +264,8 @@ export function RoomView({
   stream: RoomStreamPage;
   /** 第二视图的数据独立取用，未到或失败时为 null——不挡住聊天流 */
   plan: RepositoryPlanView | null;
+  /** 单仓环境切片；未取到为 null，窗内显缺口不填假数 */
+  env: RepositoryEnv | null;
   /** 数据来源与刷新机制的实况标注。**必须与实际一致**：写着 replay 却在放 live
    *  数据，比不标注更糟——那是在说谎。由取数容器按数据源传入。 */
   sourceNote: string;
@@ -267,7 +352,7 @@ export function RoomView({
         <p className="py-8 text-[12.5px] text-tx2">DAG · PLAN · SPEC 取用中…</p>
       )}
 
-      <EnvFloat repositoryName={room.repository_name} />
+      <EnvFloat repositoryName={room.repository_name} env={env} />
     </div>
   );
 }
