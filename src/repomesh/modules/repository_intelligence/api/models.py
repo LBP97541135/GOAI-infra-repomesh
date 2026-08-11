@@ -32,6 +32,15 @@ class RepositoryCreate(BaseModel):
     auto_card: AutoCardCreate | None = None
 
 
+class OrgScanRequest(BaseModel):
+    """Request body for organization-level batch scanning."""
+
+    org_url: HttpUrl
+    github_token: str = Field(default="", description="GitHub access token")
+    gitlab_token: str = Field(default="", description="GitLab access token")
+    max_workers: int = Field(default=5, ge=1, le=20)
+
+
 class RepositoryView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +51,17 @@ class RepositoryView(BaseModel):
     topics: tuple[str, ...]
     languages: tuple[str, ...]
     auto_card: AutoCardView | None = None
+
+
+class OrgScanResult(BaseModel):
+    """Response for organization-level batch scanning."""
+
+    org_url: str
+    total_scanned: int
+    registered: int
+    skipped: int
+    failed: int
+    repositories: list[RepositoryView] = Field(default_factory=list)
 
 
 class DiscoveryRequest(BaseModel):
@@ -57,6 +77,18 @@ class DiscoveryCandidate(BaseModel):
     matched_terms: tuple[str, ...]
     rationale: str
     is_entry_point: bool = False
+
+
+class RequirementAnalysisRequest(BaseModel):
+    requirement: str = Field(min_length=1, max_length=20_000)
+
+
+class RequirementAnalysisView(BaseModel):
+    sufficient: bool
+    confidence: float
+    missing_dimensions: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    extracted_keywords: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +170,14 @@ class MaterializeRequest(BaseModel):
     project_id: UUID
     leader_agent_id: UUID
     idempotency_prefix: str = Field(default="manual")
+    repo_details: dict[str, RepositoryPlanView] = Field(
+        default_factory=dict,
+        description=(
+            "Per-repository adjustment plans from the confirmation phase, "
+            "keyed by repository name. Used to enrich the handoff documents "
+            "generated for this plan."
+        ),
+    )
 
 
 class MaterializeResponse(BaseModel):
@@ -146,6 +186,70 @@ class MaterializeResponse(BaseModel):
     task_ids: list[UUID] = Field(default_factory=list)
     skipped_repos: list[str] = Field(default_factory=list)
     plan_id: UUID | None = None
+    handoff_doc_ids: list[UUID] = Field(default_factory=list)
+
+
+class ReplanRequest(BaseModel):
+    """Trigger a partial replan after a BLOCKED task reports an upstream change."""
+
+    project_id: UUID
+    leader_agent_id: UUID
+    feedback: str = Field(min_length=1, max_length=20_000)
+    change_source_repo: str = Field(min_length=1, max_length=200)
+    plan_version: int = Field(default=1, ge=1)
+    requirement: str = Field(default="", max_length=20_000)
+    idempotency_prefix: str = Field(min_length=1, max_length=100)
+    confirmation: ConfirmationSummaryView | None = Field(
+        default=None,
+        description=(
+            "Optional confirmation summary used by the Leader to locally "
+            "re-integrate a new plan for the affected repositories. When "
+            "provided, the replan produces a new plan (and regenerates the "
+            "affected repositories' handoff documents); when omitted, the "
+            "replan only supersedes the old tasks."
+        ),
+    )
+
+
+class ReplanResponse(BaseModel):
+    new_plan_version: int
+    superseded_task_ids: list[UUID] = Field(default_factory=list)
+    new_task_ids: list[UUID] = Field(default_factory=list)
+    affected_repos: list[str] = Field(default_factory=list)
+    feedback_summary: str = ""
+    handoff_doc_ids: list[UUID] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Handoff documents (仓库对接文档 / human approval)
+# ---------------------------------------------------------------------------
+
+
+class HandoffDocView(BaseModel):
+    """A repository's adjustment proposal awaiting (or carrying) a human decision."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    plan_version: int
+    repository: str
+    status: str
+    decision: str | None = None
+    content: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    created_by_agent_id: UUID | None = None
+    decided_by_agent_id: UUID | None = None
+    decision_reason: str = ""
+    superseded_by_version: int | None = None
+
+
+class HandoffDocDecisionRequest(BaseModel):
+    """Manual decision of a repository owner on a PENDING handoff document."""
+
+    approved: bool
+    decided_by_agent_id: UUID
+    reason: str = Field(default="", max_length=4000)
 
 
 class WorkerTaskStatusView(BaseModel):

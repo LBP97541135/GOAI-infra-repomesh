@@ -67,8 +67,15 @@ class AgentTeamsMatrixClient:
         params: dict[str, str | int] = {"timeout": max(0, timeout_ms)}
         if since:
             params["since"] = since
+        # Use a timeout slightly longer than the long-poll window so
+        # httpx doesn't abort before Matrix responds.
+        sync_timeout = max(10.0, (timeout_ms / 1000.0) + 5.0)
         try:
-            response = await self._client.get("/_matrix/client/v3/sync", params=params)
+            response = await self._client.get(
+                "/_matrix/client/v3/sync",
+                params=params,
+                timeout=sync_timeout,
+            )
         except httpx.HTTPError as error:
             raise AgentTeamsUnavailable("Matrix sync failed") from error
         if response.status_code != 200:

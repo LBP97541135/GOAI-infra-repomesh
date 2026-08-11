@@ -22,9 +22,9 @@ empty proved indistinguishable from success in live use.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID
 
 from opentelemetry import trace
@@ -133,6 +133,36 @@ class TaskSupersederGateway(Protocol):
     ) -> TaskView: ...
 
 
+class HandoffDocGenerator(Protocol):
+    """Subset of HandoffDocService needed by the bridge.
+
+    The bridge generates one handoff document per repository (the human
+    approval surface for each repository's proposed adjustment) when a plan
+    is materialised, and regenerates them for the affected repositories when
+    a replan produces a new plan version.
+    """
+
+    async def generate_for_plan(
+        self,
+        *,
+        project_id: UUID,
+        plan_version: int,
+        plan: IntegratedPlan,
+        requirement: str,
+        created_by_agent_id: UUID | None = ...,
+        repositories: Sequence[str] | None = ...,
+        details: Mapping[str, Mapping[str, Any]] | None = ...,
+    ) -> list[Any]: ...
+
+    async def supersede_for_repos(
+        self,
+        *,
+        project_id: UUID,
+        repositories: Sequence[str],
+        superseded_by_version: int,
+    ) -> int: ...
+
+
 # ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
@@ -147,6 +177,7 @@ class MaterializationResult:
     tasks: list[TaskView] = field(default_factory=list)
     skipped_repos: list[str] = field(default_factory=list)
     plan_id: UUID | None = None
+    handoff_doc_ids: list[UUID] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +189,7 @@ class ReplanResult:
     new_tasks: list[TaskView] = field(default_factory=list)
     affected_repos: list[str] = field(default_factory=list)
     feedback_summary: str = ""
+    handoff_doc_ids: list[UUID] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +232,7 @@ class PlanExecutionBridge:
         catalog: RepositoryCatalog,
         snapshot_store: PlanSnapshotWriter | None = None,
         superseder: TaskSupersederGateway | None = None,
+        handoff_docs: HandoffDocGenerator | None = None,
     ) -> None:
         self._specs = specifications
         self._plans = plans
@@ -207,6 +240,7 @@ class PlanExecutionBridge:
         self._catalog = catalog
         self._snapshots = snapshot_store
         self._superseder = superseder
+        self._handoff_docs = handoff_docs
 
     @traced("planning.materialize")
     async def materialize(
@@ -217,6 +251,7 @@ class PlanExecutionBridge:
         leader_agent_id: UUID,
         *,
         idempotency_prefix: str,
+        repo_details: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> MaterializationResult:
         """Create specs and tasks from *plan*.
 
@@ -227,6 +262,9 @@ class PlanExecutionBridge:
             leader_agent_id: ORG_LEADER agent UUID.
             idempotency_prefix: Unique prefix for idempotency keys
                 (e.g. ``"tt-001"``).
+            repo_details: Optional per-repository adjustment plan from the
+                confirmation phase (keyed by repository name) used to enrich
+                the handoff documents.  Plain ``dict`` values only.
 
         Returns:
             :class:`MaterializationResult` with created specs and tasks.
@@ -345,12 +383,13 @@ class PlanExecutionBridge:
         span.set_attribute("repomesh.materialize.skipped_repos", list(skipped))
 
         # --- 5. Save plan snapshot (if store configured) ---------------------
+        plan_version: int | None = None
         if self._snapshots is not None:
             try:
-                version = await self._snapshots.next_version(project_id)
+                plan_version = await self._snapshots.next_version(project_id)
                 await self._snapshots.save(
                     project_id=project_id,
-                    plan_version=version,
+                    plan_version=plan_version,
                     engineering_spec=plan.engineering_spec or requirement,
                     contracts=[
                         c.to_dict() if hasattr(c, "to_dict") else dict(c)
@@ -370,12 +409,38 @@ class PlanExecutionBridge:
             except Exception:
                 _logger.warning("Failed to save plan snapshot", exc_info=True)
 
+        # --- 5b. Generate handoff documents (if store configured) ------------
+        # One PENDING document per repository so the repository owner can
+        # manually approve or reject the proposed adjustment before it lands.
+        handoff_doc_ids: list[UUID] = []
+        if self._handoff_docs is not None:
+            try:
+                docs = await self._handoff_docs.generate_for_plan(
+                    project_id=project_id,
+                    plan_version=plan_version if plan_version is not None else 1,
+                    plan=plan,
+                    requirement=requirement,
+                    created_by_agent_id=leader_agent_id,
+                    details=repo_details,
+                )
+                handoff_doc_ids = [doc.id for doc in docs]
+                _logger.info(
+                    "Generated %d handoff document(s) for plan v%d",
+                    len(docs),
+                    plan_version,
+                )
+            except Exception:
+                _logger.warning(
+                    "Failed to generate handoff documents", exc_info=True
+                )
+
         return MaterializationResult(
             engineering_spec=eng_spec,
             contract_specs=contract_specs,
             tasks=tasks_created,
             skipped_repos=skipped,
             plan_id=plan_id,
+            handoff_doc_ids=handoff_doc_ids,
         )
 
     @traced("planning.replan")
@@ -494,6 +559,45 @@ class PlanExecutionBridge:
                 new_plan_version=new_plan_version,
             )
 
+        # --- 3c. Regenerate handoff documents for the affected repos ----------
+        # A replan produces a new plan version: the previous documents of the
+        # affected repositories are superseded and fresh PENDING documents are
+        # generated from the new plan so repository owners re-approve the
+        # adjusted proposal. When no new plan was produced (cancel-only
+        # fallback), the stale documents are still superseded.
+        handoff_doc_ids: list[UUID] = []
+        if self._handoff_docs is not None and affected_repos:
+            try:
+                if new_plan is None:
+                    await self._handoff_docs.supersede_for_repos(
+                        project_id=project_id,
+                        repositories=affected_repos,
+                        superseded_by_version=new_plan_version,
+                    )
+                else:
+                    docs = await self._handoff_docs.generate_for_plan(
+                        project_id=project_id,
+                        plan_version=new_plan_version,
+                        plan=new_plan,
+                        requirement=requirement,
+                        created_by_agent_id=leader_agent_id,
+                        repositories=affected_repos,
+                        details=self._handoff_details_from_summary(
+                            confirmation_summary, affected_repos
+                        ),
+                    )
+                    handoff_doc_ids = [doc.id for doc in docs]
+                _logger.info(
+                    "replan: handoff documents for %s regenerated @ v%d",
+                    affected_repos,
+                    new_plan_version,
+                )
+            except Exception:
+                _logger.warning(
+                    "replan: failed to regenerate handoff documents",
+                    exc_info=True,
+                )
+
         # --- 4. Notification: record who needs to be interrupted --------------
         # The bridge does not own a CollaborationGateway; the API layer reads
         # ``affected_repos`` from the result and pushes the interrupt notices.
@@ -521,6 +625,7 @@ class PlanExecutionBridge:
             new_tasks=new_tasks,
             affected_repos=list(affected_repos),
             feedback_summary=feedback_summary,
+            handoff_doc_ids=handoff_doc_ids,
         )
 
     # ------------------------------------------------------------------
@@ -577,6 +682,34 @@ class PlanExecutionBridge:
             "not change their public contracts."
         )
         return integration_service.integrate(scoped_requirement, confirmation_summary)
+
+    @staticmethod
+    def _handoff_details_from_summary(
+        confirmation_summary: ConfirmationSummary | None,
+        affected_repos: list[str],
+    ) -> Mapping[str, Mapping[str, Any]] | None:
+        """Project per-repository adjustment plans onto the affected repos.
+
+        The confirmation phase already produced one :class:`RepositoryPlan`
+        per repository; replan handoff documents reuse that adjustment plan
+        so repository owners approve the same proposal that was confirmed.
+        """
+
+        if confirmation_summary is None:
+            return None
+        details: dict[str, Mapping[str, Any]] = {}
+        for result in (
+            confirmation_summary.required + confirmation_summary.maybe
+        ):
+            if result.repository not in affected_repos or result.plan is None:
+                continue
+            details[result.repository] = {
+                "summary": result.plan_summary,
+                "changed_apis": tuple(result.plan.changed_apis),
+                "changed_modules": tuple(result.plan.changed_modules),
+                "risk": result.plan.risk,
+            }
+        return details or None
 
     async def _supersede_affected_tasks(
         self,

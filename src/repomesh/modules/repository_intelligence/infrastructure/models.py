@@ -57,3 +57,39 @@ class PlanSnapshotRecord(Base):
     execution_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     requirement_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     integration_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class HandoffDocRecord(Base):
+    """Repository handoff document (仓库对接文档) for human approval.
+
+    One document per (repository, plan_version).  ``status`` moves through
+    PENDING → APPROVED | REJECTED and is set to SUPERSEDED when a replan
+    regenerates the document for a newer plan version.
+    """
+
+    __tablename__ = "handoff_docs"
+    __table_args__ = {"schema": "repository_intelligence"}
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    plan_version: Mapped[int] = mapped_column(Integer)
+    repository: Mapped[str] = mapped_column(String(200), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    content: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_by_agent_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    decided_by_agent_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    decision_reason: Mapped[str] = mapped_column(Text, default="")
+    superseded_by_version: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )

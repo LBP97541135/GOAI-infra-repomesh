@@ -4,19 +4,23 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 
 from repomesh.modules.repository_intelligence.application import (
-    ConfirmationService,
     DependencyGraphService,
     ExecutionPlaneUnavailable,
-    PlanIntegrationService,
+    HandoffDocError,
     RegisterRepository,
     RepositoryDiscoveryService,
+    render_markdown,
 )
 from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
     ConfirmationSummary,
     RepositoryPlan,
+)
+from repomesh.modules.repository_intelligence.application.handoff_docs import (
+    HandoffDocStatus,
 )
 from repomesh.modules.repository_intelligence.application.plan_integration import (
     ContractSpec,
@@ -40,15 +44,23 @@ from .models import (
     DiscoveryCandidate,
     DiscoveryRequest,
     ExecutionPlanStatusView,
+    HandoffDocDecisionRequest,
+    HandoffDocView,
     IntegratedPlanView,
     IntegrationRequest,
     MaterializeRequest,
     MaterializeResponse,
+    OrgScanRequest,
+    OrgScanResult,
     PlannedTaskStatusView,
     PlanSnapshotSummaryView,
     PlanSnapshotView,
+    ReplanRequest,
+    ReplanResponse,
     RepositoryCreate,
     RepositoryView,
+    RequirementAnalysisRequest,
+    RequirementAnalysisView,
     TaskNodeView,
     WorkerTaskStatusView,
 )
@@ -96,6 +108,68 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
     return await catalog.list()
 
 
+@router.post("/repositories/scan-org", response_model=OrgScanResult)
+async def scan_organization(
+    body: OrgScanRequest, catalog: CatalogDependency
+) -> OrgScanResult:
+    """Batch-scan all repos under a GitHub/GitLab organization.
+
+    Fetches file trees, dependency files, and commits for every repo,
+    builds AutoCards, and registers them in the catalog.
+    """
+    from repomesh.modules.repository_intelligence.application.scan_remote import (
+        scan_org,
+    )
+    from repomesh.modules.repository_intelligence.infrastructure.platform import (
+        detect_platform,
+        make_fetcher,
+    )
+
+    url = str(body.org_url)
+    platform = detect_platform(url)
+    if platform.value == "local":
+        raise HTTPException(400, "URL must be a GitHub/GitLab organization URL")
+
+    fetcher = make_fetcher(
+        platform,
+        github_token=body.github_token,
+        gitlab_token=body.gitlab_token,
+    )
+
+    try:
+        profiles = await scan_org(
+            url, fetcher, max_workers=body.max_workers
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Scan failed: {exc}") from exc
+
+    register = RegisterRepository(catalog)
+    registered: list[RepositoryView] = []
+    skipped = 0
+    failed = 0
+
+    existing = {p.name for p in await catalog.list()}
+
+    for profile in profiles:
+        if profile.name in existing:
+            skipped += 1
+            continue
+        try:
+            await register.execute(profile)
+            registered.append(RepositoryView.model_validate(profile))
+        except Exception:
+            failed += 1
+
+    return OrgScanResult(
+        org_url=url,
+        total_scanned=len(profiles),
+        registered=len(registered),
+        skipped=skipped,
+        failed=failed,
+        repositories=registered,
+    )
+
+
 @router.post("/discovery", response_model=list[DiscoveryCandidate])
 async def discover_repositories(
     body: DiscoveryRequest, catalog: CatalogDependency, request: Request
@@ -122,6 +196,28 @@ async def discover_repositories(
     ]
 
 
+@router.post("/requirement-analysis", response_model=RequirementAnalysisView)
+async def analyze_requirement(
+    body: RequirementAnalysisRequest, request: Request
+) -> RequirementAnalysisView:
+    """Evaluate whether a requirement has sufficient business information."""
+    container = request.app.state.container
+    analyzer = container.requirement_analyzer()
+    if analyzer is None:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured — requirement analysis unavailable",
+        )
+    result = analyzer.analyze(body.requirement)
+    return RequirementAnalysisView(
+        sufficient=result.sufficient,
+        confidence=result.confidence,
+        missing_dimensions=list(result.missing_dimensions),
+        questions=list(result.questions),
+        extracted_keywords=list(result.extracted_keywords),
+    )
+
+
 def _confirmation_summary_to_view(
     summary: ConfirmationSummary,
 ) -> ConfirmationSummaryView:
@@ -139,10 +235,11 @@ async def confirm_repositories(
     body: ConfirmationRequest, request: Request
 ) -> ConfirmationSummaryView:
     """Phase 2: Team Managers confirm involvement and produce plans."""
-    catalog = request.app.state.container.repository_catalog
-    llm = request.app.state.container.llm_client
+    container = request.app.state.container
+    llm = container.llm_client
 
-    profiles = {p.name: p for p in await catalog.list()}
+    service = await container.confirmation_service(llm)
+    profiles = service._profiles  # noqa: SLF001
 
     candidate_repos = [r for r in body.candidate_repos if r in profiles]
     if not candidate_repos:
@@ -155,8 +252,6 @@ async def confirm_repositories(
         elif isinstance(val, str):
             evidence[repo] = (val, 0.5)
 
-    graph = DependencyGraphService(list(profiles.values())) if profiles else None
-    service = ConfirmationService(llm, profiles, graph=graph)
     summary = service.confirm(
         candidate_repos,
         body.requirement,
@@ -165,12 +260,10 @@ async def confirm_repositories(
     return _confirmation_summary_to_view(summary)
 
 
-@router.post("/integration", response_model=IntegratedPlanView)
-async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
-    """Phase 3: Leader integrates per-repo plans into a project-level plan."""
-    llm = request.app.state.container.llm_client
+def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
+    """Rebuild the application-level confirmation summary from its API view."""
 
-    def _to_result(v: ConfirmationResultView) -> ConfirmationResult:  # noqa: ANN202
+    def _to_result(v: ConfirmationResultView) -> ConfirmationResult:
         plan = None
         if v.plan is not None:
             plan = RepositoryPlan(
@@ -190,16 +283,23 @@ async def integrate_plan(body: IntegrationRequest, request: Request) -> Integrat
             missing_dependencies=v.missing_dependencies,
         )
 
-    summary = ConfirmationSummary(
-        required=[_to_result(r) for r in body.confirmation.required],
-        maybe=[_to_result(r) for r in body.confirmation.maybe],
-        excluded=[_to_result(r) for r in body.confirmation.excluded],
-        supplemented_repos=body.confirmation.supplemented_repos,
+    return ConfirmationSummary(
+        required=[_to_result(r) for r in view.required],
+        maybe=[_to_result(r) for r in view.maybe],
+        excluded=[_to_result(r) for r in view.excluded],
+        supplemented_repos=view.supplemented_repos,
     )
 
-    profiles = await request.app.state.container.repository_catalog.list()
-    graph = DependencyGraphService(profiles) if profiles else None
-    service = PlanIntegrationService(llm, graph=graph)
+
+@router.post("/integration", response_model=IntegratedPlanView)
+async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
+    """Phase 3: Leader integrates per-repo plans into a project-level plan."""
+    container = request.app.state.container
+    llm = container.llm_client
+
+    summary = _summary_from_view(body.confirmation)
+
+    service = await container.plan_integration_service(llm)
     plan = service.integrate(body.requirement, summary)
 
     return IntegratedPlanView(
@@ -264,6 +364,15 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
             project_id=body.project_id,
             leader_agent_id=body.leader_agent_id,
             idempotency_prefix=body.idempotency_prefix,
+            repo_details={
+                name: {
+                    "changed_apis": tuple(detail.changed_apis),
+                    "changed_modules": tuple(detail.changed_modules),
+                    "risk": detail.risk,
+                }
+                for name, detail in body.repo_details.items()
+            }
+            or None,
         )
     except ExecutionPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -274,7 +383,142 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
         task_ids=[t.id for t in result.tasks],
         skipped_repos=list(result.skipped_repos),
         plan_id=result.plan_id,
+        handoff_doc_ids=list(result.handoff_doc_ids),
     )
+
+
+@router.post("/bridge/replan", response_model=ReplanResponse)
+async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
+    """Trigger a partial replan based on TM feedback.
+
+    Determines the affected repository set via dependency-graph reverse
+    traversal, supersedes the old tasks of those repositories, and (when an
+    integration service can be built) starts a new execution plan batch. The
+    collaboration interrupt notices are pushed by the API layer using the
+    ``affected_repos`` in the response.
+    """
+
+    container = request.app.state.container
+
+    # The integration step needs an LLM; without it the bridge still performs
+    # impact analysis and supersede, but cannot produce a new local plan.
+    llm = container.llm_client
+    integration_service = None
+    confirmation_summary = None
+    if llm is not None:
+        integration_service = await container.plan_integration_service(llm)
+        if body.confirmation is not None:
+            confirmation_summary = _summary_from_view(body.confirmation)
+
+    bridge = container.plan_execution_bridge()
+
+    # Build the dependency graph from the live catalog for impact analysis.
+    profiles = await container.repository_catalog.list()
+    graph = DependencyGraphService(profiles) if profiles else None
+
+    try:
+        result = await bridge.replan(
+            project_id=body.project_id,
+            leader_agent_id=body.leader_agent_id,
+            feedback=body.feedback,
+            change_source_repo=body.change_source_repo,
+            plan_version=body.plan_version,
+            requirement=body.requirement,
+            idempotency_prefix=body.idempotency_prefix,
+            all_repos=[p.name for p in profiles],
+            integration_service=integration_service,
+            confirmation_summary=confirmation_summary,
+            graph=graph,
+        )
+    except ExecutionPlaneUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+    return ReplanResponse(
+        new_plan_version=result.new_plan_version,
+        superseded_task_ids=[t.id for t in result.superseded_tasks],
+        new_task_ids=[t.id for t in result.new_tasks],
+        affected_repos=list(result.affected_repos),
+        feedback_summary=result.feedback_summary,
+        handoff_doc_ids=list(result.handoff_doc_ids),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Handoff documents (仓库对接文档 / human approval)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/handoff-docs", response_model=list[HandoffDocView])
+async def list_handoff_docs(
+    request: Request,
+    project_id: UUID,
+    plan_version: int | None = None,
+    repository: str | None = None,
+    status: HandoffDocStatus | None = None,
+) -> list[HandoffDocView]:
+    """List the handoff documents of a project (optionally filtered).
+
+    Repository owners use these documents to review *their* repository's
+    proposed adjustment and approve or reject it.
+    """
+
+    container = request.app.state.container
+    docs = await container.handoff_doc_service().list_docs(
+        project_id=project_id,
+        plan_version=plan_version,
+        repository=repository,
+        status=status,
+    )
+    return [HandoffDocView.model_validate(doc) for doc in docs]
+
+
+@router.get("/handoff-docs/{doc_id}", response_model=HandoffDocView)
+async def get_handoff_doc(doc_id: UUID, request: Request) -> HandoffDocView:
+    """Fetch a single handoff document by id."""
+    container = request.app.state.container
+    doc = await container.handoff_doc_service().get_doc(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="handoff document not found")
+    return HandoffDocView.model_validate(doc)
+
+
+@router.get(
+    "/handoff-docs/{doc_id}/markdown", response_class=PlainTextResponse
+)
+async def get_handoff_doc_markdown(
+    doc_id: UUID, request: Request
+) -> PlainTextResponse:
+    """Render a handoff document as Markdown for a repository owner to read."""
+    container = request.app.state.container
+    doc = await container.handoff_doc_service().get_doc(doc_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="handoff document not found")
+    return PlainTextResponse(render_markdown(doc))
+
+
+@router.post(
+    "/handoff-docs/{doc_id}/decision", response_model=HandoffDocView
+)
+async def decide_handoff_doc(
+    doc_id: UUID, body: HandoffDocDecisionRequest, request: Request
+) -> HandoffDocView:
+    """Record a repository owner's manual approval or rejection.
+
+    Only PENDING documents can be decided; a document superseded by a newer
+    plan version must be re-decided on its regenerated copy.
+    """
+
+    container = request.app.state.container
+    try:
+        doc = await container.handoff_doc_service().decide(
+            doc_id=doc_id,
+            approved=body.approved,
+            decided_by_agent_id=body.decided_by_agent_id,
+            reason=body.reason,
+        )
+    except HandoffDocError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return HandoffDocView.model_validate(doc)
 
 
 def _planned_task_status(

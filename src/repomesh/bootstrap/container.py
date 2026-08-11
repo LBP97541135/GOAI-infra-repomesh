@@ -23,6 +23,7 @@ from repomesh.modules.project.contracts import ProjectAgentTopologyView, Project
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
+    HandoffDocService,
     PlanExecutionBridge,
     PlanIntegrationService,
 )
@@ -30,6 +31,13 @@ from repomesh.modules.repository_intelligence.application.confirmation import Co
 from repomesh.modules.repository_intelligence.application.discovery import LLMClient
 from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (
     StartedExecutionPlan,
+    TaskSupersederGateway,
+)
+from repomesh.modules.repository_intelligence.application.requirement_analysis import (
+    RequirementAnalyzer,
+)
+from repomesh.modules.repository_intelligence.infrastructure.handoff_doc_store import (
+    PostgresHandoffDocStore,
 )
 from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (
     PlanSnapshotStore,
@@ -309,6 +317,17 @@ class ApplicationContainer:
 
         return _Adapter()
 
+    def requirement_analyzer(self) -> RequirementAnalyzer | None:
+        """Build a RequirementAnalyzer when an LLM client is configured.
+
+        Requirement sufficiency analysis is only meaningful with an LLM; when
+        none is wired the endpoint returns 503 rather than degrading silently.
+        """
+
+        if self.llm_client is None:
+            return None
+        return RequirementAnalyzer(self.llm_client)
+
     async def confirmation_service(self, llm_client: LLMClient) -> ConfirmationService:
         profiles = await self.repository_catalog.list()
         by_name = {p.name: p for p in profiles}
@@ -420,8 +439,27 @@ class ApplicationContainer:
             return None
         return cast(TaskAssignmentGateway, self.task_report_gateway)
 
+    def task_superseder(self) -> TaskSupersederGateway | None:
+        """The composed TaskOrchestrator also superseds tasks on replan.
+
+        ``TaskOrchestrator`` implements ``assign``, ``report`` and
+        ``supersede``, so the same instance that backs the assignment and
+        report gateways also satisfies the superseder protocol. It only
+        exists once the AgentTeams messenger is configured.
+        """
+
+        if self.task_report_gateway is None:
+            return None
+        return cast(TaskSupersederGateway, self.task_report_gateway)
+
     def execution_plan_store(self) -> ExecutionPlanStore:
         return PostgresExecutionPlanStore(self.database)
+
+    def handoff_doc_store(self) -> PostgresHandoffDocStore:
+        return PostgresHandoffDocStore(self.database)
+
+    def handoff_doc_service(self) -> HandoffDocService:
+        return HandoffDocService(self.handoff_doc_store())
 
     def execution_plan_advancer(self) -> AdvanceExecutionPlan | None:
         assigner = self.task_assignment_gateway()
@@ -460,6 +498,8 @@ class ApplicationContainer:
             topologies=self.topology_reader(),
             catalog=self.repository_catalog,
             snapshot_store=self.plan_snapshot_store(),
+            superseder=self.task_superseder(),
+            handoff_docs=self.handoff_doc_service(),
         )
 
     def runner_gateway(self):
