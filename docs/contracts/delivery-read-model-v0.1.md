@@ -188,13 +188,19 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
 
 来源：`agent_runtime.runner_events`（runner）、`collaboration.messages` 投递记录（matrix）、
 delivery CI/review/merge observations（gate）、plan snapshot 版本变化（plan）。
-`deny`（权限拒绝）目前无审计存储，v0.1 不产出该 kind——出现即为契约违约。
+`deny`（权限拒绝）目前无审计存储，v0.1 不产出该 kind——`kind=deny` 过滤合法且恒返回
+空集，条目出现即为契约违约。matrix 条目时间戳来源为 `collaboration.messages.created_at`
+（该列原不存在，2026-08-11 主脑追认加列，迁移 `20260811_0017`——`at` 必须取持久化
+时间戳、不得编造，与 §5.2 repair_timeline 同一裁决）。
 
 ### 4.2 `GET /deliveries/{delivery_id}/messages`
 
 `CollaborationMessageView` 直投影（kind、subject、body、sender/recipient、status、
 event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方向；Worker→Leader 回报
 摄取是审计缺口（closed-loop-gap-analysis §4.2），补齐后本端点自然包含，契约不变。
+响应另含附加字段 `direction`/`sender_name`/`recipient_name`/`created_at`
+（2026-08-11 主脑追认）：`direction=leader_to_worker` 显式标记上述单向限制，
+前端以该字段辨识，勿以列表恒单向为前提硬编码。
 
 ### 4.3 `GET /deliveries/{delivery_id}/decisions`
 
