@@ -33,7 +33,7 @@ CONS-13 回放模式（Demo）
 
 | ID | 任务 | Owner 组 / 模块 | 依赖 | 交付物 | 完成标准 | 规模 |
 | --- | --- | --- | --- | --- | --- | --- |
-| CONS-01 | Specification 增加 `forbidden_paths` 可选字段 | 项目规格组 / `specification` | 无 | contracts 字段 + 迁移 + Runner 投影透传 | 旧数据返回空集不报错；CodingAgentPackage 带出该字段；契约测试更新 | S |
+| CONS-01 | Specification 增加 `forbidden_paths` 可选字段 | 项目规格组 / `specification` | 无 | contracts 字段（内容为 JSONB 单列，无需 Alembic 迁移；空值省键保持旧 content_hash 有效）+ Runner 投影透传 | 旧数据返回空集不报错；CodingAgentPackage 带出该字段；契约测试更新。✅ 已验收 89984e6 | S |
 | CONS-02 | 治理决策写端点 + 交付归档端点 | 质量交付组 / `delivery` | 无 | `POST /deliveries/{id}/governance-decisions`（包装既有 Command，head-bound、幂等、写审计）+ `POST /deliveries/{id}/archive`（终态校验、幂等、409 语义） | E2E 脚本改走 API 不再直调应用服务；SHA 漂移 409 有测试；活跃交付拒绝归档 | M |
 | CONS-03 | 交付读模型聚合服务 | 平台组 / `api`（新 `api/read_models/`） | 无（01/02 合入后补字段） | `GET /deliveries`（分组列表 + phase 推导）、`GET /deliveries/{id}` 全貌聚合；§5 状态映射与 attempt/rework 推导的唯一实现 | phase 推导单测覆盖契约 §2 全部分支；6 态映射单测；只经各模块 contracts 读取，架构测试通过；对 8-10 验收留存数据可正确聚合 | L |
 | CONS-04 | 事件与消息端点 | 平台组 / `api` + 编排组 / `collaboration` | CONS-03 | `GET .../events`（runner/matrix/gate/plan 合并时间线，游标分页）+ `GET .../messages`（CollaborationMessageView 投影） | 时间线排序稳定、游标可续读；不产出 `deny` kind；messages 单向限制在响应中可辨识 | M |
