@@ -134,6 +134,11 @@ identity_access.organizations
   登记行，不是已拉起的运行时**——花名册上它以 runtime 三态如实呈现（未配置 →
   `null` → 显「未接入」）。本端点响应与前端文案**不得暗示「已生成一个可工作的智能体」**；
   它的语义只是「该工作区有了可承接 issue 与治理决策的登记主体」。
+- **实现注记（2026-08-11 主脑追认，随实现同批入文本）**：「同事务」实现为**顺序双幂等**
+  而非单一物理事务——组织行与 leader 登记行都从同一 idempotency_key 派生，两写之间
+  崩溃留下的夹缝由同键重放修复（org 已存在则跳过、leader 幂等创建）。理由：跨模块共享
+  DB 会话/事务破坏模块边界（identity_access 不得进入 agent_directory 的存储），代价大于
+  「同事务」字面收益；用户可见保证等价——不存在「重放也修不好」的中间态。
 - `organization_id` 由 `idempotency_key` UUIDv5 稳定派生；重放 → 200 返回既有行。
   `name` 撞 UNIQUE（不同 key 同名）→ 409。
 - 响应 `201`/`200`：`{ "organization_id", "name", "created_at",

@@ -57,6 +57,12 @@ export function ApprovalModal({
 
   const blocked = principal.state === "missing" || principal.state === "resolving";
 
+  // C-1（验收缺陷升格修复）：关闭时不渲染。此前 <dialog> 常驻 DOM 靠 showModal()
+  // 显隐，隐藏的表单仍出现在可访问性树里，且 querySelector('textarea') 会先选中它
+  // （验收实走中实证咬人）。条件渲染的固有后果是每次打开表单状态重置为初始值——
+  // 对确认框正是既有语义（原本就每次 open 复位），对意见框是可接受的默认行为。
+  if (!open) return null;
+
   return (
     <dialog
       ref={ref}
