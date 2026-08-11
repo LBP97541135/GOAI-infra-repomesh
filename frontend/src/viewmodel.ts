@@ -46,10 +46,10 @@ function shortSha(sha: string): string {
   return sha.slice(0, 8);
 }
 
-/** "https://github.com/o/r/pull/1" → "o/r#1"；无 PR 时 "未创建" */
+/** "https://<host>/o/r/pull/1" → "o/r#1"（host 不限 github.com）；无 PR 时 "未创建" */
 function prLabel(repo: RepositoryDeliveryView): string {
   if (!repo.pull_request_url || repo.pull_request_number === null) return "未创建";
-  const m = repo.pull_request_url.match(/github\.com\/([^/]+\/[^/]+)\/pull\//);
+  const m = repo.pull_request_url.match(/^https?:\/\/[^/]+\/(.+?)\/pull\//);
   return `${m ? m[1] : "PR"}#${repo.pull_request_number}`;
 }
 
