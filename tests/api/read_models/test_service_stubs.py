@@ -5,14 +5,16 @@ flows, so escalated_to_human and the archived/failed list branches are driven
 through stub sources implementing the read-model source protocols.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
 
-from repomesh.api.read_models import DeliveryReadModelService
+from repomesh.api.read_models import REWORK_TASK_TITLE, DeliveryReadModelService
 from repomesh.api.read_models.sources import PlanSnapshotData
 from repomesh.modules.delivery.contracts import (
+    CandidateRevisionView,
     ChangeSetStatus,
     ChangeSetView,
     DeliveryArchiveView,
@@ -350,3 +352,59 @@ async def test_merge_gate_is_null_once_the_question_is_moot(status, expect_gate)
         assert gate == {"allowed": False, "reasons": ["blocked"]}
     else:
         assert gate is None
+
+
+@pytest.mark.asyncio
+async def test_repair_timeline_at_is_always_a_timestamp() -> None:
+    """Contract §3: `at` is a string; rework entries fall back to the candidate
+    revision the rework produced, else the change set's persisted timestamp."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
+    worker = _worker(project_id, repository_id, leader_task_id)
+    revised_rework = replace(
+        worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.SUCCEEDED
+    )
+    running_rework = replace(
+        worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.IN_PROGRESS
+    )
+    revision_at = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
+    change_set = replace(
+        _manual_intervention_change_set(plan, repository_id, worker.id),
+        recovery_plans=(),
+        candidate_revisions=(
+            CandidateRevisionView(
+                id=uuid4(),
+                repository_id=repository_id,
+                task_id=revised_rework.id,
+                sequence=1,
+                head_sha="c" * 40,
+                previous_head_sha="a" * 40,
+                reason="candidate rework",
+                created_at=revision_at,
+            ),
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker, revised_rework, running_rework),
+        StubChangeSets({plan.id: change_set}),
+        StubArchives(),
+    )
+
+    detail = await service.get_delivery(plan.id)
+
+    timelines = {item["task_id"]: item["repair_timeline"] for item in detail["tasks"]}
+    worker_entries = {entry["what"]: entry["at"] for entry in timelines[worker.id]}
+    assert worker_entries == {
+        "返工任务 succeeded": revision_at,
+        "返工任务 in_progress": change_set.updated_at,
+    }
+    assert all(
+        entry["at"] is not None
+        for timeline in timelines.values()
+        for entry in timeline
+    )

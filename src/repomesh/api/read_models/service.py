@@ -8,6 +8,7 @@ composition-root adapters; unimplemented contract fields return ``null``.
 
 import json
 from dataclasses import asdict
+from datetime import datetime
 from uuid import UUID
 
 from repomesh.modules.delivery.contracts import (
@@ -374,6 +375,20 @@ class DeliveryReadModelService:
                 repository = str(node.get("repository", ""))
                 dag_dependencies[repository] = tuple(node.get("depends_on") or ())
 
+        # Contract §3: repair_timeline[].at is a string, but task rows persist no
+        # timestamps. A rework task's own persisted moment is the candidate
+        # revision it produced; otherwise the owning aggregate's timestamp.
+        revision_at: dict[UUID, datetime] = {}
+        fallback_at: datetime | None = None
+        if change_set is not None:
+            fallback_at = change_set.updated_at
+            for revision in change_set.candidate_revisions:
+                seen = revision_at.get(revision.task_id)
+                if seen is None or revision.created_at > seen:
+                    revision_at[revision.task_id] = revision.created_at
+        elif snapshot is not None:
+            fallback_at = snapshot.created_at
+
         views: list[dict] = []
         for task in worker_tasks:
             chain = rework_by_key.get((task.repository_id, task.parent_task_id), [])
@@ -397,11 +412,17 @@ class DeliveryReadModelService:
                 for name in dag_dependencies.get(repository_name or "", ())
                 if name in name_to_task
             ]
-            repair_timeline = [
-                {"at": None, "what": f"返工任务 {item.status.value}"}
-                for item in chain
-                if item.id != task.id
-            ]
+            repair_timeline = []
+            for item in chain:
+                if item.id == task.id:
+                    continue
+                at = revision_at.get(item.id, fallback_at)
+                if at is None:
+                    # No persisted fact anywhere to date this entry with.
+                    continue
+                repair_timeline.append(
+                    {"at": at, "what": f"返工任务 {item.status.value}"}
+                )
             escalated = False
             if change_set is not None:
                 for recovery in change_set.recovery_plans:
