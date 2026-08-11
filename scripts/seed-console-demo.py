@@ -116,6 +116,7 @@ from repomesh.modules.specification.contracts import (
 )
 from repomesh.modules.specification.domain import (
     Specification,
+    SpecificationConflict,
     SpecificationContent,
     SpecificationVersion,
 )
@@ -293,6 +294,73 @@ async def seed_agents(directory: PostgresAgentDirectory, leader_id: UUID) -> Non
                     idempotency_key=f"console-demo:agent:{principal.id}",
                     request_fingerprint="sha256:" + "e" * 64,
                 )
+
+
+REPOSITORY_SPECS = (
+    # key, repository, status, revision, goal, allowed, forbidden
+    (
+        "a-api",
+        "repo:a:api",
+        SpecificationStatus.FROZEN,
+        3,
+        "在定价响应中新增 discount_amount，保持旧字段兼容。",
+        ("src/pricing/**", "tests/**"),
+        ("src/pricing/legacy/**",),
+    ),
+    (
+        "a-client",
+        "repo:a:client",
+        SpecificationStatus.APPROVED,
+        2,
+        "在结算页展示 discount_amount，缺值时隐藏该行。",
+        ("src/components/**",),
+        (".github/**",),
+    ),
+)
+
+
+async def seed_repository_specs(
+    specifications: PostgresSpecificationStore, leader_id: UUID
+) -> None:
+    """Per-repository specs so §5.4's `spec` block has a non-null sample.
+
+    The plan sheet selects FROZEN over APPROVED and then the highest revision;
+    scenario A carries one of each so both branches are observable. The other
+    repositories keep no spec, which is the "本仓无独立 spec" path.
+    """
+
+    for key, repo_name, status, revision, goal, allowed, forbidden in REPOSITORY_SPECS:
+        specification_id = stable_id(f"spec:repo:{key}")
+        with contextlib.suppress(SpecificationConflict):  # rerun: already stored
+            await specifications.add(
+                Specification(
+                    id=specification_id,
+                    organization_id=stable_id("organization"),
+                    project_id=stable_id("project:a"),
+                    kind=SpecificationKind.REPOSITORY,
+                    status=status,
+                    revision=revision,
+                    repository_id=stable_id(repo_name),
+                    title=f"{key} repository scope",
+                    owner_agent_id=leader_id,
+                    current_version=SpecificationVersion(
+                        id=stable_id(f"spec:repo:{key}:v1"),
+                        specification_id=specification_id,
+                        version=1,
+                        created_by_agent_id=leader_id,
+                        content=SpecificationContent(
+                            goal=goal,
+                            acceptance=("本仓单测通过", "不触碰禁止路径"),
+                            constraints=("不改动公共接口签名",),
+                            tests=("pytest",),
+                            allowed_paths=allowed,
+                            forbidden_paths=forbidden,
+                        ),
+                    ),
+                ),
+                idempotency_key=f"console-demo:spec:repo:{key}",
+                request_fingerprint="sha256:" + "b" * 64,
+            )
 
 
 async def seed_project_topologies(database: Database, leader_id: UUID) -> None:
@@ -617,6 +685,9 @@ async def seed(database_url: str) -> dict[str, object]:
             )
             await seed_room_stream(database)
             await seed_project_topologies(database, replay.principal.id)
+            await seed_repository_specs(
+                PostgresSpecificationStore(database), replay.principal.id
+            )
             return {
                 "already_seeded": True,
                 "decided_by_agent_id": str(replay.principal.id),
@@ -1080,6 +1151,7 @@ async def seed(database_url: str) -> dict[str, object]:
         }
         await seed_room_stream(database)
         await seed_project_topologies(database, leader_id)
+        await seed_repository_specs(specifications, leader_id)
         out["rooms"] = {
             key: {"team_room": team_room(key), "leader_room": leader_room(key)}
             for key, *_ in TEAM_SCENARIOS

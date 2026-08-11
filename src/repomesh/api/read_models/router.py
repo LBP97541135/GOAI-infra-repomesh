@@ -6,6 +6,7 @@ from repomesh.settings import get_settings
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
 issues_router = APIRouter(prefix="/issues", tags=["issues"])
+rooms_router = APIRouter(prefix="/rooms", tags=["rooms"])
 
 _ISSUE_STATES = {"open", "closed", "all"}
 
@@ -112,4 +113,38 @@ async def get_issue(issue_id: UUID, request: Request) -> dict:
     payload = await _service(request).get_issue(issue_id)
     if payload is None:
         raise HTTPException(status_code=404, detail=f"issue not found: {issue_id}")
+    return payload
+
+
+@issues_router.get("/{issue_id}/rooms")
+async def list_issue_rooms(issue_id: UUID, request: Request) -> dict:
+    """Contract v0.2 §5.1. An issue with no team returns an empty list, not 404."""
+
+    payload = await _service(request).list_rooms(issue_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"issue not found: {issue_id}")
+    return payload
+
+
+@issues_router.get("/{issue_id}/repositories/{repository_id}/plan")
+async def get_repository_plan(
+    issue_id: UUID, repository_id: UUID, request: Request
+) -> dict:
+    payload = await _service(request).repository_plan(issue_id, repository_id)
+    if payload is None:
+        raise HTTPException(
+            status_code=404, detail=f"no plan for repository {repository_id}"
+        )
+    return payload
+
+
+@rooms_router.get("/{room_id}/stream")
+async def get_room_stream(
+    room_id: str, request: Request, cursor: str | None = None, limit: int = 100
+) -> dict:
+    payload = await _service(request).room_stream(
+        room_id, offset=_offset(cursor), limit=max(1, min(limit, 500))
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"room not found: {room_id}")
     return payload

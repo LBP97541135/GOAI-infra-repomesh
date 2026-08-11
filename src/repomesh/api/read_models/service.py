@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from repomesh.modules.collaboration.contracts import CollaborationMessageView
 from repomesh.modules.delivery.contracts import (
     MERGE_GATE_GOVERNANCE_MISSING_REASON,
     ChangeSetView,
@@ -768,28 +769,314 @@ class DeliveryReadModelService:
         for message in await self._messages.for_project(plan.project_id):
             if message.task_id is not None and message.task_id not in worker_task_ids:
                 continue
+            items.append(await self._message_item(message))
+        return {"items": items}
+
+    async def _message_item(self, message: CollaborationMessageView) -> dict:
+        """§4.2 projection, shared by /messages and the room stream (v0.2 §5.2).
+
+        room_id was missing from v0.1's projection even though the view always
+        carried it; the room stream needs it, and both endpoints must agree.
+        """
+
+        return {
+            "id": message.id,
+            "kind": message.kind.value,
+            "subject": message.subject,
+            "body": message.body,
+            "sender_agent_id": message.sender_agent_id,
+            "sender_name": await self._agents.name(message.sender_agent_id),
+            "recipient_agent_id": message.recipient_agent_id,
+            "recipient_name": await self._agents.name(message.recipient_agent_id),
+            "repository_id": message.repository_id,
+            "task_id": message.task_id,
+            "room_id": message.room_id,
+            "status": message.status.value,
+            "event_id": message.event_id,
+            "correlation_id": message.correlation_id,
+            "created_at": message.created_at,
+            "direction": "leader_to_worker",
+        }
+
+    # ----------------------------------------------------------------- rooms
+
+    async def list_rooms(self, issue_id: UUID) -> dict | None:
+        """Contract v0.2 §5.1: two rooms per team — teamRoom and leaderDM.
+
+        Rooms come from the topology's persisted room ids; `kind` is decided by
+        which field held the id, never guessed. An empty room reports
+        last_message null and message_count 0 rather than a placeholder.
+        """
+
+        topology = await self._topology.get_view(issue_id)
+        if topology is None:
+            if not await self._issue_exists(issue_id):
+                return None
+            # The issue exists but never formed a team, so it has no rooms.
+            return {"rooms": []}
+
+        catalog = {item.id: item for item in await self._repositories.list()}
+        tasks = await self._tasks.list_by_project(issue_id)
+        live_repositories = {
+            task.repository_id
+            for task in tasks
+            if task.status is TaskStatus.IN_PROGRESS
+        }
+        rooms: list[dict] = []
+        for team in topology.repository_teams:
+            leader = await self._member(team.leader_agent_id, "repository_leader")
+            # Membership differs per room kind: the team room holds the workers,
+            # the leader DM is the repository leader talking to the organization
+            # leader. Listing workers in the DM would misdescribe who can read it.
+            members_by_kind = {
+                "team_room": [leader]
+                + [
+                    await self._member(worker_id, "worker")
+                    for worker_id in team.worker_agent_ids
+                ],
+                "leader_dm": [
+                    leader,
+                    await self._member(
+                        topology.organization_leader_id, "organization_leader"
+                    ),
+                ],
+            }
+            for room_id, kind in (
+                (team.room_id, "team_room"),
+                (team.leader_room_id, "leader_dm"),
+            ):
+                if room_id is None:
+                    continue  # the team never got that room provisioned
+                messages = await self._messages.for_room(room_id)
+                last = max(messages, key=lambda item: item.created_at, default=None)
+                rooms.append(
+                    {
+                        "room_id": room_id,
+                        "kind": kind,
+                        "issue_id": issue_id,
+                        "team_id": team.id,
+                        "repository_id": team.repository_id,
+                        "repository_name": (
+                            catalog[team.repository_id].name
+                            if team.repository_id in catalog
+                            else None
+                        ),
+                        "members": members_by_kind[kind],
+                        "last_message": (
+                            {
+                                "at": last.created_at,
+                                "kind": last.kind.value,
+                                "subject": last.subject,
+                                "sender_agent_id": last.sender_agent_id,
+                            }
+                            if last is not None
+                            else None
+                        ),
+                        "message_count": len(messages),
+                        # §5.3: derived from in-flight work, never presence.
+                        "live": team.repository_id in live_repositories,
+                    }
+                )
+        return {"rooms": rooms}
+
+    async def _member(self, agent_id: UUID, role: str) -> dict:
+        return {
+            "agent_id": agent_id,
+            "name": await self._agents.name(agent_id),
+            "role": role,
+        }
+
+    async def room_stream(
+        self, room_id: str, *, offset: int = 0, limit: int = 100
+    ) -> dict | None:
+        """Contract v0.2 §5.2: one room's real messages plus console projections.
+
+        Only `source == "message"` happened inside the room. Governance
+        decisions project into the owning repository's leaderDM (Q4 ruling A);
+        gate and runner facts project into its teamRoom, because that is where
+        the work they describe was carried out. Every non-message item carries a
+        payload_ref so the frontend can link back to the underlying fact — and
+        so ordering stays stable, as in v0.1 §4.1.
+        """
+
+        topology = await self._topology.find_by_room(room_id)
+        if topology is None:
+            return None
+        team = next(
+            (
+                item
+                for item in topology.repository_teams
+                if room_id in {item.room_id, item.leader_room_id}
+            ),
+            None,
+        )
+        if team is None:
+            return None
+        is_leader_dm = room_id == team.leader_room_id
+
+        items: list[dict] = []
+        for message in await self._messages.for_room(room_id):
             items.append(
                 {
-                    "id": message.id,
-                    "kind": message.kind.value,
-                    "subject": message.subject,
-                    "body": message.body,
-                    "sender_agent_id": message.sender_agent_id,
-                    "sender_name": await self._agents.name(message.sender_agent_id),
-                    "recipient_agent_id": message.recipient_agent_id,
-                    "recipient_name": await self._agents.name(
-                        message.recipient_agent_id
-                    ),
+                    "at": message.created_at,
+                    "source": "message",
+                    "room_id": room_id,
+                    "message": await self._message_item(message),
+                    "text": message.subject,
                     "repository_id": message.repository_id,
                     "task_id": message.task_id,
-                    "status": message.status.value,
-                    "event_id": message.event_id,
-                    "correlation_id": message.correlation_id,
-                    "created_at": message.created_at,
-                    "direction": "leader_to_worker",
+                    "payload_ref": f"collaboration-message:{message.id}",
                 }
             )
-        return {"items": items}
+
+        project_id = topology.project_id
+        plans = (await self._plans_by_project()).get(project_id, ())
+        if is_leader_dm:
+            for plan in plans:
+                change_set = await self._change_sets.for_delivery(plan.id)
+                if change_set is None:
+                    continue
+                for decision in change_set.governance_decisions:
+                    if decision.repository_id != team.repository_id:
+                        continue
+                    items.append(
+                        _projected_item(
+                            at=decision.decided_at,
+                            source="governance",
+                            room_id=room_id,
+                            text=(
+                                f"治理决策 {decision.decision.value}: {decision.reason}"
+                            ),
+                            repository_id=decision.repository_id,
+                            payload_ref=f"governance-decision:{decision.id}",
+                        )
+                    )
+        else:
+            tasks = await self._tasks.list_by_project(project_id)
+            repository_task_ids = {
+                task.id for task in tasks if task.repository_id == team.repository_id
+            }
+            for event in await self._runner_events.for_project(project_id):
+                if event.task_id not in repository_task_ids:
+                    continue
+                items.append(
+                    _projected_item(
+                        at=event.occurred_at,
+                        source="runner",
+                        room_id=room_id,
+                        text=event.event_type,
+                        repository_id=event.repository_id,
+                        payload_ref=f"runner-event:{event.event_id}",
+                        task_id=event.task_id,
+                    )
+                )
+            for plan in plans:
+                change_set = await self._change_sets.for_delivery(plan.id)
+                if change_set is None:
+                    continue
+                for observation in await self._observations.for_change_set(
+                    change_set.id
+                ):
+                    if observation.repository_id != team.repository_id:
+                        continue
+                    items.append(
+                        _projected_item(
+                            at=observation.observed_at,
+                            source="gate",
+                            room_id=room_id,
+                            text=observation.event_type,
+                            repository_id=observation.repository_id,
+                            payload_ref=f"scm-observation:{observation.id}",
+                        )
+                    )
+
+        items.sort(key=lambda item: (item["at"], item["payload_ref"]))
+        return {
+            "items": items[offset : offset + limit],
+            "next_cursor": (
+                str(offset + limit) if offset + limit < len(items) else None
+            ),
+        }
+
+    async def repository_plan(
+        self, issue_id: UUID, repository_id: UUID
+    ) -> dict | None:
+        """Contract v0.2 §5.4: the DAG / PLAN / SPEC sheet for one repository.
+
+        The DAG is repository-grained: nodes are the planned repositories,
+        layers are execution_batches and edges come from task_dag[].depends_on.
+        graph_edges is not projected — the column is persisted but its only
+        producer writes an empty list, so it would render as an empty DAG.
+        """
+
+        snapshots = await self._snapshots.for_project(issue_id)
+        if not snapshots:
+            if not await self._issue_exists(issue_id):
+                return None
+            return None  # no plan was ever snapshotted for this issue
+        snapshot = snapshots[0]
+        catalog = {item.id: item for item in await self._repositories.list()}
+        id_by_name = {item.name: item.id for item in catalog.values()}
+
+        nodes = []
+        for batch_index, batch in enumerate(snapshot.execution_batches):
+            for name in batch:
+                node_id = id_by_name.get(name)
+                nodes.append(
+                    {
+                        "repository_id": node_id,
+                        "name": name,
+                        "batch_index": batch_index,
+                        "is_focus": node_id == repository_id,
+                    }
+                )
+        edges = []
+        for node in snapshot.task_dag:
+            target = id_by_name.get(str(node.get("repository", "")))
+            for dependency in node.get("depends_on") or ():
+                source = id_by_name.get(str(dependency))
+                if source is None or target is None:
+                    continue  # a name the catalog cannot resolve is not an edge
+                edges.append(
+                    {"from_repository_id": source, "to_repository_id": target}
+                )
+
+        spec = await self._specifications.repository_spec(issue_id, repository_id)
+        return {
+            "issue_id": issue_id,
+            "repository_id": repository_id,
+            "plan_version": snapshot.plan_version,
+            "dag": {
+                "nodes": nodes,
+                "edges": edges,
+                "granularity": "repository",
+                "edge_source": "task_dag.depends_on",
+            },
+            "execution_batches": [list(batch) for batch in snapshot.execution_batches],
+            "spec": (
+                {
+                    "specification_id": spec.specification_id,
+                    "kind": spec.kind,
+                    "status": spec.status,
+                    "revision": spec.revision,
+                    "goal": spec.goal,
+                    "acceptance": list(spec.acceptance),
+                    "allowed_paths": list(spec.allowed_paths),
+                    "forbidden_paths": list(spec.forbidden_paths),
+                    "tests": list(spec.tests),
+                }
+                if spec is not None
+                else None
+            ),
+            "engineering_contract": _contract_block(
+                await self._specifications.engineering_contract(issue_id)
+            ),
+        }
+
+    async def _issue_exists(self, issue_id: UUID) -> bool:
+        if (await self._plans_by_project()).get(issue_id):
+            return True
+        return bool(await self._snapshots.for_project(issue_id))
 
     # ----------------------------------------------------------------- detail
 
@@ -1094,6 +1381,35 @@ class DeliveryReadModelService:
             if item.environment.get("execution_plan") == str(delivery_id):
                 return item
         return None
+
+
+def _projected_item(
+    *,
+    at: datetime,
+    source: str,
+    room_id: str,
+    text: str,
+    repository_id: UUID | None,
+    payload_ref: str,
+    task_id: UUID | None = None,
+) -> dict:
+    """A §5.2 stream entry that did NOT happen inside the room.
+
+    `message` is None precisely so the frontend cannot render it as a chat
+    bubble: the contract requires system-entry styling for every non-message
+    source, or a user would read a console projection as something an agent said.
+    """
+
+    return {
+        "at": at,
+        "source": source,
+        "room_id": room_id,
+        "message": None,
+        "text": text,
+        "repository_id": repository_id,
+        "task_id": task_id,
+        "payload_ref": payload_ref,
+    }
 
 
 def _contract_block(contract: SpecificationContractData | None) -> dict | None:
