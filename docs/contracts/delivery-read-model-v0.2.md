@@ -55,7 +55,7 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
 { "issues": [ {
   "issue_id": "uuid",
   "issue_key": null,                    // nullable：无 Project 注册表（§0）
-  "organization_id": "uuid",
+  "organization_id": "uuid|null",       // nullable：三级取值链全空时（见下）
   "title": "string",                    // 最早 PlanSnapshot.requirement_text 截断
   "requirement_text": "string|null",
   "state": "open|closed",               // §2.1 派生
@@ -67,8 +67,9 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
   "pending_decision_count": 1,          // v0.1 §4.3 派生跨轮次求和
   "repository_count": 2,
   "team_count": 2,
-  "operational_status": "active|paused|cancelled",   // project 拓扑，main 引入
-  "execution_mode": "auto|supervised|manual_controlled",
+  // 以下两项 nullable：未建团（无 project 拓扑行）时为 null，禁止填默认值
+  "operational_status": "active|paused|cancelled|null",   // project 拓扑，main 引入
+  "execution_mode": "auto|supervised|manual_controlled|null",
   "opened_by_agent_id": "uuid|null",    // 最早 PlanSnapshot.created_by_agent_id
   "opened_at": "...",                   // 最早 PlanSnapshot.created_at
   "updated_at": "..."                   // §2.3
@@ -153,6 +154,7 @@ GitHub 式列表的两个标签页各带总数（`Open 3 | Closed 12`）。消�
                 "plan_version": 1, "created_at": "...", "updated_at": "..." } ],
   "repositories": [ { "repository_id": "uuid", "name": "string",
                       "team_id": "uuid|null", "role_in_issue": "string|null" } ],
+  // teams / human_grants / required_checkpoints：未建团时为 []（非 null，非占位）
   "teams": [ { "team_id": "uuid", "agentteams_team_name": "rm-team-...",
                "repository_id": "uuid", "runtime_status": "pending|ready|failed" } ],
   "contract": { ... },                  // 复用 v0.1 §3 contract 整块（可 null）
@@ -160,6 +162,9 @@ GitHub 式列表的两个标签页各带总数（`Open 3 | Closed 12`）。消�
                       "code_access": "none|read|write" } ],
   "required_checkpoints": ["specification", "delivery"] }
 ```
+
+`rounds` 按时间正序（第 1 轮在前），`created_at` 取该轮次 PlanSnapshot 的时间、无快照为
+`null`；`repositories` 是「该 issue 各轮次计划涉及的仓库 ∪ 拓扑驻扎仓库」的并集。
 
 `role_in_issue` nullable：拓扑不记录仓库在 issue 中的角色语义（生产者/消费者只存在于
 CONTRACT spec 的 scope），取不到时为 `null`。
