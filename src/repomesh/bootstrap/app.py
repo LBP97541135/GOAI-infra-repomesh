@@ -32,6 +32,7 @@ from repomesh.integrations.scm.github_auth import (
 )
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.collaboration import (
+    CollaborationDeliveryRetryWorker,
     PostgresCollaborationMessageStore,
     PostgresProcessedMatrixEventStore,
     ProcessMatrixTaskReport,
@@ -49,7 +50,12 @@ from repomesh.modules.delivery import (
     SCMPollCursorService,
 )
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
-from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
+from repomesh.modules.project import ProjectCheckpointService
+from repomesh.modules.project.infrastructure import (
+    PostgresHumanReviewRequestStore,
+    PostgresProjectCheckpointDecisionStore,
+    PostgresProjectTopologyStore,
+)
 from repomesh.modules.repository_intelligence.infrastructure import PostgresRepositoryCatalog
 from repomesh.modules.review_validation import (
     PostgresValidationSnapshotStore,
@@ -114,6 +120,11 @@ def build_default_container() -> ApplicationContainer:
         resources = (*resources, scm_adapter, scm_token_provider)
     agent_directory = PostgresAgentDirectory(database)
     topology_store = PostgresProjectTopologyStore(database)
+    checkpoint_service = ProjectCheckpointService(
+        topology_store,
+        PostgresProjectCheckpointDecisionStore(database),
+        PostgresHumanReviewRequestStore(database),
+    )
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
     repository_catalog = PostgresRepositoryCatalog(database)
@@ -133,6 +144,7 @@ def build_default_container() -> ApplicationContainer:
             task_store,
             collaboration,
             task_publisher,
+            checkpoint_service,
         )
         task_report_gateway = tasks
         inbound = ProcessMatrixTaskReport(
@@ -142,7 +154,10 @@ def build_default_container() -> ApplicationContainer:
             PostgresProcessedMatrixEventStore(database),
             tasks,
         )
-        background_services = (AgentTeamsMatrixInboundPoller(messenger, inbound),)
+        background_services = (
+            AgentTeamsMatrixInboundPoller(messenger, inbound),
+            CollaborationDeliveryRetryWorker(collaboration_store, collaboration),
+        )
     if settings.github_webhook_secret or scm_adapter is not None:
         validation = ValidationSnapshotService(PostgresValidationSnapshotStore(database))
         delivery = DeliveryService(

@@ -10,8 +10,14 @@ __pycache__/
 .repomesh-local.db
 .repomesh-workspaces/
 .test-tmp/
+.test-tmp-*/
+.runtime/
 repomesh-local.*.log
 dist/
+node_modules/
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
 build/
 .coverage
 htmlcov/

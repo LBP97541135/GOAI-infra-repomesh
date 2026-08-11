@@ -1,6 +1,10 @@
 """Questions, answers, conclusion publication, and team collaboration records."""
 
-from .application import ProcessMatrixTaskReport, SendCollaborationMessage
+from .application import (
+    CollaborationDeliveryRetryWorker,
+    ProcessMatrixTaskReport,
+    SendCollaborationMessage,
+)
 from .contracts import (
     CollaborationDeliveryStatus,
     CollaborationGateway,
@@ -26,6 +30,7 @@ from .infrastructure import (
 __all__ = [
     "CollaborationConflict",
     "CollaborationDeliveryStatus",
+    "CollaborationDeliveryRetryWorker",
     "CollaborationDenied",
     "CollaborationError",
     "CollaborationGateway",

@@ -15,7 +15,12 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationMessageKind,
     SendCollaborationMessageCommand,
 )
-from repomesh.modules.project.contracts import ProjectTopologyReader, RepositoryTeamView
+from repomesh.modules.project.contracts import (
+    ProjectCheckpoint,
+    ProjectCheckpointGateway,
+    ProjectTopologyReader,
+    RepositoryTeamView,
+)
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
     DeliveryStatePort,
@@ -52,12 +57,14 @@ class TaskOrchestrator:
         tasks: TaskStore,
         collaboration: CollaborationGateway,
         publisher: TaskAssignmentPublisher | None = None,
+        checkpoints: ProjectCheckpointGateway | None = None,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
         self._tasks = tasks
         self._collaboration = collaboration
         self._publisher = publisher
+        self._checkpoints = checkpoints
 
     async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
         key = idempotency_key.strip()
@@ -78,6 +85,10 @@ class TaskOrchestrator:
         topology = await self._topologies.get_view(command.project_id)
         if topology is None or topology.organization_id != command.organization_id:
             raise TaskDenied("project topology does not exist")
+        if self._checkpoints is not None:
+            gate = await self._checkpoints.operational_gate(command.project_id)
+            if not gate.allowed:
+                raise TaskDenied(gate.reason)
         self._validate_membership(assigner, assignee, command.repository_id, topology)
         if command.parent_task_id is not None:
             parent = await self._tasks.get(command.parent_task_id)
@@ -160,12 +171,21 @@ class TaskOrchestrator:
         task = await self._required_task(task_id)
         if task.assignee_agent_id != agent_id:
             raise TaskDenied("only the assignee can start a task")
+        if self._checkpoints is not None:
+            gate = await self._checkpoints.evaluate(
+                task.project_id,
+                ProjectCheckpoint.EXECUTION,
+                f"task:{task.id}:v{task.version}",
+                repository_id=task.repository_id,
+            )
+            if not gate.allowed:
+                raise TaskDenied(gate.reason)
         updated = task.start()
         await self._tasks.update(updated, expected_version=task.version)
         return updated.to_view()
 
     async def report(self, command: ReportTaskCommand, *, idempotency_key: str) -> TaskView:
-        await self._required_agent(command.reporter_agent_id)
+        reporter = await self._required_agent(command.reporter_agent_id)
         task = await self._required_task(command.task_id)
         if task.assignee_agent_id != command.reporter_agent_id:
             raise TaskDenied("only the assignee can report a task")
@@ -198,6 +218,20 @@ class TaskOrchestrator:
             ),
             idempotency_key=f"{idempotency_key}:message",
         )
+        if (
+            self._checkpoints is not None
+            and reporter.role is AgentRole.REPOSITORY_LEADER
+            and command.status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
+        ):
+            await self._checkpoints.evaluate(
+                task.project_id,
+                ProjectCheckpoint.EXCEPTION_ESCALATION,
+                f"task:{updated.id}:v{updated.version}",
+                repository_id=task.repository_id,
+                requested_by_agent_id=reporter.id,
+                title=f"{task.title}：仓库异常升级",
+                summary=command.summary.strip(),
+            )
         return updated.to_view()
 
     async def supersede(

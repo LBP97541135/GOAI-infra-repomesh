@@ -9,9 +9,15 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.project.contracts import (
+    CodeAccessLevel,
+    HumanControlAction,
+    HumanProjectRole,
     ProjectAgentTopologyView,
+    ProjectCheckpoint,
+    ProjectExecutionMode,
 )
 from repomesh.modules.project.domain import (
+    HumanProjectGrant,
     ProjectAgentTopology,
     ProjectTopologyConflict,
     ProjectTopologyViolation,
@@ -28,11 +34,24 @@ class RepositoryTeamAssignment:
 
 
 @dataclass(frozen=True, slots=True)
+class HumanProjectGrantInput:
+    human_principal_id: UUID
+    role: HumanProjectRole
+    code_access: CodeAccessLevel
+    control_actions: frozenset[HumanControlAction]
+    repository_id: UUID | None = None
+    path_patterns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class CreateProjectAgentTopologyRequest:
     organization_id: UUID
     project_id: UUID
     organization_leader_id: UUID
     repository_teams: tuple[RepositoryTeamAssignment, ...]
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
+    human_grants: tuple[HumanProjectGrantInput, ...] = ()
 
 
 class CreateProjectAgentTopology:
@@ -93,6 +112,19 @@ class CreateProjectAgentTopology:
             project_id=request.project_id,
             organization_leader_id=request.organization_leader_id,
             repository_teams=tuple(teams),
+            execution_mode=request.execution_mode,
+            required_checkpoints=request.required_checkpoints,
+            human_grants=tuple(
+                HumanProjectGrant(
+                    human_principal_id=grant.human_principal_id,
+                    role=grant.role,
+                    code_access=grant.code_access,
+                    control_actions=grant.control_actions,
+                    repository_id=grant.repository_id,
+                    path_patterns=grant.path_patterns,
+                )
+                for grant in request.human_grants
+            ),
         )
         await self._store.add(
             topology,

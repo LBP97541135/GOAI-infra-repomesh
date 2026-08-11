@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,8 @@ from repomesh.modules.delivery.contracts import (
     PrepareChangeSetCommand,
     RepositoryCandidateInput,
 )
+from repomesh.modules.project.checkpoint_control import ProjectCheckpointService
+from repomesh.modules.project.contracts import ProjectCheckpoint
 from repomesh.modules.review_validation import (
     CreateValidationSnapshotCommand,
     ValidationSnapshotService,
@@ -41,17 +44,51 @@ class PlanDeliveryFinalizer:
         tasks: TaskStore,
         policy: PlanDeliveryPolicy,
         validation: ValidationSnapshotService | None = None,
+        checkpoints: ProjectCheckpointService | None = None,
     ) -> None:
         self._delivery = delivery
         self._coordinator = coordinator
         self._tasks = tasks
         self._policy = policy
         self._validation = validation
+        self._checkpoints = checkpoints
 
     async def handle(self, plan: ExecutionPlanView) -> None:
         candidates, workspaces, tests = await self._candidates(plan)
         if not candidates:
             return
+        if self._checkpoints is not None:
+            validation_payload = json.dumps(
+                {
+                    "heads": sorted(
+                        (str(item.repository_id), item.commit_sha) for item in candidates
+                    ),
+                    "tests": [
+                        {
+                            "repository_id": str(item.repository_id),
+                            "command": item.command,
+                            "exit_code": item.exit_code,
+                        }
+                        for item in tests
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            validation_gate = await self._checkpoints.evaluate(
+                plan.project_id,
+                ProjectCheckpoint.VALIDATION,
+                f"sha256:{hashlib.sha256(validation_payload).hexdigest()}",
+            )
+            if not validation_gate.allowed:
+                raise ValueError(validation_gate.reason)
+            delivery_gate = await self._checkpoints.evaluate(
+                plan.project_id,
+                ProjectCheckpoint.DELIVERY,
+                f"execution-plan:{plan.id}:v{plan.version}",
+            )
+            if not delivery_gate.allowed:
+                raise ValueError(delivery_gate.reason)
         idempotency_key = f"execution-plan:{plan.id}:delivery"
         existing = await self._delivery.get_by_idempotency_key(idempotency_key)
         validation_snapshot_id = (

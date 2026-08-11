@@ -28,3 +28,10 @@ Organization Leader <-> Repository Leader <-> Repository Workers
 The Organization Leader cannot message project Workers directly, and Workers cannot message peers.
 Secrets are denied here and must later be issued by a dedicated Secret Gateway using purpose-bound,
 short-lived credentials.
+
+## Local human accounts
+
+Local human accounts provide the first authenticated surface for supervised projects. Passwords use
+salted `scrypt`; session tokens are random, expire server-side, and are stored only as SHA-256
+hashes. A one-time bootstrap creates the first administrator. Human project grants remain separate
+from account authentication, so a valid login does not imply project or repository access.

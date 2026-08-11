@@ -49,6 +49,19 @@ class PostgresAgentDirectory:
         principal = await self.get(agent_id)
         return principal.to_view() if principal is not None else None
 
+    async def list(self) -> tuple[AgentPrincipal, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(AgentPrincipalRecord).order_by(
+                        AgentPrincipalRecord.organization_id,
+                        AgentPrincipalRecord.role,
+                        AgentPrincipalRecord.agentteams_resource_name,
+                    )
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
     async def get_by_idempotency_key(
         self, idempotency_key: str
     ) -> tuple[AgentPrincipal, str] | None:

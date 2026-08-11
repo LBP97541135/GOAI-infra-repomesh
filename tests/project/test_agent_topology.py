@@ -18,12 +18,133 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     WorkerRuntimeRef,
 )
 from repomesh.modules.project import (
+    CodeAccessLevel,
     CreateProjectAgentTopology,
     CreateProjectAgentTopologyRequest,
+    HumanAuthorizationRequest,
+    HumanControlAction,
+    HumanProjectGrantInput,
+    HumanProjectRole,
+    ProjectCheckpoint,
+    ProjectExecutionMode,
     RepositoryTeamAssignment,
+    authorize_human,
+    requires_human_checkpoint,
 )
 from repomesh.modules.project.domain import ProjectTopologyConflict, ProjectTopologyViolation
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
+
+
+@pytest.mark.asyncio
+async def test_supervised_project_persists_human_scope_and_permissions() -> None:
+    organization_id = uuid4()
+    project_id = uuid4()
+    repository_id = uuid4()
+    human_id = uuid4()
+    directory, organization_id, organization_leader, teams = await build_agents(1)
+    repository_id = teams[0].repository_id
+    repository_leader = teams[0].leader
+    worker = teams[0].workers[0]
+    service = CreateProjectAgentTopology(directory, InMemoryProjectTopologyStore())
+
+    topology = await service.execute(
+        CreateProjectAgentTopologyRequest(
+            organization_id=organization_id,
+            project_id=project_id,
+            organization_leader_id=organization_leader.id,
+            repository_teams=(
+                RepositoryTeamAssignment(
+                    repository_id,
+                    repository_leader.id,
+                    (worker.id,),
+                ),
+            ),
+            execution_mode=ProjectExecutionMode.SUPERVISED,
+            required_checkpoints=frozenset(
+                {ProjectCheckpoint.SPECIFICATION, ProjectCheckpoint.DELIVERY}
+            ),
+            human_grants=(
+                HumanProjectGrantInput(
+                    human_principal_id=human_id,
+                    role=HumanProjectRole.REPOSITORY_SUPERVISOR,
+                    code_access=CodeAccessLevel.READ,
+                    control_actions=frozenset(
+                        {
+                            HumanControlAction.VIEW_DECISIONS,
+                            HumanControlAction.APPROVE_CHECKPOINT,
+                            HumanControlAction.REQUEST_CHANGES,
+                        }
+                    ),
+                    repository_id=repository_id,
+                    path_patterns=("src/**",),
+                ),
+            ),
+        ),
+        idempotency_key="supervised-project",
+    )
+
+    assert requires_human_checkpoint(topology, ProjectCheckpoint.DELIVERY)
+    assert authorize_human(
+        topology,
+        HumanAuthorizationRequest(
+            human_principal_id=human_id,
+            repository_id=repository_id,
+            path="src/pricing.py",
+            code_access=CodeAccessLevel.READ,
+        ),
+    ).allowed
+    assert not authorize_human(
+        topology,
+        HumanAuthorizationRequest(
+            human_principal_id=human_id,
+            repository_id=repository_id,
+            path="src/pricing.py",
+            code_access=CodeAccessLevel.WRITE,
+        ),
+    ).allowed
+
+
+@pytest.mark.asyncio
+async def test_manual_controlled_project_requires_every_checkpoint() -> None:
+    directory, organization_id, organization_leader, teams = await build_agents(1)
+    team = teams[0]
+    base = dict(
+        organization_id=organization_id,
+        project_id=uuid4(),
+        organization_leader_id=organization_leader.id,
+        repository_teams=(
+            RepositoryTeamAssignment(
+                team.repository_id, team.leader.id, (team.workers[0].id,)
+            ),
+        ),
+        execution_mode=ProjectExecutionMode.MANUAL_CONTROLLED,
+        human_grants=(
+            HumanProjectGrantInput(
+                human_principal_id=uuid4(),
+                role=HumanProjectRole.PROJECT_SUPERVISOR,
+                code_access=CodeAccessLevel.READ,
+                control_actions=frozenset({HumanControlAction.APPROVE_CHECKPOINT}),
+            ),
+        ),
+    )
+    service = CreateProjectAgentTopology(directory, InMemoryProjectTopologyStore())
+    with pytest.raises(ProjectTopologyViolation, match="every human checkpoint"):
+        await service.execute(
+            CreateProjectAgentTopologyRequest(
+                **base,
+                required_checkpoints=frozenset({ProjectCheckpoint.EXECUTION}),
+            ),
+            idempotency_key="incomplete-manual-project",
+        )
+
+    accepted = await service.execute(
+        CreateProjectAgentTopologyRequest(
+            **{**base, "project_id": uuid4()},
+            required_checkpoints=frozenset(ProjectCheckpoint),
+        ),
+        idempotency_key="complete-manual-project",
+    )
+    assert accepted.required_checkpoints == frozenset(ProjectCheckpoint)
 
 
 async def build_agents(repository_count: int = 2):

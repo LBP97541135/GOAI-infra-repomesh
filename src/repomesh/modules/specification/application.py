@@ -16,7 +16,11 @@ from repomesh.modules.identity_access.contracts import (
     AuthorizationAction,
     AuthorizationRequest,
 )
-from repomesh.modules.project.contracts import ProjectTopologyReader
+from repomesh.modules.project.contracts import (
+    ProjectCheckpoint,
+    ProjectCheckpointGateway,
+    ProjectTopologyReader,
+)
 from repomesh.modules.specification.contracts import (
     ApproveSpecificationCommand,
     CreateSpecificationCommand,
@@ -66,12 +70,14 @@ class SpecificationService:
         specifications: SpecificationStore,
         contexts: ContextPublisher,
         authorizer: AgentAuthorizationGateway,
+        checkpoints: ProjectCheckpointGateway | None = None,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
         self._specifications = specifications
         self._contexts = contexts
         self._authorizer = authorizer
+        self._checkpoints = checkpoints
 
     async def create(
         self, command: CreateSpecificationCommand, *, idempotency_key: str
@@ -194,6 +200,18 @@ class SpecificationService:
             raise SpecificationConflict("only approved specifications can be published")
         if command.actor_agent_id != specification.owner_agent_id:
             raise SpecificationDenied("only the specification owner can publish it")
+        if (
+            self._checkpoints is not None
+            and specification.kind is not SpecificationKind.TASK
+        ):
+            gate = await self._checkpoints.evaluate(
+                specification.project_id,
+                ProjectCheckpoint.SPECIFICATION,
+                specification.current_version.content_hash,
+                repository_id=specification.repository_id,
+            )
+            if not gate.allowed:
+                raise SpecificationDenied(gate.reason)
         object_type, scope = _CONTEXT_MAPPING[specification.kind]
         spec_version = specification.current_version
         return await self._contexts.publish(

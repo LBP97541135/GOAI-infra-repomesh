@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "staging", "production"] = "development"
     log_level: str = "INFO"
     database_url: str = "postgresql+asyncpg://repomesh:repomesh@localhost:5432/repomesh"
+    local_session_ttl_seconds: int = Field(default=28800, ge=300, le=604800)
     agentteams_required: bool = False
     agentteams_controller_url: str = "http://localhost:8090"
     agentteams_controller_token: str | None = None

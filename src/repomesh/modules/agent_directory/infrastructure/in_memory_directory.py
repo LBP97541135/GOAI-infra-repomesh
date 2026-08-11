@@ -45,6 +45,9 @@ class InMemoryAgentDirectory:
         principal = await self.get(agent_id)
         return principal.to_view() if principal is not None else None
 
+    async def list(self) -> tuple[AgentPrincipal, ...]:
+        return tuple(sorted(self._principals.values(), key=lambda item: str(item.id)))
+
     async def get_by_idempotency_key(
         self, idempotency_key: str
     ) -> tuple[AgentPrincipal, str] | None:

@@ -1,5 +1,8 @@
+import asyncio
 import hashlib
 import json
+import logging
+from contextlib import suppress
 from dataclasses import asdict
 from uuid import UUID
 
@@ -238,6 +241,60 @@ class SendCollaborationMessage:
             asdict(command), sort_keys=True, default=str, separators=(",", ":")
         ).encode()
         return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+class CollaborationDeliveryRetryWorker:
+    """Retry persisted failed collaboration messages without duplicating delivery."""
+
+    def __init__(
+        self,
+        store: CollaborationMessageStore,
+        sender: SendCollaborationMessage,
+        *,
+        interval_seconds: float = 5.0,
+    ) -> None:
+        self._store = store
+        self._sender = sender
+        self._interval = interval_seconds
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._run())
+
+    async def close(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+
+    async def _run(self) -> None:
+        while True:
+            for message, key in await self._store.list_failed():
+                try:
+                    await self._sender.send(
+                        SendCollaborationMessageCommand(
+                            organization_id=message.organization_id,
+                            project_id=message.project_id,
+                            repository_id=message.repository_id,
+                            task_id=message.task_id,
+                            sender_agent_id=message.sender_agent_id,
+                            recipient_agent_id=message.recipient_agent_id,
+                            kind=message.kind,
+                            subject=message.subject,
+                            body=message.body,
+                            correlation_id=message.correlation_id,
+                        ),
+                        idempotency_key=key,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "failed collaboration delivery will be retried",
+                        extra={"message_id": str(message.id)},
+                    )
+            await asyncio.sleep(self._interval)
 
 
 class ProcessMatrixTaskReport:

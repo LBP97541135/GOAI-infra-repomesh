@@ -2,15 +2,60 @@
 from .application import (
     CreateProjectAgentTopology,
     CreateProjectAgentTopologyRequest,
+    HumanProjectGrantInput,
     RepositoryTeamAssignment,
 )
-from .contracts import ProjectAgentTopologyView, ProjectTeamRuntimeStatus, RepositoryTeamView
+from .checkpoint_control import (
+    ProjectCheckpointService,
+    RecordCheckpointDecisionCommand,
+)
+from .contracts import (
+    CheckpointDecisionKind,
+    CheckpointGateDecision,
+    CodeAccessLevel,
+    HumanControlAction,
+    HumanProjectGrantView,
+    HumanProjectRole,
+    ProjectAgentTopologyView,
+    ProjectCheckpoint,
+    ProjectCheckpointDecisionView,
+    ProjectExecutionMode,
+    ProjectOperationalStatus,
+    ProjectTeamRuntimeStatus,
+    RepositoryTeamView,
+)
+from .human_control import (
+    HumanAuthorizationDecision,
+    HumanAuthorizationRequest,
+    authorize_human,
+    requires_human_checkpoint,
+)
+from .lifecycle_control import ControlProjectCommand, ProjectLifecycleService
 
 __all__ = [
     "CreateProjectAgentTopology",
     "CreateProjectAgentTopologyRequest",
+    "CodeAccessLevel",
+    "CheckpointDecisionKind",
+    "CheckpointGateDecision",
+    "HumanControlAction",
+    "HumanAuthorizationDecision",
+    "HumanAuthorizationRequest",
+    "HumanProjectGrantInput",
+    "HumanProjectGrantView",
+    "HumanProjectRole",
+    "authorize_human",
     "ProjectAgentTopologyView",
+    "ProjectCheckpoint",
+    "ProjectCheckpointDecisionView",
+    "ProjectCheckpointService",
+    "ProjectExecutionMode",
+    "ProjectOperationalStatus",
+    "ControlProjectCommand",
+    "ProjectLifecycleService",
     "ProjectTeamRuntimeStatus",
     "RepositoryTeamAssignment",
     "RepositoryTeamView",
+    "RecordCheckpointDecisionCommand",
+    "requires_human_checkpoint",
 ]

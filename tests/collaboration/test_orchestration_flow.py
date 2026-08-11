@@ -26,8 +26,10 @@ from repomesh.modules.collaboration import (
 )
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project import (
+    CheckpointGateDecision,
     CreateProjectAgentTopology,
     CreateProjectAgentTopologyRequest,
+    ProjectCheckpoint,
     RepositoryTeamAssignment,
 )
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
@@ -103,7 +105,39 @@ class RecordingTaskPublisher:
         )
 
 
-async def build_flow(messenger=None):
+class RecordingCheckpointGateway:
+    def __init__(self) -> None:
+        self.calls = []
+
+    async def operational_gate(self, project_id) -> CheckpointGateDecision:
+        return CheckpointGateDecision(True, "project_active")
+
+    async def evaluate(
+        self,
+        project_id,
+        checkpoint,
+        evidence_version,
+        *,
+        repository_id=None,
+        requested_by_agent_id=None,
+        title=None,
+        summary=None,
+    ) -> CheckpointGateDecision:
+        self.calls.append(
+            (
+                project_id,
+                checkpoint,
+                evidence_version,
+                repository_id,
+                requested_by_agent_id,
+                title,
+                summary,
+            )
+        )
+        return CheckpointGateDecision(False, "human_checkpoint_pending")
+
+
+async def build_flow(messenger=None, checkpoints=None):
     directory = InMemoryAgentDirectory()
     create = CreateAgent(directory)
     organization_id = uuid4()
@@ -158,7 +192,12 @@ async def build_flow(messenger=None):
     )
     tasks = InMemoryTaskStore()
     orchestrator = TaskOrchestrator(
-        directory, topologies, tasks, collaboration, RecordingTaskPublisher()
+        directory,
+        topologies,
+        tasks,
+        collaboration,
+        RecordingTaskPublisher(),
+        checkpoints,
     )
     return (
         organization_id,
@@ -253,6 +292,82 @@ async def test_manager_leader_worker_assignment_and_report_flow() -> None:
         delivery[1]["schema"] == "repomesh.collaboration.v1"
         for delivery in messenger.deliveries
     )
+
+
+@pytest.mark.asyncio
+async def test_repository_leader_exception_requests_human_review_without_worker_bypass() -> None:
+    checkpoints = RecordingCheckpointGateway()
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        _,
+        orchestrator,
+        _,
+        _,
+    ) = await build_flow(checkpoints=checkpoints)
+    repository_task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            assigned_by_agent_id=organization_leader.id,
+            assignee_agent_id=repository_team.leader.id,
+            title="Integrate pricing change",
+            instruction="Coordinate the repository change.",
+            acceptance=("Integration succeeds",),
+        ),
+        idempotency_key="assign-exception-repository-task",
+    )
+    worker = repository_team.workers[0]
+    worker_task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            parent_task_id=repository_task.id,
+            assigned_by_agent_id=repository_team.leader.id,
+            assignee_agent_id=worker.id,
+            title="Change pricing code",
+            instruction="Implement the pricing change.",
+            acceptance=("Unit tests pass",),
+        ),
+        idempotency_key="assign-exception-worker-task",
+    )
+    await orchestrator.report(
+        ReportTaskCommand(
+            task_id=worker_task.id,
+            reporter_agent_id=worker.id,
+            status=TaskStatus.BLOCKED,
+            summary="API contract is ambiguous.",
+        ),
+        idempotency_key="worker-blocked",
+    )
+    assert checkpoints.calls == []
+
+    reported = await orchestrator.report(
+        ReportTaskCommand(
+            task_id=repository_task.id,
+            reporter_agent_id=repository_team.leader.id,
+            status=TaskStatus.BLOCKED,
+            summary="The contract conflict requires a project decision.",
+        ),
+        idempotency_key="repository-leader-blocked",
+    )
+    assert checkpoints.calls == [
+        (
+            project_id,
+            ProjectCheckpoint.EXCEPTION_ESCALATION,
+            f"task:{repository_task.id}:v{reported.version}",
+            repository_id,
+            repository_team.leader.id,
+            "Integrate pricing change：仓库异常升级",
+            "The contract conflict requires a project decision.",
+        )
+    ]
 
 
 @pytest.mark.asyncio

@@ -76,6 +76,16 @@ class InMemoryCollaborationMessageStore:
     async def update(self, message: CollaborationMessage) -> None:
         self.messages[message.id] = message
 
+    async def list_failed(
+        self, limit: int = 100
+    ) -> tuple[tuple[CollaborationMessage, str], ...]:
+        failed = []
+        for key, (message_id, _) in self.idempotency.items():
+            message = self.messages[message_id]
+            if message.status is CollaborationDeliveryStatus.FAILED:
+                failed.append((message, key))
+        return tuple(failed[:limit])
+
 
 class InMemoryProcessedMatrixEventStore:
     def __init__(self) -> None:
@@ -133,6 +143,22 @@ class PostgresCollaborationMessageStore:
                 raise CollaborationConflict("collaboration message does not exist")
             record.status = message.status.value
             record.event_id = message.event_id
+
+    async def list_failed(
+        self, limit: int = 100
+    ) -> tuple[tuple[CollaborationMessage, str], ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(CollaborationMessageRecord)
+                    .where(
+                        CollaborationMessageRecord.status
+                        == CollaborationDeliveryStatus.FAILED.value
+                    )
+                    .limit(limit)
+                )
+            ).all()
+        return tuple((self._to_domain(record), record.idempotency_key) for record in records)
 
     @staticmethod
     def _values(message: CollaborationMessage) -> dict[str, object]:

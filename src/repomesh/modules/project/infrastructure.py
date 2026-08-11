@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint, delete, select
@@ -7,9 +9,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
-from repomesh.modules.project.contracts import ProjectTeamRuntimeStatus
+from repomesh.modules.project.contracts import (
+    CheckpointDecisionKind,
+    CodeAccessLevel,
+    HumanControlAction,
+    HumanProjectRole,
+    HumanReviewStatus,
+    ProjectCheckpoint,
+    ProjectExecutionMode,
+    ProjectOperationalStatus,
+    ProjectTeamRuntimeStatus,
+)
 from repomesh.modules.project.domain import (
+    HumanProjectGrant,
+    HumanReviewRequest,
     ProjectAgentTopology,
+    ProjectCheckpointDecision,
     ProjectTopologyConflict,
     RepositoryTeam,
 )
@@ -33,6 +48,12 @@ class ProjectAgentTopologyRecord(Base):
     organization_leader_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_fingerprint: Mapped[str] = mapped_column(String(71))
+    execution_mode: Mapped[str] = mapped_column(String(30), default="auto")
+    operational_status: Mapped[str] = mapped_column(String(30), default="active")
+    required_checkpoints: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
+    human_grants: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON_DOCUMENT, default=list
+    )
 
 
 class ProjectRepositoryTeamRecord(Base):
@@ -57,6 +78,53 @@ class ProjectRepositoryTeamRecord(Base):
     runtime_status: Mapped[str] = mapped_column(String(30), index=True)
     room_id: Mapped[str | None] = mapped_column(Text)
     leader_room_id: Mapped[str | None] = mapped_column(Text)
+
+
+class ProjectCheckpointDecisionRecord(Base):
+    __tablename__ = "checkpoint_decisions"
+    __table_args__ = (
+        UniqueConstraint("review_request_id", name="uq_checkpoint_decision_review_request"),
+        {"schema": "project"},
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    review_request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    checkpoint: Mapped[str] = mapped_column(String(40), index=True)
+    repository_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
+    human_principal_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    decision: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(Text)
+    evidence_version: Mapped[str] = mapped_column(String(200), index=True)
+    decided_at: Mapped[datetime]
+
+
+class HumanReviewRequestRecord(Base):
+    __tablename__ = "human_review_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "checkpoint",
+            "repository_scope_key",
+            "evidence_version",
+            name="uq_project_human_review_evidence",
+        ),
+        {"schema": "project"},
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    checkpoint: Mapped[str] = mapped_column(String(40), index=True)
+    repository_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
+    repository_scope_key: Mapped[str] = mapped_column(String(36), default="")
+    evidence_version: Mapped[str] = mapped_column(String(200), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    requested_by_agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    resolved_by_human_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
 
 
 class InMemoryProjectTopologyStore:
@@ -98,6 +166,104 @@ class InMemoryProjectTopologyStore:
         self._topologies[topology.project_id] = topology
 
 
+class InMemoryProjectCheckpointDecisionStore:
+    def __init__(self) -> None:
+        self._decisions: list[ProjectCheckpointDecision] = []
+
+    async def add(self, decision: ProjectCheckpointDecision) -> None:
+        if any(
+            item.review_request_id == decision.review_request_id
+            for item in self._decisions
+        ):
+            raise ProjectTopologyConflict("review request was already decided")
+        self._decisions.append(decision)
+
+    async def latest(
+        self,
+        project_id: UUID,
+        checkpoint: ProjectCheckpoint,
+        repository_id: UUID | None,
+    ) -> ProjectCheckpointDecision | None:
+        matches = [
+            item
+            for item in self._decisions
+            if item.project_id == project_id
+            and item.checkpoint is checkpoint
+            and item.repository_id == repository_id
+        ]
+        return max(matches, key=lambda item: item.decided_at) if matches else None
+
+
+class InMemoryHumanReviewRequestStore:
+    def __init__(self) -> None:
+        self._requests: dict[
+            tuple[UUID, ProjectCheckpoint, UUID | None, str], HumanReviewRequest
+        ] = {}
+
+    async def ensure(self, request: HumanReviewRequest) -> HumanReviewRequest:
+        key = (
+            request.project_id,
+            request.checkpoint,
+            request.repository_id,
+            request.evidence_version,
+        )
+        return self._requests.setdefault(key, request)
+
+    async def get_exact(
+        self,
+        project_id: UUID,
+        checkpoint: ProjectCheckpoint,
+        repository_id: UUID | None,
+        evidence_version: str,
+    ) -> HumanReviewRequest | None:
+        return self._requests.get(
+            (project_id, checkpoint, repository_id, evidence_version)
+        )
+
+    async def get_by_id(self, review_request_id: UUID) -> HumanReviewRequest | None:
+        return next(
+            (item for item in self._requests.values() if item.id == review_request_id),
+            None,
+        )
+
+    async def list_for_human(
+        self, human_principal_id: UUID, *, status: HumanReviewStatus | None = None
+    ) -> tuple[HumanReviewRequest, ...]:
+        del human_principal_id
+        values = [
+            item
+            for item in self._requests.values()
+            if status is None or item.status is status
+        ]
+        return tuple(sorted(values, key=lambda item: item.updated_at, reverse=True))
+
+    async def list_all(
+        self, *, status: HumanReviewStatus | None = None
+    ) -> tuple[HumanReviewRequest, ...]:
+        return await self.list_for_human(UUID(int=0), status=status)
+
+    async def resolve_pending(
+        self,
+        review_request_id: UUID,
+        decision: CheckpointDecisionKind,
+        human_principal_id: UUID,
+    ) -> bool:
+        binding = next(
+            ((key, item) for key, item in self._requests.items() if item.id == review_request_id),
+            None,
+        )
+        if binding is None or binding[1].status is not HumanReviewStatus.PENDING:
+            return False
+        key, current = binding
+        self._requests[key] = replace(
+            current,
+            status=HumanReviewStatus(decision.value),
+            resolved_by_human_id=human_principal_id,
+            updated_at=datetime.now(UTC),
+        )
+        return True
+
+
 class PostgresProjectTopologyStore:
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -119,6 +285,12 @@ class PostgresProjectTopologyStore:
                         organization_leader_id=topology.organization_leader_id,
                         idempotency_key=idempotency_key,
                         request_fingerprint=request_fingerprint,
+                        execution_mode=topology.execution_mode.value,
+                        operational_status=topology.operational_status.value,
+                        required_checkpoints=sorted(
+                            item.value for item in topology.required_checkpoints
+                        ),
+                        human_grants=self._grant_payloads(topology),
                     )
                 )
                 session.add_all(self._team_records(topology))
@@ -172,6 +344,7 @@ class PostgresProjectTopologyStore:
             record = await session.get(ProjectAgentTopologyRecord, topology.id)
             if record is None:
                 raise ProjectTopologyConflict("project topology does not exist")
+            record.operational_status = topology.operational_status.value
             await session.execute(
                 delete(ProjectRepositoryTeamRecord).where(
                     ProjectRepositoryTeamRecord.topology_id == topology.id
@@ -207,6 +380,29 @@ class PostgresProjectTopologyStore:
             organization_id=record.organization_id,
             project_id=record.project_id,
             organization_leader_id=record.organization_leader_id,
+            execution_mode=ProjectExecutionMode(record.execution_mode),
+            operational_status=ProjectOperationalStatus(record.operational_status),
+            required_checkpoints=frozenset(
+                ProjectCheckpoint(value) for value in record.required_checkpoints
+            ),
+            human_grants=tuple(
+                HumanProjectGrant(
+                    human_principal_id=UUID(str(item["human_principal_id"])),
+                    role=HumanProjectRole(str(item["role"])),
+                    code_access=CodeAccessLevel(str(item["code_access"])),
+                    control_actions=frozenset(
+                        HumanControlAction(str(value))
+                        for value in item["control_actions"]
+                    ),
+                    repository_id=(
+                        UUID(str(item["repository_id"]))
+                        if item.get("repository_id")
+                        else None
+                    ),
+                    path_patterns=tuple(str(value) for value in item["path_patterns"]),
+                )
+                for item in record.human_grants
+            ),
             repository_teams=tuple(
                 RepositoryTeam(
                     id=team.id,
@@ -221,4 +417,234 @@ class PostgresProjectTopologyStore:
                 )
                 for team in teams
             ),
+        )
+
+    @staticmethod
+    def _grant_payloads(topology: ProjectAgentTopology) -> list[dict[str, object]]:
+        return [
+            {
+                "human_principal_id": str(grant.human_principal_id),
+                "role": grant.role.value,
+                "code_access": grant.code_access.value,
+                "control_actions": sorted(item.value for item in grant.control_actions),
+                "repository_id": (
+                    str(grant.repository_id) if grant.repository_id else None
+                ),
+                "path_patterns": list(grant.path_patterns),
+            }
+            for grant in topology.human_grants
+        ]
+
+
+class PostgresProjectCheckpointDecisionStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def add(self, decision: ProjectCheckpointDecision) -> None:
+        try:
+            async with self._database.transaction() as session:
+                session.add(
+                    ProjectCheckpointDecisionRecord(
+                    id=decision.id,
+                    review_request_id=decision.review_request_id,
+                    project_id=decision.project_id,
+                    checkpoint=decision.checkpoint.value,
+                    repository_id=decision.repository_id,
+                    human_principal_id=decision.human_principal_id,
+                    decision=decision.decision.value,
+                    reason=decision.reason,
+                    evidence_version=decision.evidence_version,
+                    decided_at=decision.decided_at,
+                    )
+                )
+        except IntegrityError as error:
+            raise ProjectTopologyConflict("review request was already decided") from error
+
+    async def latest(
+        self,
+        project_id: UUID,
+        checkpoint: ProjectCheckpoint,
+        repository_id: UUID | None,
+    ) -> ProjectCheckpointDecision | None:
+        async with self._database.transaction() as session:
+            statement = select(ProjectCheckpointDecisionRecord).where(
+                ProjectCheckpointDecisionRecord.project_id == project_id,
+                ProjectCheckpointDecisionRecord.checkpoint == checkpoint.value,
+            )
+            if repository_id is None:
+                statement = statement.where(
+                    ProjectCheckpointDecisionRecord.repository_id.is_(None)
+                )
+            else:
+                statement = statement.where(
+                    ProjectCheckpointDecisionRecord.repository_id == repository_id
+                )
+            record = await session.scalar(
+                statement.order_by(ProjectCheckpointDecisionRecord.decided_at.desc()).limit(1)
+            )
+        if record is None:
+            return None
+        return ProjectCheckpointDecision(
+            id=record.id,
+            review_request_id=record.review_request_id,
+            project_id=record.project_id,
+            checkpoint=ProjectCheckpoint(record.checkpoint),
+            repository_id=record.repository_id,
+            human_principal_id=record.human_principal_id,
+            decision=CheckpointDecisionKind(record.decision),
+            reason=record.reason,
+            evidence_version=record.evidence_version,
+            decided_at=record.decided_at,
+        )
+
+
+class PostgresHumanReviewRequestStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def ensure(self, request: HumanReviewRequest) -> HumanReviewRequest:
+        scope = str(request.repository_id) if request.repository_id else ""
+        async with self._database.transaction() as session:
+            existing = await session.scalar(
+                select(HumanReviewRequestRecord).where(
+                    HumanReviewRequestRecord.project_id == request.project_id,
+                    HumanReviewRequestRecord.checkpoint == request.checkpoint.value,
+                    HumanReviewRequestRecord.repository_scope_key == scope,
+                    HumanReviewRequestRecord.evidence_version == request.evidence_version,
+                )
+            )
+            if existing is not None:
+                return self._to_domain(existing)
+            record = HumanReviewRequestRecord(
+                id=request.id,
+                project_id=request.project_id,
+                checkpoint=request.checkpoint.value,
+                repository_id=request.repository_id,
+                repository_scope_key=scope,
+                evidence_version=request.evidence_version,
+                title=request.title,
+                summary=request.summary,
+                status=request.status.value,
+                requested_by_agent_id=request.requested_by_agent_id,
+                resolved_by_human_id=request.resolved_by_human_id,
+                created_at=request.created_at,
+                updated_at=request.updated_at,
+            )
+            session.add(record)
+            return request
+
+    async def get_exact(
+        self,
+        project_id: UUID,
+        checkpoint: ProjectCheckpoint,
+        repository_id: UUID | None,
+        evidence_version: str,
+    ) -> HumanReviewRequest | None:
+        scope = str(repository_id) if repository_id else ""
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(HumanReviewRequestRecord).where(
+                    HumanReviewRequestRecord.project_id == project_id,
+                    HumanReviewRequestRecord.checkpoint == checkpoint.value,
+                    HumanReviewRequestRecord.repository_scope_key == scope,
+                    HumanReviewRequestRecord.evidence_version == evidence_version,
+                )
+            )
+        return self._to_domain(record) if record is not None else None
+
+    async def get_by_id(self, review_request_id: UUID) -> HumanReviewRequest | None:
+        async with self._database.transaction() as session:
+            record = await session.get(HumanReviewRequestRecord, review_request_id)
+        return self._to_domain(record) if record is not None else None
+
+    async def list_for_human(
+        self, human_principal_id: UUID, *, status: HumanReviewStatus | None = None
+    ) -> tuple[HumanReviewRequest, ...]:
+        async with self._database.transaction() as session:
+            topologies = (
+                await session.scalars(select(ProjectAgentTopologyRecord))
+            ).all()
+            grants_by_project = {
+                item.project_id: tuple(
+                    grant
+                    for grant in item.human_grants
+                    if grant.get("human_principal_id") == str(human_principal_id)
+                )
+                for item in topologies
+                if any(
+                    grant.get("human_principal_id") == str(human_principal_id)
+                    for grant in item.human_grants
+                )
+            }
+            if not grants_by_project:
+                return ()
+            statement = select(HumanReviewRequestRecord).where(
+                HumanReviewRequestRecord.project_id.in_(grants_by_project)
+            )
+            if status is not None:
+                statement = statement.where(HumanReviewRequestRecord.status == status.value)
+            records = (
+                await session.scalars(
+                    statement.order_by(HumanReviewRequestRecord.updated_at.desc())
+                )
+            ).all()
+        return tuple(
+            self._to_domain(item)
+            for item in records
+            if any(
+                grant.get("repository_id") is None
+                or grant.get("repository_id") == str(item.repository_id)
+                for grant in grants_by_project[item.project_id]
+            )
+        )
+
+    async def list_all(
+        self, *, status: HumanReviewStatus | None = None
+    ) -> tuple[HumanReviewRequest, ...]:
+        async with self._database.transaction() as session:
+            statement = select(HumanReviewRequestRecord)
+            if status is not None:
+                statement = statement.where(HumanReviewRequestRecord.status == status.value)
+            records = (
+                await session.scalars(
+                    statement.order_by(HumanReviewRequestRecord.updated_at.desc())
+                )
+            ).all()
+        return tuple(self._to_domain(item) for item in records)
+
+    async def resolve_pending(
+        self,
+        review_request_id: UUID,
+        decision: CheckpointDecisionKind,
+        human_principal_id: UUID,
+    ) -> bool:
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(HumanReviewRequestRecord).where(
+                    HumanReviewRequestRecord.id == review_request_id,
+                    HumanReviewRequestRecord.status == HumanReviewStatus.PENDING.value,
+                )
+            )
+            if record is None:
+                return False
+            record.status = decision.value
+            record.resolved_by_human_id = human_principal_id
+            record.updated_at = datetime.now(UTC)
+            return True
+
+    @staticmethod
+    def _to_domain(record: HumanReviewRequestRecord) -> HumanReviewRequest:
+        return HumanReviewRequest(
+            id=record.id,
+            project_id=record.project_id,
+            checkpoint=ProjectCheckpoint(record.checkpoint),
+            repository_id=record.repository_id,
+            evidence_version=record.evidence_version,
+            title=record.title,
+            summary=record.summary,
+            status=HumanReviewStatus(record.status),
+            requested_by_agent_id=record.requested_by_agent_id,
+            resolved_by_human_id=record.resolved_by_human_id,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )

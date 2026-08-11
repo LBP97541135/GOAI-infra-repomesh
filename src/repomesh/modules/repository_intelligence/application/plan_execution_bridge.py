@@ -21,6 +21,8 @@ empty proved indistinguishable from success in live use.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -29,7 +31,11 @@ from uuid import UUID
 
 from opentelemetry import trace
 
-from repomesh.modules.project.contracts import ProjectTopologyReader
+from repomesh.modules.project.contracts import (
+    ProjectCheckpoint,
+    ProjectCheckpointGateway,
+    ProjectTopologyReader,
+)
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification.contracts import (
     CreateSpecificationCommand,
@@ -233,6 +239,7 @@ class PlanExecutionBridge:
         snapshot_store: PlanSnapshotWriter | None = None,
         superseder: TaskSupersederGateway | None = None,
         handoff_docs: HandoffDocGenerator | None = None,
+        checkpoints: ProjectCheckpointGateway | None = None,
     ) -> None:
         self._specs = specifications
         self._plans = plans
@@ -241,6 +248,7 @@ class PlanExecutionBridge:
         self._snapshots = snapshot_store
         self._superseder = superseder
         self._handoff_docs = handoff_docs
+        self._checkpoints = checkpoints
 
     @traced("planning.materialize")
     async def materialize(
@@ -289,6 +297,27 @@ class PlanExecutionBridge:
             raise ValueError(f"Project topology not found: {project_id}")
 
         org_id = topology.organization_id
+
+        if self._checkpoints is not None:
+            scope_payload = json.dumps(
+                {
+                    "repositories": sorted({task.repository for task in plan.task_dag}),
+                    "contracts": sorted(
+                        (item.producer, item.consumer, item.interface)
+                        for item in plan.contracts
+                    ),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            gate = await self._checkpoints.evaluate(
+                project_id,
+                ProjectCheckpoint.REPOSITORY_SCOPE,
+                f"sha256:{hashlib.sha256(scope_payload).hexdigest()}",
+            )
+            if not gate.allowed:
+                raise ValueError(gate.reason)
 
         # --- 1b. Build name → UUID mappings -----------------------------------
         # catalog has RepositoryProfile(name, id) — gives us name → repository_id

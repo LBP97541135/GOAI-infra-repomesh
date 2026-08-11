@@ -18,7 +18,8 @@ from repomesh.modules.capability_management import (
 from repomesh.modules.collaboration.ports import CollaborationMessageStore
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
-from repomesh.modules.identity_access import PolicyAuthorizationGateway
+from repomesh.modules.identity_access import LocalAccountService, PolicyAuthorizationGateway
+from repomesh.modules.identity_access.infrastructure import PostgresLocalAccountStore
 from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
@@ -264,6 +265,17 @@ class ApplicationContainer:
     def capability_assembler(self) -> PresetCapabilityAssembler:
         return PresetCapabilityAssembler()
 
+    def local_account_service(self):
+        return LocalAccountService(
+            PostgresLocalAccountStore(self.database),
+            session_ttl_seconds=get_settings().local_session_ttl_seconds,
+        )
+
+    def project_topology_creator(self):
+        from repomesh.modules.project import CreateProjectAgentTopology
+
+        return CreateProjectAgentTopology(self.agent_directory, self.project_topology_store)
+
     def agent_capabilities(self) -> ResolveAgentCapabilities:
         return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
 
@@ -294,6 +306,7 @@ class ApplicationContainer:
             self.specification_store,
             ContextPublicationGateway(self.context_store),
             PolicyAuthorizationGateway(),
+            self.project_checkpoint_service(),
         )
 
     def coding_agent_package_builder(self) -> BuildCodingAgentPackage:
@@ -437,7 +450,48 @@ class ApplicationContainer:
                 required_approvals=settings.delivery_required_approvals,
             ),
             validation=self.validation_snapshot_service(),
+            checkpoints=self.project_checkpoint_service(),
         )
+
+    def project_checkpoint_service(self):
+        from repomesh.modules.project import ProjectCheckpointService
+        from repomesh.modules.project.infrastructure import (
+            PostgresHumanReviewRequestStore,
+            PostgresProjectCheckpointDecisionStore,
+        )
+
+        notifier = None
+        if self.agent_team_messenger is not None:
+            from repomesh.integrations.agentteams.human_decisions import (
+                HumanDecisionCollaborationNotifier,
+            )
+            from repomesh.modules.collaboration import SendCollaborationMessage
+
+            notifier = HumanDecisionCollaborationNotifier(
+                SendCollaborationMessage(
+                    self.agent_directory,
+                    self.project_topology_store,
+                    PolicyAuthorizationGateway(),
+                    self.collaboration_message_store,
+                    self.agent_team_messenger,
+                )
+            )
+        return ProjectCheckpointService(
+            self.topology_reader(),
+            PostgresProjectCheckpointDecisionStore(self.database),
+            PostgresHumanReviewRequestStore(self.database),
+            notifier,
+        )
+
+    def human_review_request_store(self):
+        from repomesh.modules.project.infrastructure import PostgresHumanReviewRequestStore
+
+        return PostgresHumanReviewRequestStore(self.database)
+
+    def project_lifecycle_service(self):
+        from repomesh.modules.project import ProjectLifecycleService
+
+        return ProjectLifecycleService(self.project_topology_store)
 
     def task_assignment_gateway(self) -> TaskAssignmentGateway | None:
         """The composed TaskOrchestrator assigns and receives task reports.
@@ -552,6 +606,7 @@ class ApplicationContainer:
             snapshot_store=self.plan_snapshot_store(),
             superseder=self.task_superseder(),
             handoff_docs=self.handoff_doc_service(),
+            checkpoints=self.project_checkpoint_service(),
         )
 
     def runner_gateway(self):

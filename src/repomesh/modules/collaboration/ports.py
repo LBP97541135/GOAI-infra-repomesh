@@ -20,6 +20,10 @@ class CollaborationMessageStore(Protocol):
 
     async def update(self, message: CollaborationMessage) -> None: ...
 
+    async def list_failed(
+        self, limit: int = 100
+    ) -> tuple[tuple[CollaborationMessage, str], ...]: ...
+
 
 class CollaborationMessenger(Protocol):
     async def send_task(
