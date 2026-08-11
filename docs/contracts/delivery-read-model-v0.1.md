@@ -92,7 +92,7 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
     "requirement_text": "string|null",        // plan snapshot.requirement_text
     "created_at": "..."
   },
-  "contract": {                                // specification (kind=ENGINEERING, FROZEN 优先)
+  "contract": {                                // specification (kind=ENGINEERING, FROZEN 优先)；整体可为 null（该交付未建 ENGINEERING spec）
     "specification_id": "uuid", "version": 3, "status": "frozen",
     "goal": "string",
     "acceptance": ["string"],
