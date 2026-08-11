@@ -41,6 +41,46 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
   };
 }
 
+/** 跨轮决策查看（验收缺陷 B-6）：单轮的「待决策 + 已记录治理决策」合并视图。
+ *
+ *  数据都是既有端点：待决策 = §4.3 `/decisions`（纯派生），已记录 =
+ *  聚合 `change_set.governance_decisions`（v0.1 §3）。不引入新映射——待决策条目
+ *  复用决策夹的同一派生函数，已记录条目直接透传契约形状由视图渲染。 */
+export interface RoundDecisionHistory {
+  pending: Decision[];
+  recorded: GovernanceDecisionView[];
+}
+
+export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundDecisionHistory> {
+  if (resolveDataSourceMode() === "replay") {
+    // 夹具只覆盖当前轮；历史轮次没有数据就说没有，不编造空集冒充「无决策」
+    if (roundId !== deliveryAggregateFixture.delivery_id) {
+      throw new Error(`replay 夹具未覆盖轮次 ${roundId.slice(0, 8)}`);
+    }
+    return {
+      pending: decisionsFromContract(decisionsFixture.items),
+      recorded: deliveryAggregateFixture.change_set?.governance_decisions ?? [],
+    };
+  }
+  const api = client();
+  const [agg, decisions] = await Promise.all([api.getDelivery(roundId), api.getDecisions(roundId)]);
+  return {
+    pending: decisionsFromContract(decisions.items),
+    recorded: agg.change_set?.governance_decisions ?? [],
+  };
+}
+
+/** 轮次归档（验收缺陷 B-4）：挂既有 `POST /deliveries/{id}/archive`（v0.1 §4.5）。
+ *  语义是**轮次级**归档，不是 issue 级关闭（issue 级归档实体契约 §6.1 明确未立项）。
+ *  仅终态可归档；活跃轮次后端返回 409，错误原样上抛由调用方呈现。 */
+export async function archiveRound(roundId: string): Promise<void> {
+  if (resolveDataSourceMode() === "replay") {
+    // 回放模式不写后端；与治理批准的回放行为同一风格，由调用方 toast 说明
+    return;
+  }
+  await client().archiveDelivery(roundId);
+}
+
 /** §4.4 写回路。head-bound：SHA 漂移即 409，错误原样上抛给弹窗显示，不静默。
  *  幂等键按内容确定性生成，重试自然复用同一键（后端内容重放去重）。 */
 export async function submitGovernanceDecision(

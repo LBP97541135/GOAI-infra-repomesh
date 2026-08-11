@@ -1,6 +1,7 @@
-import type { IssueDetailView, IssueTeamRef, RoomListItemView } from "../api/contract";
+import type { IssueDetailView, IssueRoundView, IssueTeamRef, RoomListItemView } from "../api/contract";
 import type { Decision } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
+import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
 import { dayLabel, openedBy, shortId } from "../display";
 import { eventTime } from "../viewmodel";
 
@@ -103,6 +104,12 @@ export function IssueDetailPage({
   onBack,
   onOpenRoom,
   onToast,
+  roundsExpanded,
+  roundsHistory,
+  onToggleRound,
+  archiveConfirmId,
+  archivingId,
+  onArchiveRound,
 }: {
   detail: IssueDetailView;
   rooms: RoomListItemView[];
@@ -116,6 +123,14 @@ export function IssueDetailPage({
   onBack: () => void;
   onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
+  /** 轮次索引与跨轮决策（B-6）：展开态与取数结果由容器持有 */
+  roundsExpanded: Record<string, boolean>;
+  roundsHistory: Record<string, RoundHistoryState>;
+  onToggleRound: (round: IssueRoundView) => void;
+  /** 轮次归档（B-4）：两步确认态与在途态由容器持有 */
+  archiveConfirmId: string | null;
+  archivingId: string | null;
+  onArchiveRound: (round: IssueRoundView) => void;
 }) {
   const teamOf = (repositoryId: string) => detail.teams.find((t) => t.repository_id === repositoryId) ?? null;
 
@@ -222,6 +237,18 @@ export function IssueDetailPage({
         </>
       )}
 
+      {/* 轮次索引 + 跨轮决策（B-6）：位置在决策夹（当前轮）之后、房间区之前 */}
+      <RoundsPanel
+        detail={detail}
+        currentRoundId={detail.active_round_id ?? detail.latest_round_id}
+        expanded={roundsExpanded}
+        history={roundsHistory}
+        archiveConfirmId={archiveConfirmId}
+        archivingId={archivingId}
+        onToggleRound={onToggleRound}
+        onArchiveRound={onArchiveRound}
+      />
+
       <div className="microlabel pt-5 pb-2">房间</div>
       {rooms.length === 0 && (
         <p className="text-[12px] text-[#6b6046]">
@@ -262,13 +289,11 @@ export function IssueDetailPage({
       })}
 
       {/* pending_decision_count 是跨轮求和（§2），决策夹只呈现当前一轮：两个数不等时
-          说清楚差在哪，别让人以为决策夹漏了事项。按轮次翻阅的入口原本指向 v1 控制台，
-          v1 退役后这里如实写成缺口——把读者送去一个不存在的页面比不给入口更糟。 */}
+          说清楚差在哪，别让人以为决策夹漏了事项。查看入口 = 上方轮次区逐轮展开（B-6）。 */}
       {detail.pending_decision_count > deck.length && (
         <div className="pt-4 text-[11.5px] text-[#6b6046]">
-          该 issue 跨全部 {detail.round_count} 轮共 {detail.pending_decision_count} 项待决策，本页决策夹只显示当前一轮的{" "}
-          {deck.length} 项。其余轮次的决策<b className="text-tx2">尚无查看入口</b>
-          ——决策读模型是轮次粒度，没有 issue 级的决策清单。
+          该 issue 跨全部 {detail.round_count} 轮共 {detail.pending_decision_count} 项待决策，决策夹只显示当前一轮的{" "}
+          {deck.length} 项——其余轮次在上方「轮次」区逐轮展开查看（批准动作仍只在当前轮的决策夹）。
         </div>
       )}
     </div>

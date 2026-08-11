@@ -1,0 +1,189 @@
+import type { GovernanceDecisionView, IssueDetailView, IssueRoundView } from "../api/contract";
+import type { Decision } from "../types";
+import { dayLabel, shortId } from "../display";
+import { eventTime } from "../viewmodel";
+
+/** 轮次索引 + 跨轮决策查看（验收缺陷 B-6）。
+ *
+ *  v0.2 §3 的 `rounds` 一直在数据里，此前页面只在元数据行显示总数——历史轮次的
+ *  决策因此没有查看入口。本面板按轮次列出，展开时取该轮的「待决策 + 已记录治理
+ *  决策」（api/decisions.ts `fetchRoundDecisionHistory`，全部既有端点，无新映射）。
+ *
+ *  红线：phase 是读模型派生值，本页只渲染；下方配色是展示皮肤不是状态映射。
+ *  待决策条目在这里是**只读信息**——批准动作只存在于上方决策夹（当前轮），历史轮
+ *  没有授权单语义，放一个不能点的「批准」按钮比不放更糟。 */
+
+const PHASE_SKIN: Record<string, string> = {
+  contract: "border-line text-tx2",
+  plan: "border-line text-tx2",
+  execute: "border-bluegray text-bluegray",
+  validate: "border-salmon text-salmon",
+  release: "border-amber text-amber",
+  delivered: "border-olive text-olive",
+  failed: "border-salmon text-salmon",
+  archived: "border-line text-tx2",
+};
+
+const DECISION_LABEL: Record<GovernanceDecisionView["decision"], string> = {
+  ready: "READY",
+  blocked: "BLOCKED",
+  rollback_required: "ROLLBACK_REQUIRED",
+};
+
+export interface RoundHistoryState {
+  loading: boolean;
+  error: string | null;
+  pending: Decision[];
+  recorded: GovernanceDecisionView[];
+}
+
+/** 归档按钮（B-4）的呈现规则：只对 `delivered` / `failed` 终态轮次给出动作；
+ *  `archived` 显静态徽标；其余 phase 不显示按钮——后端对活跃轮次返回 409，
+ *  给一个大概率失败的按钮不如不给（fail-closed 的界面版）。 */
+const ARCHIVABLE_PHASES = new Set(["delivered", "failed"]);
+
+export function RoundsPanel({
+  detail,
+  currentRoundId,
+  expanded,
+  history,
+  archiveConfirmId,
+  archivingId,
+  onToggleRound,
+  onArchiveRound,
+}: {
+  detail: IssueDetailView;
+  /** 决策夹正在呈现的那一轮（active ?? latest）；展开该轮时提示去上方处理待决策 */
+  currentRoundId: string | null;
+  expanded: Record<string, boolean>;
+  history: Record<string, RoundHistoryState>;
+  /** 两步确认：第一次点击后该轮按钮变「确认归档？」，再点才真发请求 */
+  archiveConfirmId: string | null;
+  /** 归档请求在途的轮次 id；期间按钮禁用 */
+  archivingId: string | null;
+  onToggleRound: (round: IssueRoundView) => void;
+  onArchiveRound: (round: IssueRoundView) => void;
+}) {
+  if (detail.rounds.length === 0) return null;
+
+  const repoName = (repositoryId: string) =>
+    detail.repositories.find((r) => r.repository_id === repositoryId)?.name ?? shortId(repositoryId);
+
+  return (
+    <>
+      <div className="microlabel pt-5 pb-2">
+        轮次
+        <span className="pl-2 text-[10px] tracking-normal text-[#6b6046]">
+          决策是轮次粒度（round_id = 交付 id），展开查看该轮全部决策
+        </span>
+      </div>
+      <div className="rounded-hard border border-line">
+        {detail.rounds.map((round, i) => {
+          const open = expanded[round.round_id] ?? false;
+          const state = history[round.round_id];
+          const isCurrent = round.round_id === currentRoundId;
+          return (
+            <div key={round.round_id} className="border-b border-panel last:border-b-0">
+              {/* 行内两个动作（展开 / 归档）不能嵌套 button，行是布局容器 */}
+              <div className="flex items-baseline gap-2.5 px-3 py-2 hover:bg-[#241e13]">
+                <button
+                  className="flex min-w-0 flex-1 items-baseline gap-2.5 text-left"
+                  onClick={() => onToggleRound(round)}
+                >
+                  <span className="font-mono text-[11.5px] text-tx">第 {i + 1} 轮</span>
+                  <span
+                    className={`rounded-hard border px-1.5 font-mono text-[10px] ${PHASE_SKIN[round.phase] ?? "border-line text-tx2"}`}
+                  >
+                    {round.phase}
+                  </span>
+                  <span className="text-[10.5px] text-[#6b6046]">
+                    计划 v{round.plan_version} · 更新于 {dayLabel(round.updated_at)}
+                    {isCurrent ? " · 决策夹当前轮" : ""}
+                  </span>
+                </button>
+                {round.phase === "archived" && (
+                  <span className="flex-none rounded-hard border border-line px-1.5 font-mono text-[10px] text-tx2">
+                    已归档
+                  </span>
+                )}
+                {ARCHIVABLE_PHASES.has(round.phase) && (
+                  <button
+                    className={`flex-none rounded-hard border px-1.5 font-mono text-[10px] ${
+                      archiveConfirmId === round.round_id
+                        ? "border-salmon text-salmon"
+                        : "border-line text-tx2 hover:border-amber hover:text-amber-hi"
+                    }`}
+                    disabled={archivingId === round.round_id}
+                    onClick={() => onArchiveRound(round)}
+                  >
+                    {archivingId === round.round_id
+                      ? "归档中…"
+                      : archiveConfirmId === round.round_id
+                        ? "确认归档？"
+                        : "归档本轮"}
+                  </button>
+                )}
+                <button className="flex-none font-mono text-[10.5px] text-tx2" onClick={() => onToggleRound(round)}>
+                  {open ? "▾ 收起" : "决策 ›"}
+                </button>
+              </div>
+
+              {open && (
+                <div className="border-t border-panel bg-[#161209] px-3 py-2.5">
+                  {state?.loading && <p className="text-[11.5px] text-tx2">决策取用中…</p>}
+                  {state?.error && <p className="text-[11.5px] text-salmon">决策取用失败：{state.error}</p>}
+                  {state && !state.loading && !state.error && (
+                    <>
+                      {state.pending.length === 0 && state.recorded.length === 0 && (
+                        <p className="text-[11.5px] text-[#6b6046]">该轮无待决策事项，也无已记录的治理决策。</p>
+                      )}
+
+                      {state.pending.length > 0 && (
+                        <div className="pb-1.5">
+                          <div className="pb-1 font-mono text-[10px] tracking-[0.1em] text-[#6b6046]">待决策</div>
+                          {state.pending.map((d) => (
+                            <div key={d.id} className="flex items-baseline gap-2 py-0.5">
+                              <span className="rounded-hard border border-amber px-1.5 font-mono text-[10px] text-amber">
+                                {d.kind === "approve" ? "放行" : "关注"}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-[11.5px] text-kraft">{d.title}</span>
+                              {isCurrent && <span className="flex-none text-[10.5px] text-[#6b6046]">在上方决策夹处理</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {state.recorded.length > 0 && (
+                        <div>
+                          <div className="pb-1 font-mono text-[10px] tracking-[0.1em] text-[#6b6046]">已记录治理决策</div>
+                          {state.recorded.map((g) => (
+                            <div key={g.id} className="flex flex-wrap items-baseline gap-x-2 py-0.5">
+                              <span
+                                className={`rounded-hard border px-1.5 font-mono text-[10px] ${
+                                  g.decision === "ready" ? "border-olive text-olive" : "border-salmon text-salmon"
+                                }`}
+                              >
+                                {DECISION_LABEL[g.decision]}
+                              </span>
+                              <span className="font-mono text-[11px] text-tx">{repoName(g.repository_id)}</span>
+                              <span className="font-mono text-[10.5px] text-tx2">head {g.head_sha.slice(0, 12)}</span>
+                              {/* decided_by 只有 agent id，花名册解析不进这里——短版如实，不冒充人名 */}
+                              <span className="text-[10.5px] text-[#6b6046]">
+                                AGENT {shortId(g.decided_by_agent_id)} · {eventTime(g.decided_at)}
+                              </span>
+                              <span className="w-full pl-0 text-[11px] text-tx2">{g.reason}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}

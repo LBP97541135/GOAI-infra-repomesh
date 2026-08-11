@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import type { IssueDetailView, RoomListItemView } from "../api/contract";
+import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { ApprovalInfo, Decision } from "../types";
 import {
+  archiveRound,
   fetchDecisionDeck,
+  fetchRoundDecisionHistory,
   resolveGovernanceAgent,
   submitGovernanceDecision,
   type GovernanceAgent,
 } from "../api/decisions";
+import type { RoundHistoryState } from "../components/RoundsPanel";
 import { fetchIssueDetail, fetchRooms } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
@@ -46,10 +49,23 @@ export function IssueDetailContainer({
   const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
   const [principalResolving, setPrincipalResolving] = useState(true);
 
+  /** 轮次区（B-6）：展开态与逐轮决策取数结果。懒取——首次展开才发请求，
+   *  已取到的轮次收起再展开不重取（issue 或 reload 变化时整体清空）。 */
+  const [roundsExpanded, setRoundsExpanded] = useState<Record<string, boolean>>({});
+  const [roundsHistory, setRoundsHistory] = useState<Record<string, RoundHistoryState>>({});
+
+  /** 轮次归档（B-4）：两步确认——第一次点击进入确认态，再点才发请求；
+   *  点击其他轮次或成功/失败后确认态复位。 */
+  const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    // 换 issue / 手动刷新时清空轮次区缓存：真批后决策集合已变，旧缓存是过期事实
+    setRoundsExpanded({});
+    setRoundsHistory({});
     Promise.all([fetchIssueDetail(issueId), fetchRooms(issueId)])
       .then(([d, r]) => {
         if (cancelled) return;
@@ -118,6 +134,67 @@ export function IssueDetailContainer({
       cancelled = true;
     };
   }, [roundId, detail, reload]);
+
+  const handleToggleRound = useCallback(
+    (round: IssueRoundView) => {
+      const id = round.round_id;
+      const willExpand = !roundsExpanded[id];
+      setRoundsExpanded((prev) => ({ ...prev, [id]: willExpand }));
+
+      // 懒取数：只在展开且无成功缓存时取；失败态在下次展开时重取。
+      // 取数完成前用户可能已收起，结果照常落桶——再展开即命中缓存，无副作用。
+      const existing = roundsHistory[id];
+      if (!willExpand || (existing && !existing.loading && !existing.error)) return;
+      setRoundsHistory((prev) => ({ ...prev, [id]: { loading: true, error: null, pending: [], recorded: [] } }));
+      fetchRoundDecisionHistory(id)
+        .then((data) =>
+          setRoundsHistory((p) => ({
+            ...p,
+            [id]: { loading: false, error: null, pending: data.pending, recorded: data.recorded },
+          })),
+        )
+        .catch((err: unknown) =>
+          setRoundsHistory((p) => ({
+            ...p,
+            [id]: {
+              loading: false,
+              error: err instanceof Error ? err.message : String(err),
+              pending: [],
+              recorded: [],
+            },
+          })),
+        );
+    },
+    [roundsExpanded, roundsHistory],
+  );
+
+  const handleArchiveRound = useCallback(
+    (round: IssueRoundView) => {
+      if (archiveConfirmId !== round.round_id) {
+        setArchiveConfirmId(round.round_id);
+        return;
+      }
+      if (resolveDataSourceMode() === "replay") {
+        setArchiveConfirmId(null);
+        onToast("已归档（回放演示，未写入后端）");
+        return;
+      }
+      setArchivingId(round.round_id);
+      archiveRound(round.round_id)
+        .then(() => {
+          setArchiveConfirmId(null);
+          onToast("本轮已归档（轮次级；issue 的 Open/Closed 仍按 §2.1 派生）");
+          setReload((n) => n + 1);
+        })
+        .catch((err: unknown) => {
+          // 409 = 活跃轮次拒绝归档等，原因原样呈现，不静默
+          setArchiveConfirmId(null);
+          onToast(`归档失败：${err instanceof Error ? err.message : String(err)}`);
+        })
+        .finally(() => setArchivingId(null));
+    },
+    [archiveConfirmId, onToast],
+  );
 
   const handleDecisionAction = useCallback(
     (decision: Decision, actionIdx: number) => {
@@ -211,6 +288,12 @@ export function IssueDetailContainer({
         onBack={onBack}
         onOpenRoom={onOpenRoom}
         onToast={onToast}
+        roundsExpanded={roundsExpanded}
+        roundsHistory={roundsHistory}
+        onToggleRound={handleToggleRound}
+        archiveConfirmId={archiveConfirmId}
+        archivingId={archivingId}
+        onArchiveRound={handleArchiveRound}
       />
       <ApprovalModal
         open={approvalOpen}
