@@ -4,9 +4,10 @@ import { LoginPage } from "./components/LoginPage";
 import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import { issuesFixture } from "./data/issues";
-import { issueDetailFixture, roomsFixture } from "./data/issueDetail";
+import { issueDetailFixture, repositoryPlanFixture, roomStreamFixtures, roomsFixture } from "./data/issueDetail";
 import { IssueDetailPage } from "./pages/IssueDetailPage";
 import { IssueListPage } from "./pages/IssueListPage";
+import { RoomView } from "./pages/RoomView";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 import DeliveryConsole from "./App";
@@ -61,12 +62,17 @@ export default function ConsoleShell() {
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
-    setRoute({ nav, deliveryV1: false, issueId: null });
+    setRoute({ nav, deliveryV1: false, issueId: null, roomId: null });
   };
 
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
-    setRoute({ nav: "issues", deliveryV1: false, issueId });
+    setRoute({ nav: "issues", deliveryV1: false, issueId, roomId: null });
+  };
+
+  const openRoom = (issueId: string, roomId: string) => {
+    window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
+    setRoute({ nav: "issues", deliveryV1: false, issueId, roomId });
   };
 
   const handleLogout = () => {
@@ -153,15 +159,45 @@ export default function ConsoleShell() {
               onToast={showToast}
             />
           ) : route.issueId === issueDetailFixture.issue_id ? (
-            <IssueDetailPage
-              detail={issueDetailFixture}
-              rooms={roomsFixture}
-              onBack={() => navigate("issues")}
-              onOpenRoom={(room) =>
-                showToast(`房间视图待 CONS-43（${room.room_id}）；房间读模型属后端 CONS-33`)
-              }
-              onToast={showToast}
-            />
+            route.roomId !== null ? (
+              (() => {
+                const room = roomsFixture.find((r) => r.room_id === route.roomId);
+                if (!room) {
+                  return (
+                    <div className="max-w-[860px]">
+                      <button
+                        className="pb-3 text-[11.5px] text-tx2 hover:text-tx"
+                        onClick={() => openIssue(issueDetailFixture.issue_id)}
+                      >
+                        ‹ issue
+                      </button>
+                      <div className="rounded-hard border border-line bg-panel px-4 py-3.5 text-[12.5px] text-tx2">
+                        房间 <span className="font-mono text-tx">{route.roomId}</span> 不在 replay 夹具内。
+                        真实 room_id 来自 <span className="font-mono">project.agent_topologies</span>，
+                        该表在联调种子上为空，待后端 CONS-33 扩种子补拓扑后接 live。
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <RoomView
+                    room={room}
+                    stream={roomStreamFixtures[room.room_id] ?? { items: [], next_cursor: null }}
+                    plan={repositoryPlanFixture}
+                    onBack={() => openIssue(issueDetailFixture.issue_id)}
+                    onToast={showToast}
+                  />
+                );
+              })()
+            ) : (
+              <IssueDetailPage
+                detail={issueDetailFixture}
+                rooms={roomsFixture}
+                onBack={() => navigate("issues")}
+                onOpenRoom={(room) => openRoom(issueDetailFixture.issue_id, room.room_id)}
+                onToast={showToast}
+              />
+            )
           ) : (
             /* 诚实数据：详情 replay 夹具只覆盖一条 issue，其余不伪造详情 */
             <div className="max-w-[860px]">

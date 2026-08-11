@@ -451,6 +451,60 @@ export const teamRoomStreamFixture: RoomStreamPage = {
   ],
 };
 
+/** 静默房间的历史流：live=false 不代表空，打开即完整历史（原型 `#v-detail` 的
+ *  「静默房间 → 打开即完整历史」）。同为 teamRoom，同样不含 governance。 */
+export const dashboardTeamStreamFixture: RoomStreamPage = {
+  next_cursor: null,
+  items: [
+    {
+      at: "2026-08-11T12:14:00Z",
+      source: "message",
+      room_id: "!room-dashboard-team:local",
+      message: {
+        id: "m-0201",
+        kind: "assignment",
+        subject: "任务指派：dashboard 订单详情展示修改原因",
+        body: "订单详情页新增「价格修改原因」展示项，字段随 core 的 GraphQL 类型同步。",
+        sender_agent_id: "a-lead-02",
+        sender_name: "leader · dashboard",
+        recipient_agent_id: "a-work-03",
+        recipient_name: "worker · 8a1c22de",
+        repository_id: REPO_WEB,
+        task_id: "task-0011",
+        status: "delivered",
+        event_id: null,
+        correlation_id: null,
+        created_at: "2026-08-11T12:14:00Z",
+        direction: "outbound",
+        room_id: "!room-dashboard-team:local",
+      },
+      text: null,
+      repository_id: REPO_WEB,
+      task_id: "task-0011",
+      payload_ref: "message:m-0201",
+    },
+    {
+      at: "2026-08-11T12:41:10Z",
+      source: "gate",
+      room_id: "!room-dashboard-team:local",
+      message: null,
+      text: "SCM 门禁：dashboard#887 已合并",
+      repository_id: REPO_WEB,
+      task_id: null,
+      payload_ref: "gate:pr-887",
+    },
+  ],
+};
+
+/** 按 room_id 取流。**不要按 kind 取**——那会让空房间显示别的房间的消息。
+ *  未收录的房间返回空流，与 §5.1「空房间不装填占位消息」一致。 */
+export const roomStreamFixtures: Record<string, RoomStreamPage> = {
+  "!room-core-team:local": teamRoomStreamFixture,
+  "!room-core-dm:local": leaderDmStreamFixture,
+  "!room-dashboard-team:local": dashboardTeamStreamFixture,
+  "!room-dashboard-dm:local": { items: [], next_cursor: null },
+};
+
 export const repositoryPlanFixture: RepositoryPlan = {
   issue_id: ISSUE_ID,
   repository_id: REPO_API,
