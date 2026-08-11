@@ -126,8 +126,10 @@ function deriveApproval(data: DeliveryData): ApprovalInfo | null {
   };
 }
 
-/** at：UTC ISO → HH:MM:SS；非 ISO 原样展示 */
-function eventTime(at: string): string {
+/** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。
+ *  防御：联调发现后端 repair_timeline.at 可为 null（契约写 string，已报后端），空值渲染 "—"。 */
+function eventTime(at: string | null | undefined): string {
+  if (!at) return "—";
   const m = at.match(/T(\d{2}:\d{2}:\d{2})/);
   return m ? m[1] : at;
 }
@@ -147,21 +149,32 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
   const keyOf = new Map(agg.tasks.map((t, i) => [t.task_id, t.task_key ?? `T${i + 1}`]));
 
   const visibleTasks = agg.tasks.filter((t) => t.backend_status !== "superseded");
-  const tasks: DeliveryTask[] = visibleTasks.map((t) => ({
-    id: keyOf.get(t.task_id) ?? t.task_id.slice(0, 6),
-    taskId: t.task_id,
-    repo: repoName.get(t.repository_id) ?? t.repository_id,
-    col: cols.get(t.task_id) ?? 0,
-    lane: Math.max(0, lanes.indexOf(repoName.get(t.repository_id) ?? "")),
-    title: t.title,
-    status: t.display_status,
-    agent: t.agent,
-    attempt: t.attempt,
-    detail: t.result_summary,
-    deps: t.depends_on.map((d) => keyOf.get(d) ?? d.slice(0, 6)),
-    repair: t.repair_timeline.map((r) => ({ at: eventTime(r.at), what: r.what })),
-    escalated: t.escalated_to_human,
-  }));
+  // 同泳道同拓扑层的任务（如原任务 + 返工任务）横向顺延，避免 DAG 节点重叠
+  const usedCells = new Set<string>();
+  const placeCol = (lane: number, col: number): number => {
+    let c = col;
+    while (usedCells.has(`${lane}:${c}`)) c += 1;
+    usedCells.add(`${lane}:${c}`);
+    return c;
+  };
+  const tasks: DeliveryTask[] = visibleTasks.map((t) => {
+    const lane = Math.max(0, lanes.indexOf(repoName.get(t.repository_id) ?? ""));
+    return {
+      id: keyOf.get(t.task_id) ?? t.task_id.slice(0, 6),
+      taskId: t.task_id,
+      repo: repoName.get(t.repository_id) ?? t.repository_id,
+      col: placeCol(lane, cols.get(t.task_id) ?? 0),
+      lane,
+      title: t.title,
+      status: t.display_status,
+      agent: t.agent,
+      attempt: t.attempt,
+      detail: t.result_summary,
+      deps: t.depends_on.map((d) => keyOf.get(d) ?? d.slice(0, 6)),
+      repair: t.repair_timeline.map((r) => ({ at: eventTime(r.at), what: r.what })),
+      escalated: t.escalated_to_human,
+    };
+  });
 
   const csRepos = (agg.change_set?.repositories ?? []).slice().sort((a, b) => a.merge_order - b.merge_order);
   const gates: RepoGate[] = csRepos.map((r) => ({
@@ -170,6 +183,8 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
     checks: gateChecks(r),
     pr: prLabel(r),
     prUrl: r.pull_request_url,
+    mergeAllowed: r.merge_gate.allowed,
+    merged: r.merge_sha !== null,
   }));
 
   const events: DeliveryEvent[] = data.events.items.map((e) => ({ at: eventTime(e.at), kind: e.kind, text: e.text }));
@@ -180,6 +195,7 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
 
   return {
     label: ov?.deliveryLabel ?? `DLV-${agg.delivery_id.slice(0, 8)}`,
+    projectLabel: agg.project.project_key ?? agg.project.title,
     title: agg.project.title,
     phase: listItem?.phase ?? "execute",
     phaseNote: listItem?.phase_note ?? "",

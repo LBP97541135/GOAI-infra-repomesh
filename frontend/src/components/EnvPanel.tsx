@@ -139,14 +139,21 @@ export function EnvPanel({ view, onToast }: { view: DeliveryView; onToast: (text
             <>
               <Label>CHANGESET{view.mergeOrderLabel ? ` · ${view.mergeOrderLabel}` : ""}</Label>
               {view.gates.map((g) => {
-                const [label, cls] = PR_STATE[g.state];
+                const [label, cls] = g.merged ? ["已合并", "text-olive"] : PR_STATE[g.state];
                 return (
                   <StaticRow
                     key={g.repo}
                     icon={<PrIcon />}
                     name={g.prUrl ? g.pr : g.repo}
                     nameClass="font-mono"
-                    end={<i className={`text-[11.5px] not-italic ${cls}`}>{label}</i>}
+                    end={
+                      <>
+                        {g.mergeAllowed && !g.merged && (
+                          <i className="text-[11px] not-italic text-olive">✓ 可合并</i>
+                        )}
+                        <i className={`text-[11.5px] not-italic ${cls}`}>{label}</i>
+                      </>
+                    }
                   />
                 );
               })}

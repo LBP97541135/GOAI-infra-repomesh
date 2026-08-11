@@ -30,6 +30,10 @@ export default function App() {
   const [deck, setDeck] = useState<Decision[]>([]);
   const [deckHidden, setDeckHidden] = useState(false);
   const [approvalOpen, setApprovalOpen] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const toastTimer = useRef<number | undefined>(undefined);
@@ -46,7 +50,7 @@ export default function App() {
     setLoadError(null);
     source.setScene?.(sceneIdx);
     source
-      .fetchAll()
+      .fetchAll(selectedDeliveryId ?? undefined)
       .then((d) => {
         if (cancelled) return;
         setData(d);
@@ -61,7 +65,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [source, sceneIdx]);
+  }, [source, sceneIdx, selectedDeliveryId, reloadTick]);
 
   useEffect(() => {
     if (!playing) return;
@@ -115,13 +119,49 @@ export default function App() {
     }
   };
 
-  const handleApprovalClose = (approved: boolean) => {
+  const handleApprovalCancel = () => {
     setApprovalOpen(false);
-    if (approved) {
-      setDeck((prev) => prev.filter((x) => x.kind !== "approve"));
-      // POST /governance-decisions 写回路属 CONS-12，当前仅前端演示
-      showToast("已批准：授权 30 分钟内有效，合并按序推进（演示，未写回后端）");
+    setApprovalError(null);
+  };
+
+  const handleApprovalSubmit = (comment: string) => {
+    const info = delivery?.approval;
+    const deliveryId = data?.aggregate?.delivery_id;
+    // live：POST governance-decisions（契约 §4.4，head-bound + 内容重放幂等）
+    if (source.submitGovernanceDecision && deliveryId && info?.changeSetId && info.repositoryId && info.headSha) {
+      const agentId = import.meta.env.VITE_GOVERNANCE_AGENT_ID ?? "";
+      if (!agentId) {
+        setApprovalError("未配置治理决策主体（VITE_GOVERNANCE_AGENT_ID），无法提交。");
+        return;
+      }
+      setApprovalSubmitting(true);
+      setApprovalError(null);
+      source
+        .submitGovernanceDecision(deliveryId, {
+          change_set_id: info.changeSetId,
+          repository_id: info.repositoryId,
+          head_sha: info.headSha,
+          decision: "ready",
+          reason: comment,
+          decided_by_agent_id: agentId,
+          // 按内容确定性生成：重试自然复用同一键（后端内容重放去重）
+          idempotency_key: `console-${info.repositoryId}-${info.headSha.slice(0, 12)}-ready`,
+        })
+        .then(() => {
+          setApprovalOpen(false);
+          showToast("治理决策已记录：READY（head-bound），merge gate 放行");
+          setReloadTick((t) => t + 1);
+        })
+        .catch((err: unknown) => {
+          setApprovalError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setApprovalSubmitting(false));
+      return;
     }
+    // replay：前端演示，消化 approve 决策
+    setApprovalOpen(false);
+    setDeck((prev) => prev.filter((x) => x.kind !== "approve"));
+    showToast("已批准：授权 30 分钟内有效，合并按序推进（回放演示）");
   };
 
   const handleSend = (e: React.FormEvent) => {
@@ -154,6 +194,13 @@ export default function App() {
         list={data?.list ?? { projects: [], next_cursor: null }}
         activeDeliveryId={data?.aggregate?.delivery_id ?? null}
         pendingCount={deck.length}
+        onSelect={(id) => {
+          if (source.mode === "replay") {
+            showToast("回放模式为单交付叙事，切换交付请用 live 数据源");
+            return;
+          }
+          setSelectedDeliveryId(id);
+        }}
         onToast={showToast}
       />
 
@@ -185,8 +232,8 @@ export default function App() {
         {delivery ? (
           <>
             <header className="ticks-amber flex-none border-b border-line px-[22px] pt-3 pb-2.5">
-              <div className="font-mono text-[10.5px] tracking-[0.1em] text-tx2 uppercase">
-                {data?.list.projects[0]?.title ?? ""} › {delivery.label}
+              <div className="truncate font-mono text-[10.5px] tracking-[0.1em] text-tx2 uppercase">
+                {delivery.projectLabel} › {delivery.label}
                 {delivery.matrixRoom ? ` · MATRIX ${delivery.matrixRoom}` : ""}
               </div>
               <div className="mt-[7px] flex items-center gap-3">
@@ -281,7 +328,14 @@ export default function App() {
         )}
       </main>
 
-      <ApprovalModal open={approvalOpen} info={delivery?.approval ?? null} onClose={handleApprovalClose} />
+      <ApprovalModal
+        open={approvalOpen}
+        info={delivery?.approval ?? null}
+        submitting={approvalSubmitting}
+        errorText={approvalError}
+        onCancel={handleApprovalCancel}
+        onApprove={handleApprovalSubmit}
+      />
 
       {toast && (
         <div className="fixed bottom-[72px] left-1/2 z-[999] -translate-x-1/2 rounded-lg border border-white/15 bg-[#14161c] px-4 py-2 text-[12.5px] text-white">

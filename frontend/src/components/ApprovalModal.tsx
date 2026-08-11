@@ -3,16 +3,23 @@ import type { ApprovalInfo } from "../types";
 
 /** 快照绑定授权单：授权主体 / 不可变快照 / 30 分钟有效期 / 写入范围 /
  *  「任一 SHA、契约或门禁变化即失效」确认框。治理故事的核心展示。
- *  head-bound 语义由后端保证（契约 §4.4：SHA 漂移即 409）。 */
+ *  head-bound 语义由后端保证（契约 §4.4：SHA 漂移即 409）——409 时失效提示
+ *  显示在弹窗内，不静默失败。 */
 
 export function ApprovalModal({
   open,
   info,
-  onClose,
+  submitting,
+  errorText,
+  onCancel,
+  onApprove,
 }: {
   open: boolean;
   info: ApprovalInfo | null;
-  onClose: (approved: boolean) => void;
+  submitting: boolean;
+  errorText: string | null;
+  onCancel: () => void;
+  onApprove: (comment: string) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [confirmed, setConfirmed] = useState(false);
@@ -40,15 +47,15 @@ export function ApprovalModal({
     <dialog
       ref={ref}
       className="m-auto w-[min(480px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
-      onClose={() => open && onClose(false)}
-      onCancel={() => open && onClose(false)}
+      onClose={() => open && onCancel()}
+      onCancel={() => open && onCancel()}
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div>
           <span className="eyebrow">DELIVERY GATE</span>
           <h2 className="mt-1 text-[16px] font-semibold text-cream">批准临时远程写入</h2>
         </div>
-        <button className="text-[18px] text-tx2" aria-label="关闭" onClick={() => onClose(false)}>
+        <button className="text-[18px] text-tx2" aria-label="关闭" onClick={onCancel}>
           ×
         </button>
       </div>
@@ -67,6 +74,13 @@ export function ApprovalModal({
           <div className="mb-3 rounded-hard border border-dashed border-line bg-panel-2 px-[11px] py-2">
             <span className="block font-mono text-[9.5px] tracking-[0.1em] text-tx2">HEAD-BOUND SHA</span>
             <b className="font-mono text-[12px] text-cream">{info.headSha.slice(0, 12)}</b>
+          </div>
+        )}
+
+        {errorText && (
+          <div className="mb-3 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] text-[#e8a184]">
+            <b className="mr-1.5 font-mono tracking-[0.08em]">授权失效</b>
+            {errorText}
           </div>
         )}
 
@@ -96,16 +110,16 @@ export function ApprovalModal({
       <div className="flex justify-end gap-2.5 px-[22px] pt-3.5 pb-[18px]">
         <button
           className="rounded-hard border border-line bg-transparent px-3.5 py-2 text-[12.5px] text-tx"
-          onClick={() => onClose(false)}
+          onClick={onCancel}
         >
           拒绝 / 稍后处理
         </button>
         <button
           className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={!confirmed}
-          onClick={() => onClose(true)}
+          disabled={!confirmed || submitting}
+          onClick={() => onApprove(comment)}
         >
-          批准并授权
+          {submitting ? "提交中…" : "批准并授权"}
         </button>
       </div>
     </dialog>

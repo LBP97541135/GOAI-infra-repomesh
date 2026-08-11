@@ -20,11 +20,13 @@ function DeliveryRow({
   item,
   active,
   pendingCount,
+  onSelect,
   onToast,
 }: {
   item: DeliveryListItem;
   active: boolean;
   pendingCount: number | null;
+  onSelect: (deliveryId: string) => void;
   onToast: (text: string) => void;
 }) {
   const badge = PHASE_BADGE[item.phase];
@@ -40,7 +42,13 @@ function DeliveryRow({
           : "flex w-full items-start gap-2 border-l-2 border-transparent px-2.5 py-2 text-left hover:bg-amber/5"
       }
       onClick={() => {
-        if (!active) onToast("MVP：切换交付尚未接入");
+        if (active) return;
+        if (item.delivery_id === null) {
+          // §0 虚拟草稿交付：尚未 materialize，无全貌聚合可查
+          onToast("草稿交付尚未生成计划，暂无全貌视图");
+          return;
+        }
+        onSelect(item.delivery_id);
       }}
     >
       <span className={`mt-[7px] size-[7px] flex-none ${badge.dot} ${badge.blink ? "blink" : ""}`} />
@@ -58,20 +66,22 @@ export function Sidebar({
   list,
   activeDeliveryId,
   pendingCount,
+  onSelect,
   onToast,
 }: {
   list: DeliveryListResponse;
   activeDeliveryId: string | null;
   pendingCount: number;
+  onSelect: (deliveryId: string) => void;
   onToast: (text: string) => void;
 }) {
-  const project = list.projects[0] ?? null;
-  const deliveries = project?.deliveries ?? [];
-  const running = deliveries.filter((d) => ACTIVE_PHASES.includes(d.phase));
-  const others = deliveries.filter((d) => !ACTIVE_PHASES.includes(d.phase));
+  const projects = list.projects;
+  const single = projects.length === 1 ? projects[0] : null;
+  const sortByActivity = (a: DeliveryListItem, b: DeliveryListItem) =>
+    Number(ACTIVE_PHASES.includes(b.phase)) - Number(ACTIVE_PHASES.includes(a.phase));
 
   return (
-    <aside className="flex w-[236px] flex-none flex-col border-r border-line bg-ink-deep px-3 pt-4 pb-3">
+    <aside className="flex w-[236px] flex-none flex-col overflow-y-auto border-r border-line bg-ink-deep px-3 pt-4 pb-3">
       <div className="flex items-center gap-2.5 px-1.5 pb-4">
         <span className="grid size-[34px] flex-none place-items-center rounded-hard bg-amber font-mono text-[15px] font-extrabold text-[#16120a]">
           R
@@ -79,7 +89,11 @@ export function Sidebar({
         <div className="min-w-0">
           <strong className="block font-mono text-[13px] tracking-[0.12em] text-cream">REPOMESH</strong>
           <small className="block truncate font-mono text-[9.5px] tracking-[0.14em] text-tx2 uppercase">
-            {project ? project.title : "无项目"}
+            {projects.length === 0
+              ? "无项目"
+              : single
+                ? (single.project_key ?? single.title)
+                : `${projects.length} 个项目`}
           </small>
         </div>
       </div>
@@ -92,39 +106,28 @@ export function Sidebar({
         <kbd className="ml-auto rounded-hard border border-line px-1 py-px font-mono text-[10px] text-tx2">⌘K</kbd>
       </button>
 
-      {running.length > 0 && (
-        <>
-          <div className="microlabel mx-2 mt-4 mb-1.5">进行中</div>
-          {running.map((d) => (
-            <DeliveryRow
-              key={d.delivery_id ?? `draft-${d.title}`}
-              item={d}
-              active={d.delivery_id !== null && d.delivery_id === activeDeliveryId}
-              pendingCount={d.delivery_id !== null && d.delivery_id === activeDeliveryId ? pendingCount : null}
-              onToast={onToast}
-            />
-          ))}
-        </>
-      )}
+      {projects.map((p) => (
+        <div key={p.project_id}>
+          <div className="microlabel mx-2 mt-4 mb-1.5 truncate" title={p.title}>
+            {p.project_key ?? p.title}
+          </div>
+          {p.deliveries
+            .slice()
+            .sort(sortByActivity)
+            .map((d) => (
+              <DeliveryRow
+                key={d.delivery_id ?? `draft-${p.project_id}-${d.title}`}
+                item={d}
+                active={d.delivery_id !== null && d.delivery_id === activeDeliveryId}
+                pendingCount={d.delivery_id !== null && d.delivery_id === activeDeliveryId ? pendingCount : null}
+                onSelect={onSelect}
+                onToast={onToast}
+              />
+            ))}
+        </div>
+      ))}
 
-      {others.length > 0 && (
-        <>
-          <div className="microlabel mx-2 mt-4 mb-1.5">其他交付</div>
-          {others.map((d) => (
-            <DeliveryRow
-              key={d.delivery_id ?? `draft-${d.title}`}
-              item={d}
-              active={false}
-              pendingCount={null}
-              onToast={onToast}
-            />
-          ))}
-        </>
-      )}
-
-      {deliveries.length === 0 && (
-        <div className="mx-2 mt-4 text-[12px] text-tx2">暂无交付数据</div>
-      )}
+      {projects.length === 0 && <div className="mx-2 mt-4 text-[12px] text-tx2">暂无交付数据</div>}
 
       <div className="mt-auto grid gap-2 border-t border-line pt-2.5">
         <div className="flex items-center gap-2 px-2 py-1.5">

@@ -189,7 +189,8 @@ const changeSet: ChangeSetView = {
       required_checks: ["单元测试", "集成测试", "隐藏验收测试", "安全扫描"],
       required_approvals: 1,
       reviews: [{ reviewer: "security-reviewer", state: "approved", summary: "Security Reviewer 通过" }],
-      merge_gate: { allowed: true, reasons: [] },
+      // 与后端语义一致：缺 head-bound 治理决策时 merge_gate 不放行（批准后才 allowed=true）
+      merge_gate: { allowed: false, reasons: ["head-bound governance decision is missing"] },
       merge_sha: null,
     },
     {

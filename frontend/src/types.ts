@@ -59,6 +59,10 @@ export interface RepoGate {
   /** PR 展示行，如 "saleor/saleor#19466 · 待合并" */
   pr: string;
   prUrl: string | null;
+  /** merge_gate.allowed 直投影（治理决策放行后变 true，环境窗可观察） */
+  mergeAllowed: boolean;
+  /** merge_sha 非空 = GitHub 已观测到合并 */
+  merged: boolean;
 }
 
 export interface Decision {
@@ -136,6 +140,8 @@ export interface ApprovalInfo {
 /** 组件消费的交付全貌视图（由 viewmodel.ts 从契约聚合派生） */
 export interface DeliveryView {
   label: string;
+  /** 顶栏项目标识：project_key，未落地时回退 project title */
+  projectLabel: string;
   title: string;
   phase: Phase;
   phaseNote: string;

@@ -8,9 +8,11 @@ import type {
   DeliveryEventsPage,
   DeliveryListResponse,
   DeliveryMessagesPage,
+  GovernanceDecisionRequest,
+  GovernanceDecisionView,
 } from "./contract";
 import type { PresentationOverlay } from "../types";
-import { createApiClient } from "./client";
+import { ApiError, createApiClient } from "./client";
 import { createReplaySource } from "../data/scenes";
 
 export type DataSourceMode = "live" | "replay";
@@ -33,6 +35,8 @@ export interface DeliveryDataSource {
   /** 回放场景切换（CONS-13 状态机使用；live 数据源为 undefined） */
   setScene?(index: number): void;
   readonly sceneCount?: number;
+  /** 治理决策写回（契约 §4.4；仅 live 数据源提供，回放为前端演示） */
+  submitGovernanceDecision?(deliveryId: string, payload: GovernanceDecisionRequest): Promise<GovernanceDecisionView>;
 }
 
 export function resolveDataSourceMode(): DataSourceMode {
@@ -41,6 +45,17 @@ export function resolveDataSourceMode(): DataSourceMode {
   const env = import.meta.env.VITE_DATA_SOURCE;
   if (env === "live" || env === "replay") return env;
   return "replay";
+}
+
+/** 可选端点（events/messages 属 CONS-04，decisions 派生）：404 = 端点未实现，
+ *  降级为空页而非拖垮整个视图；其他错误照常抛出。 */
+async function optional<T>(promise: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await promise;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return fallback;
+    throw err;
+  }
 }
 
 function createLiveSource(): DeliveryDataSource {
@@ -67,12 +82,13 @@ function createLiveSource(): DeliveryDataSource {
       }
       const [aggregate, events, messages, decisions] = await Promise.all([
         client.getDelivery(target),
-        client.getEvents(target),
-        client.getMessages(target),
-        client.getDecisions(target),
+        optional(client.getEvents(target), { items: [], next_cursor: null }),
+        optional(client.getMessages(target), { items: [], next_cursor: null }),
+        optional(client.getDecisions(target), { items: [] }),
       ]);
       return { list, aggregate, events, messages, decisions, overlay: null };
     },
+    submitGovernanceDecision: (deliveryId, payload) => client.postGovernanceDecision(deliveryId, payload),
   };
 }
 
