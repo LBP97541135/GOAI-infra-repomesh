@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /** 新建 issue 弹窗（CONS-41）：处理者芯片 / 需求文本 / 范围提议 / Ctrl+Enter。
  *  按原型 redesign-issue-centric.html。
@@ -25,25 +25,33 @@ export function NewIssueModal({
     if (open) areaRef.current?.focus();
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  const submit = () => {
+  const submit = useCallback(() => {
     if (!text.trim()) {
       onToast("请先描述要交付什么");
       return;
     }
     // 诚实数据：无写端点，不伪造「已创建」
     onToast("issue 写端点尚未接入（建 Project + Intake 立项），需求文本已保留");
-  };
+  }, [text, onToast]);
+
+  useEffect(() => {
+    if (!open) return;
+    // 快捷键按原型挂在 document 上：焦点不在文本框时（如点过「范围」按钮）Ctrl+Enter 仍生效
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        submit();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose, submit]);
+
+  if (!open) return null;
 
   return (
     <div
@@ -76,12 +84,6 @@ export function NewIssueModal({
           placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              submit();
-            }
-          }}
         />
 
         <div className="flex items-center gap-2.5 border-t border-line px-3.5 py-2.5">

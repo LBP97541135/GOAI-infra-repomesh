@@ -33,9 +33,9 @@ function NavIcon({ nav }: { nav: NavKey }) {
   if (nav === "teams")
     return (
       <svg viewBox="0 0 24 24" {...common}>
-        <circle cx="9" cy="9" r="3" />
-        <circle cx="17" cy="11" r="2.4" />
-        <path d="M3.5 19c.6-3 3-4.5 5.5-4.5S14 16 14.5 19M15 15.2c2 .3 3.6 1.6 4 3.8" />
+        <circle cx="8" cy="9" r="3" />
+        <circle cx="16" cy="9" r="3" />
+        <path d="M2 20v-1a5 5 0 0 1 6-4.9M22 20v-1a5 5 0 0 0-6-4.9" />
       </svg>
     );
   if (nav === "agents")
@@ -53,7 +53,10 @@ function NavIcon({ nav }: { nav: NavKey }) {
   );
 }
 
-const navBase = "flex w-full items-center gap-2.5 rounded-hard px-2.5 py-[7px] text-left text-[13px]";
+/** 选中态的琥珀左竖条是 Variant D 的导航语言（原型 `.nav.active` 的
+ *  `border-left:2px solid var(--amber)`，v1 Sidebar 同款）；未选中留同宽透明边框防位移。 */
+const navBase =
+  "flex w-full items-center gap-2.5 rounded-hard border-l-2 px-2.5 py-[7px] text-left text-[13px]";
 
 export function SidebarV2({
   account,
@@ -163,8 +166,8 @@ export function SidebarV2({
               key={item.key}
               className={
                 active
-                  ? `${navBase} bg-amber/10 text-amber-hi`
-                  : `${navBase} text-tx hover:bg-amber/5 hover:text-amber-hi`
+                  ? `${navBase} border-amber bg-amber/10 text-amber-hi`
+                  : `${navBase} border-transparent text-tx hover:bg-amber/5 hover:text-amber-hi`
               }
               onClick={() => onNavigate(item.key)}
             >
@@ -184,8 +187,8 @@ export function SidebarV2({
         <button
           className={
             nav === "settings"
-              ? `${navBase} bg-amber/10 text-amber-hi`
-              : `${navBase} text-tx hover:bg-amber/5 hover:text-amber-hi`
+              ? `${navBase} border-amber bg-amber/10 text-amber-hi`
+              : `${navBase} border-transparent text-tx hover:bg-amber/5 hover:text-amber-hi`
           }
           onClick={() => onNavigate("settings")}
         >

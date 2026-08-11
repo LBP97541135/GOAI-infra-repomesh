@@ -99,9 +99,9 @@ export default function ConsoleShell() {
   if (authState === "unreachable") {
     return (
       <div className="grid h-screen place-items-center bg-ink px-6">
-        <div className="max-w-[520px] rounded-hard border border-[#7a4530] bg-[#2b1712] px-5 py-4">
-          <div className="eyebrow mb-1.5 text-[#e8a184]">身份服务不可达</div>
-          <p className="text-[12.5px] text-[#e8a184]">{authNote}</p>
+        <div className="max-w-[520px] rounded-hard border border-salmon/60 bg-salmon/10 px-5 py-4">
+          <div className="eyebrow mb-1.5 text-salmon">身份服务不可达</div>
+          <p className="text-[12.5px] text-salmon">{authNote}</p>
           <p className="mt-2 text-[12px] text-tx2">
             控制平面需要本地身份服务（/api/v1/auth）。确认后端已启动后刷新页面。
           </p>
@@ -205,7 +205,7 @@ export default function ConsoleShell() {
       />
 
       {toast && (
-        <div className="fixed bottom-[28px] left-1/2 z-[999] -translate-x-1/2 rounded-hard border border-line bg-[#14161c] px-4 py-2 text-[12.5px] text-white">
+        <div className="fixed bottom-[28px] left-1/2 z-[999] -translate-x-1/2 rounded-hard bg-kraft px-4 py-2 text-[12.5px] text-paper-ink">
           {toast}
         </div>
       )}
