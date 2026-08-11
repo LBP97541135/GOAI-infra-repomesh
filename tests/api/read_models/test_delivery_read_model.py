@@ -338,7 +338,8 @@ def test_read_model_aggregates_a_delivered_two_repository_plan(
             repositories = change_set["repositories"]
             assert [item["merge_order"] for item in repositories] == [0, 1]
             assert all(item["gate_display"] == "open" for item in repositories)
-            assert all(item["merge_gate"] is not None for item in repositories)
+            # Contract 889464e: the gate question is moot once merged.
+            assert all(item["merge_gate"] is None for item in repositories)
             assert len(change_set["governance_decisions"]) == 2
 
             validation = body["validation_snapshot"]

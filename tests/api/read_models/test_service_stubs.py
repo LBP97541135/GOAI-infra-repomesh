@@ -277,3 +277,76 @@ async def test_list_filters_archived_and_reports_failed_phase() -> None:
         for item in full_listing["projects"][0]["deliveries"]
     }
     assert phases == {failed_plan.id: "failed", archived_plan.id: "archived"}
+
+
+def _repository_view(status: RepositoryDeliveryStatus, repository_id: UUID, task_id: UUID):
+    return RepositoryDeliveryView(
+        repository_id=repository_id,
+        task_id=task_id,
+        commit_sha="a" * 40,
+        base_sha="b" * 40,
+        branch_name="repomesh/gate",
+        depends_on=(),
+        merge_order=0,
+        status=status,
+        pull_request_number=None,
+        pull_request_url=None,
+        ci_check_run_id=None,
+        ci_summary=None,
+        merge_sha=None,
+        required_checks=(),
+        ci_checks=(),
+        required_approvals=0,
+        reviews=(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expect_gate"),
+    [
+        (RepositoryDeliveryStatus.PENDING, True),
+        (RepositoryDeliveryStatus.PR_OPEN, True),
+        (RepositoryDeliveryStatus.CI_PENDING, True),
+        (RepositoryDeliveryStatus.CI_FAILED, True),
+        (RepositoryDeliveryStatus.REVIEW_PENDING, True),
+        (RepositoryDeliveryStatus.REVIEW_CHANGES_REQUESTED, True),
+        (RepositoryDeliveryStatus.READY_TO_MERGE, True),
+        (RepositoryDeliveryStatus.MANUAL_INTERVENTION, True),
+        (RepositoryDeliveryStatus.MERGE_REQUESTED, False),
+        (RepositoryDeliveryStatus.MERGED, False),
+        (RepositoryDeliveryStatus.COMPENSATION_PENDING, False),
+        (RepositoryDeliveryStatus.COMPENSATED, False),
+    ],
+)
+async def test_merge_gate_is_null_once_the_question_is_moot(status, expect_gate) -> None:
+    """Contract 889464e: terminal-side states answer merge_gate with null."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = _worker(project_id, repository_id, leader_task_id)
+    change_set = _manual_intervention_change_set(plan, repository_id, worker.id)
+    change_set = ChangeSetView(
+        **{
+            **{f: getattr(change_set, f) for f in change_set.__dataclass_fields__},
+            "repositories": (_repository_view(status, repository_id, worker.id),),
+            "recovery_plans": (),
+        }
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: change_set}),
+        StubArchives(),
+    )
+
+    detail = await service.attach_merge_gates(await service.get_delivery(plan.id))
+
+    gate = detail["change_set"]["repositories"][0]["merge_gate"]
+    if expect_gate:
+        assert gate == {"allowed": False, "reasons": ["blocked"]}
+    else:
+        assert gate is None

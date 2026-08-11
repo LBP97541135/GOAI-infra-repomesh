@@ -43,6 +43,17 @@ from .sources import (
 REWORK_TASK_TITLE = "Repair failed delivery candidate"
 """The canonical title CIReworkTaskCreator assigns; identifies rework chains."""
 
+MERGE_GATE_MOOT_STATUSES = frozenset(
+    {
+        RepositoryDeliveryStatus.MERGE_REQUESTED,
+        RepositoryDeliveryStatus.MERGED,
+        RepositoryDeliveryStatus.COMPENSATION_PENDING,
+        RepositoryDeliveryStatus.COMPENSATED,
+    }
+)
+"""Contract 889464e: the pre-merge gate question is moot here, so merge_gate is
+null instead of a factually wrong 'blocked' answer."""
+
 _TERMINAL_ACTION_STATUSES = frozenset(
     {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
 )
@@ -196,14 +207,16 @@ class DeliveryReadModelService:
         }
         active_recovery = has_active_recovery(change_set)
         for repository in change_set.repositories:
-            gate = await self._change_sets.merge_gate(
-                change_set.id, repository.repository_id
-            )
+            awaits_approval = False
+            if repository.status not in MERGE_GATE_MOOT_STATUSES:
+                gate = await self._change_sets.merge_gate(
+                    change_set.id, repository.repository_id
+                )
+                awaits_approval = (
+                    gate.allowed
+                    or repository.status is RepositoryDeliveryStatus.READY_TO_MERGE
+                )
             missing_ready = (repository.repository_id, repository.commit_sha) not in ready_heads
-            awaits_approval = (
-                gate.allowed
-                or repository.status is RepositoryDeliveryStatus.READY_TO_MERGE
-            )
             under_recovery = active_recovery and any(
                 action.repository_id == repository.repository_id
                 and action.status not in _TERMINAL_ACTION_STATUSES
@@ -493,6 +506,8 @@ class DeliveryReadModelService:
         if not change_set:
             return payload
         for repository in change_set["repositories"]:
+            if RepositoryDeliveryStatus(repository["status"]) in MERGE_GATE_MOOT_STATUSES:
+                continue
             gate = await self._change_sets.merge_gate(
                 change_set["change_set_id"], repository["repository_id"]
             )
