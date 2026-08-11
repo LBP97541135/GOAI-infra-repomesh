@@ -144,6 +144,8 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
         "required_checks": ["string"], "required_approvals": 1,
         "reviews": [{ "reviewer": "string", "state": "approved", "summary": "string" }],
         "merge_gate": { "allowed": false, "reasons": ["string"] },
+                                           // 仅 pre-merge 状态有意义；status ∈ merge_requested/merged/
+                                           // compensation_pending/compensated 时为 null（合并已发起或已过阶段）
         "merge_sha": "string|null"
       }
     ],
