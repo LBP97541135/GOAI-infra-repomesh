@@ -197,8 +197,9 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
     label: ov?.deliveryLabel ?? `DLV-${agg.delivery_id.slice(0, 8)}`,
     projectLabel: agg.project.project_key ?? agg.project.title,
     title: agg.project.title,
-    phase: listItem?.phase ?? "execute",
-    phaseNote: listItem?.phase_note ?? "",
+    // 诚实数据：列表中找不到该交付时不编造 phase（null → 隐藏徽标）
+    phase: listItem?.phase ?? null,
+    phaseNote: listItem?.phase_note ?? null,
     createdAt: agg.project.created_at.slice(0, 10),
     requirement: agg.project.requirement_text,
     runLabel: ov?.runLabel ?? null,

@@ -143,8 +143,9 @@ export interface DeliveryView {
   /** 顶栏项目标识：project_key，未落地时回退 project title */
   projectLabel: string;
   title: string;
-  phase: Phase;
-  phaseNote: string;
+  /** null = 聚合交付未出现在列表中（不编造默认 phase，隐藏徽标） */
+  phase: Phase | null;
+  phaseNote: string | null;
   createdAt: string;
   requirement: string | null;
   runLabel: string | null;

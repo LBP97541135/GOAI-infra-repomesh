@@ -194,6 +194,7 @@ export default function App() {
         list={data?.list ?? { projects: [], next_cursor: null }}
         activeDeliveryId={data?.aggregate?.delivery_id ?? null}
         pendingCount={deck.length}
+        demo={mode === "replay"}
         onSelect={(id) => {
           if (source.mode === "replay") {
             showToast("回放模式为单交付叙事，切换交付请用 live 数据源");

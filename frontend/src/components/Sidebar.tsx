@@ -66,12 +66,15 @@ export function Sidebar({
   list,
   activeDeliveryId,
   pendingCount,
+  demo,
   onSelect,
   onToast,
 }: {
   list: DeliveryListResponse;
   activeDeliveryId: string | null;
   pendingCount: number;
+  /** 回放模式演示叙事；live 不编造运行时/身份数据，降级为「未接入」 */
+  demo: boolean;
   onSelect: (deliveryId: string) => void;
   onToast: (text: string) => void;
 }) {
@@ -131,19 +134,23 @@ export function Sidebar({
 
       <div className="mt-auto grid gap-2 border-t border-line pt-2.5">
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <span className="size-2 flex-none bg-olive shadow-[0_0_0_3px_rgba(148,163,90,0.18)] blink" />
+          {demo ? (
+            <span className="size-2 flex-none bg-olive shadow-[0_0_0_3px_rgba(148,163,90,0.18)] blink" />
+          ) : (
+            <span className="size-2 flex-none bg-tx2/50" />
+          )}
           <div>
             <b className="block font-mono text-[11px] tracking-[0.08em] text-tx">AGENT RUNTIME</b>
-            <small className="text-[10.5px] text-tx2">1 Leader · 3 Workers 在线</small>
+            <small className="text-[10.5px] text-tx2">{demo ? "1 Leader · 3 Workers 在线" : "状态未接入"}</small>
           </div>
         </div>
         <div className="flex items-center gap-2 px-2 py-1.5">
           <span className="grid size-7 flex-none place-items-center rounded-hard bg-[#4a4130] text-[12px] font-extrabold text-cream">
-            王
+            {demo ? "王" : "—"}
           </span>
           <div>
-            <b className="block text-[12px] text-tx">王倩</b>
-            <small className="text-[10.5px] text-tx2">产品经理</small>
+            <b className="block text-[12px] text-tx">{demo ? "王倩" : "未登录"}</b>
+            <small className="text-[10.5px] text-tx2">{demo ? "产品经理" : "身份系统未接入"}</small>
           </div>
         </div>
       </div>
