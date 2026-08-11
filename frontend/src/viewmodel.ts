@@ -183,7 +183,7 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
     checks: gateChecks(r),
     pr: prLabel(r),
     prUrl: r.pull_request_url,
-    mergeAllowed: r.merge_gate.allowed,
+    mergeAllowed: r.merge_gate?.allowed ?? false,
     merged: r.merge_sha !== null,
   }));
 

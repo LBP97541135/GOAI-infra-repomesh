@@ -168,7 +168,8 @@ export interface RepositoryDeliveryView {
   required_checks: string[];
   required_approvals: number;
   reviews: ReviewView[];
-  merge_gate: { allowed: boolean; reasons: string[] };
+  /** 仅 pre-merge 状态有意义；status ∈ merge_requested/merged/compensation_pending/compensated 时为 null（889464e） */
+  merge_gate: { allowed: boolean; reasons: string[] } | null;
   merge_sha: string | null;
 }
 
