@@ -19,8 +19,6 @@ type View = "room" | "plan";
 /** 场景自动推进间隔（回放模式） */
 const SCENE_INTERVAL_MS = 7000;
 
-let msgSeq = 0;
-
 export default function App() {
   const mode = useMemo(resolveDataSourceMode, []);
   const source = useMemo(() => createDataSource(mode), [mode]);
@@ -40,7 +38,6 @@ export default function App() {
   // 过滤/续读请求竞态防护：只采纳最后一次请求的结果
   const eventsReqSeq = useRef(0);
   const [toast, setToast] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const toastTimer = useRef<number | undefined>(undefined);
 
   // 回放场景状态机：默认停在终态（审批合并），▶ 从头推进完整闭环
@@ -196,30 +193,6 @@ export default function App() {
     showToast("已批准：授权 30 分钟内有效，合并按序推进（回放演示）");
   };
 
-  const handleSend = (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = draft.trim();
-    if (!text) return;
-    setDraft("");
-    setMessages((prev) => [
-      ...prev,
-      { id: `u${++msgSeq}`, author: "王倩", role: "HUMAN", time: "now", tone: "user", text },
-    ]);
-    window.setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `a${++msgSeq}`,
-          author: "Project Manager",
-          role: "AGENT",
-          time: "now",
-          tone: "agent",
-          text: "收到。我会把结论结构化回写到契约或任务，并同步给相关 Worker（演示，无真实执行）。",
-        },
-      ]);
-    }, 600);
-  };
-
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
       <Sidebar
@@ -317,33 +290,9 @@ export default function App() {
               onAction={handleDecisionAction}
             />
 
-            <form
-              className="relative z-[6] flex-none border-t border-line bg-[#191510] px-[22px] pt-3 pb-3.5 shadow-[0_-10px_24px_rgba(0,0,0,0.45)]"
-              onSubmit={handleSend}
-            >
-              <textarea
-                rows={2}
-                className="w-full resize-none rounded-hard border border-line bg-panel px-3 py-2.5 font-sans text-[13px] text-tx placeholder:text-[#6b6046] focus:outline focus:outline-amber"
-                placeholder="询问状态、调整范围，或要求 Project Manager 解释决策…"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    e.currentTarget.form?.requestSubmit();
-                  }
-                }}
-              />
-              <div className="mt-2 flex items-center">
-                <span className="text-[10px] tracking-[0.1em] text-tx2">MSG → MATRIX · 关键结论结构化回写事实库</span>
-                <button
-                  type="submit"
-                  className="ml-auto rounded-hard bg-amber px-[18px] py-[7px] text-[12.5px] font-extrabold tracking-[0.04em] text-[#191308] hover:bg-amber-hi"
-                >
-                  发送 ↑
-                </button>
-              </div>
-            </form>
+            {/* 柜沿薄条：输入框暂移除（无写链路，ChangeRequest 回路落地时恢复），
+                保留决策夹「文件夹插在柜后」的视觉锚（-mb-3 底缘藏于此条后方） */}
+            <div className="relative z-[6] h-3 flex-none border-t border-line bg-[#191510] shadow-[0_-10px_24px_rgba(0,0,0,0.45)]" />
 
             <EnvPanel
               view={delivery}
