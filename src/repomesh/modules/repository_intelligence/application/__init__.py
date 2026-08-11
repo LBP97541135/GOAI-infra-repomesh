@@ -18,6 +18,11 @@ from .handoff_docs import (
     build_doc_content,
     render_markdown,
 )
+from .issue_intake import (
+    IssueIntakeActorNotFound,
+    IssueIntakeDenied,
+    IssueIntakeService,
+)
 from .plan_integration import (
     ContractSpec,
     IntegratedPlan,
@@ -46,6 +51,9 @@ __all__ = [
     "HandoffDocStatus",
     "HandoffDocStore",
     "IntegratedPlan",
+    "IssueIntakeActorNotFound",
+    "IssueIntakeDenied",
+    "IssueIntakeService",
     "LLMClient",
     "PlanIntegrationService",
     "RegisterRepository",

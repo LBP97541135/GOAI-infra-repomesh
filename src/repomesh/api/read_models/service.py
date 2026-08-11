@@ -419,6 +419,20 @@ class DeliveryReadModelService:
             ),
         }
 
+    async def issue_summary(self, issue_id: UUID) -> dict | None:
+        """Contract v0.2 §2 single-item shape for one issue.
+
+        Public reuse point for the intake write endpoint (contract v0.3 §1.4):
+        the response of POST /issues must be this projection, not a second
+        serializer. Returns None when no plan or snapshot evidences the issue.
+        """
+
+        plans = (await self._plans_by_project()).get(issue_id, ())
+        snapshots = await self._snapshots.for_project(issue_id)
+        if not plans and not snapshots:
+            return None
+        return (await self._issue_bundle(issue_id, plans)).summary
+
     async def get_issue(self, issue_id: UUID) -> dict | None:
         """Contract v0.2 §3: §2's fields plus the round index and chips."""
 

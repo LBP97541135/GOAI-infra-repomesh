@@ -3,12 +3,15 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from repomesh.modules.change_orchestration import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
     HandoffDocError,
+    IssueIntakeActorNotFound,
+    IssueIntakeDenied,
     RegisterRepository,
     RepositoryDiscoveryService,
     render_markdown,
@@ -26,6 +29,7 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     IntegratedPlan,
     TaskNode,
 )
+from repomesh.modules.repository_intelligence.contracts import IssueIntakeCommand
 from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatusSnapshot
@@ -44,6 +48,7 @@ from .models import (
     HandoffDocView,
     IntegratedPlanView,
     IntegrationRequest,
+    IssueIntakeCreate,
     MaterializeRequest,
     MaterializeResponse,
     OrgScanRequest,
@@ -80,6 +85,59 @@ def _build_auto_card(body_card) -> AutoCard | None:  # noqa: ANN001
         recent_commits=tuple(body_card.recent_commits),
         exposed_apis=tuple(body_card.exposed_apis),
         low_signal=body_card.low_signal,
+    )
+
+
+def _authorize_intake(request: Request) -> None:
+    """Bearer action-token check (contract v0.3 §3, same scheme as the
+    delivery write endpoints). The RI router is otherwise unauthenticated;
+    the write path must not be."""
+
+    from repomesh.settings import get_settings
+
+    expected = get_settings().agent_action_token
+    if not expected:
+        raise HTTPException(
+            status_code=503, detail="issue intake authentication is not configured"
+        )
+    if request.headers.get("Authorization") != f"Bearer {expected}":
+        raise HTTPException(status_code=401, detail="invalid issue intake credentials")
+
+
+@router.post("/issues")
+async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONResponse:
+    """Contract v0.3 §1: create an issue (= first draft PlanSnapshot).
+
+    201 on first creation, 200 on idempotent replay (Q5) — both bodies are the
+    v0.2 §2 single-issue projection produced by the read model (no second
+    serializer). Method-disjoint with the read model's GET /issues."""
+
+    _authorize_intake(request)
+    service = request.app.state.container.issue_intake_service()
+    try:
+        receipt = await service.execute(
+            IssueIntakeCommand(
+                requirement_text=body.requirement_text,
+                created_by_agent_id=body.created_by_agent_id,
+                idempotency_key=body.idempotency_key,
+            )
+        )
+    except IssueIntakeActorNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except IssueIntakeDenied as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    summary = await request.app.state.container.delivery_read_model_service().issue_summary(
+        receipt.project_id
+    )
+    if summary is None:  # pragma: no cover - the snapshot was just persisted
+        raise HTTPException(status_code=500, detail="issue projection unavailable")
+    # The summary carries UUID/datetime values; the read-model routers lean on
+    # FastAPI's default encoding, a manual JSONResponse must encode explicitly.
+    return JSONResponse(
+        status_code=201 if receipt.created else 200, content=jsonable_encoder(summary)
     )
 
 

@@ -631,6 +631,21 @@ class ApplicationContainer:
             ),
         )
 
+    def issue_intake_service(self):
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.repository_intelligence.application import (
+            IssueIntakeService,
+        )
+
+        # The audit sink is the platform-generic 6-line writer that happens to
+        # live in delivery; only the composition root couples to it (module
+        # code depends on the IssueIntakeAuditLog protocol).
+        return IssueIntakeService(
+            self.plan_snapshot_store(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
     def delivery_governance_service(self):
         from repomesh.modules.delivery import (
             DeliveryGovernanceService,

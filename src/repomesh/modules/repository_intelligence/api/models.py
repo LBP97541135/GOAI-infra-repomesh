@@ -32,6 +32,16 @@ class RepositoryCreate(BaseModel):
     auto_card: AutoCardCreate | None = None
 
 
+class IssueIntakeCreate(BaseModel):
+    """Contract v0.3 §1.2. No organization_id / title on purpose: the workspace
+    derives from the actor's organization and the title from requirement_text —
+    accepting either would create a second source of truth."""
+
+    requirement_text: str = Field(min_length=1, max_length=20000)
+    created_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
 class OrgScanRequest(BaseModel):
     """Request body for organization-level batch scanning."""
 
