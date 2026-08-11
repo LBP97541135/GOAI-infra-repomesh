@@ -361,6 +361,7 @@ class ApplicationContainer:
                         ),
                         task_dag=tuple(record.task_dag),
                         execution_plan_id=record.execution_plan_id,
+                        created_by_agent_id=record.created_by_agent_id,
                     )
                     for record in await snapshot_store.list_all(project_id)
                 )
@@ -432,9 +433,16 @@ class ApplicationContainer:
                 principal = await container.agent_directory.get_view(agent_id)
                 return principal.agentteams_resource_name if principal else None
 
+            async def organization_id(self, agent_id: UUID):
+                principal = await container.agent_directory.get_view(agent_id)
+                return principal.organization_id if principal else None
+
         class _Topology:
+            async def get_view(self, project_id: UUID):
+                return await container.topology_reader().get_view(project_id)
+
             async def matrix_room_id(self, project_id: UUID):
-                topology = await container.topology_reader().get_view(project_id)
+                topology = await self.get_view(project_id)
                 if topology is None or len(topology.repository_teams) != 1:
                     return None
                 return topology.repository_teams[0].room_id

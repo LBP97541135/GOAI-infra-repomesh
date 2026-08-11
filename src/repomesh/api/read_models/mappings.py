@@ -1,4 +1,4 @@
-"""Status mappings of delivery-read-model contract v0.1 §2 and §5.
+"""Status mappings of delivery-read-model contract v0.1 §2/§5 and v0.2 §2.
 
 These functions are the single implementation of the contract's derivations;
 the frontend must not re-map statuses.
@@ -13,6 +13,7 @@ from repomesh.modules.delivery.contracts import (
     RecoveryActionStatus,
     RepositoryDeliveryStatus,
 )
+from repomesh.modules.project.contracts import ProjectOperationalStatus
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
 
 
@@ -25,6 +26,11 @@ class DeliveryPhase(StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
     ARCHIVED = "archived"
+
+
+class IssueState(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
 
 
 class TaskDisplayStatus(StrEnum):
@@ -104,6 +110,55 @@ def derive_phase(
     if has_plan_snapshot and not materialized:
         return DeliveryPhase.PLAN
     return DeliveryPhase.CONTRACT
+
+
+TERMINAL_CHANGE_SET_STATUSES = frozenset(
+    {ChangeSetStatus.DELIVERED, ChangeSetStatus.COMPENSATED}
+)
+"""v0.2 §2.1 rule 3: every other change-set status still needs work."""
+
+
+def derive_issue_state(
+    *,
+    operational_status: ProjectOperationalStatus | None,
+    has_active_round: bool,
+    has_open_change_set: bool,
+    has_draft: bool,
+    has_rounds: bool,
+) -> IssueState:
+    """v0.2 §2.1, evaluated strictly in the contract's order.
+
+    `paused` deliberately does not close an issue: state answers "does this
+    still need a human or an agent", and paused work still does. Rules 2-4 all
+    answer open, so they collapse into one branch without reordering.
+    """
+
+    if operational_status is ProjectOperationalStatus.CANCELLED:
+        return IssueState.CLOSED
+    if has_active_round or has_open_change_set or has_draft:
+        return IssueState.OPEN
+    if has_rounds:
+        return IssueState.CLOSED
+    # No round and no draft: an empty issue is a todo, not a finished one.
+    return IssueState.OPEN
+
+
+def select_issue_phase(
+    *,
+    active_round_phase: DeliveryPhase | None,
+    latest_round_phase: DeliveryPhase | None,
+    draft_phase: DeliveryPhase | None,
+) -> DeliveryPhase:
+    """v0.2 §2.2: a selection rule over the v0.1 eight phases, never a 9th one."""
+
+    if active_round_phase is not None:
+        return active_round_phase
+    if latest_round_phase is not None:
+        return latest_round_phase
+    if draft_phase is not None:
+        return draft_phase
+    # Requirement exists but nothing was ever planned.
+    return DeliveryPhase.PLAN
 
 
 def task_display_status(

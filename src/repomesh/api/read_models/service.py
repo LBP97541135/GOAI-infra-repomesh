@@ -7,8 +7,8 @@ composition-root adapters; unimplemented contract fields return ``null``.
 """
 
 import json
-from dataclasses import asdict
-from datetime import datetime
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.delivery.contracts import (
@@ -18,13 +18,23 @@ from repomesh.modules.delivery.contracts import (
     RecoveryActionStatus,
     RepositoryDeliveryStatus,
 )
-from repomesh.modules.task_orchestration.contracts import TaskStatus, TaskView
+from repomesh.modules.project.contracts import ProjectAgentTopologyView
+from repomesh.modules.task_orchestration.contracts import (
+    ExecutionPlanStatus,
+    ExecutionPlanView,
+    TaskStatus,
+    TaskView,
+)
 
 from .mappings import (
+    TERMINAL_CHANGE_SET_STATUSES,
     DeliveryPhase,
     GateDisplay,
+    IssueState,
+    derive_issue_state,
     derive_phase,
     gate_display,
+    select_issue_phase,
     task_display_status,
 )
 from .sources import (
@@ -38,6 +48,7 @@ from .sources import (
     PlanSnapshotSource,
     RepositorySource,
     RunnerEventSource,
+    SpecificationContractData,
     SpecificationSource,
     TaskSource,
     TopologySource,
@@ -65,6 +76,40 @@ _TERMINAL_ACTION_STATUSES = frozenset(
 _ACTIVE_TASK_STATUSES = frozenset(
     {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
 )
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+"""Sort floor for rounds whose only timestamp source is missing entirely."""
+
+
+@dataclass(frozen=True, slots=True)
+class _RoundFacts:
+    """One ExecutionPlan lifecycle: v0.1 calls it a delivery, v0.2 a round."""
+
+    plan: ExecutionPlanView
+    phase: DeliveryPhase
+    plan_version: int | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    change_set: ChangeSetView | None
+    pending_decision_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _IssueBundle:
+    """Everything both /issues and /issues/{id} derive from, read once."""
+
+    summary: dict
+    rounds: tuple[_RoundFacts, ...]
+    snapshots: tuple[PlanSnapshotData, ...]
+    topology: ProjectAgentTopologyView | None
+    repository_ids: tuple[UUID, ...]
+
+
+def _round_order(round_facts: _RoundFacts) -> tuple:
+    """Chronological order; rounds with no timestamp at all sort first."""
+
+    at = round_facts.updated_at or round_facts.created_at
+    return (at is not None, at or _EPOCH, round_facts.plan_version or 0)
 
 
 class DeliveryReadModelService:
@@ -140,7 +185,9 @@ class DeliveryReadModelService:
             )
         return {"projects": projects, "next_cursor": None}
 
-    async def _delivery_summary(self, plan, snapshot: PlanSnapshotData | None) -> dict:
+    async def _round_facts(
+        self, plan: ExecutionPlanView, snapshot: PlanSnapshotData | None
+    ) -> _RoundFacts:
         archived = await self._archives.get(plan.id) is not None
         change_set = await self._change_sets.for_delivery(plan.id)
         validation = await self._find_validation(plan.project_id, plan.id, change_set)
@@ -155,19 +202,29 @@ class DeliveryReadModelService:
         pending = 0
         if change_set is not None:
             pending = len(await self._decision_items(plan, change_set))
+        created_at = snapshot.created_at if snapshot is not None else None
+        return _RoundFacts(
+            plan=plan,
+            phase=phase,
+            plan_version=snapshot.plan_version if snapshot is not None else None,
+            created_at=created_at,
+            updated_at=(
+                change_set.updated_at if change_set is not None else created_at
+            ),
+            change_set=change_set,
+            pending_decision_count=pending,
+        )
+
+    async def _delivery_summary(self, plan, snapshot: PlanSnapshotData | None) -> dict:
+        facts = await self._round_facts(plan, snapshot)
         title_source = snapshot.requirement_text if snapshot is not None else None
-        updated_at = None
-        if change_set is not None:
-            updated_at = change_set.updated_at
-        elif snapshot is not None:
-            updated_at = snapshot.created_at
         return {
             "delivery_id": plan.id,
             "title": _title(title_source, plan.project_id),
-            "phase": phase.value,
-            "phase_note": self._phase_note(phase, plan, change_set),
-            "pending_decision_count": pending,
-            "updated_at": updated_at,
+            "phase": facts.phase.value,
+            "phase_note": self._phase_note(facts.phase, plan, facts.change_set),
+            "pending_decision_count": facts.pending_decision_count,
+            "updated_at": facts.updated_at,
         }
 
     def _draft_summary(self, snapshots: tuple[PlanSnapshotData, ...]) -> dict | None:
@@ -294,6 +351,290 @@ class DeliveryReadModelService:
                     }
                 )
         return items
+
+    # ---------------------------------------------------------------- issues
+
+    async def list_issues(
+        self,
+        *,
+        state: str = "open",
+        organization_id: UUID | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict:
+        """Contract v0.2 §2: issue-grained listing (issue_id = project_id).
+
+        The issue universe is every project that ever produced an ExecutionPlan
+        or a PlanSnapshot — the only persisted evidence an issue exists. Issues
+        with neither (§2.1 rule 6) stay unreachable until a project registry
+        lands; the rule is implemented so the write endpoint needs no change.
+
+        open_count / closed_count are the workspace totals behind the two tabs:
+        they honour organization_id but ignore `state` and the page window, so
+        the tab the caller is not looking at still shows a true total.
+        """
+
+        plans_by_project = await self._plans_by_project()
+        project_ids = set(plans_by_project) | set(await self._snapshots.project_ids())
+
+        scoped = []
+        for project_id in sorted(project_ids, key=str):
+            bundle = await self._issue_bundle(
+                project_id, plans_by_project.get(project_id, ())
+            )
+            issue = bundle.summary
+            if organization_id is not None and issue["organization_id"] != organization_id:
+                continue
+            scoped.append(issue)
+
+        open_count = sum(1 for issue in scoped if issue["state"] == IssueState.OPEN.value)
+        issues = (
+            scoped
+            if state == "all"
+            else [issue for issue in scoped if issue["state"] == state]
+        )
+        issues.sort(key=_issue_recency, reverse=True)
+        page = issues[offset : offset + limit]
+        return {
+            "issues": page,
+            "open_count": open_count,
+            "closed_count": len(scoped) - open_count,
+            "next_cursor": (
+                str(offset + limit) if offset + limit < len(issues) else None
+            ),
+        }
+
+    async def get_issue(self, issue_id: UUID) -> dict | None:
+        """Contract v0.2 §3: §2's fields plus the round index and chips."""
+
+        plans_by_project = await self._plans_by_project()
+        plans = plans_by_project.get(issue_id, ())
+        snapshots = await self._snapshots.for_project(issue_id)
+        if not plans and not snapshots:
+            return None
+
+        bundle = await self._issue_bundle(issue_id, plans)
+        topology = bundle.topology
+        catalog = {item.id: item for item in await self._repositories.list()}
+        team_by_repository = (
+            {team.repository_id: team for team in topology.repository_teams}
+            if topology is not None
+            else {}
+        )
+        contract = await self._specifications.engineering_contract(issue_id)
+        return {
+            **bundle.summary,
+            "rounds": [
+                {
+                    "round_id": facts.plan.id,
+                    "phase": facts.phase.value,
+                    "status": facts.plan.status.value,
+                    "plan_version": facts.plan_version,
+                    "created_at": facts.created_at,
+                    "updated_at": facts.updated_at,
+                }
+                for facts in bundle.rounds
+            ],
+            "repositories": [
+                {
+                    "repository_id": repository_id,
+                    "name": (
+                        catalog[repository_id].name
+                        if repository_id in catalog
+                        else str(repository_id)[:8]
+                    ),
+                    "team_id": (
+                        team_by_repository[repository_id].id
+                        if repository_id in team_by_repository
+                        else None
+                    ),
+                    # The topology records no per-issue repository role; the
+                    # producer/consumer split only exists in a CONTRACT spec.
+                    "role_in_issue": None,
+                }
+                for repository_id in bundle.repository_ids
+            ],
+            "teams": [
+                {
+                    "team_id": team.id,
+                    "agentteams_team_name": team.agentteams_team_name,
+                    "repository_id": team.repository_id,
+                    "runtime_status": team.runtime_status.value,
+                }
+                for team in (topology.repository_teams if topology else ())
+            ],
+            "contract": _contract_block(contract),
+            "human_grants": [
+                {
+                    "human_principal_id": grant.human_principal_id,
+                    "role": grant.role.value,
+                    "code_access": grant.code_access.value,
+                }
+                for grant in (topology.human_grants if topology else ())
+            ],
+            "required_checkpoints": sorted(
+                checkpoint.value
+                for checkpoint in (topology.required_checkpoints if topology else ())
+            ),
+        }
+
+    async def _plans_by_project(self) -> dict[UUID, list[ExecutionPlanView]]:
+        plans_by_project: dict[UUID, list[ExecutionPlanView]] = {}
+        for plan in await self._plans.list_all():
+            plans_by_project.setdefault(plan.project_id, []).append(plan)
+        return plans_by_project
+
+    async def _issue_bundle(
+        self, project_id: UUID, plans: list[ExecutionPlanView] | tuple
+    ) -> _IssueBundle:
+        snapshots = await self._snapshots.for_project(project_id)
+        snapshot_by_plan = {
+            snapshot.execution_plan_id: snapshot
+            for snapshot in snapshots
+            if snapshot.execution_plan_id is not None
+        }
+        topology = await self._topology.get_view(project_id)
+        rounds = sorted(
+            [
+                await self._round_facts(plan, snapshot_by_plan.get(plan.id))
+                for plan in plans
+            ],
+            key=_round_order,
+        )
+
+        # §0: title, requirement text and creation time all come from the
+        # earliest snapshot; `for_project` returns newest plan_version first.
+        earliest = snapshots[-1] if snapshots else None
+        draft = (
+            snapshots[0]
+            if snapshots and snapshots[0].execution_plan_id is None
+            else None
+        )
+        active = next(
+            (
+                facts
+                for facts in reversed(rounds)
+                if facts.plan.status is ExecutionPlanStatus.IN_PROGRESS
+            ),
+            None,
+        )
+        latest = rounds[-1] if rounds else None
+        draft_phase = (
+            derive_phase(
+                archived=False,
+                plan_status=None,
+                change_set=None,
+                has_validation_snapshot=False,
+                has_plan_snapshot=True,
+                materialized=False,
+            )
+            if draft is not None
+            else None
+        )
+        phase = select_issue_phase(
+            active_round_phase=active.phase if active is not None else None,
+            latest_round_phase=latest.phase if latest is not None else None,
+            draft_phase=draft_phase,
+        )
+        chosen = active or latest
+        if chosen is not None:
+            phase_note = self._phase_note(phase, chosen.plan, chosen.change_set)
+        elif draft is not None:
+            phase_note = f"计划 v{draft.plan_version} 待物化"
+        else:
+            phase_note = ""
+
+        state = derive_issue_state(
+            operational_status=topology.operational_status if topology else None,
+            has_active_round=active is not None,
+            has_open_change_set=any(
+                facts.change_set is not None
+                and facts.change_set.status not in TERMINAL_CHANGE_SET_STATUSES
+                for facts in rounds
+            ),
+            has_draft=draft is not None,
+            has_rounds=bool(rounds),
+        )
+
+        repository_ids = {
+            planned.repository_id
+            for facts in rounds
+            for batch in facts.plan.batches
+            for planned in batch
+        }
+        if topology is not None:
+            repository_ids |= {
+                team.repository_id for team in topology.repository_teams
+            }
+
+        opened_at = earliest.created_at if earliest is not None else None
+        opened_by_agent_id = (
+            earliest.created_by_agent_id if earliest is not None else None
+        )
+        # Same source and precision as v0.1's messages sender_name: an
+        # AgentTeams resource name, never a human name.
+        opened_by_name = (
+            await self._agents.name(opened_by_agent_id)
+            if opened_by_agent_id is not None
+            else None
+        )
+        # §2.3: the latest persisted fact across every round and snapshot.
+        timestamps = [facts.updated_at for facts in rounds if facts.updated_at] + [
+            snapshot.created_at for snapshot in snapshots
+        ]
+        # Workspace attribution, most authoritative fact first. A draft-only
+        # issue has neither round nor topology, so it falls back to the
+        # organization of the agent that opened it — without this the workspace
+        # filter would silently drop every un-materialized issue.
+        organization_id = next(
+            (facts.plan.organization_id for facts in rounds), None
+        ) or (topology.organization_id if topology else None)
+        if organization_id is None and (
+            earliest is not None and earliest.created_by_agent_id is not None
+        ):
+            organization_id = await self._agents.organization_id(
+                earliest.created_by_agent_id
+            )
+
+        summary = {
+            "issue_id": project_id,
+            "issue_key": None,  # §0: no project registry, so no human-readable id
+            "organization_id": organization_id,
+            "title": _title(
+                earliest.requirement_text if earliest is not None else None, project_id
+            ),
+            "requirement_text": (
+                earliest.requirement_text if earliest is not None else None
+            ),
+            "state": state.value,
+            "phase": phase.value,
+            "phase_note": phase_note,
+            "round_count": len(rounds),
+            "active_round_id": active.plan.id if active is not None else None,
+            "latest_round_id": latest.plan.id if latest is not None else None,
+            "pending_decision_count": sum(
+                facts.pending_decision_count for facts in rounds
+            ),
+            "repository_count": len(repository_ids),
+            "team_count": len(topology.repository_teams) if topology else 0,
+            # Topology-only facts degrade to null rather than a fabricated
+            # default when the issue never formed a team.
+            "operational_status": (
+                topology.operational_status.value if topology else None
+            ),
+            "execution_mode": topology.execution_mode.value if topology else None,
+            "opened_by_agent_id": opened_by_agent_id,
+            "opened_by_name": opened_by_name,
+            "opened_at": opened_at,
+            "updated_at": max(timestamps) if timestamps else opened_at,
+        }
+        return _IssueBundle(
+            summary=summary,
+            rounds=tuple(rounds),
+            snapshots=snapshots,
+            topology=topology,
+            repository_ids=tuple(sorted(repository_ids, key=str)),
+        )
 
     # ------------------------------------------------------------- decisions
 
@@ -501,23 +842,7 @@ class DeliveryReadModelService:
                 ),
                 "created_at": snapshots[-1].created_at if snapshots else None,
             },
-            "contract": (
-                {
-                    "specification_id": contract.specification_id,
-                    "version": contract.version,
-                    "status": contract.status,
-                    "goal": contract.goal,
-                    "acceptance": list(contract.acceptance),
-                    "constraints": list(contract.constraints),
-                    "allowed_paths": list(contract.allowed_paths),
-                    "forbidden_paths": list(contract.forbidden_paths),
-                    "tests": list(contract.tests),
-                    "non_goals": None,
-                    "release_rules": None,
-                }
-                if contract is not None
-                else None
-            ),
+            "contract": _contract_block(contract),
             "repositories": [
                 {
                     "repository_id": repository_id,
@@ -769,6 +1094,33 @@ class DeliveryReadModelService:
             if item.environment.get("execution_plan") == str(delivery_id):
                 return item
         return None
+
+
+def _contract_block(contract: SpecificationContractData | None) -> dict | None:
+    """§3 contract block, shared by the delivery detail and the issue overview."""
+
+    if contract is None:
+        return None
+    return {
+        "specification_id": contract.specification_id,
+        "version": contract.version,
+        "status": contract.status,
+        "goal": contract.goal,
+        "acceptance": list(contract.acceptance),
+        "constraints": list(contract.constraints),
+        "allowed_paths": list(contract.allowed_paths),
+        "forbidden_paths": list(contract.forbidden_paths),
+        "tests": list(contract.tests),
+        "non_goals": None,
+        "release_rules": None,
+    }
+
+
+def _issue_recency(issue: dict) -> tuple:
+    """§2.3 default ordering key: newest activity first, undated issues last."""
+
+    at = issue["updated_at"]
+    return (at is not None, at or _EPOCH)
 
 
 def _title(requirement_text: str | None, project_id: UUID) -> str:
