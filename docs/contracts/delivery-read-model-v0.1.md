@@ -217,11 +217,15 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 { "change_set_id": "uuid", "repository_id": "uuid",
   "head_sha": "string",                        // 必填：head-bound，SHA 漂移即 409
   "decision": "ready|blocked|rollback_required",
+  "decided_by_agent_id": "uuid",               // 必填：决策主体（bearer 为共享动作 token，无法承载身份）
   "reason": "string",
   "idempotency_key": "string" }
 ```
 
-鉴权主体必须解析为有治理权的 agent/人类身份并写审计事件。前端审批弹窗的
+`decided_by_agent_id` 必须是同组织活跃的 ORGANIZATION_LEADER 或该仓库的
+REPOSITORY_LEADER，否则 403；每次落盘写 platform 审计事件。幂等语义为
+**内容重放去重**（相同决策重放 no-op、版本不涨）；head-bound 下幂等键复用无害，
+如需严格 key 存储语义后补 `platform.idempotency_records`。前端审批弹窗的
 「任一 SHA 变化即失效」由 head-bound 语义 + merge gate fail-closed 保证，无需前端轮询锁。
 
 ### 4.5 `POST /deliveries/{delivery_id}/archive`
