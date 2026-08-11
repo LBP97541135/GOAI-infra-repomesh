@@ -49,6 +49,8 @@ export function RoomViewContainer({
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const [staleNote, setStaleNote] = useState<string | null>(null);
   const inFlight = useRef(false);
+  /** 事件时间线的代际号：换房间/重载 +1；过滤与续读的响应只在代际未变时落地（A5） */
+  const eventsEpoch = useRef(0);
   /** 本轮事件时间线（CONS-14）。轮次粒度，与环境窗共用一次轮次解析。 */
   const [roundId, setRoundId] = useState<string | null>(null);
   const [events, setEvents] = useState<EventsTimelineState>({
@@ -60,8 +62,14 @@ export function RoomViewContainer({
 
   useEffect(() => {
     let cancelled = false;
+    // A5：换房间/重载即换代——旧代的事件过滤/续读响应落地时按代际丢弃
+    eventsEpoch.current += 1;
     setLoading(true);
     setError(null);
+    // A4：room/stream 必须一并复位——否则新房间首载失败时，旧 room 仍非空，
+    // `polling` 判定为真，5s 轮询会拿旧房间 id 一直打后端
+    setRoom(null);
+    setStream(null);
     setPlan(null);
     setEnv(null);
     setRoundId(null);
@@ -166,10 +174,15 @@ export function RoomViewContainer({
   const onEventsFilter = useCallback(
     (kind: DeliveryEventKind | null) => {
       if (!roundId) return;
+      const epoch = eventsEpoch.current;
       setEvents((prev) => ({ ...prev, kind, loading: true }));
       fetchRoundEvents(roundId, { kind: kind ?? undefined })
-        .then((page) => setEvents({ items: page.items, nextCursor: page.next_cursor, kind, loading: false }))
+        .then((page) => {
+          if (epoch !== eventsEpoch.current) return; // A5：已换房间/issue，丢弃
+          setEvents({ items: page.items, nextCursor: page.next_cursor, kind, loading: false });
+        })
         .catch((err: unknown) => {
+          if (epoch !== eventsEpoch.current) return;
           setEvents((prev) => ({ ...prev, loading: false }));
           onToast(`事件过滤失败：${err instanceof Error ? err.message : String(err)}`);
         });
@@ -183,17 +196,20 @@ export function RoomViewContainer({
   const onEventsMore = useCallback(() => {
     if (!roundId || events.nextCursor === null || events.loading) return;
     const cursor = events.nextCursor;
+    const epoch = eventsEpoch.current;
     setEvents((prev) => ({ ...prev, loading: true }));
     fetchRoundEvents(roundId, { cursor, kind: events.kind ?? undefined })
-      .then((page) =>
+      .then((page) => {
+        if (epoch !== eventsEpoch.current) return; // A5：同款代际守卫
         setEvents((cur) => ({
           ...cur,
           items: [...cur.items, ...page.items],
           nextCursor: page.next_cursor,
           loading: false,
-        })),
-      )
+        }));
+      })
       .catch((err: unknown) => {
+        if (epoch !== eventsEpoch.current) return;
         setEvents((cur) => ({ ...cur, loading: false }));
         onToast(`加载后续事件失败：${err instanceof Error ? err.message : String(err)}`);
       });
