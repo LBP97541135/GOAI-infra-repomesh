@@ -18,6 +18,8 @@ export function NewIssueModal({
   onClose: () => void;
   onToast: (text: string) => void;
 }) {
+  // 草稿**有意跨开关保留**：写端点未落地时提交只报缺口，误按 Esc 不该让用户重写一遍
+  // 需求。写端点接入后改为提交成功即清空。（主脑 2026-08-11 裁决）
   const [text, setText] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
 

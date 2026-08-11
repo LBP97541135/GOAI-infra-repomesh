@@ -49,6 +49,54 @@ export type GovernanceDecisionValue = "ready" | "blocked" | "rollback_required";
 
 /* ------------------------------------------------------------------ §2 列表 */
 
+/** 契约 v0.2 §2 `GET /issues` 单条。形状于 2026-08-11 冻结（后端四连提交
+ *  b08240f..f7b2df9，合并于 fd40e53）。
+ *
+ *  诚实降级三处，均为**契约明文的恒 null**，前端显「未接入」不得编造：
+ *   - `issue_key`：无 Project 注册表（§0/§6.1），前端显 issue_id 短版；
+ *   - `operational_status` / `execution_mode`：来自 project.agent_topologies，
+ *     联调种子上该表为空 → 恒 null。**null 不等于 active**，徽标须「有值才渲染」；
+ *   - `opened_by_name`：AgentTeams **资源名**（rm-worker-01 这类），与 §4.2 的
+ *     `sender_name` 同源同精度，**不是人名**——渲染保留 AGENT 前缀语义。 */
+export interface IssueListItemView {
+  issue_id: string;
+  issue_key: string | null;
+  /** 无任何来源时为 null（后端已做轮次→拓扑→开票 agent 三级兜底） */
+  organization_id: string | null;
+  title: string;
+  requirement_text: string | null;
+  /** §2.1 读模型派生，前端禁止另行映射 */
+  state: "open" | "closed";
+  /** §2.2 读模型派生，八相枚举，issue 层不得新增第 9 相 */
+  phase: Phase;
+  phase_note: string;
+  round_count: number;
+  active_round_id: string | null;
+  latest_round_id: string | null;
+  pending_decision_count: number;
+  repository_count: number;
+  team_count: number;
+  /** §2.1：paused **不影响** state，前端以独立徽标呈现 */
+  operational_status: "active" | "paused" | "cancelled" | null;
+  execution_mode: "auto" | "supervised" | "manual_controlled" | null;
+  opened_by_agent_id: string | null;
+  opened_by_name: string | null;
+  opened_at: string;
+  /** §2.3：取不到时间源时回退 opened_at，不编造 */
+  updated_at: string;
+}
+
+/** §2.5：两个计数**不受 state 与分页影响**，但**受 organization_id 影响**
+ *  （计数与列表必须同一隔离域，否则切工作区后标签数与列表内容打架）。
+ *  计数与条目同源于一次 state 派生，不存在两套判定。 */
+export interface IssueListResponse {
+  issues: IssueListItemView[];
+  open_count: number;
+  closed_count: number;
+  /** §2.4 + Q7：offset 不透明游标，语义同 §4.1 events */
+  next_cursor: string | null;
+}
+
 export interface DeliveryListItem {
   /** null = §0 虚拟草稿交付（尚未 materialize） */
   delivery_id: string | null;

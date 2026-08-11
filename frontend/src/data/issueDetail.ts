@@ -9,40 +9,9 @@
  *  红线：state / phase / phase_note / live / runtime_status 全部由读模型派生，
  *  前端只渲染不映射（v0.1 §5 + v0.2 §2.1/§2.2/§5.3）。
  *  复用：contract 整块与 message 投影直接用 v0.1 既有类型，契约 §6 禁止另写第二套。 */
-import type { CollaborationMessageView, DeliveryContractView, Phase } from "../api/contract";
+import type { CollaborationMessageView, DeliveryContractView, IssueListItemView, Phase } from "../api/contract";
 
 // ─────────────────────────── §3 issue 概览 ───────────────────────────
-
-/** §2 的 issue 单条。与 CONS-41 夹具的差异见接线待办：无 `number`
- *  （`issue_key` 恒 null → 显 issue_id 短版）、无 `author_name`（只有
- *  `opened_by_agent_id`）、无 `closed_at`（closed 行只能显 `updated_at`）。 */
-export interface IssueSummary {
-  issue_id: string;
-  /** §0/§6.1：无 Project 注册表，恒 null，前端显 issue_id 短版 */
-  issue_key: null;
-  /** Q2：逐条回显；工作区选择由前端持有并传参，服务端不猜 */
-  organization_id: string;
-  title: string;
-  requirement_text: string | null;
-  /** §2.1 读模型派生 */
-  state: "open" | "closed";
-  /** §2.2 读模型派生（八相，禁止在 issue 层新增第 9 相） */
-  phase: Phase;
-  phase_note: string;
-  round_count: number;
-  active_round_id: string | null;
-  latest_round_id: string | null;
-  pending_decision_count: number;
-  repository_count: number;
-  team_count: number;
-  /** §2.1：paused **不影响** state，必须以独立徽标呈现 */
-  operational_status: "active" | "paused" | "cancelled";
-  execution_mode: "auto" | "supervised" | "manual_controlled";
-  /** 最早 PlanSnapshot.created_by_agent_id —— 是 agent 不是人类 principal */
-  opened_by_agent_id: string | null;
-  opened_at: string;
-  updated_at: string;
-}
 
 export interface IssueRound {
   /** = execution_plan_id = v0.1 的 delivery_id（§0 语义等式） */
@@ -77,7 +46,9 @@ export interface HumanGrant {
   code_access: "none" | "read" | "write";
 }
 
-export interface IssueDetail extends IssueSummary {
+/** §3：在 §2 单条的**全部字段**之上追加，故直接继承契约层的 IssueListItemView，
+ *  不另抄一份字段表（抄一份就会漂移）。 */
+export interface IssueDetail extends IssueListItemView {
   rounds: IssueRound[];
   repositories: IssueRepositoryRef[];
   teams: IssueTeamRef[];
@@ -199,6 +170,8 @@ export const issueDetailFixture: IssueDetail = {
   operational_status: "active",
   execution_mode: "supervised",
   opened_by_agent_id: "9c8b7a60-1122-4d33-8e44-5f6a7b8c9d00",
+  // AgentTeams 资源名，不是人名（渲染保留 AGENT 前缀）
+  opened_by_name: "console-demo-org-leader",
   opened_at: "2026-08-09T02:14:00Z",
   updated_at: "2026-08-11T12:20:01Z",
   rounds: [

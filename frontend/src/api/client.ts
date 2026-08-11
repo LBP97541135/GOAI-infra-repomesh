@@ -8,6 +8,7 @@ import type {
   DeliveryMessagesPage,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
+  IssueListResponse,
 } from "./contract";
 
 export class ApiError extends Error {
@@ -60,6 +61,23 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
 
 export function createApiClient(config: ApiClientConfig) {
   return {
+    /** §2.4：state 默认 open；organization_id 由前端持有并传参（Q2，服务端不猜）；
+     *  cursor/limit 语义同 §4.1 events。 */
+    listIssues: (opts?: {
+      state?: "open" | "closed" | "all";
+      organizationId?: string;
+      cursor?: string;
+      limit?: number;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts?.state) params.set("state", opts.state);
+      if (opts?.organizationId) params.set("organization_id", opts.organizationId);
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      const q = params.toString();
+      return request<IssueListResponse>(config, "GET", `/issues${q ? `?${q}` : ""}`);
+    },
+
     listDeliveries: (cursor?: string) =>
       request<DeliveryListResponse>(config, "GET", `/deliveries${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
 

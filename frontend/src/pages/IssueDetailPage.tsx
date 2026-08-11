@@ -1,4 +1,5 @@
 import type { IssueDetail, IssueTeamRef, RoomListItem } from "../data/issueDetail";
+import { dayLabel, openedBy, shortId } from "../display";
 import { eventTime } from "../viewmodel";
 
 /** issue 详情页（CONS-42）。版式按原型 redesign-issue-centric.html 的 `#v-detail`：
@@ -34,15 +35,6 @@ const RUNTIME_SKIN: Record<IssueTeamRef["runtime_status"], string> = {
   ready: "border-olive text-olive",
   failed: "border-salmon text-salmon",
 };
-
-function shortId(id: string | null): string {
-  return id ? id.slice(0, 8) : "—";
-}
-
-function dayLabel(at: string): string {
-  const m = at.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[2]}-${m[3]}` : at;
-}
 
 function RoomRow({ room, onOpen }: { room: RoomListItem; onOpen: (room: RoomListItem) => void }) {
   const empty = room.last_message === null;
@@ -114,7 +106,7 @@ export function IssueDetailPage({
 
   const meta = [
     `#${shortId(detail.issue_id)}`,
-    detail.opened_by_agent_id ? `AGENT ${shortId(detail.opened_by_agent_id)} 发起于 ${dayLabel(detail.opened_at)}` : `发起人未关联 · ${dayLabel(detail.opened_at)}`,
+    `${openedBy(detail)} 发起于 ${dayLabel(detail.opened_at)}`,
     `第 ${detail.round_count} 轮交付`,
     `${detail.repository_count} 仓`,
   ].join(" · ");

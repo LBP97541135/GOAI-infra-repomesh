@@ -3,7 +3,8 @@ import { AuthError, authApi, type Account } from "./api/auth";
 import { LoginPage } from "./components/LoginPage";
 import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
-import { issuesFixture } from "./data/issues";
+import type { IssueListResponse } from "./api/contract";
+import { fetchIssues, issuesSourceMode } from "./api/issues";
 import { issueDetailFixture, repositoryPlanFixture, roomStreamFixtures, roomsFixture } from "./data/issueDetail";
 import { IssueDetailPage } from "./pages/IssueDetailPage";
 import { IssueListPage } from "./pages/IssueListPage";
@@ -24,6 +25,16 @@ export default function ConsoleShell() {
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+
+  // issue 列表：state 由服务端筛选（?state=），不做本地分 tab——分页下本地过滤
+  // 等于拿部分结果冒充全量。工作区（organization_id）由前端持有，当前无组织读模型
+  // （CONS-32）故不传 = 全部工作区。
+  const [issueTab, setIssueTab] = useState<"open" | "closed">("open");
+  const [issues, setIssues] = useState<IssueListResponse | null>(null);
+  const [issuesLoading, setIssuesLoading] = useState(true);
+  const [issuesMore, setIssuesMore] = useState(false);
+  const [issuesError, setIssuesError] = useState<string | null>(null);
+  const [issuesReload, setIssuesReload] = useState(0);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -59,6 +70,40 @@ export default function ConsoleShell() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    let cancelled = false;
+    setIssuesLoading(true);
+    setIssuesError(null);
+    fetchIssues({ state: issueTab })
+      .then((page) => {
+        if (cancelled) return;
+        setIssues(page);
+        setIssuesLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setIssuesError(err instanceof Error ? err.message : String(err));
+        setIssuesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState, issueTab, issuesReload]);
+
+  const loadMoreIssues = () => {
+    const cursor = issues?.next_cursor;
+    if (!cursor || issuesMore) return;
+    setIssuesMore(true);
+    fetchIssues({ state: issueTab, cursor })
+      .then((page) =>
+        // 续读只追加条目；计数是全量值，以最新一页为准即可
+        setIssues((prev) => (prev ? { ...page, issues: [...prev.issues, ...page.issues] } : page)),
+      )
+      .catch((err: unknown) => showToast(`加载更多失败：${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => setIssuesMore(false));
+  };
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
@@ -143,7 +188,7 @@ export default function ConsoleShell() {
       <SidebarV2
         account={account}
         nav={route.nav}
-        issueCount={issuesFixture.open_count}
+        issueCount={issues?.open_count ?? null}
         onNavigate={navigate}
         onNewIssue={() => setNewIssueOpen(true)}
         onLogout={handleLogout}
@@ -154,9 +199,20 @@ export default function ConsoleShell() {
         {route.nav === "issues" &&
           (route.issueId === null ? (
             <IssueListPage
-              data={issuesFixture}
+              data={issues}
+              tab={issueTab}
+              loading={issuesLoading}
+              loadingMore={issuesMore}
+              error={issuesError}
+              sourceNote={
+                issuesSourceMode() === "live"
+                  ? "数据源：live · GET /issues（契约 v0.2 §2）"
+                  : "数据源：replay 夹具 · 加 ?source=live 打真实读模型"
+              }
+              onTab={setIssueTab}
+              onLoadMore={loadMoreIssues}
+              onRetry={() => setIssuesReload((n) => n + 1)}
               onOpenIssue={(item) => openIssue(item.issue_id)}
-              onToast={showToast}
             />
           ) : route.issueId === issueDetailFixture.issue_id ? (
             route.roomId !== null ? (
