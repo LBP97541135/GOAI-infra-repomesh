@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { IssueDetailView, RoomListItemView } from "../api/contract";
 import type { ApprovalInfo, Decision } from "../types";
-import { fetchDecisionDeck, governanceAgentId, submitGovernanceDecision } from "../api/decisions";
+import {
+  fetchDecisionDeck,
+  resolveGovernanceAgent,
+  submitGovernanceDecision,
+  type GovernanceAgent,
+} from "../api/decisions";
 import { fetchIssueDetail, fetchRooms } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
@@ -36,6 +41,10 @@ export function IssueDetailContainer({
   const [approvalOpen, setApprovalOpen] = useState(false);
   const [approvalSubmitting, setApprovalSubmitting] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  /** 治理决策主体：从花名册派生（主脑裁决乙案）。null = 尚未解析或解析不到，
+   *  后者必须禁用提交——发一个查无此人的 decided_by_agent_id 只会换来 403。 */
+  const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
+  const [principalResolving, setPrincipalResolving] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +68,22 @@ export function IssueDetailContainer({
   }, [issueId, reload]);
 
   const roundId = detail?.active_round_id ?? detail?.latest_round_id ?? null;
+  const organizationId = detail?.organization_id ?? null;
+
+  // 决策主体按 issue 所属组织解析：跨组织的 leader 会被后端以「belongs to another
+  // organization」拒绝，所以这里就得选对，不能等提交时才发现
+  useEffect(() => {
+    if (!detail) return;
+    let cancelled = false;
+    setPrincipalResolving(true);
+    resolveGovernanceAgent(organizationId)
+      .then((agent) => !cancelled && setPrincipal(agent))
+      .catch(() => !cancelled && setPrincipal(null))
+      .finally(() => !cancelled && setPrincipalResolving(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [detail, organizationId]);
 
   useEffect(() => {
     if (!roundId || !detail) {
@@ -116,14 +141,14 @@ export function IssueDetailContainer({
       onToast("已批准（回放演示，未写入后端）");
       return;
     }
-    const agentId = governanceAgentId();
-    if (!agentId) {
-      setApprovalError("未配置治理决策主体（VITE_GOVERNANCE_AGENT_ID），无法提交。");
+    // 兜底：按钮此时应当已被禁用，这里只是不让任何路径漏发注定被拒的请求
+    if (!principal) {
+      setApprovalError("决策主体未接入，无法提交。");
       return;
     }
     setApprovalSubmitting(true);
     setApprovalError(null);
-    submitGovernanceDecision(roundId, approval, comment, agentId)
+    submitGovernanceDecision(roundId, approval, comment, principal.agentId)
       .then(() => {
         setApprovalOpen(false);
         onToast("治理决策已记录：READY（head-bound），merge gate 放行");
@@ -192,6 +217,15 @@ export function IssueDetailContainer({
         info={approval}
         submitting={approvalSubmitting}
         errorText={approvalError}
+        principal={
+          resolveDataSourceMode() === "replay"
+            ? { state: "replay", label: "回放演示（不写后端）" }
+            : principalResolving
+              ? { state: "resolving", label: "解析中…" }
+              : principal
+                ? { state: "ready", label: `AGENT ${principal.label}` }
+                : { state: "missing", label: "决策主体未接入" }
+        }
         onCancel={() => setApprovalOpen(false)}
         onApprove={handleApprove}
       />

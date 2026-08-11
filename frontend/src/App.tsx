@@ -322,6 +322,15 @@ export default function App() {
         info={delivery?.approval ?? null}
         submitting={approvalSubmitting}
         errorText={approvalError}
+        // v1 保持原样：仍用 env 常量，不接花名册派生（本页随清理批次 #17 退役，
+        // 给退役中的界面加新依赖只会让退役更难）
+        principal={
+          resolveDataSourceMode() === "replay"
+            ? { state: "replay", label: delivery?.approval?.authority ?? "回放演示" }
+            : import.meta.env.VITE_GOVERNANCE_AGENT_ID
+              ? { state: "ready", label: delivery?.approval?.authority ?? "治理审批人" }
+              : { state: "missing", label: "决策主体未接入" }
+        }
         onCancel={handleApprovalCancel}
         onApprove={handleApprovalSubmit}
       />

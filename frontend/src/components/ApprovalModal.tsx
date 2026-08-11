@@ -6,11 +6,20 @@ import type { ApprovalInfo } from "../types";
  *  head-bound 语义由后端保证（契约 §4.4：SHA 漂移即 409）——409 时失效提示
  *  显示在弹窗内，不静默失败。 */
 
+/** 授权主体的解析状态（派生自花名册，见 api/decisions.ts）。
+ *  `missing` 必须**禁用提交**：`decided_by_agent_id` 查无此人时后端一定拒绝，
+ *  让用户点一个注定失败的按钮，等于把配置问题伪装成审批失败。 */
+export interface ApprovalPrincipal {
+  state: "resolving" | "ready" | "missing" | "replay";
+  label: string;
+}
+
 export function ApprovalModal({
   open,
   info,
   submitting,
   errorText,
+  principal,
   onCancel,
   onApprove,
 }: {
@@ -18,6 +27,7 @@ export function ApprovalModal({
   info: ApprovalInfo | null;
   submitting: boolean;
   errorText: string | null;
+  principal: ApprovalPrincipal;
   onCancel: () => void;
   onApprove: (comment: string) => void;
 }) {
@@ -36,12 +46,16 @@ export function ApprovalModal({
     }
   }, [open]);
 
+  // 授权主体不再取 viewmodel 的占位串「治理审批人」——它现在有真实来源了
+  // （花名册里该组织的 organization_leader），授权单上写谁批的就必须是谁
   const summary: Array<[string, string]> = [
-    ["授权主体", info?.authority ?? "—"],
+    ["授权主体", principal.label],
     ["绑定快照", info?.snapshotLabel ?? "—"],
     ["有效时间", "30 分钟"],
     ["写入范围", info?.scopeLabel ?? "—"],
   ];
+
+  const blocked = principal.state === "missing" || principal.state === "resolving";
 
   return (
     <dialog
@@ -74,6 +88,14 @@ export function ApprovalModal({
           <div className="mb-3 rounded-hard border border-dashed border-line bg-panel-2 px-[11px] py-2">
             <span className="block font-mono text-[9.5px] tracking-[0.1em] text-tx2">HEAD-BOUND SHA</span>
             <b className="font-mono text-[12px] text-cream">{info.headSha.slice(0, 12)}</b>
+          </div>
+        )}
+
+        {principal.state === "missing" && (
+          <div className="mb-3 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] text-[#e8a184]">
+            <b className="mr-1.5 font-mono tracking-[0.08em]">决策主体未接入</b>
+            花名册里没有该组织可用的 organization_leader，也没有配置
+            VITE_GOVERNANCE_AGENT_ID 覆盖。提交已禁用——治理决策必须记在一个真实主体名下。
           </div>
         )}
 
@@ -116,10 +138,10 @@ export function ApprovalModal({
         </button>
         <button
           className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={!confirmed || submitting}
+          disabled={!confirmed || submitting || blocked}
           onClick={() => onApprove(comment)}
         >
-          {submitting ? "提交中…" : "批准并授权"}
+          {submitting ? "提交中…" : principal.state === "resolving" ? "解析主体…" : "批准并授权"}
         </button>
       </div>
     </dialog>
