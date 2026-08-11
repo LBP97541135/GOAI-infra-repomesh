@@ -33,14 +33,21 @@ convention of a throwaway postgres on 127.0.0.1:5533):
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import uuid
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from repomesh.modules.agent_directory.application import CreateAgent, CreateAgentRequest
 from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
+from repomesh.modules.agent_runtime.runner_store import (
+    RunnerDispatchRecord,
+    RunnerEventRecord,
+)
+from repomesh.modules.collaboration.infrastructure import CollaborationMessageRecord
 from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
@@ -58,6 +65,7 @@ from repomesh.modules.delivery.contracts import (
     RecoveryTrigger,
     RepositoryCandidateInput,
 )
+from repomesh.modules.delivery.infrastructure import SCMObservationRecord
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.infrastructure import (
     PostgresRepositoryCatalog,
@@ -197,6 +205,189 @@ async def seed_tasks(
     return leader, worker
 
 
+async def seed_room_stream(database: Database) -> None:
+    """Idempotently seed the live room stream (runner / matrix / gate facts).
+
+    The delivery read-model events timeline (contract v0.1 §4.1) merges
+    agent_runtime.runner_events, collaboration.messages and
+    delivery.scm_observations; without rows the console room stream renders
+    empty. Stable UUIDv5 ids make reruns a no-op: when the first runner event
+    already exists the whole section is skipped.
+    """
+
+    async with database.transaction() as session:
+        marker = await session.get(
+            RunnerEventRecord, stable_id("runner-event:a-api:started")
+        )
+    if marker is not None:
+        return
+
+    organization_id = stable_id("organization")
+    changesets = PostgresChangeSetStore(database)
+    base = datetime.now(UTC) - timedelta(hours=1)
+    scenarios = (
+        ("a-api", "plan:a", "repo:a:api", A_API_HEAD, True, False),
+        ("a-client", "plan:a", "repo:a:client", A_CLIENT_HEAD, True, False),
+        ("b-checkout", "plan:b", "repo:b:checkout", B_HEAD, True, False),
+        ("c-billing", "plan:c", "repo:c:billing", C_HEAD, False, True),
+    )
+    rows: list[object] = []
+    for index, (key, plan_name, repo_name, head, ci_passed, rework) in enumerate(
+        scenarios
+    ):
+        plan_id = stable_id(plan_name)
+        repository_id = stable_id(repo_name)
+        project_id = stable_id(plan_name.replace("plan:", "project:"))
+        worker_task_id = stable_id(f"task:{key}:worker")
+        run_id = stable_id(f"run:{key}")
+        binding = await changesets.get_by_idempotency_key(
+            delivery_change_set_key(plan_id)
+        )
+        change_set_id = binding[0].id if binding is not None else None
+        t0 = base + timedelta(minutes=index * 2)
+
+        rows.append(
+            CollaborationMessageRecord(
+                id=stable_id(f"message:{key}:assignment"),
+                organization_id=organization_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                task_id=worker_task_id,
+                sender_agent_id=stable_id(f"agent:{key}:repo-leader"),
+                recipient_agent_id=stable_id(f"agent:{key}:worker"),
+                kind="task_assignment",
+                subject=f"任务指派：交付 {key}",
+                body="按已冻结的工程契约实现本仓库范围，验收标准见任务卡。",
+                room_id="!console-demo:matrix.local",
+                status="delivered",
+                event_id=f"$seed-{key}-assignment",
+                correlation_id=stable_id(f"correlation:{key}"),
+                created_at=t0,
+                idempotency_key=f"console-demo:msg:{key}:assignment",
+                request_fingerprint="sha256:" + "d" * 64,
+            )
+        )
+        rows.append(
+            RunnerDispatchRecord(
+                run_id=run_id,
+                organization_id=organization_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                task_id=worker_task_id,
+                worker_agent_id=stable_id(f"agent:{key}:worker"),
+                status="completed",
+                task_payload={"seed": "console-demo", "scenario": key},
+                idempotency_key=f"console-demo:run:{key}",
+                attempt=1,
+                lease_until=None,
+                created_at=t0 + timedelta(minutes=1),
+                completed_at=t0 + timedelta(minutes=6),
+            )
+        )
+        rows.append(
+            RunnerEventRecord(
+                event_id=stable_id(f"runner-event:{key}:started"),
+                run_id=run_id,
+                sequence=1,
+                event_type="runner.started",
+                payload={"summary": "runner picked up the task"},
+                occurred_at=t0 + timedelta(minutes=1),
+                recorded_at=t0 + timedelta(minutes=1),
+            )
+        )
+        rows.append(
+            RunnerEventRecord(
+                event_id=stable_id(f"runner-event:{key}:completed"),
+                run_id=run_id,
+                sequence=2,
+                event_type="runner.completed",
+                payload={"summary": "candidate ready", "commitSha": head},
+                occurred_at=t0 + timedelta(minutes=6),
+                recorded_at=t0 + timedelta(minutes=6),
+            )
+        )
+        if change_set_id is not None:
+            check_payload = {
+                "check": "test",
+                "conclusion": "success" if ci_passed else "failure",
+                "head_sha": head,
+            }
+            rows.append(
+                SCMObservationRecord(
+                    id=stable_id(f"observation:{key}:check"),
+                    provider="github",
+                    source="webhook",
+                    external_id=f"console-demo:{key}:check",
+                    event_type=(
+                        "check_run.completed" if ci_passed else "check_run.failed"
+                    ),
+                    payload=check_payload,
+                    payload_hash=hashlib.sha256(
+                        json.dumps(check_payload, sort_keys=True).encode()
+                    ).hexdigest(),
+                    status="processed",
+                    change_set_id=change_set_id,
+                    repository_id=repository_id,
+                    attempts=1,
+                    version=1,
+                    last_error=None,
+                    observed_at=t0 + timedelta(minutes=8),
+                    received_at=t0 + timedelta(minutes=8),
+                    claimed_at=None,
+                    processed_at=t0 + timedelta(minutes=9),
+                )
+            )
+            if key.startswith("a-"):
+                merge_payload = {"action": "merged", "head_sha": head}
+                rows.append(
+                    SCMObservationRecord(
+                        id=stable_id(f"observation:{key}:merged"),
+                        provider="github",
+                        source="webhook",
+                        external_id=f"console-demo:{key}:merged",
+                        event_type="pull_request.merged",
+                        payload=merge_payload,
+                        payload_hash=hashlib.sha256(
+                            json.dumps(merge_payload, sort_keys=True).encode()
+                        ).hexdigest(),
+                        status="processed",
+                        change_set_id=change_set_id,
+                        repository_id=repository_id,
+                        attempts=1,
+                        version=1,
+                        last_error=None,
+                        observed_at=t0 + timedelta(minutes=12),
+                        received_at=t0 + timedelta(minutes=12),
+                        claimed_at=None,
+                        processed_at=t0 + timedelta(minutes=12),
+                    )
+                )
+        if rework:
+            rows.append(
+                CollaborationMessageRecord(
+                    id=stable_id(f"message:{key}:rework"),
+                    organization_id=organization_id,
+                    project_id=project_id,
+                    repository_id=repository_id,
+                    task_id=stable_id(f"task:{key}:rework"),
+                    sender_agent_id=stable_id(f"agent:{key}:repo-leader"),
+                    recipient_agent_id=stable_id(f"agent:{key}:worker"),
+                    kind="task_assignment",
+                    subject=f"返工指派：修复 {key} 的失败候选",
+                    body="CI 未通过，请依据失败证据修复候选并重交。",
+                    room_id="!console-demo:matrix.local",
+                    status="delivered",
+                    event_id=f"$seed-{key}-rework",
+                    correlation_id=stable_id(f"correlation:{key}:rework"),
+                    created_at=t0 + timedelta(minutes=10),
+                    idempotency_key=f"console-demo:msg:{key}:rework",
+                    request_fingerprint="sha256:" + "e" * 64,
+                )
+            )
+    async with database.transaction() as session:
+        session.add_all(rows)
+
+
 async def seed(database_url: str) -> dict[str, object]:
     database = Database(database_url)
     try:
@@ -213,6 +404,7 @@ async def seed(database_url: str) -> dict[str, object]:
                 ),
                 idempotency_key="console-demo-org-leader",
             )
+            await seed_room_stream(database)
             return {
                 "already_seeded": True,
                 "decided_by_agent_id": str(replay.principal.id),
@@ -674,6 +866,7 @@ async def seed(database_url: str) -> dict[str, object]:
             "delivery_id": None,
             "phase": "plan (virtual draft)",
         }
+        await seed_room_stream(database)
         return out
     finally:
         await database.dispose()

@@ -515,6 +515,17 @@ class PostgresSCMObservationStore:
         except IntegrityError as error:
             raise DeliveryConflict("duplicate SCM observation") from error
 
+    async def list_by_change_set(self, change_set_id: UUID) -> tuple[SCMObservation, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(SCMObservationRecord)
+                    .where(SCMObservationRecord.change_set_id == change_set_id)
+                    .order_by(SCMObservationRecord.observed_at)
+                )
+            ).all()
+        return tuple(self._hydrate_observation(record) for record in records)
+
     async def get(self, observation_id: UUID) -> SCMObservation | None:
         async with self._database.transaction() as session:
             record = await session.get(SCMObservationRecord, observation_id)

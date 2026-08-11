@@ -32,9 +32,12 @@ from .sources import (
     ArchiveSource,
     ChangeSetSource,
     ExecutionPlanSource,
+    MessageSource,
+    ObservationSource,
     PlanSnapshotData,
     PlanSnapshotSource,
     RepositorySource,
+    RunnerEventSource,
     SpecificationSource,
     TaskSource,
     TopologySource,
@@ -78,6 +81,9 @@ class DeliveryReadModelService:
         repositories: RepositorySource,
         agents: AgentNameSource,
         topology: TopologySource,
+        runner_events: RunnerEventSource,
+        messages: MessageSource,
+        observations: ObservationSource,
     ) -> None:
         self._plans = plans
         self._snapshots = snapshots
@@ -89,6 +95,9 @@ class DeliveryReadModelService:
         self._repositories = repositories
         self._agents = agents
         self._topology = topology
+        self._runner_events = runner_events
+        self._messages = messages
+        self._observations = observations
 
     # ------------------------------------------------------------------ list
 
@@ -298,6 +307,148 @@ class DeliveryReadModelService:
         if change_set is None:
             return {"items": []}
         return {"items": await self._decision_items(plan, change_set)}
+
+    # ------------------------------------------------------ events & messages
+
+    async def list_events(
+        self,
+        delivery_id: UUID,
+        *,
+        kind: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict | None:
+        """Contract §4.1: one timeline over runner / matrix / gate / plan facts.
+
+        `deny` has no audit store in v0.1 and is never produced. payload_ref is
+        the stable source reference and doubles as the deterministic tiebreak,
+        so ordering (and therefore the offset cursor) is stable across reads.
+        """
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        project_id = plan.project_id
+        leader_task_ids = {
+            planned.leader_task_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        tasks = await self._tasks.list_by_project(project_id)
+        worker_task_ids = {
+            task.id for task in tasks if task.parent_task_id in leader_task_ids
+        }
+        change_set = await self._change_sets.for_delivery(delivery_id)
+
+        items: list[dict] = []
+        for event in await self._runner_events.for_project(project_id):
+            if event.task_id not in worker_task_ids:
+                continue
+            items.append(
+                {
+                    "at": event.occurred_at,
+                    "kind": "runner",
+                    "text": event.event_type,
+                    "task_id": event.task_id,
+                    "repository_id": event.repository_id,
+                    "payload_ref": f"runner-event:{event.event_id}",
+                }
+            )
+        for message in await self._messages.for_project(project_id):
+            # Task-bound messages belong to one delivery; unbound ones are
+            # project-wide broadcasts and show up on every delivery's timeline.
+            if message.task_id is not None and message.task_id not in worker_task_ids:
+                continue
+            items.append(
+                {
+                    "at": message.created_at,
+                    "kind": "matrix",
+                    "text": f"{message.kind.value}: {message.subject}",
+                    "task_id": message.task_id,
+                    "repository_id": message.repository_id,
+                    "payload_ref": f"collaboration-message:{message.id}",
+                }
+            )
+        if change_set is not None:
+            for observation in await self._observations.for_change_set(change_set.id):
+                items.append(
+                    {
+                        "at": observation.observed_at,
+                        "kind": "gate",
+                        "text": observation.event_type,
+                        "task_id": None,
+                        "repository_id": observation.repository_id,
+                        "payload_ref": f"scm-observation:{observation.id}",
+                    }
+                )
+        for snapshot in await self._snapshots.for_project(project_id):
+            if snapshot.execution_plan_id != delivery_id:
+                continue
+            items.append(
+                {
+                    "at": snapshot.created_at,
+                    "kind": "plan",
+                    "text": f"计划 v{snapshot.plan_version} 已生成",
+                    "task_id": None,
+                    "repository_id": None,
+                    "payload_ref": f"plan-snapshot:{snapshot.id}",
+                }
+            )
+
+        if kind is not None:
+            items = [item for item in items if item["kind"] == kind]
+        items.sort(key=lambda item: (item["at"], item["payload_ref"]))
+        page = items[offset : offset + limit]
+        next_cursor = str(offset + limit) if offset + limit < len(items) else None
+        return {"items": page, "next_cursor": next_cursor}
+
+    async def list_messages(self, delivery_id: UUID) -> dict | None:
+        """Contract §4.2: CollaborationMessageView projection for one delivery.
+
+        v0.1 only ingests Leader→Worker traffic, so every item carries
+        direction=leader_to_worker until Worker→Leader reports are audited.
+        """
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        leader_task_ids = {
+            planned.leader_task_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        tasks = await self._tasks.list_by_project(plan.project_id)
+        worker_task_ids = {
+            task.id for task in tasks if task.parent_task_id in leader_task_ids
+        }
+        items = []
+        for message in await self._messages.for_project(plan.project_id):
+            if message.task_id is not None and message.task_id not in worker_task_ids:
+                continue
+            items.append(
+                {
+                    "id": message.id,
+                    "kind": message.kind.value,
+                    "subject": message.subject,
+                    "body": message.body,
+                    "sender_agent_id": message.sender_agent_id,
+                    "sender_name": await self._agents.name(message.sender_agent_id),
+                    "recipient_agent_id": message.recipient_agent_id,
+                    "recipient_name": await self._agents.name(
+                        message.recipient_agent_id
+                    ),
+                    "repository_id": message.repository_id,
+                    "task_id": message.task_id,
+                    "status": message.status.value,
+                    "event_id": message.event_id,
+                    "correlation_id": message.correlation_id,
+                    "created_at": message.created_at,
+                    "direction": "leader_to_worker",
+                }
+            )
+        return {"items": items}
 
     # ----------------------------------------------------------------- detail
 

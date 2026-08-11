@@ -339,10 +339,14 @@ class ApplicationContainer:
         from repomesh.api.read_models.sources import (
             PlanSnapshotData,
             RepositoryData,
+            RunnerEventData,
             SpecificationContractData,
         )
+        from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
+        from repomesh.modules.collaboration import PostgresCollaborationMessageStore
         from repomesh.modules.delivery import (
             PostgresDeliveryArchiveStore,
+            PostgresSCMObservationStore,
             delivery_change_set_key,
         )
         from repomesh.modules.review_validation import PostgresValidationSnapshotStore
@@ -357,6 +361,9 @@ class ApplicationContainer:
         snapshot_store = self.plan_snapshot_store()
         archive_store = PostgresDeliveryArchiveStore(self.database)
         validation_store = PostgresValidationSnapshotStore(self.database)
+        runner_store = PostgresRunnerGatewayStore(self.database)
+        message_store = PostgresCollaborationMessageStore(self.database)
+        observation_store = PostgresSCMObservationStore(self.database)
 
         class _Plans:
             async def list_all(self):
@@ -462,6 +469,37 @@ class ApplicationContainer:
                     return None
                 return topology.repository_teams[0].room_id
 
+        class _RunnerEvents:
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    RunnerEventData(
+                        event_id=row["event_id"],
+                        run_id=row["run_id"],
+                        sequence=row["sequence"],
+                        event_type=row["event_type"],
+                        occurred_at=row["occurred_at"],
+                        task_id=row["task_id"],
+                        repository_id=row["repository_id"],
+                    )
+                    for row in await runner_store.list_events_for_project(project_id)
+                )
+
+        class _Messages:
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    message.to_view()
+                    for message in await message_store.list_by_project(project_id)
+                )
+
+        class _Observations:
+            async def for_change_set(self, change_set_id: UUID):
+                return tuple(
+                    observation.to_view()
+                    for observation in await observation_store.list_by_change_set(
+                        change_set_id
+                    )
+                )
+
         return DeliveryReadModelService(
             plans=_Plans(),
             snapshots=_Snapshots(),
@@ -473,6 +511,9 @@ class ApplicationContainer:
             repositories=_Repositories(),
             agents=_Agents(),
             topology=_Topology(),
+            runner_events=_RunnerEvents(),
+            messages=_Messages(),
+            observations=_Observations(),
         )
 
     def delivery_governance_service(self):

@@ -12,7 +12,12 @@ from uuid import UUID, uuid4
 import pytest
 
 from repomesh.api.read_models import REWORK_TASK_TITLE, DeliveryReadModelService
-from repomesh.api.read_models.sources import PlanSnapshotData
+from repomesh.api.read_models.sources import PlanSnapshotData, RunnerEventData
+from repomesh.modules.collaboration.contracts import (
+    CollaborationDeliveryStatus,
+    CollaborationMessageKind,
+    CollaborationMessageView,
+)
 from repomesh.modules.delivery.contracts import (
     MERGE_GATE_GOVERNANCE_MISSING_REASON,
     CandidateRevisionView,
@@ -27,6 +32,9 @@ from repomesh.modules.delivery.contracts import (
     RecoveryTrigger,
     RepositoryDeliveryStatus,
     RepositoryDeliveryView,
+    SCMObservationSource,
+    SCMObservationStatus,
+    SCMObservationView,
 )
 from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
@@ -113,8 +121,21 @@ class _Empty:
     async def matrix_room_id(self, project_id: UUID):
         return None
 
+    async def for_change_set(self, change_set_id: UUID):
+        return ()
 
-def _service(plans, snapshots, tasks, change_sets, archives, repositories=None):
+
+def _service(
+    plans,
+    snapshots,
+    tasks,
+    change_sets,
+    archives,
+    repositories=None,
+    runner_events=None,
+    messages=None,
+    observations=None,
+):
     empty = _Empty()
     return DeliveryReadModelService(
         plans=plans,
@@ -127,6 +148,9 @@ def _service(plans, snapshots, tasks, change_sets, archives, repositories=None):
         repositories=repositories if repositories is not None else empty,
         agents=empty,
         topology=empty,
+        runner_events=runner_events if runner_events is not None else empty,
+        messages=messages if messages is not None else empty,
+        observations=observations if observations is not None else empty,
     )
 
 
@@ -495,3 +519,179 @@ async def test_decisions_watch_covers_active_rework_and_missing_delivery() -> No
     assert payload["items"][0]["actions"] == ["view_evidence"]
 
     assert await service.list_decisions(uuid4()) is None
+
+
+class StubRunnerEvents:
+    def __init__(self, *events: RunnerEventData) -> None:
+        self.events = events
+
+    async def for_project(self, project_id: UUID):
+        return self.events
+
+
+class StubMessages:
+    def __init__(self, *messages: CollaborationMessageView) -> None:
+        self.messages = messages
+
+    async def for_project(self, project_id: UUID):
+        return self.messages
+
+
+class StubObservations:
+    def __init__(self, *observations: SCMObservationView) -> None:
+        self.observations = observations
+
+    async def for_change_set(self, change_set_id: UUID):
+        return self.observations
+
+
+@pytest.mark.asyncio
+async def test_events_merges_four_sources_with_stable_cursor() -> None:
+    """Contract §4.1: runner/matrix/gate/plan in one chronological timeline;
+    the offset cursor resumes without reordering and foreign tasks are cut."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = _worker(project_id, repository_id, leader_task_id)
+    change_set = _manual_intervention_change_set(plan, repository_id, worker.id)
+    t0 = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
+
+    def runner_event(minute: int, task_id: UUID, event_type: str) -> RunnerEventData:
+        return RunnerEventData(
+            event_id=uuid4(),
+            run_id=uuid4(),
+            sequence=1,
+            event_type=event_type,
+            occurred_at=t0.replace(minute=minute),
+            task_id=task_id,
+            repository_id=repository_id,
+        )
+
+    message = CollaborationMessageView(
+        id=uuid4(),
+        organization_id=plan.organization_id,
+        project_id=project_id,
+        repository_id=repository_id,
+        task_id=worker.id,
+        sender_agent_id=uuid4(),
+        recipient_agent_id=worker.assignee_agent_id,
+        kind=CollaborationMessageKind.TASK_ASSIGNMENT,
+        subject="任务指派",
+        body="body",
+        room_id="!room:local",
+        status=CollaborationDeliveryStatus.DELIVERED,
+        event_id="$evt",
+        correlation_id=uuid4(),
+        created_at=t0.replace(minute=5),
+    )
+    observation = SCMObservationView(
+        id=uuid4(),
+        provider="github",
+        source=SCMObservationSource.WEBHOOK,
+        external_id="obs-1",
+        event_type="check_run.completed",
+        payload={},
+        payload_hash="0" * 64,
+        status=SCMObservationStatus.PROCESSED,
+        change_set_id=change_set.id,
+        repository_id=repository_id,
+        attempts=1,
+        version=1,
+        last_error=None,
+        observed_at=t0.replace(minute=20),
+        received_at=t0.replace(minute=20),
+        claimed_at=None,
+        processed_at=None,
+    )
+    snapshot = PlanSnapshotData(
+        id=uuid4(),
+        project_id=project_id,
+        plan_version=1,
+        created_at=t0,
+        engineering_spec="spec",
+        requirement_text="req",
+        execution_batches=(("repo",),),
+        task_dag=(),
+        execution_plan_id=plan.id,
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(snapshot),
+        StubTasks(worker),
+        StubChangeSets({plan.id: change_set}),
+        StubArchives(),
+        runner_events=StubRunnerEvents(
+            runner_event(10, worker.id, "runner.started"),
+            runner_event(15, uuid4(), "runner.started"),  # foreign task: excluded
+        ),
+        messages=StubMessages(message),
+        observations=StubObservations(observation),
+    )
+
+    full = await service.list_events(plan.id)
+    assert [item["kind"] for item in full["items"]] == ["plan", "matrix", "runner", "gate"]
+    assert full["next_cursor"] is None
+    assert all(isinstance(item["at"], datetime) for item in full["items"])
+
+    page_one = await service.list_events(plan.id, limit=2)
+    page_two = await service.list_events(plan.id, offset=2, limit=2)
+    assert page_one["next_cursor"] == "2"
+    assert page_two["next_cursor"] is None
+    assert [i["payload_ref"] for i in page_one["items"] + page_two["items"]] == [
+        item["payload_ref"] for item in full["items"]
+    ]
+
+    gate_only = await service.list_events(plan.id, kind="gate")
+    assert [item["kind"] for item in gate_only["items"]] == ["gate"]
+    assert await service.list_events(uuid4()) is None
+
+
+@pytest.mark.asyncio
+async def test_messages_projects_direction_and_scopes_to_delivery() -> None:
+    """Contract §4.2: direct projection; the Leader→Worker-only limitation is
+    discernible via the direction field."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = _worker(project_id, repository_id, leader_task_id)
+
+    def message(task_id: UUID | None) -> CollaborationMessageView:
+        return CollaborationMessageView(
+            id=uuid4(),
+            organization_id=plan.organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            task_id=task_id,
+            sender_agent_id=uuid4(),
+            recipient_agent_id=worker.assignee_agent_id,
+            kind=CollaborationMessageKind.TASK_ASSIGNMENT,
+            subject="任务指派",
+            body="body",
+            room_id="!room:local",
+            status=CollaborationDeliveryStatus.DELIVERED,
+            event_id=None,
+            correlation_id=uuid4(),
+            created_at=datetime(2026, 8, 11, 10, 0, tzinfo=UTC),
+        )
+
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({}),
+        StubArchives(),
+        messages=StubMessages(message(worker.id), message(uuid4())),
+    )
+
+    payload = await service.list_messages(plan.id)
+
+    assert len(payload["items"]) == 1  # foreign-task message excluded
+    item = payload["items"][0]
+    assert item["direction"] == "leader_to_worker"
+    assert item["status"] == "delivered"
+    assert item["created_at"] is not None
+    assert await service.list_messages(uuid4()) is None

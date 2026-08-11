@@ -10,10 +10,12 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from repomesh.modules.collaboration.contracts import CollaborationMessageView
 from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     DeliveryArchiveView,
     MergeGateDecision,
+    SCMObservationView,
 )
 from repomesh.modules.review_validation.contracts import ValidationSnapshotView
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanView, TaskView
@@ -94,6 +96,33 @@ class SpecificationSource(Protocol):
 
 class RepositorySource(Protocol):
     async def list(self) -> tuple[RepositoryData, ...]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class RunnerEventData:
+    event_id: UUID
+    run_id: UUID
+    sequence: int
+    event_type: str
+    occurred_at: datetime
+    task_id: UUID
+    repository_id: UUID
+
+
+class RunnerEventSource(Protocol):
+    async def for_project(self, project_id: UUID) -> tuple[RunnerEventData, ...]: ...
+
+
+class MessageSource(Protocol):
+    async def for_project(
+        self, project_id: UUID
+    ) -> tuple[CollaborationMessageView, ...]: ...
+
+
+class ObservationSource(Protocol):
+    async def for_change_set(
+        self, change_set_id: UUID
+    ) -> tuple[SCMObservationView, ...]: ...
 
 
 class AgentNameSource(Protocol):
