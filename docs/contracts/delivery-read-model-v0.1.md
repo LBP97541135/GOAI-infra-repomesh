@@ -209,6 +209,24 @@ v0.2 §5.2 `/rooms/{room_id}/stream` 的职责，不在此端点重复一套游�
 本段是澄清既有行为、不改变实现——写下来是因为消费方曾按 §4.1 的形状类推补了游标字段。
 v0.2 另为本端点补投影 `room_id`（见 v0.2 §5.2），与房间流共用同一投影函数。
 
+**再补三个附加字段 `id` / `repository_id` / `task_id`（2026-08-11 主脑追认，消费方
+code-review 问询后补写，与 `direction` 先例同类）**：投影函数直出 view 的这三列，起草时
+正文枚举没写全，实现从未变过。语义与可空性以 `collaboration/contracts.py` 的
+`CollaborationMessageView` 为准：
+
+- `id`：消息主键，**恒非空**（`UUID`）——消费方可安全用作列表 key；
+- `repository_id`：`UUID | None`，**非仓库相关的消息为 `null`**；
+- `task_id`：`UUID | None`，**非任务相关的消息为 `null`**。
+
+投影函数 `_message_item()` 由 `/messages` 与 v0.2 §5.2 房间流**共用**，故 `items[].message`
+里同样有这三个字段，两端形状恒等（这正是当初共用一个函数的目的）。
+
+至此本端点响应的 16 个键**全部见于契约文本**：正文枚举 8（`kind` / `subject` / `body` /
+`sender_agent_id` / `recipient_agent_id` / `status` / `event_id` / `correlation_id`）+
+前段追认 4（`direction` / `sender_name` / `recipient_name` / `created_at`）+ `room_id` 1 +
+本段 3。**记账教训（同 v0.2 §7.3）**：「直投影」这种省略式写法会系统性漏字段——
+凡写「直投影」的段落，字段表都应从投影函数逐字段对读生成，而不是凭印象枚举。
+
 ### 4.3 `GET /deliveries/{delivery_id}/decisions`
 
 ```json
