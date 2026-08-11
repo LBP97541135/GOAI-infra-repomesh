@@ -126,7 +126,7 @@ export function SettingsPage({ account }: { account: Account }) {
           </li>
           <li>· 房间刷新仍为轮询（5s）；SSE 推送需先定「哪些事实值得推」，另立项。</li>
           <li>· 读端点用共享动作 token，与本地登录会话是两套鉴权，尚未打通。</li>
-          <li>· 工作区（组织）列表与切换：组织写端点未接入，侧栏暂无工作区清单。</li>
+          <li>· 工作区（组织）删除与改名未接入；列表、切换与创建已接入（契约 v0.3 §2）。</li>
         </ul>
       </Section>
     </div>
