@@ -10,7 +10,6 @@ import type {
   DeliveryMessagesPage,
   DeliveryTaskView,
 } from "../api/contract";
-import type { DeliveryData, DeliveryDataSource } from "../api/source";
 import type { ChatMessage, Clarification, Decision, PresentationOverlay, RepoDiff } from "../types";
 
 /* ------------------------------------------------------------------ 标识符 */
@@ -551,22 +550,4 @@ export const overlay: PresentationOverlay = {
   envProcesses: ["repomesh-runner · poll /runner-tasks/next", "otlp-exporter → localhost:3001/v1/traces"],
 };
 
-/* -------------------------------------------------------------- 数据源 */
-
-export function buildReleaseScene(): DeliveryData {
-  return {
-    list: listResponse,
-    aggregate,
-    events: eventsPage,
-    messages: messagesPage,
-    decisions: decisionsResponse,
-    overlay,
-  };
-}
-
-export function createReplaySource(): DeliveryDataSource {
-  return {
-    mode: "replay",
-    fetchAll: () => Promise.resolve(buildReleaseScene()),
-  };
-}
+/* 场景状态机（回放模式的 4 阶段推进）见 ./scenes.ts */

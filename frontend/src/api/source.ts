@@ -11,7 +11,7 @@ import type {
 } from "./contract";
 import type { PresentationOverlay } from "../types";
 import { createApiClient } from "./client";
-import { createReplaySource } from "../data/replay";
+import { createReplaySource } from "../data/scenes";
 
 export type DataSourceMode = "live" | "replay";
 

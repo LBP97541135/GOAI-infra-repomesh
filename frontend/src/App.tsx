@@ -5,12 +5,17 @@ import { EnvPanel } from "./components/EnvPanel";
 import { MessageStream } from "./components/MessageStream";
 import { PlanView } from "./components/PlanView";
 import { Sidebar } from "./components/Sidebar";
+import { ReplayBar } from "./components/ReplayBar";
 import { createDataSource, resolveDataSourceMode } from "./api/source";
 import type { DeliveryData } from "./api/source";
+import { SCENES } from "./data/scenes";
 import { deriveChat, deriveView } from "./viewmodel";
 import type { ChatMessage, Decision } from "./types";
 
 type View = "room" | "plan";
+
+/** 场景自动推进间隔（回放模式） */
+const SCENE_INTERVAL_MS = 7000;
 
 let msgSeq = 0;
 
@@ -29,11 +34,17 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const toastTimer = useRef<number | undefined>(undefined);
 
+  // 回放场景状态机：默认停在终态（审批合并），▶ 从头推进完整闭环
+  const sceneCount = source.sceneCount ?? 0;
+  const [sceneIdx, setSceneIdx] = useState(Math.max(0, sceneCount - 1));
+  const [playing, setPlaying] = useState(false);
+
   const delivery = useMemo(() => (data ? deriveView(data) : null), [data]);
 
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
+    source.setScene?.(sceneIdx);
     source
       .fetchAll()
       .then((d) => {
@@ -50,7 +61,30 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [source]);
+  }, [source, sceneIdx]);
+
+  useEffect(() => {
+    if (!playing) return;
+    const timer = window.setInterval(() => {
+      setSceneIdx((i) => {
+        if (i + 1 >= sceneCount) {
+          setPlaying(false);
+          return i;
+        }
+        return i + 1;
+      });
+    }, SCENE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [playing, sceneCount]);
+
+  const handleTogglePlay = () => {
+    if (playing) {
+      setPlaying(false);
+      return;
+    }
+    if (sceneIdx >= sceneCount - 1) setSceneIdx(0);
+    setPlaying(true);
+  };
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -124,6 +158,22 @@ export default function App() {
       />
 
       <main className="relative flex min-w-0 flex-1 flex-col bg-ink">
+        {mode === "replay" && sceneCount > 0 && (
+          <ReplayBar
+            scenes={SCENES}
+            current={sceneIdx}
+            playing={playing}
+            onSelect={(i) => {
+              setPlaying(false);
+              setSceneIdx(i);
+            }}
+            onTogglePlay={handleTogglePlay}
+            onReset={() => {
+              setPlaying(false);
+              setSceneIdx(0);
+            }}
+          />
+        )}
         {loadError && (
           <div className="flex-none border-b border-[#7a4530] bg-[#2b1712] px-[22px] py-2 text-[12.5px] text-[#e8a184]">
             <b className="mr-2 font-mono tracking-[0.08em]">LIVE 数据源不可用</b>

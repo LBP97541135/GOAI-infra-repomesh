@@ -32,6 +32,7 @@ nullable 降级路径（契约 §6）：`diffstat` 缺失只列文件名；`cost
 - `src/api/client.ts` —— typed fetch client（Bearer、ApiError）。
 - `src/api/source.ts` —— `live | replay` 数据源开关与统一取数接口。
 - `src/data/replay.ts` —— DLV-0042 replay 夹具（契约形状 + 演示叙事覆盖层）。
+- `src/data/scenes.ts` —— 回放场景状态机：契约冻结 → 执行 → 失败修复 → 审批合并。
 - `src/viewmodel.ts` —— 契约聚合 → 组件视图模型派生（DAG 布局、标签、降级回退；
   **不做状态映射**：display_status / gate_display / phase 由后端或夹具给出）。
 - `src/types.ts` —— 视图模型类型（状态枚举复用契约类型）。
@@ -41,7 +42,14 @@ nullable 降级路径（契约 §6）：`diffstat` 缺失只列文件名；`cost
   - `MessageStream` + `artifacts` 对话主线程与结构化 artifact 卡；
   - `PlanView` 阿波罗飞行计划纸面文档；`Dag` 四泳道 DAG SVG（room/paper 双皮肤）；
   - `DecisionDeck` VARIADEX 牛皮纸决策夹；`EnvPanel` Codex 式悬浮环境窗；
-  - `ApprovalModal` 快照绑定授权单（未勾选确认框不可批准）。
+  - `ApprovalModal` 快照绑定授权单（未勾选确认框不可批准）；
+  - `ReplayBar` 回放控制条（仅 replay 模式：▶ 一键回放 / ⏸ 暂停 / ↺ 重置 / 场景跳转）。
+
+## 回放模式（Demo 叙事）
+
+replay 数据源默认停在终态（审批合并）；`▶ 回放` 从「契约冻结」起每 7 秒推进一个场景，
+可暂停、重置、点场景章节跳转。clarify 决策（澄清）只存在于回放模式——契约 §6.5 无后端
+实体，live 模式决策夹只有 approve/watch 两类。
 
 ## 已知边界
 
