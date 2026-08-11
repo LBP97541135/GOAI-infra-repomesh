@@ -4,6 +4,8 @@
  *  显示「回放模式不适用」而不是编一份列表。 */
 import type { OrganizationCreateResponse, OrganizationView } from "./contract";
 import { createApiClient } from "./client";
+import { invalidateGovernanceAgentCache } from "./decisions";
+import { invalidateGridCache } from "./grid";
 import { resolveDataSourceMode } from "./source";
 
 function client() {
@@ -21,13 +23,18 @@ export async function fetchWorkspaces(): Promise<OrganizationView[] | null> {
   return res.organizations;
 }
 
-/** 幂等键由调用方持有并传入（A2）：每次逻辑创建新键、重试沿用同键（§1.3/§2.3）。 */
+/** 幂等键由调用方持有并传入（A2）：每次逻辑创建新键、重试沿用同键（§1.3/§2.3）。
+ *  成功后清花名册缓存（B1 主脑硬性要求）：本请求登记了新 Org Leader，缓存不失效
+ *  的话花名册看不到它，工作区闭环显示就是坏的。 */
 export async function createWorkspace(
   name: string,
   idempotencyKey: string,
 ): Promise<OrganizationCreateResponse> {
-  return client().createOrganization({
+  const created = await client().createOrganization({
     name,
     idempotency_key: idempotencyKey,
   });
+  invalidateGridCache();
+  invalidateGovernanceAgentCache();
+  return created;
 }

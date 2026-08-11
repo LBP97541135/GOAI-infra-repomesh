@@ -136,6 +136,11 @@ export interface GovernanceAgent {
  *  （带运行时探测时 ~2s，这里用 with_runtime=false 的那一版，~0.06s）。 */
 const governanceAgentCache = new Map<string, Promise<GovernanceAgent | null>>();
 
+/** B1 配套：花名册事实变化（如创建工作区登记了新 leader）后清缓存。 */
+export function invalidateGovernanceAgentCache(): void {
+  governanceAgentCache.clear();
+}
+
 export function resolveGovernanceAgent(organizationId: string | null): Promise<GovernanceAgent | null> {
   const key = organizationId ?? "*";
   const cached = governanceAgentCache.get(key);

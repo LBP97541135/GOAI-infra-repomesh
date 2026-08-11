@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invalidateGridCache } from "../api/grid";
 import type { RuntimePhase } from "../display";
 
 /** 团队页与花名册页共用的**两段式取数**（CONS-44 选型，见 api/grid.ts 头注）。
@@ -69,5 +70,16 @@ export function useRuntimeRows<T>(fetcher: (withRuntime: boolean) => Promise<T[]
     };
   }, [fetcher, reload]);
 
-  return { rows, error, phase, probeError, retry: () => setReload((n) => n + 1) };
+  return {
+    rows,
+    error,
+    phase,
+    probeError,
+    // B1：手动重试是「我要新事实」的显式表达——绕过会话级缓存强制重取，
+    // 否则 controller 恢复在线后重试按钮只会命中离线时代的缓存
+    retry: () => {
+      invalidateGridCache();
+      setReload((n) => n + 1);
+    },
+  };
 }

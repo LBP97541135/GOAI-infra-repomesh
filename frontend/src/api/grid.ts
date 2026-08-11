@@ -25,6 +25,29 @@ export function gridSourceMode(): DataSourceMode {
   return resolveDataSourceMode();
 }
 
+/** B1：teams/agents 的会话级共享缓存（Promise 缓存，与 governanceAgentCache 同一
+ *  手法——并发调用也去重）。此前智能体页与设置页各自全量重取，来回切一次就是
+ *  4 × 2.1s 的运行时探测。键 = 端点 + with_runtime。
+ *
+ *  失效（主脑裁决硬性要求）：**创建工作区成功后必须清缓存**——POST
+ *  /console/organizations 会同请求登记新的 Org Leader，缓存不失效的话花名册
+ *  看不到它，B-2 的闭环显示就是坏的（api/workspaces.ts 调 invalidate）。 */
+const gridCache = new Map<string, Promise<unknown>>();
+
+function cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const hit = gridCache.get(key);
+  if (hit) return hit as Promise<T>;
+  const pending = load();
+  gridCache.set(key, pending);
+  // 失败不缓存否定结果：临时不可用不该让本会话永久拿不到花名册
+  pending.catch(() => gridCache.delete(key));
+  return pending;
+}
+
+export function invalidateGridCache(): void {
+  gridCache.clear();
+}
+
 /** §4.1：本端点没有运行时代理，一次取全，无需两段式。 */
 export async function fetchConsoleRepositories(): Promise<ConsoleRepositoryView[]> {
   if (gridSourceMode() === "replay") return consoleRepositoriesFixture;
@@ -33,12 +56,12 @@ export async function fetchConsoleRepositories(): Promise<ConsoleRepositoryView[
 
 export async function fetchConsoleTeams(withRuntime: boolean): Promise<ConsoleTeamView[]> {
   if (gridSourceMode() === "replay") return replayRuntime(consoleTeamsFixture, withRuntime);
-  return (await client().listConsoleTeams({ withRuntime })).teams;
+  return cached(`teams:${withRuntime}`, async () => (await client().listConsoleTeams({ withRuntime })).teams);
 }
 
 export async function fetchConsoleAgents(withRuntime: boolean): Promise<ConsoleAgentView[]> {
   if (gridSourceMode() === "replay") return replayRuntime(consoleAgentsFixture, withRuntime);
-  return (await client().listConsoleAgents({ withRuntime })).agents;
+  return cached(`agents:${withRuntime}`, async () => (await client().listConsoleAgents({ withRuntime })).agents);
 }
 
 /** ⚠ **两段式加载的关键陷阱**：`with_runtime=false` 的响应里 `runtime` 也是 `null`
