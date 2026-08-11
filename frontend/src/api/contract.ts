@@ -117,13 +117,16 @@ export interface IssueRepositoryRef {
   role_in_issue: string | null;
 }
 
+/** 拓扑持久化的**建团结果**（§3 与 §4.1/§4.2 同一枚举，只定义一次）。 */
+export type TeamRuntimeStatus = "pending" | "ready" | "failed";
+
 export interface IssueTeamRef {
   team_id: string;
   agentteams_team_name: string;
   repository_id: string;
   /** 拓扑记录的**建团结果**（历史事实）；与 §4.2 的 runtime.phase（当前观测态）
    *  是两个不同事实，契约明文不得合并 */
-  runtime_status: "pending" | "ready" | "failed";
+  runtime_status: TeamRuntimeStatus;
 }
 
 export interface HumanGrantView {
@@ -232,6 +235,112 @@ export interface RepositoryPlanView {
   } | null;
   /** ENGINEERING kind 是项目级，不混入 spec */
   engineering_contract: DeliveryContractView | null;
+}
+
+/* ------------------------------------------ 契约 v0.2 §4 网格 / 团队 / 花名册 */
+
+/** §4.4 运行时代理块的**三态**，压不成一个布尔——三者含义不同，混在一起会撒谎：
+ *   - `null`：AgentTeams 未配置，或 Controller 说没有这个资源（404）——无事实可报；
+ *   - `{ reachable: false }`：探测失败或超时，**HTTP 仍是 200**。契约硬性要求：
+ *     持久化那一半本来可读，不该因运行时不可达整页失败——这是**降级不是故障**，
+ *     文案不得写成「团队坏了」；
+ *   - `{ reachable: true, ... }`：Controller 当前观测值。
+ *
+ *  判据写 `runtime?.reachable`：null 与 false 都落到「无观测值」，只有 true 分支
+ *  才有字段可读，漏判只会退化成「未接入」，不会退化成编造的运行时状态。 */
+export type RuntimeBlock<T> = ({ reachable: true } & T) | { reachable: false } | null;
+
+/** §4.2 TeamRuntimeRef 实际可得字段（`RuntimeSnapshot` 全字段 nullable，已核实现）。 */
+export interface TeamRuntimeFields {
+  phase: string | null;
+  ready_workers: number | null;
+  total_workers: number | null;
+}
+
+/** §4.3 WorkerRuntimeRef / ManagerRuntimeRef 实际可得字段。
+ *  `awake` / `uptime_seconds` **恒 null**：Controller 响应里没有任何时间字段，
+ *  而 DesiredRuntimeState 是我们**下发的期望态**不是观测态——拿它冒充观测即编造。
+ *  两者都只能显「未接入」，补齐路径是 AgentTeams Controller 暴露启动时间戳。 */
+export interface AgentRuntimeFields {
+  phase: string | null;
+  runtime_kind: string | null;
+  matrix_user_id: string | null;
+  room_id: string | null;
+  message: string | null;
+  awake: null;
+  uptime_seconds: null;
+}
+
+/** §4.1 单条。`auto_card` **不投影**（发现证据未按 project 存储，v0.1 §6.10），
+ *  故仓库卡片没有「证据」一栏可填，页面以一句说明交代而不是每张卡糊一个占位。 */
+export interface ConsoleRepositoryView {
+  repository_id: string;
+  name: string;
+  url: string;
+  description: string;
+  topics: string[];
+  languages: string[];
+  profiled_at: string;
+  /** 拓扑派生：该仓库被多少 team 驻扎 */
+  resident_team_count: number;
+  /** 与 /issues 同一次 state 派生求和，不会与 issue 列表打架（§4.1） */
+  open_issue_count: number;
+  active_task_count: number;
+  last_delivery_at: string | null;
+  teams: Array<{ team_id: string; issue_id: string; runtime_status: TeamRuntimeStatus }>;
+}
+
+/** §4.2。`runtime_status`（拓扑记录的**建团结果**，历史事实）与 `runtime.phase`
+ *  （Controller 的**当前观测态**，可能不可达）是两个不同事实，**契约明文不得合并**：
+ *  合成一个徽标会让 controller 打不通时显示成「团队坏了」，而团队其实建成过。 */
+export interface ConsoleTeamView {
+  team_id: string;
+  agentteams_team_name: string;
+  issue_id: string;
+  repository_id: string;
+  /** 契约写 string，但实现在 catalog 查不到该仓库时给 null（已核 service.py） */
+  repository_name: string | null;
+  runtime_status: TeamRuntimeStatus;
+  team_room_id: string | null;
+  leader_room_id: string | null;
+  leader: RoomMemberView;
+  workers: RoomMemberView[];
+  runtime: RuntimeBlock<TeamRuntimeFields>;
+}
+
+export type AgentRole = "organization_leader" | "repository_leader" | "worker";
+
+/** §4.3。`status` 是 agent_directory 的**启用态**（active|disabled），
+ *  **不是醒睡观测态**——原型花名册里的「在岗 / 执行中 / 休眠」没有数据源，
+ *  醒睡见 `AgentRuntimeFields.awake` 的说明。 */
+export interface ConsoleAgentView {
+  agent_id: string;
+  organization_id: string;
+  role: AgentRole;
+  status: "active" | "disabled";
+  /** AgentTeams 资源名（rm-worker-01 这类），**不是人名** */
+  agentteams_resource_name: string;
+  leader_agent_id: string | null;
+  repository_id: string | null;
+  repository_name: string | null;
+  responsibility_paths: string[];
+  /** 拓扑反查；未驻扎任何团队时为 null */
+  team_id: string | null;
+  issue_id: string | null;
+  active_task_count: number;
+  runtime: RuntimeBlock<AgentRuntimeFields>;
+}
+
+export interface ConsoleRepositoriesResponse {
+  repositories: ConsoleRepositoryView[];
+}
+
+export interface ConsoleTeamsResponse {
+  teams: ConsoleTeamView[];
+}
+
+export interface ConsoleAgentsResponse {
+  agents: ConsoleAgentView[];
 }
 
 export interface DeliveryListItem {

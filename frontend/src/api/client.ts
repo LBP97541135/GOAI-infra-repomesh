@@ -1,6 +1,9 @@
 /** 读模型 API typed client。端点与 JSON 形状唯一来源：
  *  docs/contracts/delivery-read-model-v0.1.md §1-§4。 */
 import type {
+  ConsoleAgentsResponse,
+  ConsoleRepositoriesResponse,
+  ConsoleTeamsResponse,
   DecisionsResponse,
   DeliveryAggregate,
   DeliveryEventsPage,
@@ -81,6 +84,31 @@ export function createApiClient(config: ApiClientConfig) {
       const q = params.toString();
       return request<IssueListResponse>(config, "GET", `/issues${q ? `?${q}` : ""}`);
     },
+
+    /** §4.1 + §4.5：三条网格端点收在 `console` 命名空间下——裸 `/repositories`
+     *  已被 repository_intelligence 的 catalog 视图先注册占用，挂裸路径会得到一个
+     *  永远不可达的端点而 OpenAPI 反显网格的定义（文档与实际行为相反）。
+     *  本端点**没有 runtime 块**，故无 with_runtime 参数，实测 0.3s 返回。 */
+    listConsoleRepositories: () =>
+      request<ConsoleRepositoriesResponse>(config, "GET", `/console/repositories`),
+
+    /** §4.2。`withRuntime: false` 时整块 runtime 省略且不发任何 Controller 请求
+     *  （实测 0.10s vs 默认 true 的 2.12s）——首屏用 false，运行时列另发一次填。 */
+    listConsoleTeams: (opts?: { withRuntime?: boolean }) =>
+      request<ConsoleTeamsResponse>(
+        config,
+        "GET",
+        `/console/teams${opts?.withRuntime === false ? "?with_runtime=false" : ""}`,
+      ),
+
+    /** §4.3。同上：探测已并发化（后端 15d9a76），N 条不可达仍收敛到单条超时量级，
+     *  但那仍是 ~2s，故首屏不等它。 */
+    listConsoleAgents: (opts?: { withRuntime?: boolean }) =>
+      request<ConsoleAgentsResponse>(
+        config,
+        "GET",
+        `/console/agents${opts?.withRuntime === false ? "?with_runtime=false" : ""}`,
+      ),
 
     listDeliveries: (cursor?: string) =>
       request<DeliveryListResponse>(config, "GET", `/deliveries${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),

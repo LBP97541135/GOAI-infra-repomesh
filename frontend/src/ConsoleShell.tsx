@@ -5,10 +5,13 @@ import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListResponse } from "./api/contract";
 import { fetchIssues, issuesSourceMode } from "./api/issues";
+import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
+import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { RoomViewContainer } from "./pages/RoomViewContainer";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { TeamsPage } from "./pages/TeamsPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 import DeliveryConsole from "./App";
 
@@ -228,38 +231,10 @@ export default function ConsoleShell() {
               onToast={showToast}
             />
           ))}
-        {route.nav === "repositories" && (
-          <PlaceholderPage
-            title="仓库"
-            workItem="CONS-44"
-            depends="后端 CONS-32（GET /repositories 拓扑与驻扎团队）"
-            note="将展示每仓 · 驻扎团队数 · 团队状态。"
-          />
-        )}
-        {route.nav === "teams" && (
-          <PlaceholderPage
-            title="团队"
-            workItem="CONS-44"
-            depends="后端 CONS-32（GET /teams）"
-            note="将展示 rm-team-* · 归属仓库 · 所属 issue · 成员及状态。"
-          />
-        )}
-        {route.nav === "agents" && (
-          <PlaceholderPage
-            title="智能体"
-            workItem="CONS-44"
-            depends="后端 CONS-32（GET /agents，运行时字段走 AgentTeams Controller 实时代理）"
-            note="将展示花名册：状态 / 归属 / 运行时 / 时长。"
-          />
-        )}
-        {route.nav === "settings" && (
-          <PlaceholderPage
-            title="设置"
-            workItem="CONS-44"
-            depends="Agent runtime 适配器注册表（只读首版）"
-            note="写路径（适配器配置/接入）为二期。"
-          />
-        )}
+        {route.nav === "repositories" && <RepositoriesPage onOpenIssue={openIssue} />}
+        {route.nav === "teams" && <TeamsPage onOpenIssue={openIssue} onOpenRoom={openRoom} />}
+        {route.nav === "agents" && <AgentsPage onOpenIssue={openIssue} />}
+        {route.nav === "settings" && <SettingsPage account={account} />}
       </main>
 
       <NewIssueModal
