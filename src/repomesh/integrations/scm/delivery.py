@@ -185,7 +185,9 @@ class ChangeSetSCMCoordinator:
         if observation.state.value != "open":
             raise ValueError("pull request is no longer open")
         if observation.draft:
-            raise ValueError("draft pull request cannot merge")
+            # Draft is the designed early lifecycle of every delivery PR;
+            # undraft_when_allowed promotes it once dependencies merged.
+            return change_set
         if observation.mergeable is False:
             raise ValueError("pull request has conflicts")
         if self._command_service is not None:
@@ -277,6 +279,56 @@ class ChangeSetSCMCoordinator:
             )
         )
 
+    async def update_pull_request_description(
+        self, change_set_id: UUID, repository_id: UUID, body: str
+    ) -> ChangeSetView:
+        """Rewrite a published PR description (used to back-fill sibling links)."""
+
+        change_set = await self._delivery.get(change_set_id)
+        candidate = self._candidate(change_set, repository_id)
+        if candidate.pull_request_number is None:
+            return change_set
+        updater = getattr(self._adapter, "update_pull_request", None)
+        if updater is None:
+            return change_set
+        profile = await self._catalog.get(repository_id)
+        if profile is None:
+            raise DeliveryNotFound(f"repository not in catalog: {repository_id}")
+        await updater(
+            parse_repository_ref(profile.url),
+            candidate.pull_request_number,
+            body=body,
+            idempotency_key=(
+                f"changeset:{change_set.id}:repository:{repository_id}:body"
+            ),
+        )
+        return change_set
+
+    async def add_change_set_label(
+        self, change_set_id: UUID, repository_id: UUID
+    ) -> ChangeSetView:
+        """Tag a published PR with the change set id (optional, label-token only)."""
+
+        change_set = await self._delivery.get(change_set_id)
+        candidate = self._candidate(change_set, repository_id)
+        if candidate.pull_request_number is None:
+            return change_set
+        label_adder = getattr(self._adapter, "add_label", None)
+        if label_adder is None:
+            return change_set
+        profile = await self._catalog.get(repository_id)
+        if profile is None:
+            raise DeliveryNotFound(f"repository not in catalog: {repository_id}")
+        await label_adder(
+            parse_repository_ref(profile.url),
+            candidate.pull_request_number,
+            f"changeset/{str(change_set.id)[:8]}",
+            idempotency_key=(
+                f"changeset:{change_set.id}:repository:{repository_id}:label"
+            ),
+        )
+        return change_set
+
     async def merge_ready_repositories(self, change_set_id: UUID) -> ChangeSetView:
         """Merge every currently eligible candidate in dependency order."""
 
@@ -286,6 +338,59 @@ class ChangeSetSCMCoordinator:
             if gate.allowed:
                 current = await self.merge_when_allowed(change_set_id, candidate.repository_id)
         return current
+
+    async def undraft_when_allowed(self, change_set_id: UUID) -> ChangeSetView:
+        """Promote draft PRs to ready-for-review once upstream dependencies merged.
+
+        A candidate stays draft while any ``depends_on`` repository is not yet
+        merged; once the upstream merge observation arrives the next replay
+        cycle issues an ``UNDRAFT_PULL_REQUEST`` command for every open draft
+        PR. Commands are idempotent per PR, so repeated observations never
+        enqueue a duplicate.
+        """
+
+        change_set = await self._delivery.get(change_set_id)
+        for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
+            if candidate.status is not RepositoryDeliveryStatus.PR_OPEN:
+                continue
+            if candidate.pull_request_number is None:
+                continue
+            if not all(
+                self._candidate(change_set, dependency).status
+                is RepositoryDeliveryStatus.MERGED
+                for dependency in candidate.depends_on
+            ):
+                continue
+            idempotency_key = (
+                f"undraft:{change_set.id}:{candidate.repository_id}:"
+                f"{candidate.pull_request_number}"
+            )
+            if self._command_service is not None:
+                await self._command_service.enqueue(
+                    EnqueueSCMCommand(
+                        change_set_id=change_set.id,
+                        repository_id=candidate.repository_id,
+                        kind=SCMCommandKind.UNDRAFT_PULL_REQUEST,
+                        idempotency_key=idempotency_key,
+                        payload={
+                            "pull_request_number": candidate.pull_request_number,
+                            "expected_head_sha": candidate.commit_sha,
+                        },
+                    )
+                )
+                continue
+            ready_for_review = getattr(self._adapter, "ready_for_review", None)
+            if ready_for_review is None:
+                continue
+            profile = await self._catalog.get(candidate.repository_id)
+            if profile is None:
+                raise DeliveryNotFound(f"repository not in catalog: {candidate.repository_id}")
+            await ready_for_review(
+                parse_repository_ref(profile.url),
+                candidate.pull_request_number,
+                idempotency_key=idempotency_key,
+            )
+        return change_set
 
     async def reconcile_and_merge(self, change_set_id: UUID) -> ChangeSetView:
         """Recover remote SCM facts, then merge eligible repositories in order."""

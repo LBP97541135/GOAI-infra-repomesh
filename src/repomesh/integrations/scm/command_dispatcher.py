@@ -63,6 +63,9 @@ class SCMCommandDispatcher:
                 )
 
     async def _dispatch(self, command) -> None:
+        if command.kind is SCMCommandKind.UNDRAFT_PULL_REQUEST:
+            await self._undraft(command)
+            return
         if command.kind is not SCMCommandKind.MERGE_PULL_REQUEST:
             raise ValueError(f"unsupported SCM command: {command.kind}")
         profile = await self._catalog.get(command.repository_id)
@@ -92,6 +95,24 @@ class SCMCommandDispatcher:
         )
         await self._delivery.record_merge_requested(
             RecordMergeRequestedCommand(command.change_set_id, command.repository_id, expected_head)
+        )
+
+    async def _undraft(self, command) -> None:
+        profile = await self._catalog.get(command.repository_id)
+        if profile is None:
+            raise ValueError(f"repository not in catalog: {command.repository_id}")
+        repository = parse_repository_ref(profile.url)
+        number = int(command.payload["pull_request_number"])
+        expected_head = str(command.payload["expected_head_sha"])
+        current = await self._adapter.get_pull_request(repository, number)
+        if current.head_sha != expected_head:
+            raise ValueError("remote PR head SHA differs from queued command")
+        if not current.draft or current.state is not PullRequestState.OPEN:
+            # Already non-draft: either the undraft landed before the previous
+            # acknowledgement, or the PR moved past open (merged/closed).
+            return
+        await self._adapter.ready_for_review(
+            repository, number, idempotency_key=f"undraft:{command.id}"
         )
 
     async def _run(self) -> None:

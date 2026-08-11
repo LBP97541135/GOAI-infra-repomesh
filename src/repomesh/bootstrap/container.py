@@ -364,6 +364,79 @@ class ApplicationContainer:
             require_governance=get_settings().delivery_auto_enabled,
             require_validation=get_settings().delivery_auto_enabled,
             validation_reader=validation,
+            contract_catalog=(
+                self.contract_catalog()
+                if get_settings().delivery_contract_gate
+                else None
+            ),
+        )
+
+    def contract_catalog(self):
+        """Adapt CONTRACT specifications into the delivery contract gate.
+
+        CONTRACT specs store repository names in ``scope=(producer,
+        consumer)``; this composition-root adapter projects the names onto
+        repository ids and marks consumers that already have a planned
+        adapter task. The merge gate then distinguishes a genuinely missing
+        consumer candidate from one that arrives with a later batch.
+        """
+
+        from repomesh.modules.delivery.contracts import ContractView
+        from repomesh.modules.specification.contracts import (
+            SpecificationKind,
+            SpecificationStatus,
+        )
+
+        class _ContractCatalogPort:
+            def __init__(self, store, repository_catalog, task_store) -> None:
+                self._specs = store
+                self._catalog = repository_catalog
+                self._tasks = task_store
+
+            async def contracts_for_project(self, project_id):
+                spec_rows = await self._specs.list_by_project(project_id)
+                if not spec_rows:
+                    return ()
+                profiles = await self._catalog.list()
+                by_name = {profile.name: profile for profile in profiles}
+                task_rows = await self._tasks.list_by_project(project_id)
+                task_repository_ids = {task.repository_id for task in task_rows}
+                contracts = []
+                for spec in spec_rows:
+                    if spec.kind is not SpecificationKind.CONTRACT:
+                        continue
+                    if spec.status not in {
+                        SpecificationStatus.APPROVED,
+                        SpecificationStatus.FROZEN,
+                    }:
+                        continue
+                    content = spec.current_version.content
+                    if len(content.scope) < 2:
+                        continue
+                    producer = by_name.get(content.scope[0])
+                    consumer = by_name.get(content.scope[1])
+                    if producer is None or consumer is None:
+                        continue
+                    interface = (
+                        content.interface_changes[0]
+                        if content.interface_changes
+                        else ""
+                    )
+                    contracts.append(
+                        ContractView(
+                            producer=producer.id,
+                            consumer=consumer.id,
+                            interface=interface,
+                            status=spec.status.value,
+                            consumer_planned=consumer.id in task_repository_ids,
+                        )
+                    )
+                return tuple(contracts)
+
+        return _ContractCatalogPort(
+            self.specification_store,
+            self.repository_catalog,
+            self.task_store,
         )
 
     def validation_snapshot_service(self):
@@ -411,7 +484,12 @@ class ApplicationContainer:
             self.scm_observation_service(),
             delivery,
             self.repository_catalog,
-            ChangeSetSCMCoordinator(delivery, self.repository_catalog, self.scm_adapter),
+            ChangeSetSCMCoordinator(
+                delivery,
+                self.repository_catalog,
+                self.scm_adapter,
+                command_service=self.scm_command_service(),
+            ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
         )
@@ -448,9 +526,15 @@ class ApplicationContainer:
                 base_branch=settings.delivery_base_branch,
                 required_checks=settings.delivery_required_checks,
                 required_approvals=settings.delivery_required_approvals,
+                add_label=settings.delivery_pr_label,
             ),
             validation=self.validation_snapshot_service(),
             checkpoints=self.project_checkpoint_service(),
+            contracts=(
+                self.contract_catalog()
+                if settings.delivery_contract_gate
+                else None
+            ),
         )
 
     def project_checkpoint_service(self):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -14,6 +15,7 @@ from repomesh.modules.delivery.contracts import (
     PrepareChangeSetCommand,
     RepositoryCandidateInput,
 )
+from repomesh.modules.delivery.ports import ContractCatalogPort
 from repomesh.modules.project.checkpoint_control import ProjectCheckpointService
 from repomesh.modules.project.contracts import ProjectCheckpoint
 from repomesh.modules.review_validation import (
@@ -26,12 +28,15 @@ from repomesh.modules.task_orchestration.ports import TaskStore
 
 from .delivery import ChangeSetSCMCoordinator, PublishChangeSetPullRequestCommand
 
+_logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class PlanDeliveryPolicy:
     base_branch: str = "main"
     required_checks: tuple[str, ...] = ()
     required_approvals: int = 1
+    add_label: bool = False
 
 
 class PlanDeliveryFinalizer:
@@ -45,6 +50,7 @@ class PlanDeliveryFinalizer:
         policy: PlanDeliveryPolicy,
         validation: ValidationSnapshotService | None = None,
         checkpoints: ProjectCheckpointService | None = None,
+        contracts: ContractCatalogPort | None = None,
     ) -> None:
         self._delivery = delivery
         self._coordinator = coordinator
@@ -52,6 +58,7 @@ class PlanDeliveryFinalizer:
         self._policy = policy
         self._validation = validation
         self._checkpoints = checkpoints
+        self._contracts = contracts
 
     async def handle(self, plan: ExecutionPlanView) -> None:
         candidates, workspaces, tests = await self._candidates(plan)
@@ -129,13 +136,16 @@ class PlanDeliveryFinalizer:
                     repository_id=candidate.repository_id,
                     workspace=workspaces[candidate.repository_id],
                     base_branch=self._policy.base_branch,
-                    body=(
-                        f"Automated RepoMesh delivery for execution plan `{plan.id}`.\n\n"
-                        "The candidate commit passed its frozen Task Spec commands."
+                    body=self._pull_request_body(
+                        plan, [candidate.repository_id], batch_index=None
                     ),
-                    draft=False,
+                    # Draft by design: consumers of a contract stay hidden
+                    # until the producer merges, then undraft_when_allowed
+                    # promotes the PR on the next 15s replay cycle.
+                    draft=True,
                 )
             )
+        await self._backfill_sibling_links(change_set.id, plan, batch_index=None)
 
     async def handle_batch(self, plan: ExecutionPlanView) -> None:
         """Deliver the plan's current batch (batch-by-batch delivery).
@@ -202,14 +212,18 @@ class PlanDeliveryFinalizer:
                     repository_id=candidate.repository_id,
                     workspace=workspaces[candidate.repository_id],
                     base_branch=self._policy.base_branch,
-                    body=(
-                        f"Automated RepoMesh delivery for execution plan `{plan.id}` "
-                        f"(batch {batch_index + 1}).\n\n"
-                        "The candidate commit passed its frozen Task Spec commands."
+                    body=self._pull_request_body(
+                        plan, [candidate.repository_id], batch_index=batch_index
                     ),
-                    draft=False,
+                    # Draft by design: consumers of a contract stay hidden
+                    # until the producer merges, then undraft_when_allowed
+                    # promotes the PR on the next 15s replay cycle.
+                    draft=True,
                 )
             )
+        await self._backfill_sibling_links(
+            change_set.id, plan, batch_index=batch_index
+        )
 
     async def _candidates_for_batch(
         self, plan: ExecutionPlanView, batch_index: int
@@ -278,7 +292,120 @@ class PlanDeliveryFinalizer:
                     )
                 )
             earlier_repositories.append(planned.repository_id)
+        await self._check_contract_coverage(plan, earlier_repositories)
         return candidates, workspaces, tests
+
+    async def _check_contract_coverage(
+        self, plan: ExecutionPlanView, delivered_ids: list[UUID]
+    ) -> None:
+        """Primary path: a delivered producer's contract consumer must have a candidate.
+
+        Consumers are part of the plan's batches (the graph reasoning stage
+        emits adapter tasks), so they already enter the candidate set when
+        their batch is delivered. A contract whose consumer has neither a
+        planned task nor a delivered candidate is left to the merge gate's
+        eighth check ("contract change is missing a consumer adapter
+        candidate") to refuse the producer merge.
+        """
+        if self._contracts is None:
+            return
+        contracts = await self._contracts.contracts_for_project(plan.project_id)
+        if not contracts:
+            return
+        planned_ids = {
+            planned.repository_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        for contract in contracts:
+            if contract.producer not in delivered_ids:
+                continue
+            if contract.consumer in planned_ids or contract.consumer in delivered_ids:
+                continue
+            _logger.warning(
+                "contract %s->%s has no consumer adapter candidate for plan %s",
+                contract.producer,
+                contract.consumer,
+                plan.id,
+            )
+
+    async def _backfill_sibling_links(
+        self,
+        change_set_id: UUID,
+        plan: ExecutionPlanView,
+        *,
+        batch_index: int | None,
+    ) -> None:
+        """Append the sibling PR list to every published description.
+
+        Each publish run rewrites the descriptions so that a ChangeSet's PRs
+        link to each other. The update is skipped for single-repository
+        ChangeSets and is idempotent per repository (same body content).
+        """
+
+        current = await self._delivery.get(change_set_id)
+        published = [
+            (item.repository_id, item.pull_request_number)
+            for item in sorted(current.repositories, key=lambda item: item.merge_order)
+            if item.pull_request_number is not None
+        ]
+        if len(published) < 2:
+            return
+        sibling_section = self._sibling_links(current, published)
+        for repository_id, _ in published:
+            body = self._pull_request_body(
+                plan, [repository_id], batch_index=batch_index
+            )
+            await self._coordinator.update_pull_request_description(
+                change_set_id, repository_id, body + sibling_section
+            )
+            if self._policy.add_label:
+                await self._coordinator.add_change_set_label(
+                    change_set_id, repository_id
+                )
+
+    @staticmethod
+    def _sibling_links(change_set, published: list[tuple[UUID, int | None]]) -> str:
+        status_by_repository = {
+            item.repository_id: item.status.value
+            for item in change_set.repositories
+        }
+        links = [
+            (
+                f"- `{str(repository_id)[:8]}`: "
+                f"PR #{number} ({status_by_repository.get(repository_id, 'unknown')})"
+            )
+            for repository_id, number in published
+            if number is not None
+        ]
+        return "\n\n## Sibling PRs in this ChangeSet\n\n" + "\n".join(links)
+
+    @staticmethod
+    def _pull_request_body(
+        plan: ExecutionPlanView,
+        repository_ids: list[UUID],
+        *,
+        batch_index: int | None,
+    ) -> str:
+        """Standard PR body: change_id, execution order and batch scope."""
+        batch_line = (
+            f"- execution order: batch {batch_index + 1}"
+            if batch_index is not None
+            else "- execution order: full plan"
+        )
+        return "\n".join(
+            [
+                f"Automated RepoMesh delivery for execution plan `{plan.id}`.",
+                "",
+                f"- change_id: `{plan.id}`",
+                batch_line,
+                "- repositories: "
+                + ", ".join(f"`{repository_id}`" for repository_id in repository_ids),
+                "",
+                "The candidate commits passed their frozen Task Spec commands.",
+            ]
+        )
 
     async def _candidates(
         self, plan: ExecutionPlanView

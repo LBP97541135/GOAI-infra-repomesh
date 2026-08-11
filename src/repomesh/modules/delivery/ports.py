@@ -2,8 +2,19 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from .contracts import ValidationEvidenceDecision
+from .contracts import ContractView, ValidationEvidenceDecision
 from .domain import ChangeSet, SCMCommand, SCMObservation, SCMPollCursor
+
+
+class ContractCatalogPort(Protocol):
+    """Read-only catalog of approved CONTRACT specification pairs.
+
+    Project-scoped because CONTRACT specifications are stored per project;
+    the composition root projects repository names onto repository ids and
+    marks consumers that already have a planned adapter task.
+    """
+
+    async def contracts_for_project(self, project_id: UUID) -> tuple[ContractView, ...]: ...
 
 
 class ChangeSetStore(Protocol):

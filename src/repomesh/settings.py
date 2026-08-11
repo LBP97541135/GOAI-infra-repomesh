@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     delivery_base_branch: str = "main"
     delivery_required_checks: tuple[str, ...] = ()
     delivery_required_approvals: int = Field(default=1, ge=0)
+    delivery_contract_gate: bool = False
+    delivery_pr_label: bool = False
     delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
     scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
     scm_poll_interval_seconds: int = Field(default=60, ge=5)

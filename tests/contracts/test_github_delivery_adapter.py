@@ -103,6 +103,56 @@ def test_webhook_signature_verification() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_pull_request_patches_body() -> None:
+    import json
+
+    requests: list[httpx.Request] = []
+    responses = iter(
+        [
+            httpx.Response(200, json=pull_payload()),
+            httpx.Response(200, json=pull_payload()),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return next(responses)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    result = await adapter.update_pull_request(
+        repository(), 42, body="## Sibling PRs", idempotency_key="body:1"
+    )
+
+    assert [request.method for request in requests] == ["GET", "PATCH"]
+    assert json.loads(requests[1].content) == {"body": "## Sibling PRs"}
+    assert result.number == 42
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_add_label_posts_labels() -> None:
+    import json
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(201, json=[])
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    await adapter.add_label(repository(), 42, "changeset/abc123", idempotency_key="label:1")
+
+    assert [request.method for request in requests] == ["POST"]
+    assert requests[0].url.path.endswith("/issues/42/labels")
+    assert json.loads(requests[0].content) == {"labels": ["changeset/abc123"]}
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_branch_protection_is_normalized_for_delivery_preflight() -> None:
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(

@@ -147,6 +147,18 @@ class SCMAdapter(Protocol):
         self, repository: RepositoryRef, number: int, *, idempotency_key: str
     ) -> PullRequestObservation: ...
 
+    async def ready_for_review(
+        self, repository: RepositoryRef, number: int, *, idempotency_key: str
+    ) -> PullRequestObservation: ...
+
+    async def update_pull_request(
+        self, repository: RepositoryRef, number: int, *, body: str, idempotency_key: str
+    ) -> PullRequestObservation: ...
+
+    async def add_label(
+        self, repository: RepositoryRef, number: int, label: str, *, idempotency_key: str
+    ) -> None: ...
+
     async def merge_pull_request(
         self, command: MergePullRequestCommand
     ) -> MergePullRequestResult: ...

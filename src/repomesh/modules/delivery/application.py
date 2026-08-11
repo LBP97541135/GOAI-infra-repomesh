@@ -48,6 +48,7 @@ from .domain import (
 )
 from .ports import (
     ChangeSetStore,
+    ContractCatalogPort,
     SCMCommandStore,
     SCMObservationStore,
     SCMPollCursorStore,
@@ -292,11 +293,13 @@ class DeliveryService:
         require_governance: bool = False,
         require_validation: bool = False,
         validation_reader: ValidationSnapshotReader | None = None,
+        contract_catalog: ContractCatalogPort | None = None,
     ) -> None:
         self._store = store
         self._require_governance = require_governance
         self._require_validation = require_validation
         self._validation_reader = validation_reader
+        self._contract_catalog = contract_catalog
 
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
@@ -552,6 +555,20 @@ class DeliveryService:
                     {item.repository_id: item.commit_sha for item in change_set.repositories},
                 )
                 reasons.extend(validation.reasons)
+        if self._contract_catalog is not None:
+            contracts = await self._contract_catalog.contracts_for_project(
+                change_set.project_id
+            )
+            candidate_ids = {item.repository_id for item in change_set.repositories}
+            for contract in contracts:
+                if contract.producer != repository_id:
+                    continue
+                if contract.consumer in candidate_ids:
+                    continue
+                if contract.consumer_planned:
+                    continue
+                reasons.append("contract change is missing a consumer adapter candidate")
+                break
         return MergeGateDecision(
             change_set_id=change_set.id,
             repository_id=repository_id,

@@ -106,6 +106,7 @@ class SCMObservationStatus(StrEnum):
 
 class SCMCommandKind(StrEnum):
     MERGE_PULL_REQUEST = "merge_pull_request"
+    UNDRAFT_PULL_REQUEST = "undraft_pull_request"
 
 
 class SCMCommandStatus(StrEnum):
@@ -387,6 +388,23 @@ class ChangeSetView:
     candidate_revisions: tuple[CandidateRevisionView, ...]
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ContractView:
+    """Read-only view of an approved CONTRACT specification pair.
+
+    The contract gate uses these to refuse merging a producer that has no
+    consumer adapter candidate: a consumer already present in the ChangeSet
+    or with a planned adapter task is considered covered, anything else is a
+    missing candidate.
+    """
+
+    producer: UUID
+    consumer: UUID
+    interface: str
+    status: str
+    consumer_planned: bool = False
 
 
 @dataclass(frozen=True, slots=True)

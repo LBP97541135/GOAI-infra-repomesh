@@ -78,6 +78,8 @@ class RecordingGitHubAdapter:
     def __init__(self) -> None:
         self.pull_requests: list[CreateDraftPullRequestCommand] = []
         self.merges: list[MergePullRequestCommand] = []
+        self.updates: list[tuple[RepositoryRef, int, str]] = []
+        self.labels: list[tuple[RepositoryRef, int, str]] = []
 
     async def create_draft_pull_request(
         self, command: CreateDraftPullRequestCommand
@@ -154,6 +156,17 @@ class RecordingGitHubAdapter:
         self.merges.append(command)
         marker = "c" if len(self.merges) == 1 else "d"
         return MergePullRequestResult(True, marker * 40, "merged")
+
+    async def update_pull_request(
+        self, repository: RepositoryRef, number: int, *, body: str, idempotency_key: str
+    ) -> PullRequestObservation:
+        self.updates.append((repository, number, body))
+        return await self.get_pull_request(repository, number)
+
+    async def add_label(
+        self, repository: RepositoryRef, number: int, label: str, *, idempotency_key: str
+    ) -> None:
+        self.labels.append((repository, number, label))
 
 
 async def _store_candidate(
@@ -295,7 +308,16 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
     assert len(adapter.pull_requests) == 2
     assert change_set.id == first_change_set.id
     assert change_set.validation_snapshot_id == first_snapshot_id
-    assert all(not command.draft for command in adapter.pull_requests)
+    assert all(command.draft for command in adapter.pull_requests)
+    # Sibling PR descriptions are back-filled with links to every PR in the
+    # ChangeSet, and carry the change_id + execution order markers. handle()
+    # runs twice (create + idempotent replay), so every PR is updated twice.
+    assert len(adapter.updates) == 4
+    for _, _, body in adapter.updates:
+        assert "change_id" in body
+        assert "execution order: full plan" in body
+        assert "## Sibling PRs in this ChangeSet" in body
+        assert "PR #1" in body and "PR #2" in body
     first_published = _git(
         first_remote, "rev-parse", adapter.pull_requests[0].head_branch, bare=True
     )
@@ -443,6 +465,12 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
     change_set, _ = await delivery.resolve_candidate(first_repository_id, first_head)
     assert len(adapter.pull_requests) == 2
     assert len(change_set.repositories) == 2
+    # Batch-by-batch: after the second batch, sibling links cover both PRs
+    # and the back-filled body records the batch execution order.
+    assert len(adapter.updates) == 2
+    for _, _, body in adapter.updates:
+        assert "execution order: batch 2" in body
+        assert "## Sibling PRs in this ChangeSet" in body
     orders = {item.repository_id: item.merge_order for item in change_set.repositories}
     assert orders[second_repository_id] > orders[first_repository_id]
     second = next(

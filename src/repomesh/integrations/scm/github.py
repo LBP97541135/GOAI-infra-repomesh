@@ -186,6 +186,47 @@ class GitHubAdapter:
         )
         return self._observation(repository, payload)
 
+    async def ready_for_review(
+        self, repository: RepositoryRef, number: int, *, idempotency_key: str
+    ) -> PullRequestObservation:
+        current = await self.get_pull_request(repository, number)
+        if not current.draft or current.state is not PullRequestState.OPEN:
+            return current
+        payload = await self._request(
+            "PATCH",
+            repository,
+            f"/pulls/{number}",
+            body={"draft": False},
+            idempotency_key=idempotency_key,
+        )
+        return self._observation(repository, payload)
+
+    async def update_pull_request(
+        self, repository: RepositoryRef, number: int, *, body: str, idempotency_key: str
+    ) -> PullRequestObservation:
+        current = await self.get_pull_request(repository, number)
+        if current.state is not PullRequestState.OPEN:
+            return current
+        payload = await self._request(
+            "PATCH",
+            repository,
+            f"/pulls/{number}",
+            body={"body": body},
+            idempotency_key=idempotency_key,
+        )
+        return self._observation(repository, payload)
+
+    async def add_label(
+        self, repository: RepositoryRef, number: int, label: str, *, idempotency_key: str
+    ) -> None:
+        await self._request(
+            "POST",
+            repository,
+            f"/issues/{number}/labels",
+            body={"labels": [label]},
+            idempotency_key=idempotency_key,
+        )
+
     async def merge_pull_request(self, command: MergePullRequestCommand) -> MergePullRequestResult:
         sha = command.expected_head_sha.strip().lower()
         if len(sha) != 40 or any(char not in "0123456789abcdef" for char in sha):

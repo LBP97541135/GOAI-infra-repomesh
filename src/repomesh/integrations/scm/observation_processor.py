@@ -117,6 +117,10 @@ class GitHubObservationProcessor:
                     change_set_id, repository_id, parsed
                 )
             if self._auto_merge and self._coordinator.can_mutate:
+                # Draft PRs wait for their upstream dependencies to merge;
+                # undraft first, then merge whatever became eligible. The
+                # replay worker's 15s poll re-drives this until commands land.
+                await self._coordinator.undraft_when_allowed(change_set_id)
                 result = await self._coordinator.merge_ready_repositories(change_set_id)
             if self._on_observed is not None and result is not None:
                 await self._on_observed(result)

@@ -6,6 +6,7 @@ from .application import (
     SCMObservationService,
     SCMPollCursorService,
 )
+from .contracts import ContractView
 from .domain import DeliveryConflict, DeliveryError, DeliveryNotFound
 from .infrastructure import (
     InMemoryChangeSetStore,
@@ -17,12 +18,15 @@ from .infrastructure import (
     PostgresSCMObservationStore,
     PostgresSCMPollCursorStore,
 )
+from .ports import ContractCatalogPort
 
 __all__ = [
     "DeliveryService",
     "DeliveryConflict",
     "DeliveryError",
     "DeliveryNotFound",
+    "ContractCatalogPort",
+    "ContractView",
     "InMemoryChangeSetStore",
     "InMemorySCMObservationStore",
     "InMemorySCMPollCursorStore",
