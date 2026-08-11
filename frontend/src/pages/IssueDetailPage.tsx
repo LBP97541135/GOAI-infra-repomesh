@@ -1,4 +1,6 @@
 import type { IssueDetailView, IssueTeamRef, RoomListItemView } from "../api/contract";
+import type { Decision } from "../types";
+import { DecisionDeck } from "../components/DecisionDeck";
 import { dayLabel, openedBy, shortId } from "../display";
 import { eventTime } from "../viewmodel";
 
@@ -92,12 +94,25 @@ function RoomRow({ room, onOpen }: { room: RoomListItemView; onOpen: (room: Room
 export function IssueDetailPage({
   detail,
   rooms,
+  deck,
+  deckHidden,
+  deckNote,
+  onToggleDeck,
+  onBringToFront,
+  onDecisionAction,
   onBack,
   onOpenRoom,
   onToast,
 }: {
   detail: IssueDetailView;
   rooms: RoomListItemView[];
+  deck: Decision[];
+  deckHidden: boolean;
+  /** 决策夹的轮次与数据源说明；null = 该 issue 无轮次，整块不渲染 */
+  deckNote: string | null;
+  onToggleDeck: () => void;
+  onBringToFront: (id: string) => void;
+  onDecisionAction: (decision: Decision, actionIdx: number) => void;
   onBack: () => void;
   onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
@@ -183,6 +198,30 @@ export function IssueDetailPage({
         })}
       </div>
 
+      {/* 决策夹：位置按设计定稿——关联仓库芯片之后、房间区之前。
+          决策是轮次粒度，deckNote 说明取的是哪一轮，避免与 issue 级
+          pending_decision_count（跨轮求和）被读成同一个数。 */}
+      {(deck.length > 0 || deckNote) && (
+        <>
+          <div className="microlabel flex items-baseline gap-2 pt-5 pb-2">
+            决策夹
+            {deckNote && <span className="text-[10px] tracking-normal text-[#6b6046]">{deckNote}</span>}
+          </div>
+          {deck.length > 0 ? (
+            <DecisionDeck
+              deck={deck}
+              hidden={deckHidden}
+              variant="inline"
+              onToggleHidden={onToggleDeck}
+              onBringToFront={onBringToFront}
+              onAction={onDecisionAction}
+            />
+          ) : (
+            <p className="text-[12px] text-[#6b6046]">本轮无待决策事项。</p>
+          )}
+        </>
+      )}
+
       <div className="microlabel pt-5 pb-2">房间</div>
       {rooms.length === 0 && (
         <p className="text-[12px] text-[#6b6046]">
@@ -222,14 +261,18 @@ export function IssueDetailPage({
         );
       })}
 
-      <div className="pt-4 text-[11.5px] text-[#6b6046]">
-        决策夹（治理决策 + 审批弹窗）尚未迁入本页；当前 issue 有{" "}
-        {detail.pending_decision_count} 项待决策，可在{" "}
-        <a className="text-tx2 underline hover:text-amber-hi" href="#/delivery-v1">
-          v1 交付控制台
-        </a>{" "}
-        处理。
-      </div>
+      {/* pending_decision_count 是**跨轮求和**（§2），决策夹只呈现当前一轮：
+          两个数不等时说清楚差在哪，别让人以为决策夹漏了事项。 */}
+      {detail.pending_decision_count > deck.length && (
+        <div className="pt-4 text-[11.5px] text-[#6b6046]">
+          该 issue 跨全部 {detail.round_count} 轮共 {detail.pending_decision_count} 项待决策，本页决策夹只显示当前一轮的{" "}
+          {deck.length} 项。其余轮次可在{" "}
+          <a className="text-tx2 underline hover:text-amber-hi" href="#/delivery-v1">
+            v1 交付控制台
+          </a>{" "}
+          按轮次查看。
+        </div>
+      )}
     </div>
   );
 }

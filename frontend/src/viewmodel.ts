@@ -4,6 +4,8 @@
 import type {
   CollaborationMessageView,
   DecisionAction,
+  DecisionItem,
+  DeliveryAggregate,
   DeliveryTaskView,
   RepositoryDeliveryView,
 } from "./api/contract";
@@ -94,8 +96,10 @@ function deriveDiffs(data: DeliveryData): RepoDiff[] {
   });
 }
 
-function deriveDecisions(data: DeliveryData): Decision[] {
-  const fromApi: Decision[] = data.decisions.items.map((item) => ({
+/** §4.3 决策项 → 组件模型。v1 交付控制台与 v2 issue 详情页共用这一份，
+ *  两处各写一套就会漂移（决策夹是控制台唯一的写回路，漂移代价高）。 */
+export function decisionsFromContract(items: DecisionItem[]): Decision[] {
+  return items.map((item) => ({
     id: item.id,
     kind: item.kind,
     urgency: item.kind === "approve" ? "now" : "soon",
@@ -106,24 +110,37 @@ function deriveDecisions(data: DeliveryData): Decision[] {
     repositoryId: item.repository_id,
     headSha: item.head_sha,
   }));
-  return [...fromApi, ...(data.overlay?.extraDecisions ?? [])];
 }
 
-function deriveApproval(data: DeliveryData): ApprovalInfo | null {
-  const agg = data.aggregate;
-  const approve = data.decisions.items.find((d) => d.kind === "approve");
-  if (!agg || !approve) return null;
+function deriveDecisions(data: DeliveryData): Decision[] {
+  return [...decisionsFromContract(data.decisions.items), ...(data.overlay?.extraDecisions ?? [])];
+}
+
+/** 授权单信息。head-bound 语义由后端保证（§4.4：SHA 漂移即 409）——本函数只把
+ *  绑定对象呈现出来，不做任何判定。v1 与 v2 共用。 */
+export function approvalFromContract(
+  agg: DeliveryAggregate,
+  items: DecisionItem[],
+  authority = "治理审批人",
+): ApprovalInfo | null {
+  const approve = items.find((d) => d.kind === "approve");
+  if (!approve) return null;
   const cs = agg.change_set;
   const repo = cs?.repositories.find((r) => r.repository_id === approve.repository_id);
   const repoName = agg.repositories.find((r) => r.repository_id === approve.repository_id)?.name ?? "目标仓库";
   return {
-    authority: data.overlay?.approvalAuthority ?? "治理审批人",
+    authority,
     snapshotLabel: agg.validation_snapshot ? `${agg.validation_snapshot.id} · IMMUTABLE` : approve.head_sha ? `HEAD ${shortSha(approve.head_sha)}` : "—",
     scopeLabel: repo?.pull_request_number != null ? `${repoName}（仅合并 PR #${repo.pull_request_number}）` : repoName,
     changeSetId: cs?.change_set_id ?? null,
     repositoryId: approve.repository_id,
     headSha: approve.head_sha,
   };
+}
+
+function deriveApproval(data: DeliveryData): ApprovalInfo | null {
+  if (!data.aggregate) return null;
+  return approvalFromContract(data.aggregate, data.decisions.items, data.overlay?.approvalAuthority ?? undefined);
 }
 
 /** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。

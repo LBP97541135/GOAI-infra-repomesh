@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { IssueDetailView, RoomListItemView } from "../api/contract";
+import type { ApprovalInfo, Decision } from "../types";
+import { fetchDecisionDeck, governanceAgentId, submitGovernanceDecision } from "../api/decisions";
 import { fetchIssueDetail, fetchRooms } from "../api/rooms";
+import { resolveDataSourceMode } from "../api/source";
+import { ApprovalModal } from "../components/ApprovalModal";
 import { IssueDetailPage } from "./IssueDetailPage";
 
-/** issue 详情取数容器（§3 概览 + §5.1 房间清单）。ConsoleShell 只做路由分发，
- *  取数与加载/失败态收在这里。
+/** issue 详情取数容器（§3 概览 + §5.1 房间清单 + §4.3 决策夹 + §4.4 写回路）。
  *
- *  空房间清单**不是错误**：未建团的 issue 返回 `{"rooms": []}` 且 HTTP 200，
- *  详情页照常渲染，房间区按仓库显示「无房间」。 */
+ *  空房间清单**不是错误**：未建团的 issue 返回 `{"rooms": []}` 且 HTTP 200。
+ *  决策夹是轮次粒度，取 `active_round_id ?? latest_round_id`；决策取用失败不该
+ *  拖垮整页——概览与房间照常渲染，决策区单独降级。 */
 export function IssueDetailContainer({
   issueId,
   onBack,
@@ -24,6 +28,14 @@ export function IssueDetailContainer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+
+  const [deck, setDeck] = useState<Decision[]>([]);
+  const [deckHidden, setDeckHidden] = useState(false);
+  const [deckNote, setDeckNote] = useState<string | null>(null);
+  const [approval, setApproval] = useState<ApprovalInfo | null>(null);
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,6 +57,84 @@ export function IssueDetailContainer({
       cancelled = true;
     };
   }, [issueId, reload]);
+
+  const roundId = detail?.active_round_id ?? detail?.latest_round_id ?? null;
+
+  useEffect(() => {
+    if (!roundId || !detail) {
+      setDeck([]);
+      setDeckNote(null);
+      setApproval(null);
+      return;
+    }
+    let cancelled = false;
+    const replay = resolveDataSourceMode() === "replay";
+    const roundIndex = detail.rounds.findIndex((r) => r.round_id === roundId);
+    const roundLabel = roundIndex >= 0 ? `第 ${roundIndex + 1} 轮` : `轮次 ${roundId.slice(0, 8)}`;
+
+    fetchDecisionDeck(roundId)
+      .then((data) => {
+        if (cancelled) return;
+        setDeck(data.deck);
+        setApproval(data.approval);
+        setDeckNote(
+          replay
+            ? // 回放夹具取自 v1 演示交付，不是本 issue 的决策——必须说明，否则是冒充
+              "回放演示数据（非本 issue 的真实决策）"
+            : `${roundLabel} · live`,
+        );
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setDeck([]);
+        setApproval(null);
+        setDeckNote(`${roundLabel} · 决策取用失败：${err instanceof Error ? err.message : String(err)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roundId, detail, reload]);
+
+  const handleDecisionAction = useCallback(
+    (decision: Decision, actionIdx: number) => {
+      const action = decision.actionKinds?.[actionIdx];
+      if (action === "approve_merge") {
+        setApprovalError(null);
+        setApprovalOpen(true);
+        return;
+      }
+      onToast("证据面（CI 报告 / 变更详情）待接入，可在 v1 交付控制台查看");
+    },
+    [onToast],
+  );
+
+  const handleApprove = (comment: string) => {
+    if (!roundId || !approval) return;
+    if (resolveDataSourceMode() === "replay") {
+      setApprovalOpen(false);
+      setDeck((prev) => prev.filter((x) => x.kind !== "approve"));
+      onToast("已批准（回放演示，未写入后端）");
+      return;
+    }
+    const agentId = governanceAgentId();
+    if (!agentId) {
+      setApprovalError("未配置治理决策主体（VITE_GOVERNANCE_AGENT_ID），无法提交。");
+      return;
+    }
+    setApprovalSubmitting(true);
+    setApprovalError(null);
+    submitGovernanceDecision(roundId, approval, comment, agentId)
+      .then(() => {
+        setApprovalOpen(false);
+        onToast("治理决策已记录：READY（head-bound），merge gate 放行");
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409 = head 漂移，必须显示在弹窗内，不静默失败
+        setApprovalError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setApprovalSubmitting(false));
+  };
 
   if (loading) {
     return (
@@ -78,6 +168,33 @@ export function IssueDetailContainer({
   }
 
   return (
-    <IssueDetailPage detail={detail} rooms={rooms} onBack={onBack} onOpenRoom={onOpenRoom} onToast={onToast} />
+    <>
+      <IssueDetailPage
+        detail={detail}
+        rooms={rooms}
+        deck={deck}
+        deckHidden={deckHidden}
+        deckNote={deckNote}
+        onToggleDeck={() => setDeckHidden((v) => !v)}
+        onBringToFront={(id) =>
+          setDeck((prev) => {
+            const found = prev.find((d) => d.id === id);
+            return found ? [...prev.filter((d) => d.id !== id), found] : prev;
+          })
+        }
+        onDecisionAction={handleDecisionAction}
+        onBack={onBack}
+        onOpenRoom={onOpenRoom}
+        onToast={onToast}
+      />
+      <ApprovalModal
+        open={approvalOpen}
+        info={approval}
+        submitting={approvalSubmitting}
+        errorText={approvalError}
+        onCancel={() => setApprovalOpen(false)}
+        onApprove={handleApprove}
+      />
+    </>
   );
 }
