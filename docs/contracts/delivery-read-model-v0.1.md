@@ -69,13 +69,16 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
 | 条件（按序判定） | phase |
 | --- | --- |
 | 已归档 | `archived` |
-| ExecutionPlan/ChangeSet 任一 FAILED / MANUAL_INTERVENTION 且无活跃恢复 | `failed` |
+| Plan FAILED，或 ChangeSet MANUAL_INTERVENTION / COMPENSATED，且无活跃恢复 | `failed` |
 | ChangeSet.status = DELIVERED | `delivered` |
 | ChangeSet 存在且未终态 | `release` |
 | ValidationSnapshot 存在且 ChangeSet 不存在 | `validate` |
 | ExecutionPlan.status = IN_PROGRESS | `execute` |
+| ExecutionPlan 已终态但尚无验证/交付证据 | `validate` |
 | PlanSnapshot 存在但未 materialize | `plan` |
 | 仅有 Specification | `contract` |
+
+列表分页说明：v0.1 数据量下 `next_cursor` 恒为 `null`，游标语义保留待后续实现。
 
 ## 3. `GET /deliveries/{delivery_id}` — 全貌聚合
 
@@ -83,7 +86,9 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
 {
   "delivery_id": "uuid",
   "project": {
-    "project_id": "uuid", "project_key": "string", "title": "string",
+    "project_id": "uuid",
+    "project_key": "string|null",             // Project 实体/注册表未落地前为 null（§6.9）
+    "title": "string",                        // 暂以 plan snapshot requirement_text 截断，Project 落地后切换
     "requirement_text": "string|null",        // plan snapshot.requirement_text
     "created_at": "..."
   },
@@ -278,6 +283,9 @@ IN_PROGRESS）；活跃交付返回 409。归档不删数据，列表默认过�
 | 6.6 | deny 治理拦截未入审计 | events 不产出 `deny` | 审计缺口任务（gap-analysis §4.2） |
 | 6.7 | Worker→Leader 回报未摄取 | messages 单向 | 同上 |
 | 6.8 | 无统一 trace_id | `trace_id: null` | 观测线任务 |
+| 6.9 | 无 Project 实体/注册表 | `project_key: null`，title 用 requirement 截断 | project 模块落地后切换 |
+| 6.10 | 发现证据未按 project 存储 | `repositories[].evidence: null` | repository_intelligence 证据关联 |
+| 6.11 | 多团队时 Matrix 房间歧义 | 仅单仓/单团队时给 `matrix_room_id`，否则 null | 团队↔交付关联建模 |
 
 ## 7. 字段来源速查
 
