@@ -18,6 +18,7 @@
   --color-bluegray: #8aa0b4;
   --color-tx: #d8cdb2;
   --color-tx2: #93876c;
+  --color-tx3: #6b6046; /* 第三级弱文本（原型 --tx3，A12 补齐移植时丢失的令牌） */
   --color-paper-ink: #221c10; /* 纸面正文 */
   --color-paper-dim: #6d6349;
   --color-paper-neg: #a34a2e;
