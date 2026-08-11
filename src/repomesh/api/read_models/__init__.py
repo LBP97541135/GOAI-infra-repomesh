@@ -11,7 +11,7 @@ from .mappings import (
     select_issue_phase,
     task_display_status,
 )
-from .router import issues_router, router
+from .router import issues_router, rooms_router, router
 from .service import REWORK_TASK_TITLE, DeliveryReadModelService
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "derive_phase",
     "gate_display",
     "issues_router",
+    "rooms_router",
     "router",
     "select_issue_phase",
     "task_display_status",

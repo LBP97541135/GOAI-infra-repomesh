@@ -149,6 +149,19 @@ class PostgresCollaborationMessageStore:
             ).all()
         return tuple(self._to_domain(record) for record in records)
 
+    async def list_by_room(self, room_id: str) -> tuple[CollaborationMessage, ...]:
+        """Every message delivered to one Matrix room, oldest first."""
+
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(CollaborationMessageRecord)
+                    .where(CollaborationMessageRecord.room_id == room_id)
+                    .order_by(CollaborationMessageRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
     async def update(self, message: CollaborationMessage) -> None:
         async with self._database.transaction() as session:
             record = await session.get(CollaborationMessageRecord, message.id)

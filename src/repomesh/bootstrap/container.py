@@ -309,6 +309,7 @@ class ApplicationContainer:
         from repomesh.api.read_models.sources import (
             PlanSnapshotData,
             RepositoryData,
+            RepositorySpecData,
             RunnerEventData,
             SpecificationContractData,
         )
@@ -419,6 +420,40 @@ class ApplicationContainer:
                     tests=content.tests,
                 )
 
+            async def repository_spec(self, project_id: UUID, repository_id: UUID):
+                candidates = [
+                    specification
+                    for specification in await container.specification_store.list_by_project(
+                        project_id
+                    )
+                    if specification.repository_id == repository_id
+                    and specification.kind
+                    in {SpecificationKind.REPOSITORY, SpecificationKind.TASK}
+                ]
+                if not candidates:
+                    return None
+                # Contract v0.2 §5.4: FROZEN wins, then APPROVED, then the
+                # highest revision within the winning status.
+                for status in (SpecificationStatus.FROZEN, SpecificationStatus.APPROVED):
+                    ranked = [item for item in candidates if item.status is status]
+                    if ranked:
+                        chosen = max(ranked, key=lambda item: item.revision)
+                        break
+                else:
+                    return None
+                content = chosen.current_version.content
+                return RepositorySpecData(
+                    specification_id=chosen.id,
+                    kind=chosen.kind.value,
+                    status=chosen.status.value,
+                    revision=chosen.revision,
+                    goal=content.goal,
+                    acceptance=content.acceptance,
+                    allowed_paths=content.allowed_paths,
+                    forbidden_paths=content.forbidden_paths,
+                    tests=content.tests,
+                )
+
         class _Repositories:
             async def list(self):
                 return tuple(
@@ -440,6 +475,9 @@ class ApplicationContainer:
         class _Topology:
             async def get_view(self, project_id: UUID):
                 return await container.topology_reader().get_view(project_id)
+
+            async def find_by_room(self, room_id: str):
+                return await container.project_topology_store.find_view_by_room(room_id)
 
             async def matrix_room_id(self, project_id: UUID):
                 topology = await self.get_view(project_id)
@@ -467,6 +505,12 @@ class ApplicationContainer:
                 return tuple(
                     message.to_view()
                     for message in await message_store.list_by_project(project_id)
+                )
+
+            async def for_room(self, room_id: str):
+                return tuple(
+                    message.to_view()
+                    for message in await message_store.list_by_room(room_id)
                 )
 
         class _Observations:

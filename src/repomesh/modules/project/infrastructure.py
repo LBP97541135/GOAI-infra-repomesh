@@ -3,7 +3,16 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint, delete, select
+from sqlalchemy import (
+    JSON,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    delete,
+    or_,
+    select,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
@@ -150,6 +159,15 @@ class InMemoryProjectTopologyStore:
     async def get_view(self, project_id: UUID):
         topology = await self.get(project_id)
         return topology.to_view() if topology is not None else None
+
+    async def find_view_by_room(self, room_id: str):
+        for topology in self._topologies.values():
+            if any(
+                room_id in {team.room_id, team.leader_room_id}
+                for team in topology.repository_teams
+            ):
+                return topology.to_view()
+        return None
 
     async def get_by_idempotency_key(
         self, idempotency_key: str
@@ -318,6 +336,27 @@ class PostgresProjectTopologyStore:
     async def get_view(self, project_id: UUID):
         topology = await self.get(project_id)
         return topology.to_view() if topology is not None else None
+
+    async def find_view_by_room(self, room_id: str):
+        """The topology owning a team room or leader DM, or None.
+
+        Added for the delivery read model's room endpoints: a room id is the
+        only handle the console has there, and finding its owner by scanning
+        would cost one query per issue.
+        """
+
+        async with self._database.transaction() as session:
+            project_id = await session.scalar(
+                select(ProjectRepositoryTeamRecord.project_id).where(
+                    or_(
+                        ProjectRepositoryTeamRecord.room_id == room_id,
+                        ProjectRepositoryTeamRecord.leader_room_id == room_id,
+                    )
+                )
+            )
+        if project_id is None:
+            return None
+        return await self.get_view(project_id)
 
     async def get_by_idempotency_key(
         self, idempotency_key: str

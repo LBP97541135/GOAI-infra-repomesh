@@ -89,8 +89,9 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
 以下字段在 issue 从未建团时**无持久化事实源，返回 `null` 或空数组**，不得填默认值
 （诚实数据红线，2026-08-11 主脑追认）：`operational_status`、`execution_mode`（→ `null`），
 `team_count`（→ `0`）；§3 的 `teams`、`human_grants`、`required_checkpoints`（→ `[]`），
-`repositories[].team_id`（→ `null`）。实测：5533 联调库 `project.agent_topologies` 为空表，
-故种子上这些字段全空——前端按「未接入」呈现，**禁止把缺拓扑显示成 `active`**。
+`repositories[].team_id`（→ `null`）。前端按「未接入」呈现，**禁止把缺拓扑显示成 `active`**。
+联调锚点（CONS-33 扩种子后）：场景 A/B/C 有拓扑，**场景 D 故意不建团**，即降级路径的活体样本；
+起草期 `project.agent_topologies` 曾是空表，那时四个场景全走降级。
 
 ### 2.1 `state`（Open/Closed）派生规则
 
@@ -447,6 +448,20 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 列表筛选 | `?repository_id=` / `?phase=` **v0.2 不做**：列表响应无仓库字段、分页下的本地过滤是部分结果冒充全量。前端两个筛选按钮撤掉，另立 backlog | §2.4、§6.1 |
 | 拓扑降级 | 未建团时拓扑派生字段返 null/空数组，实测种子拓扑表为空 | §2 |
 | issue 全集 | 全集 = 有 ExecutionPlan 或 PlanSnapshot 的 project 并集；**§2.1 规则 6 当前不可达**（无注册表也无拓扑列举接口），issue 写端点落地后自动生效 | §2、§6.1 |
+
+### 7.2 CONS-33 实现期追认（2026-08-11，随实现同批入文本）
+
+| 追认项 | 内容 | 落点 |
+| --- | --- | --- |
+| 非 message 投影落点 | §5.2 只规定治理决策进 leaderDM。**runner 与 gate 投影进对应仓库的 teamRoom**（工作发生地），leaderDM 只含治理条目 | §5.2 |
+| 硬约束的结构化保证 | `source != "message"` 的条目 `message` 字段**恒为 `null`**（由无法附加 message 的构造函数生成）。前端判据建议用 `message === null` 而非比对 `source` 字符串——同样的语义，更难写错 | §5.2 |
+| 房间成员按类型 | teamRoom 成员 = 仓库 leader + workers；**leaderDM 成员 = 仓库 leader + 组织 leader**。leaderDM 列 workers 会误述「谁能读这个房间」 | §5.1 |
+| 未建团的 issue | `/issues/{id}/rooms` 返回 `{"rooms": []}` 且 **HTTP 200**（不是 404）；issue 本身不存在才 404 | §5.1 |
+| 无法解析的依赖名 | `task_dag[].depends_on` 中 catalog 查不到的仓库名**丢弃该边**，不产出带 null 端点的边 | §5.4 |
+| spec 状态枚举校正 | §5.4 原文写 `draft\|submitted\|approved\|frozen`，**实际枚举无 `submitted`**：`draft\|in_review\|approved\|frozen\|superseded`（`specification/contracts.py`）。读模型透传真实值 | §5.4 |
+| 种子扩展 | 拓扑 + 双房间 + 4 仓库 leader/worker 注册 + A 两仓单仓 spec（frozen rev3 / approved rev2）；消息由占位房间迁入所属 teamRoom。**幂等，只动 5533** | 见 `scripts/seed-console-demo.py` |
+| 名称解析恢复 | 补注册 principals 后 `members[].name`、v0.1 `messages[].sender_name`、`tasks[].agent` 不再恒 null（值仍是 agent 资源名） | §5.1、v0.1 §4.2 |
+| live 现状 | 派生自 in_progress 任务；**当前种子任务全终态，故实测 `live` 全 false**，需要 LIVE 演示时再造在途任务 | §5.3 |
 
 ## 8. 实现顺序
 

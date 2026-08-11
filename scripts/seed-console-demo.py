@@ -18,7 +18,15 @@ B) release    — single repository READY_TO_MERGE with green CI but no READY
 C) repairing  — CI failed candidate with a rework task in flight and a pending
                recovery plan: repairing/watch surfaces. contract is null.
 D) draft      — an un-materialized plan snapshot only: the list shows a virtual
-               draft delivery with delivery_id null and phase "plan".
+               draft delivery with delivery_id null and phase "plan". D also
+               deliberately has **no project topology**, so the console keeps a
+               live sample of the "never formed a team" degradation.
+
+Project topologies (added for the v0.2 room line): A/B/C each carry one team per
+repository with a teamRoom and a leaderDM, plus the repository leaders and
+workers the seeded tasks and messages already cite. Modes differ so each console
+branch has data — A automatic, B supervised with checkpoints and a human grant,
+C supervised and paused.
 
 Idempotency: every id derives from a fixed UUIDv5 namespace. If scenario A's
 execution plan already exists the script prints the id map and exits without
@@ -33,6 +41,7 @@ convention of a throwaway postgres on 127.0.0.1:5533):
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -40,8 +49,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from sqlalchemy import update
+
 from repomesh.modules.agent_directory.application import CreateAgent, CreateAgentRequest
 from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_directory.domain import AgentAlreadyExists, AgentPrincipal
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.agent_runtime.runner_store import (
     RunnerDispatchRecord,
@@ -66,6 +78,22 @@ from repomesh.modules.delivery.contracts import (
     RepositoryCandidateInput,
 )
 from repomesh.modules.delivery.infrastructure import SCMObservationRecord
+from repomesh.modules.project.contracts import (
+    CodeAccessLevel,
+    HumanControlAction,
+    HumanProjectRole,
+    ProjectCheckpoint,
+    ProjectExecutionMode,
+    ProjectOperationalStatus,
+    ProjectTeamRuntimeStatus,
+)
+from repomesh.modules.project.domain import (
+    HumanProjectGrant,
+    ProjectAgentTopology,
+    ProjectTopologyConflict,
+    RepositoryTeam,
+)
+from repomesh.modules.project.infrastructure import PostgresProjectTopologyStore
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.infrastructure import (
     PostgresRepositoryCatalog,
@@ -88,6 +116,7 @@ from repomesh.modules.specification.contracts import (
 )
 from repomesh.modules.specification.domain import (
     Specification,
+    SpecificationConflict,
     SpecificationContent,
     SpecificationVersion,
 )
@@ -203,6 +232,256 @@ async def seed_tasks(
             request_fingerprint="sha256:" + "c" * 64,
         )
     return leader, worker
+
+
+TEAM_SCENARIOS = (
+    # key, project, repository, the worker's responsibility scope
+    ("a-api", "project:a", "repo:a:api", ("src/pricing/**",)),
+    ("a-client", "project:a", "repo:a:client", ("src/components/**",)),
+    ("b-checkout", "project:b", "repo:b:checkout", ("src/checkout/**",)),
+    ("c-billing", "project:c", "repo:c:billing", ("src/billing/**",)),
+)
+
+
+def team_room(key: str) -> str:
+    return f"!rm-team-{key}:matrix.local"
+
+
+def leader_room(key: str) -> str:
+    return f"!rm-leader-{key}:matrix.local"
+
+
+async def seed_agents(directory: PostgresAgentDirectory, leader_id: UUID) -> None:
+    """Register the repository leaders and workers the seeded rows already cite.
+
+    The tasks and messages seeded below assign `agent:{key}:repo-leader` /
+    `agent:{key}:worker`, but nothing ever registered those principals, so every
+    name resolution (v0.1 `tasks[].agent`, `messages[].sender_name`, v0.2 room
+    members) came back null. Constructing AgentPrincipal directly — rather than
+    through CreateAgent — is what lets the ids stay UUIDv5-stable and match the
+    rows that reference them; the hierarchy those commands validate is built
+    correctly here (org leader -> repository leader -> worker).
+    """
+
+    organization_id = stable_id("organization")
+    for key, _project, repo_name, paths in TEAM_SCENARIOS:
+        repository_id = stable_id(repo_name)
+        repository_leader = AgentPrincipal(
+            id=stable_id(f"agent:{key}:repo-leader"),
+            organization_id=organization_id,
+            role=AgentRole.REPOSITORY_LEADER,
+            leader_agent_id=leader_id,
+            singleton_key=f"repository:{repository_id}:leader",
+            repository_id=repository_id,
+            responsibility_paths=paths,
+            agentteams_resource_name=f"rm-leader-{key}",
+        )
+        worker = AgentPrincipal(
+            id=stable_id(f"agent:{key}:worker"),
+            organization_id=organization_id,
+            role=AgentRole.WORKER,
+            leader_agent_id=repository_leader.id,
+            singleton_key=None,
+            repository_id=repository_id,
+            responsibility_paths=paths,
+            agentteams_resource_name=f"rm-worker-{key}",
+        )
+        for principal in (repository_leader, worker):
+            # rerun: the principal is already registered
+            with contextlib.suppress(AgentAlreadyExists):
+                await directory.add(
+                    principal,
+                    idempotency_key=f"console-demo:agent:{principal.id}",
+                    request_fingerprint="sha256:" + "e" * 64,
+                )
+
+
+REPOSITORY_SPECS = (
+    # key, repository, status, revision, goal, allowed, forbidden
+    (
+        "a-api",
+        "repo:a:api",
+        SpecificationStatus.FROZEN,
+        3,
+        "在定价响应中新增 discount_amount，保持旧字段兼容。",
+        ("src/pricing/**", "tests/**"),
+        ("src/pricing/legacy/**",),
+    ),
+    (
+        "a-client",
+        "repo:a:client",
+        SpecificationStatus.APPROVED,
+        2,
+        "在结算页展示 discount_amount，缺值时隐藏该行。",
+        ("src/components/**",),
+        (".github/**",),
+    ),
+)
+
+
+async def seed_repository_specs(
+    specifications: PostgresSpecificationStore, leader_id: UUID
+) -> None:
+    """Per-repository specs so §5.4's `spec` block has a non-null sample.
+
+    The plan sheet selects FROZEN over APPROVED and then the highest revision;
+    scenario A carries one of each so both branches are observable. The other
+    repositories keep no spec, which is the "本仓无独立 spec" path.
+    """
+
+    for key, repo_name, status, revision, goal, allowed, forbidden in REPOSITORY_SPECS:
+        specification_id = stable_id(f"spec:repo:{key}")
+        with contextlib.suppress(SpecificationConflict):  # rerun: already stored
+            await specifications.add(
+                Specification(
+                    id=specification_id,
+                    organization_id=stable_id("organization"),
+                    project_id=stable_id("project:a"),
+                    kind=SpecificationKind.REPOSITORY,
+                    status=status,
+                    revision=revision,
+                    repository_id=stable_id(repo_name),
+                    title=f"{key} repository scope",
+                    owner_agent_id=leader_id,
+                    current_version=SpecificationVersion(
+                        id=stable_id(f"spec:repo:{key}:v1"),
+                        specification_id=specification_id,
+                        version=1,
+                        created_by_agent_id=leader_id,
+                        content=SpecificationContent(
+                            goal=goal,
+                            acceptance=("本仓单测通过", "不触碰禁止路径"),
+                            constraints=("不改动公共接口签名",),
+                            tests=("pytest",),
+                            allowed_paths=allowed,
+                            forbidden_paths=forbidden,
+                        ),
+                    ),
+                ),
+                idempotency_key=f"console-demo:spec:repo:{key}",
+                request_fingerprint="sha256:" + "b" * 64,
+            )
+
+
+async def seed_project_topologies(database: Database, leader_id: UUID) -> None:
+    """Idempotently seed project topologies so the room line has anchors.
+
+    Without a topology row there is no team, no `room_id` and no
+    `leader_room_id`, so `/issues/{id}/rooms` has nothing to list and the whole
+    v0.2 room line is unverifiable. Scenario D deliberately gets **no**
+    topology: it keeps a live sample of the "never formed a team" degradation
+    (operational_status/execution_mode null, teams []) that the console must
+    render as 未接入 rather than as `active`.
+
+    Modes differ on purpose so each console branch has data: A is automatic,
+    B is supervised with checkpoints and a human grant, C is supervised and
+    paused (the only way to exercise the paused badge, which §2.1 requires to
+    be independent of Open/Closed).
+    """
+
+    topologies = PostgresProjectTopologyStore(database)
+    if await topologies.get(stable_id("project:a")) is not None:
+        return
+
+    await seed_agents(PostgresAgentDirectory(database), leader_id)
+
+    teams_by_project: dict[str, list[RepositoryTeam]] = {}
+    for key, project_name, repo_name, _paths in TEAM_SCENARIOS:
+        teams_by_project.setdefault(project_name, []).append(
+            RepositoryTeam(
+                id=stable_id(f"team:{key}"),
+                project_id=stable_id(project_name),
+                repository_id=stable_id(repo_name),
+                leader_agent_id=stable_id(f"agent:{key}:repo-leader"),
+                worker_agent_ids=(stable_id(f"agent:{key}:worker"),),
+                agentteams_team_name=f"rm-team-{key}",
+                runtime_status=ProjectTeamRuntimeStatus.READY,
+                room_id=team_room(key),
+                leader_room_id=leader_room(key),
+            )
+        )
+
+    supervisor = stable_id("human:console-demo-supervisor")
+    grant = HumanProjectGrant(
+        human_principal_id=supervisor,
+        role=HumanProjectRole.PROJECT_SUPERVISOR,
+        code_access=CodeAccessLevel.READ,
+        control_actions=frozenset(
+            {
+                HumanControlAction.VIEW_DECISIONS,
+                HumanControlAction.APPROVE_CHECKPOINT,
+                HumanControlAction.PAUSE_PROJECT,
+                HumanControlAction.RESUME_PROJECT,
+            }
+        ),
+    )
+    modes: dict[str, dict] = {
+        "project:a": {
+            "execution_mode": ProjectExecutionMode.AUTO,
+            "required_checkpoints": frozenset(),
+            "human_grants": (),
+            "operational_status": ProjectOperationalStatus.ACTIVE,
+        },
+        "project:b": {
+            "execution_mode": ProjectExecutionMode.SUPERVISED,
+            "required_checkpoints": frozenset(
+                {ProjectCheckpoint.SPECIFICATION, ProjectCheckpoint.DELIVERY}
+            ),
+            "human_grants": (grant,),
+            "operational_status": ProjectOperationalStatus.ACTIVE,
+        },
+        "project:c": {
+            "execution_mode": ProjectExecutionMode.SUPERVISED,
+            "required_checkpoints": frozenset(
+                {ProjectCheckpoint.EXECUTION, ProjectCheckpoint.EXCEPTION_ESCALATION}
+            ),
+            "human_grants": (grant,),
+            "operational_status": ProjectOperationalStatus.PAUSED,
+        },
+    }
+    for project_name, teams in teams_by_project.items():
+        # rerun: this project already carries a topology
+        with contextlib.suppress(ProjectTopologyConflict):
+            await topologies.add(
+                ProjectAgentTopology(
+                    id=stable_id(f"topology:{project_name}"),
+                    organization_id=stable_id("organization"),
+                    project_id=stable_id(project_name),
+                    organization_leader_id=leader_id,
+                    repository_teams=tuple(teams),
+                    **modes[project_name],
+                ),
+                idempotency_key=f"console-demo:topology:{project_name}",
+                request_fingerprint="sha256:" + "f" * 64,
+            )
+
+    await bind_messages_to_team_rooms(database)
+
+
+async def bind_messages_to_team_rooms(database: Database) -> None:
+    """Move the seeded messages from the placeholder room into their team room.
+
+    The earlier seed put every message in one `!console-demo` room, which
+    predates the topology and cannot back `/rooms/{room_id}/stream`. Re-pointing
+    them at the owning team room is idempotent (same value on a rerun) and only
+    touches rows this script created.
+    """
+
+    async with database.transaction() as session:
+        for key, *_ in TEAM_SCENARIOS:
+            await session.execute(
+                update(CollaborationMessageRecord)
+                .where(CollaborationMessageRecord.room_id != team_room(key))
+                .where(
+                    CollaborationMessageRecord.idempotency_key.in_(
+                        (
+                            f"console-demo:msg:{key}:assignment",
+                            f"console-demo:msg:{key}:rework",
+                        )
+                    )
+                )
+                .values(room_id=team_room(key))
+            )
 
 
 async def seed_room_stream(database: Database) -> None:
@@ -405,6 +684,10 @@ async def seed(database_url: str) -> dict[str, object]:
                 idempotency_key="console-demo-org-leader",
             )
             await seed_room_stream(database)
+            await seed_project_topologies(database, replay.principal.id)
+            await seed_repository_specs(
+                PostgresSpecificationStore(database), replay.principal.id
+            )
             return {
                 "already_seeded": True,
                 "decided_by_agent_id": str(replay.principal.id),
@@ -867,6 +1150,12 @@ async def seed(database_url: str) -> dict[str, object]:
             "phase": "plan (virtual draft)",
         }
         await seed_room_stream(database)
+        await seed_project_topologies(database, leader_id)
+        await seed_repository_specs(specifications, leader_id)
+        out["rooms"] = {
+            key: {"team_room": team_room(key), "leader_room": leader_room(key)}
+            for key, *_ in TEAM_SCENARIOS
+        }
         return out
     finally:
         await database.dispose()

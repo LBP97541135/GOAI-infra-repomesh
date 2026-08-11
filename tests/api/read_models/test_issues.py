@@ -161,6 +161,15 @@ class StubTopology:
     async def matrix_room_id(self, project_id: UUID):
         return None
 
+    async def find_by_room(self, room_id: str):
+        for topology in self.mapping.values():
+            if any(
+                room_id in {team.room_id, team.leader_room_id}
+                for team in topology.repository_teams
+            ):
+                return topology
+        return None
+
 
 def _topology(
     project_id: UUID,

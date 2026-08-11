@@ -90,10 +90,31 @@ class ValidationSource(Protocol):
     async def for_project(self, project_id: UUID) -> tuple[ValidationSnapshotView, ...]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RepositorySpecData:
+    """A per-repository spec (v0.2 §5.4), distinct from the project contract."""
+
+    specification_id: UUID
+    kind: str
+    status: str
+    revision: int
+    goal: str
+    acceptance: tuple[str, ...]
+    allowed_paths: tuple[str, ...]
+    forbidden_paths: tuple[str, ...]
+    tests: tuple[str, ...]
+
+
 class SpecificationSource(Protocol):
     async def engineering_contract(
         self, project_id: UUID
     ) -> SpecificationContractData | None: ...
+
+    async def repository_spec(
+        self, project_id: UUID, repository_id: UUID
+    ) -> RepositorySpecData | None:
+        """§5.4: FROZEN wins over APPROVED, then the highest revision."""
+        ...
 
 
 class RepositorySource(Protocol):
@@ -120,6 +141,10 @@ class MessageSource(Protocol):
         self, project_id: UUID
     ) -> tuple[CollaborationMessageView, ...]: ...
 
+    async def for_room(self, room_id: str) -> tuple[CollaborationMessageView, ...]:
+        """Messages delivered to one Matrix room, oldest first."""
+        ...
+
 
 class ObservationSource(Protocol):
     async def for_change_set(
@@ -140,4 +165,8 @@ class TopologySource(Protocol):
 
     async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
         """Agent topology of one issue; None when no team was ever formed."""
+        ...
+
+    async def find_by_room(self, room_id: str) -> ProjectAgentTopologyView | None:
+        """The topology owning a room, so a room id resolves without a scan."""
         ...

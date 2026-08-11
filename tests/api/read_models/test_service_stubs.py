@@ -127,6 +127,15 @@ class _Empty:
     async def get_view(self, project_id: UUID):
         return None
 
+    async def find_by_room(self, room_id: str):
+        return None
+
+    async def for_room(self, room_id: str):
+        return ()
+
+    async def repository_spec(self, project_id: UUID, repository_id: UUID):
+        return None
+
     async def for_change_set(self, change_set_id: UUID):
         return ()
 
@@ -143,6 +152,7 @@ def _service(
     observations=None,
     topology=None,
     agents=None,
+    specifications=None,
 ):
     empty = _Empty()
     return DeliveryReadModelService(
@@ -152,7 +162,7 @@ def _service(
         change_sets=change_sets,
         archives=archives,
         validations=empty,
-        specifications=empty,
+        specifications=specifications if specifications is not None else empty,
         repositories=repositories if repositories is not None else empty,
         agents=agents if agents is not None else empty,
         topology=topology if topology is not None else empty,
@@ -543,6 +553,9 @@ class StubMessages:
 
     async def for_project(self, project_id: UUID):
         return self.messages
+
+    async def for_room(self, room_id: str):
+        return tuple(item for item in self.messages if item.room_id == room_id)
 
 
 class StubObservations:

@@ -2,7 +2,7 @@ from fastapi import APIRouter
 
 from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
-from repomesh.api.read_models import issues_router
+from repomesh.api.read_models import issues_router, rooms_router
 from repomesh.api.read_models import router as delivery_read_model_router
 from repomesh.api.scm_reconciliation import router as scm_reconciliation_router
 from repomesh.api.scm_webhook import router as scm_webhook_router
@@ -24,5 +24,6 @@ api_router.include_router(human_control_router, prefix="/api/v1")
 api_router.include_router(deliveries_router, prefix="/api/v1")
 api_router.include_router(delivery_read_model_router, prefix="/api/v1")
 api_router.include_router(issues_router, prefix="/api/v1")
+api_router.include_router(rooms_router, prefix="/api/v1")
 api_router.include_router(scm_webhook_router, prefix="/api/v1")
 api_router.include_router(scm_reconciliation_router, prefix="/api/v1")
