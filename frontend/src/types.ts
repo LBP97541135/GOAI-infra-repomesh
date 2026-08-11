@@ -1,11 +1,7 @@
 /** 交付控制台前端视图模型。
  *  契约数据（src/api/contract.ts）经 src/viewmodel.ts 派生成本文件的展示形状；
  *  display_status / gate_display / phase 由后端（或 replay 夹具）给出，前端只渲染，
- *  不做任何状态映射（契约 §5 是唯一实现）。
- *
- *  v1 控制台退役后，本文件只剩 v2 四个消费面用得到的形状。原先另外 16 个导出
- *  （DeliveryView / ChatMessage / RepoGate / PresentationOverlay 等）描述的是 v1
- *  那张交付全貌页，随它一同移除。 */
+ *  不做任何状态映射（契约 §5 是唯一实现）。 */
 import type { DecisionAction, GateDisplay } from "./api/contract";
 
 /** 契约 §4.3 仅此两类。clarify 已删（X4 裁决：无消费方；真机制落地时按
@@ -15,7 +11,6 @@ export type DecisionKind = "approve" | "watch";
 export interface Decision {
   id: string;
   kind: DecisionKind;
-  urgency: "now" | "soon" | "later";
   title: string;
   body: string;
   actions: string[];
@@ -28,7 +23,6 @@ export interface Decision {
  *  授权单按点击的决策卡构建（S1），decisionId 用于消化后从决策夹移除对应项。 */
 export interface ApprovalInfo {
   decisionId: string;
-  authority: string;
   snapshotLabel: string;
   scopeLabel: string;
   changeSetId: string | null;

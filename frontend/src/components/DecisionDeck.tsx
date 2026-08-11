@@ -14,27 +14,21 @@ const folderFace = "border border-[#8a7648] bg-kraft";
 export function DecisionDeck({
   deck,
   hidden,
-  variant = "docked",
   onToggleHidden,
   onBringToFront,
   onAction,
 }: {
   deck: Decision[];
   hidden: boolean;
-  /** docked：v1 交付控制台，柜沿升起、底缘藏于薄条之后；
-   *  inline：v2 issue 详情页，文档流中的一个区块。视觉语言（牛皮纸档案柜 +
-   *  彩色标签错位露头）两者一致，只有定位与投影方向不同。 */
-  variant?: "docked" | "inline";
   onToggleHidden: () => void;
   onBringToFront: (id: string) => void;
   onAction: (decision: Decision, actionIdx: number) => void;
 }) {
   if (deck.length === 0) return null;
 
-  const docked = variant === "docked";
-  const shell = docked ? "relative z-[4] -mb-3 flex-none px-[22px]" : "relative";
-  // docked 从柜沿升起故投影朝上；inline 在文档流里，投影朝下才合物理
-  const shadow = docked ? "shadow-[0_-4px_14px_rgba(0,0,0,0.35)]" : "shadow-[0_6px_16px_rgba(0,0,0,0.3)]";
+  // 文档流中的一个区块，投影朝下才合物理
+  const shell = "relative";
+  const shadow = "shadow-[0_6px_16px_rgba(0,0,0,0.3)]";
 
   const stackBar = (
     <button

@@ -32,8 +32,7 @@ function client() {
 
 export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckData> {
   if (resolveDataSourceMode() === "replay") {
-    // 夹具与详情/房间/计划同源（同一 issue、同一套仓库与轮次 id），所以这里就是
-    // 「本 issue 本轮的决策」——不再需要「非本 issue」那句补丁说明。
+    // 夹具与详情/房间/计划同源（同一 issue、同一套仓库与轮次 id）
     return {
       deck: decisionsFromContract(decisionsFixture.items),
       aggregate: deliveryAggregateFixture,
@@ -113,18 +112,10 @@ export async function submitGovernanceDecision(
   return client().postGovernanceDecision(roundId, payload);
 }
 
-/** 治理决策主体。**从花名册派生，而不是写死一个 uuid**（主脑 2026-08-11 裁决，乙案）。
- *
- *  起因：`.env.development` 里写死的 `d2abc576-…` 已经不在种子花名册里——v2 换基线时
- *  5533 DROP 重建重种，org leader 是 v4 随机 uuid，每次重种都换一个。后端
- *  `_authorized_actor` 查不到该 principal 就拒绝，于是「真批」会当场失败。
- *
- *  但更根本的理由不是修那一行常量：决策主体的语义本来就是「**当前组织的 leader**」，
- *  而 §4.3 的花名册正好是这一事实的持久化来源。派生出来的东西重种免疫只是附带收益。
- *
- *  取值链：`VITE_GOVERNANCE_AGENT_ID`（可选覆盖，留给联调指定特定主体）→ 花名册里
- *  该组织的 active `organization_leader`。都取不到返回 `null`——调用方必须呈现
- *  「决策主体未接入」并**禁用提交**，而不是发一个注定被 403 拒绝的请求。 */
+/** 治理决策主体从花名册派生（主脑 2026-08-11 裁决，乙案）：决策主体的语义即
+ *  「当前组织的 leader」，§4.3 花名册是这一事实的持久化来源。取值链：
+ *  `VITE_GOVERNANCE_AGENT_ID`（可选覆盖）→ 花名册里该组织的 active
+ *  `organization_leader` → 都取不到返回 `null`，调用方呈现「决策主体未接入」并禁用提交。 */
 export interface GovernanceAgent {
   agentId: string;
   /** AgentTeams 资源名（不是人名），用于授权单上如实标注「谁在批」 */

@@ -74,8 +74,8 @@ export async function fetchConsoleAgents(withRuntime: boolean): Promise<ConsoleA
  *  才允许把 null 解读成「未接入」。同构于 `operational_status: null ≠ active`。 */
 
 /** 夹具侧也要如实模拟 `with_runtime=false`：那时后端**不发任何 Controller 请求**，
- *  整块 runtime 缺省。若夹具在首屏就把运行时给出来，两段式加载的第一段就永远验不到
- *  「探测中」这个真实状态——夹具骗过自己比没有夹具更糟。 */
+ *  runtime 字段常在、值恒 null（契约 §7.3 勘正）。若夹具在首屏就把运行时给出来，
+ *  两段式加载的第一段就永远验不到「探测中」这个真实状态——夹具骗过自己比没有夹具更糟。 */
 function replayRuntime<T extends { runtime: unknown }>(rows: T[], withRuntime: boolean): T[] {
   return withRuntime ? rows : rows.map((row) => ({ ...row, runtime: null }));
 }

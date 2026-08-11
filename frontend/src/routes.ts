@@ -47,7 +47,7 @@ export function parseRoute(hash: string): Route {
   const detail = h.match(/^\/issues\/([^/?]+)/);
   if (detail) return { nav: "issues", issueId: safeDecode(detail[1]), roomId: null };
 
-  // 未知 hash（含已退役的 #/delivery-v1）回落到 issue 列表，不留半死路由
+  // 未知 hash 回落到 issue 列表，不留半死路由
   const found = (Object.keys(NAV_HASH) as NavKey[]).find((k) => h.startsWith(NAV_HASH[k].slice(1)));
   return { nav: found ?? "issues", issueId: null, roomId: null };
 }

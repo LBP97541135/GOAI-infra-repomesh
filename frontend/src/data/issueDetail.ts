@@ -39,7 +39,8 @@ export const issueDetailFixture: IssueDetailView = {
   pending_decision_count: 1,
   repository_count: 3,
   team_count: 3,
-  operational_status: "active",
+  // 与 data/issues.ts 列表夹具同一派生同一结论（§3 详情 = §2 全字段之上追加）
+  operational_status: "paused",
   execution_mode: "supervised",
   opened_by_agent_id: "9c8b7a60-1122-4d33-8e44-5f6a7b8c9d00",
   // AgentTeams 资源名，不是人名（渲染保留 AGENT 前缀）
@@ -90,9 +91,9 @@ export const roomsFixture: RoomListItemView[] = [
     repository_id: REPO_API,
     repository_name: "saleor-core",
     members: [
-      { agent_id: "a-lead-01", name: "leader · core", role: "repository_leader" },
-      { agent_id: "a-work-01", name: "worker · 597869c4", role: "worker" },
-      { agent_id: "a-work-02", name: "worker · b6b2f051", role: "worker" },
+      { agent_id: "a-lead-01", name: "rm-leader-core", role: "repository_leader" },
+      { agent_id: "a-work-01", name: "rm-worker-597869c4", role: "worker" },
+      { agent_id: "a-work-02", name: "rm-worker-b6b2f051", role: "worker" },
     ],
     last_message: {
       at: "2026-08-11T14:31:00Z",
@@ -111,8 +112,8 @@ export const roomsFixture: RoomListItemView[] = [
     repository_id: REPO_API,
     repository_name: "saleor-core",
     members: [
-      { agent_id: "a-org-lead", name: "manager · default", role: "organization_leader" },
-      { agent_id: "a-lead-01", name: "leader · core", role: "repository_leader" },
+      { agent_id: "a-org-lead", name: "rm-manager", role: "organization_leader" },
+      { agent_id: "a-lead-01", name: "rm-leader-core", role: "repository_leader" },
     ],
     last_message: {
       at: "2026-08-11T15:30:00Z",
@@ -131,8 +132,8 @@ export const roomsFixture: RoomListItemView[] = [
     repository_id: REPO_WEB,
     repository_name: "saleor-dashboard",
     members: [
-      { agent_id: "a-lead-02", name: "leader · dashboard", role: "repository_leader" },
-      { agent_id: "a-work-03", name: "worker · 8a1c22de", role: "worker" },
+      { agent_id: "a-lead-02", name: "rm-leader-dashboard", role: "repository_leader" },
+      { agent_id: "a-work-03", name: "rm-worker-8a1c22de", role: "worker" },
     ],
     last_message: {
       at: "2026-08-11T12:14:00Z",
@@ -151,8 +152,8 @@ export const roomsFixture: RoomListItemView[] = [
     repository_id: REPO_WEB,
     repository_name: "saleor-dashboard",
     members: [
-      { agent_id: "a-org-lead", name: "manager · default", role: "organization_leader" },
-      { agent_id: "a-lead-02", name: "leader · dashboard", role: "repository_leader" },
+      { agent_id: "a-org-lead", name: "rm-manager", role: "organization_leader" },
+      { agent_id: "a-lead-02", name: "rm-leader-dashboard", role: "repository_leader" },
     ],
     last_message: null,
     message_count: 0,
@@ -162,7 +163,7 @@ export const roomsFixture: RoomListItemView[] = [
 
 /** §5.2 四值全覆盖：message（真实气泡）+ governance / gate / runner（系统条目，无头像）。
  *  治理决策按 Q4 方案 A **只投进 leaderDM 流**，teamRoom 流不含 governance。 */
-export const leaderDmStreamFixture: RoomStreamPage = {
+const leaderDmStreamFixture: RoomStreamPage = {
   next_cursor: null,
   items: [
     {
@@ -175,16 +176,16 @@ export const leaderDmStreamFixture: RoomStreamPage = {
         subject: "第 2 轮候选已就绪",
         body: "core 的 price_override_reason 已落库并通过本仓单测，等待发布门禁。",
         sender_agent_id: "a-lead-01",
-        sender_name: "leader · core",
+        sender_name: "rm-leader-core",
         recipient_agent_id: "a-org-lead",
-        recipient_name: "manager · default",
+        recipient_name: "rm-manager",
         repository_id: REPO_API,
         task_id: null,
         status: "delivered",
         event_id: null,
         correlation_id: null,
         created_at: "2026-08-11T12:04:12Z",
-        direction: "inbound",
+        direction: "leader_to_worker",
         room_id: "!room-core-dm:local",
       },
       text: null,
@@ -226,7 +227,7 @@ export const leaderDmStreamFixture: RoomStreamPage = {
 };
 
 /** teamRoom 流：只有真实消息 + runner 投影，**不含 governance**（Q4 方案 A）。 */
-export const teamRoomStreamFixture: RoomStreamPage = {
+const teamRoomStreamFixture: RoomStreamPage = {
   next_cursor: null,
   items: [
     {
@@ -239,16 +240,16 @@ export const teamRoomStreamFixture: RoomStreamPage = {
         subject: "任务指派：交付 core 价格原因字段",
         body: "按已冻结的工程契约实现本仓库范围，验收标准见任务卡。",
         sender_agent_id: "a-lead-01",
-        sender_name: "leader · core",
+        sender_name: "rm-leader-core",
         recipient_agent_id: "a-work-01",
-        recipient_name: "worker · 597869c4",
+        recipient_name: "rm-worker-597869c4",
         repository_id: REPO_API,
         task_id: "task-0007",
         status: "delivered",
         event_id: null,
         correlation_id: null,
         created_at: "2026-08-11T12:12:00Z",
-        direction: "outbound",
+        direction: "leader_to_worker",
         room_id: "!room-core-team:local",
       },
       text: null,
@@ -266,16 +267,16 @@ export const teamRoomStreamFixture: RoomStreamPage = {
         subject: "返工指派：修复 core 的失败候选",
         body: "隐藏验收测试 test_price_reason_audit 未过，按证据修正后重新提交。",
         sender_agent_id: "a-lead-01",
-        sender_name: "leader · core",
+        sender_name: "rm-leader-core",
         recipient_agent_id: "a-work-01",
-        recipient_name: "worker · 597869c4",
+        recipient_name: "rm-worker-597869c4",
         repository_id: REPO_API,
         task_id: "task-0009",
         status: "delivered",
         event_id: null,
         correlation_id: null,
         created_at: "2026-08-11T14:31:00Z",
-        direction: "outbound",
+        direction: "leader_to_worker",
         room_id: "!room-core-team:local",
       },
       text: null,
@@ -298,7 +299,7 @@ export const teamRoomStreamFixture: RoomStreamPage = {
 
 /** 静默房间的历史流：live=false 不代表空，打开即完整历史（原型 `#v-detail` 的
  *  「静默房间 → 打开即完整历史」）。同为 teamRoom，同样不含 governance。 */
-export const dashboardTeamStreamFixture: RoomStreamPage = {
+const dashboardTeamStreamFixture: RoomStreamPage = {
   next_cursor: null,
   items: [
     {
@@ -311,16 +312,16 @@ export const dashboardTeamStreamFixture: RoomStreamPage = {
         subject: "任务指派：dashboard 订单详情展示修改原因",
         body: "订单详情页新增「价格修改原因」展示项，字段随 core 的 GraphQL 类型同步。",
         sender_agent_id: "a-lead-02",
-        sender_name: "leader · dashboard",
+        sender_name: "rm-leader-dashboard",
         recipient_agent_id: "a-work-03",
-        recipient_name: "worker · 8a1c22de",
+        recipient_name: "rm-worker-8a1c22de",
         repository_id: REPO_WEB,
         task_id: "task-0011",
         status: "delivered",
         event_id: null,
         correlation_id: null,
         created_at: "2026-08-11T12:14:00Z",
-        direction: "outbound",
+        direction: "leader_to_worker",
         room_id: "!room-dashboard-team:local",
       },
       text: null,
@@ -388,17 +389,9 @@ export const repositoryPlanFixture: RepositoryPlanView = {
 
 // ══════════ 当前轮次的交付聚合与决策夹（v0.1 §3 / §4.3，环境窗与决策夹消费） ══════════
 
-/** 决策夹与环境窗原先借用 v1 演示交付的夹具（已随 v1 删除）。那份夹具的 `project_id`
- *  其实与本文件是同一个 issue，**但仓库 id 与轮次 id 是另一套**——于是 replay 模式下
- *  用本文件的 `REPO_API` 去那份聚合里取环境切片必然落空，环境窗恒显「本仓环境未接入」，
- *  决策夹也只能挂一句「非本 issue 的真实决策」的补丁说明。
- *
- *  现在改为本文件自产，id 与房间/计划夹具同源，replay 世界自洽。
- *
- *  只保留 v2 两个消费面真正要的部分：`repositoryEnvFromAggregate` 要 change_set /
- *  diffs / validation_snapshot / plan.merge_order，`approvalFromContract` 要
- *  change_set 与仓库名。`tasks` 在 v2 没有消费面（任务列表是 v1 的），故为空数组——
- *  照抄一份没人读的任务列表，只会让下一个人以为它有用。 */
+/** 聚合与决策夹由本文件自产，id 与房间/计划夹具同源，replay 世界自洽；只保留两个
+ *  消费面真正要的部分：`repositoryEnvFromAggregate` 要 change_set / diffs /
+ *  validation_snapshot / plan.merge_order，`approvalFromContract` 要 change_set 与仓库名。 */
 const ROUND_ID = "2ebf564b-3bf2-5af1-ae24-3ccc4dd9d721";
 const CHANGE_SET_ID = "cc84f1d0-51be-4b7e-9d02-88a3c67e2042";
 const BASE_SHA = "d4c8b21a7e90f5d36b18a04c92e7f6531c80ee55";
@@ -425,11 +418,10 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
     plan_version: 2,
     status: "in_progress",
     current_batch_index: 1,
-    execution_batches: [["saleor-core"], ["saleor-dashboard"], ["saleor-docs"]],
+    // 与 repositoryPlanFixture.execution_batches 同一份计划，两处必须一致
+    execution_batches: [["saleor-core"], ["saleor-dashboard", "saleor-docs"]],
     merge_order: [REPO_API, REPO_WEB, REPO_DOCS],
   },
-  // v2 没有任务列表消费面（那是 v1 的）——空数组而不是照抄一份没人读的数据
-  tasks: [],
   change_set: {
     change_set_id: CHANGE_SET_ID,
     status: "delivering",
@@ -573,9 +565,7 @@ export const decisionsFixture: DecisionsResponse = {
  *  （计划生成）——环境窗是单仓作用域，这三类的取舍见 RoomView 的落位注释。
  *
  *  末条 `deny` 是**回放专属的治理拦截叙事**：契约 §6.6 规定 live 不应产出 deny，
- *  live 收到即渲染为违约警示（EventTimeline 的 `demo` 开关分流两种语义）。
- *
- *  当初落在这里而不是 data/replay.ts，是因为后者已排期随 v1 退役——现已删除。 */
+ *  live 收到即渲染为违约警示（EventTimeline 的 `demo` 开关分流两种语义）。 */
 export const roundEventsFixture: DeliveryEventsPage = {
   items: [
     { at: "2026-08-11T09:12:04Z", kind: "plan", text: "计划 v1 已生成 · 3 仓 2 批次", task_id: null, repository_id: null, payload_ref: "plan-snapshot:1" },

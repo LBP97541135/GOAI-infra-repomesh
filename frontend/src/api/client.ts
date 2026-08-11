@@ -1,5 +1,5 @@
 /** 读模型 API typed client。端点与 JSON 形状唯一来源：
- *  docs/contracts/delivery-read-model-v0.1.md §1-§4。 */
+ *  docs/contracts/ 交付读模型契约 v0.1/v0.2/v0.3 全部消费端点。 */
 import type {
   ConsoleAgentsResponse,
   ConsoleRepositoriesResponse,
@@ -7,8 +7,6 @@ import type {
   DecisionsResponse,
   DeliveryAggregate,
   DeliveryEventsPage,
-  DeliveryListResponse,
-  DeliveryMessagesPage,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
   IssueDetailView,
@@ -111,8 +109,9 @@ export function createApiClient(config: ApiClientConfig) {
     listConsoleRepositories: () =>
       request<ConsoleRepositoriesResponse>(config, "GET", `/console/repositories`),
 
-    /** §4.2。`withRuntime: false` 时整块 runtime 省略且不发任何 Controller 请求
-     *  （实测 0.10s vs 默认 true 的 2.12s）——首屏用 false，运行时列另发一次填。 */
+    /** §4.2。`withRuntime: false` 时 runtime 字段常在、值恒 null（契约 §7.3 勘正），
+     *  且不发任何 Controller 请求（实测 0.10s vs 默认 true 的 2.12s）——
+     *  首屏用 false，运行时列另发一次填。 */
     listConsoleTeams: (opts?: { withRuntime?: boolean }) =>
       request<ConsoleTeamsResponse>(
         config,
@@ -129,9 +128,6 @@ export function createApiClient(config: ApiClientConfig) {
         `/console/agents${opts?.withRuntime === false ? "?with_runtime=false" : ""}`,
       ),
 
-    listDeliveries: (cursor?: string) =>
-      request<DeliveryListResponse>(config, "GET", `/deliveries${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
-
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),
 
@@ -144,10 +140,6 @@ export function createApiClient(config: ApiClientConfig) {
       const q = params.toString();
       return request<DeliveryEventsPage>(config, "GET", `/deliveries/${deliveryId}/events${q ? `?${q}` : ""}`);
     },
-
-    // §4.2 不分页（契约 5152f48）——此处曾有一个猜来的 cursor 参数，已清除
-    getMessages: (deliveryId: string) =>
-      request<DeliveryMessagesPage>(config, "GET", `/deliveries/${deliveryId}/messages`),
 
     /** §5.1：未建团的 issue 返回 `{"rooms": []}` 且 HTTP 200，空态不是错误 */
     listRooms: (issueId: string) => request<RoomListResponse>(config, "GET", `/issues/${issueId}/rooms`),
@@ -178,5 +170,3 @@ export function createApiClient(config: ApiClientConfig) {
       request<unknown>(config, "POST", `/deliveries/${deliveryId}/archive`),
   };
 }
-
-export type ApiClient = ReturnType<typeof createApiClient>;

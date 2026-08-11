@@ -1,8 +1,7 @@
 import type { IssueListItemView, Phase, RuntimeBlock } from "./api/contract";
 
 /** issue 与网格页的展示辅助。**纯格式化**，不含任何状态派生——state/phase/
- *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。
- *  （放这里而不是 viewmodel.ts：后者依赖 v1 的 DeliveryData，随清理批次 #17 退役。） */
+ *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。 */
 
 /** 八相皮肤唯一表（X2 合并：此前三页各持一份，release 在列表页灰、详情页琥珀——
  *  主脑裁决琥珀为正）。展示皮肤，不是状态映射；类型收窄到 Phase（缺项=编译错误），

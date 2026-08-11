@@ -205,7 +205,6 @@ export function IssueDetailPage({
             <DecisionDeck
               deck={deck}
               hidden={deckHidden}
-              variant="inline"
               onToggleHidden={onToggleDeck}
               onBringToFront={onBringToFront}
               onAction={onDecisionAction}

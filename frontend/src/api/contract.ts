@@ -1,7 +1,6 @@
-/** 交付读模型契约 v0.1 的 TypeScript 类型。
- *  唯一来源：docs/contracts/delivery-read-model-v0.1.md（dbd2b1a）。
- *  契约是唯一事实——本文件只转写 §2/§3/§4 的 JSON 形状，禁止添加契约外字段；
- *  契约修订时本文件同步修订。 */
+/** 交付读模型契约的 TypeScript 类型。
+ *  转写 docs/contracts/ 交付读模型契约 v0.1/v0.2/v0.3 全部消费端点的 JSON 形状。
+ *  契约是唯一事实——禁止添加契约外字段；契约修订时本文件同步修订。 */
 
 /** §2 交付阶段（读模型推导，前端只渲染） */
 export type Phase =
@@ -13,19 +12,6 @@ export type Phase =
   | "delivered"
   | "failed"
   | "archived";
-
-/** §5.1 任务展示 6 态（后端唯一映射，前端只渲染） */
-export type DisplayStatus = "pending" | "running" | "repairing" | "blocked" | "succeeded" | "failed";
-
-/** §3 任务后端 7 态（原样透出） */
-export type BackendTaskStatus =
-  | "assigned"
-  | "in_progress"
-  | "blocked"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "superseded";
 
 /** §5.3 门禁展示 4 态（后端唯一映射，前端只渲染） */
 export type GateDisplay = "open" | "blocked" | "running" | "waiting";
@@ -303,9 +289,12 @@ export interface TeamRuntimeFields {
  *  `awake` / `uptime_seconds` **恒 null**：Controller 响应里没有任何时间字段，
  *  而 DesiredRuntimeState 是我们**下发的期望态**不是观测态——拿它冒充观测即编造。
  *  两者都只能显「未接入」，补齐路径是 AgentTeams Controller 暴露启动时间戳。 */
+/** §4.3 契约枚举：Controller 回报的运行时适配器种类。 */
+export type RuntimeKind = "openclaw" | "copaw" | "hermes" | "openhuman" | "repomesh-runner";
+
 export interface AgentRuntimeFields {
   phase: string | null;
-  runtime_kind: string | null;
+  runtime_kind: RuntimeKind | null;
   matrix_user_id: string | null;
   room_id: string | null;
   message: string | null;
@@ -385,30 +374,6 @@ export interface ConsoleAgentsResponse {
   agents: ConsoleAgentView[];
 }
 
-export interface DeliveryListItem {
-  /** null = §0 虚拟草稿交付（尚未 materialize） */
-  delivery_id: string | null;
-  title: string;
-  phase: Phase;
-  phase_note: string;
-  pending_decision_count: number;
-  updated_at: string;
-}
-
-export interface DeliveryProjectGroup {
-  project_id: string;
-  /** nullable：Project 实体/注册表未落地前为 null（§6.9） */
-  project_key: string | null;
-  title: string;
-  deliveries: DeliveryListItem[];
-}
-
-export interface DeliveryListResponse {
-  projects: DeliveryProjectGroup[];
-  /** v0.1 数据量下恒为 null，游标语义保留待后续实现 */
-  next_cursor: string | null;
-}
-
 /* ------------------------------------------------------------ §3 全貌聚合 */
 
 export interface DeliveryProjectInfo {
@@ -452,28 +417,6 @@ export interface DeliveryPlanView {
   execution_batches: string[][];
   /** 由 ChangeSet depends_on 拓扑排序导出 */
   merge_order: string[];
-}
-
-export interface RepairStep {
-  at: string;
-  what: string;
-}
-
-export interface DeliveryTaskView {
-  task_id: string;
-  task_key: string | null;
-  repository_id: string;
-  title: string;
-  backend_status: BackendTaskStatus;
-  display_status: DisplayStatus;
-  agent: string | null;
-  /** 1 + 同仓 rework 链长度（§5.2） */
-  attempt: number;
-  depends_on: string[];
-  result_summary: string | null;
-  repair_timeline: RepairStep[];
-  /** §5.2：仅转述 recovery plan 的 MANUAL_INTERVENTION，读模型不做升级判断 */
-  escalated_to_human: boolean;
 }
 
 export interface CiCheckView {
@@ -558,7 +501,6 @@ export interface DeliveryAggregate {
   contract: DeliveryContractView | null;
   repositories: DeliveryRepositoryInfo[];
   plan: DeliveryPlanView;
-  tasks: DeliveryTaskView[];
   change_set: ChangeSetView | null;
   validation_snapshot: ValidationSnapshotView | null;
   diffs: DeliveryDiffView[];
@@ -608,13 +550,6 @@ export interface CollaborationMessageView {
   correlation_id: string | null;
   created_at: string;
   direction: string;
-}
-
-/** §4.2 **不分页**（契约 5152f48 明文澄清）：一次交付的消息量以「一屏读完」为设计
- *  前提，需要翻页的是房间流（§5.2 `/rooms/{room_id}/stream`），不在此重复一套游标。
- *  此处曾按 §4.1 events 类推多写过一个 `next_cursor`，是消费方猜字段，已清除。 */
-export interface DeliveryMessagesPage {
-  items: CollaborationMessageView[];
 }
 
 /** §4.3：v0.1 仅 approve|watch；clarify 无后端实体（§6.5），只存在于前端回放模式 */

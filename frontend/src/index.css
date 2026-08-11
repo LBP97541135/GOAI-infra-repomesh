@@ -1,8 +1,7 @@
 @import "tailwindcss";
 
-/* 设计令牌 —— Variant D「复古未来主义 · 硬朗」的选型见
-   frontend-prototype/DESIGN-DECISION.md。原型的 styles.css 已随 v1 退役，
-   本段即这套令牌的现行归属，不再有上游文件可对照。 */
+/* 设计令牌 —— Variant D「复古未来主义 · 硬朗」（选型见
+   frontend-prototype/DESIGN-DECISION.md），本段即这套令牌的唯一归属。 */
 @theme {
   --color-ink: #16130d; /* 暖黑背景 */
   --color-ink-deep: #131009; /* 左栏更深一档 */
@@ -21,7 +20,6 @@
   --color-tx3: #6b6046; /* 第三级弱文本（原型 --tx3，A12 补齐移植时丢失的令牌） */
   --color-paper-ink: #221c10; /* 纸面正文 */
   --color-paper-dim: #6d6349;
-  --color-paper-neg: #a34a2e;
 
   --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
@@ -68,22 +66,6 @@ button {
     text-transform: uppercase;
     color: var(--color-tx2);
   }
-
-  /* 坐标网格底纹（DAG 容器） */
-  .grid-amber {
-    background:
-      repeating-linear-gradient(0deg, transparent 0 21px, rgba(201, 158, 82, 0.04) 21px 22px),
-      repeating-linear-gradient(90deg, transparent 0 21px, rgba(201, 158, 82, 0.04) 21px 22px);
-  }
-  .grid-paper {
-    background:
-      repeating-linear-gradient(0deg, transparent 0 21px, rgba(23, 19, 10, 0.05) 21px 22px),
-      repeating-linear-gradient(90deg, transparent 0 21px, rgba(23, 19, 10, 0.05) 21px 22px);
-  }
-  /* 顶栏刻度纹 */
-  .ticks-amber {
-    background: repeating-linear-gradient(90deg, transparent 0 22px, rgba(201, 158, 82, 0.03) 22px 23px);
-  }
 }
 
 @keyframes blink {
@@ -94,12 +76,8 @@ button {
 .blink {
   animation: blink 1.6s infinite;
 }
-.blink-fast {
-  animation: blink 1.4s infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .blink,
-  .blink-fast {
+  .blink {
     animation: none;
   }
 }

@@ -1,10 +1,6 @@
 /** 契约聚合 → 组件视图模型的派生层。
  *  只做展示派生（标签拼接、nullable 降级回退），不做状态映射：
- *  display_status / gate_display / phase 原样透传（契约 §5 是唯一映射实现）。
- *
- *  v1 控制台退役后只剩三个派生函数 + 一个时间格式化。原先的 deriveView / deriveChat
- *  是 v1 那张交付全貌页的整页装配（含 DAG 拓扑布局、门禁检查项拼装、演示叙事覆盖层
- *  合并），随 v1 一同移除。 */
+ *  display_status / gate_display / phase 原样透传（契约 §5 是唯一映射实现）。 */
 import type {
   DecisionAction,
   DecisionItem,
@@ -36,7 +32,6 @@ export function decisionsFromContract(items: DecisionItem[]): Decision[] {
   return items.map((item) => ({
     id: item.id,
     kind: item.kind,
-    urgency: item.kind === "approve" ? "now" : "soon",
     title: item.title,
     body: item.body,
     actions: item.actions.map((a) => ACTION_LABEL[a]),
@@ -47,15 +42,11 @@ export function decisionsFromContract(items: DecisionItem[]): Decision[] {
 }
 
 /** 授权单信息。head-bound 语义由后端保证（§4.4：SHA 漂移即 409）——本函数只把
- *  绑定对象呈现出来，不做任何判定。
- *
- *  `authority` 这个入参在 v1 用来接演示叙事层的审批人名；v2 的授权单改为显示
- *  从花名册派生的真实决策主体（见 api/decisions.ts），弹窗不再读这个字段，
- *  保留默认值只为形状不变。 */
+ *  绑定对象呈现出来，不做任何判定。审批人显示从花名册派生的真实决策主体
+ *  （见 api/decisions.ts），不在此拼装。 */
 export function approvalForDecision(
   agg: DeliveryAggregate,
   decision: { id: string; repositoryId: string | null; headSha: string | null },
-  authority = "治理审批人",
 ): ApprovalInfo | null {
   // S1 修复：授权单按**用户点击的那张决策卡**构建。此前这里 find 第一个 approve
   // 项——多仓同时待批时，点 B 卡会弹出并提交 A 卡的仓库与 SHA（给未审仓库发
@@ -67,7 +58,6 @@ export function approvalForDecision(
     agg.repositories.find((r) => r.repository_id === decision.repositoryId)?.name ?? "目标仓库";
   return {
     decisionId: decision.id,
-    authority,
     snapshotLabel: agg.validation_snapshot
       ? `${agg.validation_snapshot.id} · IMMUTABLE`
       : decision.headSha

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
-import type { ApprovalInfo, Decision } from "../types";
+import type { DeliveryAggregate, IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
+import type { ApprovalInfo, Decision, EvidenceView } from "../types";
 import {
   archiveRound,
   fetchDecisionDeck,
@@ -10,8 +10,6 @@ import {
   type GovernanceAgent,
 } from "../api/decisions";
 import type { RoundHistoryState } from "../components/RoundsPanel";
-import type { DeliveryAggregate } from "../api/contract";
-import type { EvidenceView } from "../types";
 import { fetchIssueDetail, fetchRooms } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
@@ -142,8 +140,7 @@ export function IssueDetailContainer({
         setApproval(null);
         setDeckAggregate(data.aggregate);
         setDeckNote(
-          // 夹具已与详情/房间同源（同一 issue 同一轮），所以只需说明这是回放数据，
-          // 不必再声明「非本 issue」——那句是借用 v1 演示交付时期的补丁
+          // 夹具与详情/房间同源（同一 issue 同一轮），只需说明这是回放数据
           replay ? `${roundLabel} · 回放夹具` : `${roundLabel} · live`,
         );
       })

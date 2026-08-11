@@ -58,7 +58,7 @@ function NavIcon({ nav }: { nav: NavKey }) {
 }
 
 /** 选中态的琥珀左竖条是 Variant D 的导航语言（原型 `.nav.active` 的
- *  `border-left:2px solid var(--amber)`，v1 Sidebar 同款）；未选中留同宽透明边框防位移。 */
+ *  `border-left:2px solid var(--amber)`）；未选中留同宽透明边框防位移。 */
 const navBase =
   "flex w-full items-center gap-2.5 rounded-hard border-l-2 px-2.5 py-[7px] text-left text-[13px]";
 

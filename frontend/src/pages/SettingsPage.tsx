@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import type { Account } from "../api/auth";
-import type { ConsoleAgentView } from "../api/contract";
+import type { ConsoleAgentView, RuntimeKind } from "../api/contract";
 import { fetchConsoleAgents, gridSourceMode } from "../api/grid";
 import { useRuntimeRows } from "./useRuntimeRows";
 
@@ -52,7 +52,7 @@ export function SettingsPage({ account }: { account: Account }) {
     ...new Set(
       (rows ?? [])
         .map((a) => (a.runtime !== null && a.runtime.reachable ? a.runtime.runtime_kind : null))
-        .filter((k): k is string => k !== null),
+        .filter((k): k is RuntimeKind => k !== null),
     ),
   ];
 

@@ -154,7 +154,7 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     runtime: {
       reachable: true,
       phase: "Running",
-      runtime_kind: "claude-code",
+      runtime_kind: "openclaw",
       matrix_user_id: "@demo-org-leader:matrix.local",
       room_id: null,
       message: null,
@@ -178,7 +178,7 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     runtime: {
       reachable: true,
       phase: "Running",
-      runtime_kind: "claude-code",
+      runtime_kind: "openclaw",
       matrix_user_id: "@rm-leader-core:matrix.local",
       room_id: "!rm-leader-core:matrix.local",
       message: null,
@@ -202,7 +202,7 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     runtime: {
       reachable: true,
       phase: "Executing",
-      runtime_kind: "codex",
+      runtime_kind: "hermes",
       matrix_user_id: "@rm-worker-core:matrix.local",
       room_id: "!rm-team-core:matrix.local",
       message: "任务执行中",
