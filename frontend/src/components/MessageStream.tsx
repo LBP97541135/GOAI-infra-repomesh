@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { ChatMessage } from "../types";
+import type { ChatMessage, DeliveryView } from "../types";
 import { ApproveArtifact, DagArtifact, FailArtifact, ScopeArtifact } from "./artifacts";
 
 function Avatar({ name, tone }: { name: string; tone: ChatMessage["tone"] }) {
@@ -48,9 +48,11 @@ function Bubble({ msg }: { msg: ChatMessage }) {
 
 export function MessageStream({
   messages,
+  view,
   onApprove,
 }: {
   messages: ChatMessage[];
+  view: DeliveryView;
   onApprove: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -74,10 +76,10 @@ export function MessageStream({
               <span>{msg.attach.meta}</span>
             </div>
           )}
-          {msg.artifact === "scope" && <ScopeArtifact />}
-          {msg.artifact === "dag" && <DagArtifact />}
-          {msg.artifact === "fail" && <FailArtifact />}
-          {msg.artifact === "approve" && <ApproveArtifact onApprove={onApprove} />}
+          {msg.artifact === "scope" && <ScopeArtifact view={view} />}
+          {msg.artifact === "dag" && <DagArtifact view={view} />}
+          {msg.artifact === "fail" && <FailArtifact view={view} />}
+          {msg.artifact === "approve" && <ApproveArtifact view={view} onApprove={onApprove} />}
         </div>
       ))}
     </div>

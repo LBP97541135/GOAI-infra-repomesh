@@ -1,4 +1,3 @@
-import { decisions as allDecisions } from "../data/mock";
 import type { Decision, DecisionKind } from "../types";
 
 /** 决策夹：VARIADEX 档案柜隐喻。待决策事项是牛皮纸文件夹，堆叠收在输入框后方，
@@ -44,7 +43,7 @@ export function DecisionDeck({
         <div className="relative">
           {deck.map((dc, i) => {
             const front = i === deck.length - 1;
-            const tabX = 18 + (allDecisions.length - 1 - allDecisions.findIndex((x) => x.id === dc.id)) * 118;
+            const tabX = 18 + (deck.length - 1 - i) * 118;
             return (
               <div key={dc.id} className={`relative pt-[26px] ${i === 0 ? "" : "-mt-1.5"}`}>
                 <span

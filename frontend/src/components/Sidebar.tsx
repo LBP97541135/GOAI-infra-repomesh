@@ -1,15 +1,86 @@
-import { delivery } from "../data/mock";
+import type { DeliveryListItem, DeliveryListResponse, Phase } from "../api/contract";
 
-export function Sidebar({ onToast }: { onToast: (text: string) => void }) {
+/** 左栏项目树：按 project 分组的交付列表（契约 §2）。
+ *  phase 由读模型给出，前端只渲染徽标；delivery_id=null 为虚拟草稿交付（§0）。 */
+
+const PHASE_BADGE: Record<Phase, { label: string; dot: string; blink?: boolean }> = {
+  contract: { label: "契约", dot: "bg-tx2" },
+  plan: { label: "计划", dot: "bg-tx2" },
+  execute: { label: "执行中", dot: "bg-bluegray", blink: true },
+  validate: { label: "验证中", dot: "bg-amber", blink: true },
+  release: { label: "发布门禁", dot: "bg-bluegray", blink: true },
+  delivered: { label: "已发布", dot: "bg-olive" },
+  failed: { label: "失败", dot: "bg-salmon" },
+  archived: { label: "已归档", dot: "bg-tx2" },
+};
+
+const ACTIVE_PHASES: Phase[] = ["contract", "plan", "execute", "validate", "release"];
+
+function DeliveryRow({
+  item,
+  active,
+  pendingCount,
+  onToast,
+}: {
+  item: DeliveryListItem;
+  active: boolean;
+  pendingCount: number | null;
+  onToast: (text: string) => void;
+}) {
+  const badge = PHASE_BADGE[item.phase];
+  const pending = pendingCount ?? item.pending_decision_count;
+  const sub = [badge.label, item.phase_note, pending > 0 ? `${pending} 项待决策` : null]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <button
+      className={
+        active
+          ? "flex w-full items-start gap-2 border-l-2 border-amber bg-amber/10 px-2.5 py-2 text-left"
+          : "flex w-full items-start gap-2 border-l-2 border-transparent px-2.5 py-2 text-left hover:bg-amber/5"
+      }
+      onClick={() => {
+        if (!active) onToast("MVP：切换交付尚未接入");
+      }}
+    >
+      <span className={`mt-[7px] size-[7px] flex-none ${badge.dot} ${badge.blink ? "blink" : ""}`} />
+      <div className="min-w-0">
+        <b className={`block truncate text-[13px] font-semibold ${active ? "text-amber-hi" : "text-tx"}`}>
+          {item.title}
+        </b>
+        <small className="text-[11px] text-tx2">{sub}</small>
+      </div>
+    </button>
+  );
+}
+
+export function Sidebar({
+  list,
+  activeDeliveryId,
+  pendingCount,
+  onToast,
+}: {
+  list: DeliveryListResponse;
+  activeDeliveryId: string | null;
+  pendingCount: number;
+  onToast: (text: string) => void;
+}) {
+  const project = list.projects[0] ?? null;
+  const deliveries = project?.deliveries ?? [];
+  const running = deliveries.filter((d) => ACTIVE_PHASES.includes(d.phase));
+  const others = deliveries.filter((d) => !ACTIVE_PHASES.includes(d.phase));
+
   return (
     <aside className="flex w-[236px] flex-none flex-col border-r border-line bg-ink-deep px-3 pt-4 pb-3">
       <div className="flex items-center gap-2.5 px-1.5 pb-4">
         <span className="grid size-[34px] flex-none place-items-center rounded-hard bg-amber font-mono text-[15px] font-extrabold text-[#16120a]">
           R
         </span>
-        <div>
+        <div className="min-w-0">
           <strong className="block font-mono text-[13px] tracking-[0.12em] text-cream">REPOMESH</strong>
-          <small className="font-mono text-[9.5px] tracking-[0.14em] text-tx2">SALEOR COMMERCE</small>
+          <small className="block truncate font-mono text-[9.5px] tracking-[0.14em] text-tx2 uppercase">
+            {project ? project.title : "无项目"}
+          </small>
         </div>
       </div>
 
@@ -21,30 +92,39 @@ export function Sidebar({ onToast }: { onToast: (text: string) => void }) {
         <kbd className="ml-auto rounded-hard border border-line px-1 py-px font-mono text-[10px] text-tx2">⌘K</kbd>
       </button>
 
-      <div className="microlabel mx-2 mt-4 mb-1.5">进行中</div>
-      <button className="flex w-full items-start gap-2 border-l-2 border-amber bg-amber/10 px-2.5 py-2 text-left">
-        <span className="mt-[7px] size-[7px] flex-none bg-bluegray blink" />
-        <div>
-          <b className="block text-[13px] font-semibold text-amber-hi">{delivery.title.slice(0, 13)}…</b>
-          <small className="text-[11px] text-tx2">{delivery.id} · 3 项待决策</small>
-        </div>
-      </button>
+      {running.length > 0 && (
+        <>
+          <div className="microlabel mx-2 mt-4 mb-1.5">进行中</div>
+          {running.map((d) => (
+            <DeliveryRow
+              key={d.delivery_id ?? `draft-${d.title}`}
+              item={d}
+              active={d.delivery_id !== null && d.delivery_id === activeDeliveryId}
+              pendingCount={d.delivery_id !== null && d.delivery_id === activeDeliveryId ? pendingCount : null}
+              onToast={onToast}
+            />
+          ))}
+        </>
+      )}
 
-      <div className="microlabel mx-2 mt-4 mb-1.5">其他交付</div>
-      <button className="flex w-full items-start gap-2 border-l-2 border-transparent px-2.5 py-2 text-left hover:bg-amber/5">
-        <span className="mt-[7px] size-[7px] flex-none bg-olive" />
-        <div>
-          <b className="block text-[13px] font-semibold text-tx">购物车库存提示优化</b>
-          <small className="text-[11px] text-tx2">已发布 · 08-06</small>
-        </div>
-      </button>
-      <button className="flex w-full items-start gap-2 border-l-2 border-transparent px-2.5 py-2 text-left hover:bg-amber/5">
-        <span className="mt-[7px] size-[7px] flex-none bg-tx2" />
-        <div>
-          <b className="block text-[13px] font-semibold text-tx">订单导出增加税率列</b>
-          <small className="text-[11px] text-tx2">契约澄清中 · 08-10</small>
-        </div>
-      </button>
+      {others.length > 0 && (
+        <>
+          <div className="microlabel mx-2 mt-4 mb-1.5">其他交付</div>
+          {others.map((d) => (
+            <DeliveryRow
+              key={d.delivery_id ?? `draft-${d.title}`}
+              item={d}
+              active={false}
+              pendingCount={null}
+              onToast={onToast}
+            />
+          ))}
+        </>
+      )}
+
+      {deliveries.length === 0 && (
+        <div className="mx-2 mt-4 text-[12px] text-tx2">暂无交付数据</div>
+      )}
 
       <div className="mt-auto grid gap-2 border-t border-line pt-2.5">
         <div className="flex items-center gap-2 px-2 py-1.5">

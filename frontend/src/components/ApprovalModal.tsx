@@ -1,25 +1,22 @@
 import { useEffect, useRef, useState } from "react";
+import type { ApprovalInfo } from "../types";
 
 /** 快照绑定授权单：授权主体 / 不可变快照 / 30 分钟有效期 / 写入范围 /
- *  「任一 SHA、契约或门禁变化即失效」确认框。治理故事的核心展示。 */
-
-const summary: Array<[string, string]> = [
-  ["授权主体", "Release Guardian"],
-  ["绑定快照", "snap-dlv0042-01 · IMMUTABLE"],
-  ["有效时间", "30 分钟"],
-  ["写入范围", "saleor-core（仅合并 PR #19466）"],
-];
+ *  「任一 SHA、契约或门禁变化即失效」确认框。治理故事的核心展示。
+ *  head-bound 语义由后端保证（契约 §4.4：SHA 漂移即 409）。 */
 
 export function ApprovalModal({
   open,
+  info,
   onClose,
 }: {
   open: boolean;
+  info: ApprovalInfo | null;
   onClose: (approved: boolean) => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [confirmed, setConfirmed] = useState(false);
-  const [comment, setComment] = useState("core 五项门禁全绿且独立 Review 通过，允许按冻结 SHA 合并。");
+  const [comment, setComment] = useState("门禁全绿且独立 Review 通过，允许按冻结 SHA 合并。");
 
   useEffect(() => {
     const dlg = ref.current;
@@ -31,6 +28,13 @@ export function ApprovalModal({
       dlg.close();
     }
   }, [open]);
+
+  const summary: Array<[string, string]> = [
+    ["授权主体", info?.authority ?? "—"],
+    ["绑定快照", info?.snapshotLabel ?? "—"],
+    ["有效时间", "30 分钟"],
+    ["写入范围", info?.scopeLabel ?? "—"],
+  ];
 
   return (
     <dialog
@@ -59,6 +63,13 @@ export function ApprovalModal({
           ))}
         </div>
 
+        {info?.headSha && (
+          <div className="mb-3 rounded-hard border border-dashed border-line bg-panel-2 px-[11px] py-2">
+            <span className="block font-mono text-[9.5px] tracking-[0.1em] text-tx2">HEAD-BOUND SHA</span>
+            <b className="font-mono text-[12px] text-cream">{info.headSha.slice(0, 12)}</b>
+          </div>
+        )}
+
         <label className="block">
           <span className="mb-[5px] block text-[12px] font-semibold text-cream">审批意见</span>
           <textarea
@@ -76,7 +87,9 @@ export function ApprovalModal({
             checked={confirmed}
             onChange={(e) => setConfirmed(e.target.checked)}
           />
-          <span>我确认本次授权仅绑定 snap-dlv0042-01；任一 SHA、契约或门禁结果变化都会使授权立即失效。</span>
+          <span>
+            我确认本次授权仅绑定 {info?.snapshotLabel ?? "当前快照"}；任一 SHA、契约或门禁结果变化都会使授权立即失效。
+          </span>
         </label>
       </div>
 

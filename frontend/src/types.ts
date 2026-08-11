@@ -1,42 +1,19 @@
-/** 交付控制台前端数据模型。字段对齐 frontend-prototype/data.js，
- *  未来由 GET /api/v1/deliveries* 读模型 API 提供（契约另行同步）。 */
+/** 交付控制台前端视图模型。
+ *  契约数据（src/api/contract.ts）经 src/viewmodel.ts 派生成本文件的展示形状；
+ *  display_status / gate_display / phase 由后端（或 replay 夹具）给出，前端只渲染，
+ *  不做任何状态映射（契约 §5 是唯一实现）。 */
+import type { DecisionAction, DisplayStatus, GateDisplay, Phase, RepairStep } from "./api/contract";
 
-/** 展示 6 态，映射规则见 docs/contracts/delivery-read-model-v0.1.md §5.1 */
-export type TaskStatus = "succeeded" | "running" | "repairing" | "blocked" | "pending" | "failed";
-export type GateState = "open" | "blocked" | "running" | "waiting";
+/** 展示 6 态 = 契约 §5.1 display_status，原样透传 */
+export type TaskStatus = DisplayStatus;
+/** 门禁 4 态 = 契约 §5.3 gate_display，原样透传 */
+export type GateState = GateDisplay;
+export type { Phase, RepairStep };
+
 export type CheckStatus = "pass" | "fail" | "run" | "wait";
+
+/** approve|watch 来自契约 §4.3；clarify 无后端实体（§6.5），仅回放模式演示 */
 export type DecisionKind = "approve" | "watch" | "clarify";
-export type StageStatus = "done" | "running" | "attention" | "waiting";
-
-export interface DeliveryStage {
-  key: string;
-  name: string;
-  status: StageStatus;
-  note: string;
-}
-
-export interface Delivery {
-  id: string;
-  title: string;
-  summary: string;
-  requester: string;
-  createdAt: string;
-  runId: string;
-  stages: DeliveryStage[];
-}
-
-export interface Contract {
-  goal: string;
-  acceptance: string[];
-  nonGoals: string[];
-  scope: {
-    repositories: string[];
-    allowedPaths: string[];
-    forbiddenPaths: string[];
-  };
-  gatesRequired: string[];
-  release: { humanApproval: boolean; rollbackCondition: string };
-}
 
 export interface Clarification {
   q: string;
@@ -47,30 +24,26 @@ export interface Clarification {
 
 export interface RepoInfo {
   id: string;
-  lang: string;
-  role: string;
-  evidence: string;
-}
-
-export interface RepairStep {
-  at: string;
-  what: string;
+  evidence: string | null;
 }
 
 export interface DeliveryTask {
+  /** 展示短标（task_key，缺省回退 T{n}） */
   id: string;
+  taskId: string;
   repo: string;
-  /** DAG 拓扑层（横向） */
+  /** DAG 拓扑层（横向，前端按 depends_on 计算布局，非状态映射） */
   col: number;
   /** DAG 泳道 = 仓库索引（纵向） */
   lane: number;
   title: string;
   status: TaskStatus;
-  agent: string;
+  agent: string | null;
   attempt: number;
-  detail: string;
-  deps?: string[];
-  repair?: RepairStep[];
+  detail: string | null;
+  deps: string[];
+  repair: RepairStep[];
+  escalated: boolean;
 }
 
 export interface GateCheck {
@@ -83,7 +56,9 @@ export interface RepoGate {
   repo: string;
   state: GateState;
   checks: GateCheck[];
+  /** PR 展示行，如 "saleor/saleor#19466 · 待合并" */
   pr: string;
+  prUrl: string | null;
 }
 
 export interface Decision {
@@ -93,18 +68,23 @@ export interface Decision {
   title: string;
   body: string;
   actions: string[];
+  /** 契约 actions 枚举（clarify 演示项为 null） */
+  actionKinds: DecisionAction[] | null;
+  repositoryId: string | null;
+  headSha: string | null;
 }
 
 export interface RepoDiffFile {
   path: string;
-  add: number;
-  del: number;
+  /** 契约 diffstat 为 null 时缺省（§6.3 降级：只列文件名） */
+  add?: number;
+  del?: number;
 }
 
 export interface RepoDiff {
   id: string;
-  add: number;
-  del: number;
+  add?: number;
+  del?: number;
   note: string;
   files: RepoDiffFile[];
 }
@@ -128,4 +108,79 @@ export interface ChatMessage {
   attach?: { label: string; name: string; meta: string };
   clarifications?: Clarification[];
   artifact?: ArtifactKind;
+}
+
+/** 契约卡（PlanView 1.0/2.0 使用）。nullable 字段为 null 时隐藏对应区块。 */
+export interface ContractCard {
+  version: number;
+  status: string;
+  goal: string;
+  acceptance: string[];
+  nonGoals: string[] | null;
+  repositories: string[];
+  allowedPaths: string[];
+  forbiddenPaths: string[];
+  tests: string[];
+}
+
+/** 审批弹窗（快照绑定授权单）数据；语义见 frontend-prototype/DESIGN-DECISION.md */
+export interface ApprovalInfo {
+  authority: string;
+  snapshotLabel: string;
+  scopeLabel: string;
+  changeSetId: string | null;
+  repositoryId: string | null;
+  headSha: string | null;
+}
+
+/** 组件消费的交付全貌视图（由 viewmodel.ts 从契约聚合派生） */
+export interface DeliveryView {
+  label: string;
+  title: string;
+  phase: Phase;
+  phaseNote: string;
+  createdAt: string;
+  requirement: string | null;
+  runLabel: string | null;
+  matrixRoom: string | null;
+  traceId: string | null;
+  costLabel: string | null;
+  snapshotLabel: string | null;
+  stagingNote: string | null;
+  planRev: number;
+  mergeOrderLabel: string | null;
+  contract: ContractCard;
+  repos: RepoInfo[];
+  lanes: string[];
+  tasks: DeliveryTask[];
+  gates: RepoGate[];
+  repoDiffs: RepoDiff[];
+  events: DeliveryEvent[];
+  decisions: Decision[];
+  rollbackPlan: string[] | null;
+  envProcesses: string[];
+  approval: ApprovalInfo | null;
+}
+
+/** 回放数据源附带的演示叙事层：覆盖契约未提供（nullable/缺口）字段的 Demo 展示。
+ *  live 模式无此层，对应区块走降级渲染路径。 */
+export interface PresentationOverlay {
+  deliveryLabel: string;
+  runLabel: string | null;
+  chat: ChatMessage[];
+  /** clarify 决策演示（契约 §6.5：仅回放模式存在） */
+  extraDecisions: Decision[];
+  /** 契约 non_goals 暂缓（§6.2）的演示值 */
+  nonGoals: string[] | null;
+  /** 契约无回滚预案实体时的演示文案（计划纸面 5.0） */
+  rollbackPlan: string[] | null;
+  /** 契约 diffstat=null（§6.3）时的演示 ± 行数 */
+  repoDiffs: RepoDiff[] | null;
+  /** 契约 cost=null（§6.4）时的演示成本行 */
+  costLabel: string | null;
+  matrixAlias: string | null;
+  approvalAuthority: string | null;
+  mergeOrderLabel: string | null;
+  stagingNote: string | null;
+  envProcesses: string[];
 }

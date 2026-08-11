@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { gates, repoDiffs } from "../data/mock";
-import type { GateState } from "../types";
+import type { DeliveryView, GateState } from "../types";
 import { ChevronIcon, DiffIcon, EnvIcon, PlusIcon, PrIcon, RepoIcon, TermIcon } from "./icons";
 
-/** 悬浮环境窗（Codex 式）：关联仓库 diff → ChangeSet → 环境 → 后台进程。 */
+/** 悬浮环境窗（Codex 式）：关联仓库 diff → ChangeSet → 环境 → 后台进程。
+ *  nullable 降级：diffstat 缺失只列文件名（±隐藏）；cost/trace/matrix/快照为 null
+ *  时对应行隐藏（契约 §6.3/§6.4/§6.8）。 */
 
 const PR_STATE: Record<GateState, [string, string]> = {
   open: ["待合并", "text-olive"],
@@ -38,9 +39,9 @@ function StaticRow({
   );
 }
 
-export function EnvPanel({ onToast }: { onToast: (text: string) => void }) {
+export function EnvPanel({ view, onToast }: { view: DeliveryView; onToast: (text: string) => void }) {
   const [minimized, setMinimized] = useState(false);
-  const [openRepos, setOpenRepos] = useState<Set<string>>(() => new Set([repoDiffs[0].id]));
+  const [openRepos, setOpenRepos] = useState<Set<string>>(() => new Set(view.repoDiffs.slice(0, 1).map((r) => r.id)));
 
   const toggleRepo = (id: string) =>
     setOpenRepos((prev) => {
@@ -76,8 +77,9 @@ export function EnvPanel({ onToast }: { onToast: (text: string) => void }) {
       {!minimized && (
         <div className="flex-1 overflow-y-auto px-2 pt-0.5 pb-3.5">
           <Label>关联仓库</Label>
-          {repoDiffs.map((r) => {
+          {view.repoDiffs.map((r) => {
             const open = openRepos.has(r.id);
+            const hasTotals = r.add !== undefined && r.del !== undefined && r.add + r.del > 0;
             return (
               <div key={r.id}>
                 <button className={`${rowBase} hover:bg-amber/5`} onClick={() => toggleRepo(r.id)}>
@@ -86,11 +88,13 @@ export function EnvPanel({ onToast }: { onToast: (text: string) => void }) {
                   </span>
                   <span className="min-w-0 truncate font-mono">{r.id}</span>
                   <span className="ml-auto flex flex-none items-center gap-[7px] text-[12px]">
-                    {r.add + r.del > 0 ? (
+                    {hasTotals ? (
                       <>
                         <i className="font-mono text-[11.5px] not-italic text-olive">+{r.add}</i>
                         <i className="font-mono text-[11.5px] not-italic text-salmon">-{r.del}</i>
                       </>
+                    ) : r.files.length > 0 ? (
+                      <i className="font-mono text-[11px] not-italic text-tx2">{r.files.length} 文件</i>
                     ) : (
                       <i className="text-[11px] not-italic text-tx2">—</i>
                     )}
@@ -104,14 +108,19 @@ export function EnvPanel({ onToast }: { onToast: (text: string) => void }) {
                         r.files.map((f) => (
                           <div key={f.path} className="flex items-baseline gap-2.5 py-[3px] font-mono text-[11px] text-tx2">
                             <span className="min-w-0 truncate">{f.path}</span>
-                            <span className="ml-auto flex flex-none gap-1.5">
-                              <i className="not-italic text-olive">+{f.add}</i>
-                              {f.del > 0 && <i className="not-italic text-salmon">-{f.del}</i>}
-                            </span>
+                            {f.add !== undefined && (
+                              <span className="ml-auto flex flex-none gap-1.5">
+                                <i className="not-italic text-olive">+{f.add}</i>
+                                {f.del !== undefined && f.del > 0 && <i className="not-italic text-salmon">-{f.del}</i>}
+                              </span>
+                            )}
                           </div>
                         ))
                       ) : (
                         <div className="py-[3px] text-[11px] text-[#6b6046]">尚无变更</div>
+                      )}
+                      {r.files.length > 0 && r.files[0].add === undefined && (
+                        <div className="py-[3px] text-[10.5px] text-[#6b6046]">±行数未采集（Runner diffstat 待接入）</div>
                       )}
                     </div>
                     <div className="mt-0.5 mb-1.5 ml-6 flex items-center gap-2 pl-3 font-mono text-[10.5px] text-tx2">
@@ -126,29 +135,64 @@ export function EnvPanel({ onToast }: { onToast: (text: string) => void }) {
             );
           })}
 
-          <Label>CHANGESET · core → dash / apps → docs</Label>
-          {gates.map((g) => {
-            const [label, cls] = PR_STATE[g.state];
-            return (
-              <StaticRow
-                key={g.repo}
-                icon={<PrIcon />}
-                name={g.pr.split(" ")[0]}
-                nameClass="font-mono"
-                end={<i className={`text-[11.5px] not-italic ${cls}`}>{label}</i>}
-              />
-            );
-          })}
+          {view.gates.length > 0 && (
+            <>
+              <Label>CHANGESET{view.mergeOrderLabel ? ` · ${view.mergeOrderLabel}` : ""}</Label>
+              {view.gates.map((g) => {
+                const [label, cls] = PR_STATE[g.state];
+                return (
+                  <StaticRow
+                    key={g.repo}
+                    icon={<PrIcon />}
+                    name={g.prUrl ? g.pr : g.repo}
+                    nameClass="font-mono"
+                    end={<i className={`text-[11.5px] not-italic ${cls}`}>{label}</i>}
+                  />
+                );
+              })}
+            </>
+          )}
 
           <Label>环境</Label>
-          <StaticRow icon={<EnvIcon />} name="预发环境" end={<i className="text-[11px] not-italic text-tx2">未部署 · 等 core 合并</i>} />
-          <StaticRow icon={<DiffIcon />} name="基线快照" end={<i className="font-mono text-[11px] not-italic text-tx2">snap-dlv0042-01</i>} />
-          <StaticRow icon={<EnvIcon />} name="Matrix 房间" end={<i className="font-mono text-[11px] not-italic text-tx2">#dlv-0042</i>} />
-          <StaticRow icon={<DiffIcon />} name="成本" end={<i className="text-[11px] not-italic text-tx2">1.24M tok · ¥8.42 · 2h09m</i>} />
+          {view.stagingNote && (
+            <StaticRow icon={<EnvIcon />} name="预发环境" end={<i className="text-[11px] not-italic text-tx2">{view.stagingNote}</i>} />
+          )}
+          {view.snapshotLabel && (
+            <StaticRow
+              icon={<DiffIcon />}
+              name="基线快照"
+              end={<i className="font-mono text-[11px] not-italic text-tx2">{view.snapshotLabel}</i>}
+            />
+          )}
+          {view.matrixRoom && (
+            <StaticRow
+              icon={<EnvIcon />}
+              name="Matrix 房间"
+              end={<i className="font-mono text-[11px] not-italic text-tx2">{view.matrixRoom}</i>}
+            />
+          )}
+          {view.costLabel && (
+            <StaticRow icon={<DiffIcon />} name="成本" end={<i className="text-[11px] not-italic text-tx2">{view.costLabel}</i>} />
+          )}
+          {view.traceId && (
+            <StaticRow
+              icon={<DiffIcon />}
+              name="TRACE"
+              end={<i className="font-mono text-[11px] not-italic text-tx2">{view.traceId}</i>}
+            />
+          )}
+          {!view.stagingNote && !view.snapshotLabel && !view.matrixRoom && !view.costLabel && !view.traceId && (
+            <div className="px-2.5 py-[3px] text-[11px] text-[#6b6046]">环境信息未采集</div>
+          )}
 
-          <Label>后台进程</Label>
-          <StaticRow icon={<TermIcon />} name="repomesh-runner · poll /runner-tasks/next" nameClass="font-mono text-[11px] text-tx2" />
-          <StaticRow icon={<TermIcon />} name="otlp-exporter → localhost:3001/v1/traces" nameClass="font-mono text-[11px] text-tx2" />
+          {view.envProcesses.length > 0 && (
+            <>
+              <Label>后台进程</Label>
+              {view.envProcesses.map((p) => (
+                <StaticRow key={p} icon={<TermIcon />} name={p} nameClass="font-mono text-[11px] text-tx2" />
+              ))}
+            </>
+          )}
         </div>
       )}
     </aside>

@@ -1,17 +1,21 @@
-import { contract, delivery, rollback, tasks } from "../data/mock";
-import type { TaskStatus } from "../types";
+import type { DeliveryTask, DeliveryView, TaskStatus } from "../types";
 import { Dag } from "./Dag";
 
-/** DAG · 计划视图 —— 阿波罗飞行计划风格的奶油纸面文档。 */
+/** DAG · 计划视图 —— 阿波罗飞行计划纸面文档。
+ *  nullable 降级：non_goals 为 null 隐藏「非目标」行；forbidden_paths 空隐藏 2.2；
+ *  回滚预案无来源（契约无实体）时隐藏 5.0 区块。 */
 
-const STATUS_WORD: Record<TaskStatus, string> = {
-  succeeded: "COMPLETE",
-  running: "IN PROGRESS",
-  repairing: "REPAIR 2/3",
-  blocked: "BLOCKED",
-  pending: "HOLD",
-  failed: "FAILED",
-};
+function statusWord(t: DeliveryTask): string {
+  const words: Record<TaskStatus, string> = {
+    succeeded: "COMPLETE",
+    running: "IN PROGRESS",
+    repairing: `REPAIR #${t.attempt}`,
+    blocked: "BLOCKED",
+    pending: "HOLD",
+    failed: "FAILED",
+  };
+  return words[t.status];
+}
 
 const STATUS_COLOR: Record<TaskStatus, string> = {
   succeeded: "text-[#5b6d2c]",
@@ -57,18 +61,19 @@ function Item({
   );
 }
 
-export function PlanView() {
+export function PlanView({ view }: { view: DeliveryView }) {
+  const { contract } = view;
   return (
     <div className="flex-1 overflow-y-auto px-[26px] pt-[22px] pb-[30px]">
       <div className="mx-auto max-w-[840px] rounded-hard bg-cream px-[30px] pt-[26px] pb-[34px] text-paper-ink shadow-[0_16px_44px_rgba(0,0,0,0.5)]">
         <div className="flex items-start gap-3.5 border-b-[3px] border-[#17130a] pb-3">
           <span className="bg-[#17130a] px-2.5 py-1 font-mono text-[14px] font-extrabold tracking-[0.06em] text-cream">
-            {delivery.id}
+            {view.label}
           </span>
           <div>
-            <h2 className="text-[17px] font-extrabold tracking-[0.02em]">交付计划 · {delivery.title}</h2>
+            <h2 className="text-[17px] font-extrabold tracking-[0.02em]">交付计划 · {view.title}</h2>
             <span className="mt-0.5 block font-mono text-[10.5px] tracking-[0.12em] text-paper-dim">
-              REV 2 · CONTRACT V3 FROZEN · {delivery.createdAt.slice(0, 10)}
+              REV {view.planRev} · CONTRACT V{contract.version} {contract.status.toUpperCase()} · {view.createdAt}
             </span>
           </div>
         </div>
@@ -81,60 +86,72 @@ export function PlanView() {
               <span>{a}</span>
             </Item>
           ))}
-          <Item n="非目标" neg>
-            <span className="text-paper-dim">{contract.nonGoals.join("；")}</span>
-          </Item>
+          {contract.nonGoals && contract.nonGoals.length > 0 && (
+            <Item n="非目标" neg>
+              <span className="text-paper-dim">{contract.nonGoals.join("；")}</span>
+            </Item>
+          )}
         </section>
 
         <section className="mt-6">
           <SectionBar num="2.0" title="变更范围" />
           <div className="mb-2 flex flex-wrap gap-1.5">
-            {contract.scope.repositories.map((r) => (
+            {contract.repositories.map((r) => (
               <span key={r} className="bg-[#17130a] px-2.5 py-[3px] font-mono text-[11px] tracking-[0.04em] text-cream">
                 {r}
               </span>
             ))}
           </div>
-          <Item n="2.1">
-            <span className="font-mono text-[11.5px]">允许 {contract.scope.allowedPaths.join("  ")}</span>
-          </Item>
-          <Item n="2.2" neg>
-            <span className="font-mono text-[11.5px] text-paper-neg">
-              禁止 {contract.scope.forbiddenPaths.join("  ")}
-            </span>
-          </Item>
+          {contract.allowedPaths.length > 0 && (
+            <Item n="2.1">
+              <span className="font-mono text-[11.5px]">允许 {contract.allowedPaths.join("  ")}</span>
+            </Item>
+          )}
+          {contract.forbiddenPaths.length > 0 && (
+            <Item n="2.2" neg>
+              <span className="font-mono text-[11.5px] text-paper-neg">
+                禁止 {contract.forbiddenPaths.join("  ")}
+              </span>
+            </Item>
+          )}
         </section>
 
         <section className="mt-6">
-          <SectionBar num="3.0" title="任务 DAG" note="MERGE ORDER: core → dashboard / apps → docs" />
+          <SectionBar
+            num="3.0"
+            title="任务 DAG"
+            note={view.mergeOrderLabel ? `MERGE ORDER: ${view.mergeOrderLabel}` : undefined}
+          />
           <div className="grid-paper border border-[#17130a]/25 p-2">
-            <Dag skin="paper" />
+            <Dag skin="paper" tasks={view.tasks} lanes={view.lanes} />
           </div>
         </section>
 
         <section className="mt-6">
           <SectionBar num="4.0" title="执行计划" />
-          {tasks.map((t, i) => (
-            <Item key={t.id} n={`4.${i + 1}`}>
+          {view.tasks.map((t, i) => (
+            <Item key={t.taskId} n={`4.${i + 1}`}>
               <span className="flex-none font-mono font-extrabold">{t.id}</span>
               <span className="w-[138px] flex-none font-mono text-[11px] text-paper-dim">{t.repo}</span>
               <span className="min-w-0">{t.title}</span>
-              <span className="ml-auto flex-none font-mono text-[11px] text-paper-dim">{t.agent}</span>
+              <span className="ml-auto flex-none font-mono text-[11px] text-paper-dim">{t.agent ?? "未分配"}</span>
               <span className={`flex-none font-mono text-[10.5px] font-extrabold tracking-[0.08em] ${STATUS_COLOR[t.status]}`}>
-                {STATUS_WORD[t.status]}
+                {statusWord(t)}
               </span>
             </Item>
           ))}
         </section>
 
-        <section className="mt-6">
-          <SectionBar num="5.0" title="回滚预案" salmon />
-          {rollback.map((r, i) => (
-            <Item key={r} n={`5.${i + 1}`} neg>
-              <span>{r}</span>
-            </Item>
-          ))}
-        </section>
+        {view.rollbackPlan && view.rollbackPlan.length > 0 && (
+          <section className="mt-6">
+            <SectionBar num="5.0" title="回滚预案" salmon />
+            {view.rollbackPlan.map((r, i) => (
+              <Item key={r} n={`5.${i + 1}`} neg>
+                <span>{r}</span>
+              </Item>
+            ))}
+          </section>
+        )}
       </div>
     </div>
   );
