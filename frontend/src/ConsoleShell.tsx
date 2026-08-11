@@ -4,30 +4,16 @@ import { LoginPage } from "./components/LoginPage";
 import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import { issuesFixture } from "./data/issues";
+import { issueDetailFixture, roomsFixture } from "./data/issueDetail";
+import { IssueDetailPage } from "./pages/IssueDetailPage";
 import { IssueListPage } from "./pages/IssueListPage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { NAV_HASH, readRoute, type Route } from "./routes";
 import DeliveryConsole from "./App";
 
 /** v2 控制台外壳（CONS-40）：身份门 → 侧栏导航 → 主区页面。
  *  路由用 hash（#/issues 等），不引入路由库；v1 交付控制台（App.tsx）保留在
  *  #/delivery-v1 可达，供 CONS-42/43 迁移复用，其组件本批不改。 */
-
-const NAV_HASH: Record<NavKey, string> = {
-  issues: "#/issues",
-  repositories: "#/repositories",
-  teams: "#/teams",
-  agents: "#/agents",
-  settings: "#/settings",
-};
-
-type Route = { nav: NavKey; deliveryV1: boolean };
-
-function readRoute(): Route {
-  const h = window.location.hash.replace(/^#/, "");
-  if (h.startsWith("/delivery-v1")) return { nav: "issues", deliveryV1: true };
-  const found = (Object.keys(NAV_HASH) as NavKey[]).find((k) => h.startsWith(NAV_HASH[k].slice(1)));
-  return { nav: found ?? "issues", deliveryV1: false };
-}
 
 export default function ConsoleShell() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -75,7 +61,12 @@ export default function ConsoleShell() {
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
-    setRoute({ nav, deliveryV1: false });
+    setRoute({ nav, deliveryV1: false, issueId: null });
+  };
+
+  const openIssue = (issueId: string) => {
+    window.location.hash = `#/issues/${issueId}`;
+    setRoute({ nav: "issues", deliveryV1: false, issueId });
   };
 
   const handleLogout = () => {
@@ -154,15 +145,47 @@ export default function ConsoleShell() {
       />
 
       <main className="min-w-0 flex-1 overflow-y-auto px-8 pt-5 pb-10">
-        {route.nav === "issues" && (
-          <IssueListPage
-            data={issuesFixture}
-            onOpenIssue={(item) =>
-              showToast(`issue #${item.number} 详情页待 CONS-42；v1 交付视图见 #/delivery-v1`)
-            }
-            onToast={showToast}
-          />
-        )}
+        {route.nav === "issues" &&
+          (route.issueId === null ? (
+            <IssueListPage
+              data={issuesFixture}
+              onOpenIssue={(item) => openIssue(item.issue_id)}
+              onToast={showToast}
+            />
+          ) : route.issueId === issueDetailFixture.issue_id ? (
+            <IssueDetailPage
+              detail={issueDetailFixture}
+              rooms={roomsFixture}
+              onBack={() => navigate("issues")}
+              onOpenRoom={(room) =>
+                showToast(`房间视图待 CONS-43（${room.room_id}）；房间读模型属后端 CONS-33`)
+              }
+              onToast={showToast}
+            />
+          ) : (
+            /* 诚实数据：详情 replay 夹具只覆盖一条 issue，其余不伪造详情 */
+            <div className="max-w-[860px]">
+              <button className="pb-3 text-[11.5px] text-tx2 hover:text-tx" onClick={() => navigate("issues")}>
+                ‹ issue
+              </button>
+              <div className="rounded-hard border border-line bg-panel px-4 py-3.5">
+                <div className="microlabel pb-1.5">详情夹具未覆盖</div>
+                <p className="text-[12.5px] text-tx2">
+                  issue <span className="font-mono text-tx">{route.issueId.slice(0, 8)}</span>{" "}
+                  的详情当前无 replay 夹具，接 live 需后端 CONS-31 的{" "}
+                  <span className="font-mono">GET /issues/{"{issue_id}"}</span> 与 CONS-33 房间三端点。
+                  已覆盖的样例见 issue{" "}
+                  <button
+                    className="font-mono underline hover:text-amber-hi"
+                    onClick={() => openIssue(issueDetailFixture.issue_id)}
+                  >
+                    {issueDetailFixture.issue_id.slice(0, 8)}
+                  </button>
+                  。
+                </p>
+              </div>
+            </div>
+          ))}
         {route.nav === "repositories" && (
           <PlaceholderPage
             title="仓库"
