@@ -14,8 +14,6 @@ export const NAV_HASH: Record<NavKey, string> = {
 
 export interface Route {
   nav: NavKey;
-  /** v1 交付控制台整屏渲染于 #/delivery-v1，待 CONS-42/43 迁移后退役 */
-  deliveryV1: boolean;
   /** #/issues/{issue_id} 命中时为该 id；列表页为 null */
   issueId: string | null;
   /** #/issues/{issue_id}/rooms/{room_id} 命中时为该 room_id；否则 null。
@@ -25,24 +23,23 @@ export interface Route {
 
 export function parseRoute(hash: string): Route {
   const h = hash.replace(/^#/, "");
-  if (h.startsWith("/delivery-v1")) return { nav: "issues", deliveryV1: true, issueId: null, roomId: null };
 
   // 房间路径必须先于 issue 详情匹配，否则会被 `/issues/{id}` 的前缀吃掉
   const room = h.match(/^\/issues\/([^/?]+)\/rooms\/([^/?]+)/);
   if (room) {
     return {
       nav: "issues",
-      deliveryV1: false,
       issueId: decodeURIComponent(room[1]),
       roomId: decodeURIComponent(room[2]),
     };
   }
 
   const detail = h.match(/^\/issues\/([^/?]+)/);
-  if (detail) return { nav: "issues", deliveryV1: false, issueId: decodeURIComponent(detail[1]), roomId: null };
+  if (detail) return { nav: "issues", issueId: decodeURIComponent(detail[1]), roomId: null };
 
+  // 未知 hash（含已退役的 #/delivery-v1）回落到 issue 列表，不留半死路由
   const found = (Object.keys(NAV_HASH) as NavKey[]).find((k) => h.startsWith(NAV_HASH[k].slice(1)));
-  return { nav: found ?? "issues", deliveryV1: false, issueId: null, roomId: null };
+  return { nav: found ?? "issues", issueId: null, roomId: null };
 }
 
 export function readRoute(): Route {

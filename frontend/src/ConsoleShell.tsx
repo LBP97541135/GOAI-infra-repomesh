@@ -13,11 +13,9 @@ import { RoomViewContainer } from "./pages/RoomViewContainer";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TeamsPage } from "./pages/TeamsPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
-import DeliveryConsole from "./App";
 
 /** v2 控制台外壳（CONS-40）：身份门 → 侧栏导航 → 主区页面。
- *  路由用 hash（#/issues 等），不引入路由库；v1 交付控制台（App.tsx）保留在
- *  #/delivery-v1 可达，供 CONS-42/43 迁移复用，其组件本批不改。 */
+ *  路由用 hash（#/issues 等），不引入路由库。 */
 
 export default function ConsoleShell() {
   const [account, setAccount] = useState<Account | null>(null);
@@ -109,17 +107,17 @@ export default function ConsoleShell() {
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
-    setRoute({ nav, deliveryV1: false, issueId: null, roomId: null });
+    setRoute({ nav, issueId: null, roomId: null });
   };
 
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
-    setRoute({ nav: "issues", deliveryV1: false, issueId, roomId: null });
+    setRoute({ nav: "issues", issueId, roomId: null });
   };
 
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
-    setRoute({ nav: "issues", deliveryV1: false, issueId, roomId });
+    setRoute({ nav: "issues", issueId, roomId });
   };
 
   const handleLogout = () => {
@@ -162,26 +160,6 @@ export default function ConsoleShell() {
           setAuthState("authenticated");
         }}
       />
-    );
-  }
-
-  // v1 交付控制台自带侧栏，整屏渲染（本批不改其组件；CONS-42/43 迁移后退役）
-  if (route.deliveryV1) {
-    return (
-      <div className="flex h-screen flex-col overflow-hidden bg-ink text-tx">
-        <div className="flex flex-none items-center gap-3 border-b border-line bg-ink-deep px-4 py-1.5">
-          <button
-            className="rounded-hard border border-line px-2 py-px text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={() => navigate("issues")}
-          >
-            ‹ 返回 issue
-          </button>
-          <span className="microlabel">v1 交付控制台 · 待 CONS-42/43 迁入 issue 详情</span>
-        </div>
-        <div className="min-h-0 flex-1">
-          <DeliveryConsole />
-        </div>
-      </div>
     );
   }
 

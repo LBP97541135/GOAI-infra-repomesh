@@ -388,7 +388,7 @@ export const repositoryPlanFixture: RepositoryPlanView = {
 
 // ══════════ 当前轮次的交付聚合与决策夹（v0.1 §3 / §4.3，环境窗与决策夹消费） ══════════
 
-/** 决策夹与环境窗原先借用 data/replay.ts 的 v1 演示交付。那份夹具的 `project_id`
+/** 决策夹与环境窗原先借用 v1 演示交付的夹具（已随 v1 删除）。那份夹具的 `project_id`
  *  其实与本文件是同一个 issue，**但仓库 id 与轮次 id 是另一套**——于是 replay 模式下
  *  用本文件的 `REPO_API` 去那份聚合里取环境切片必然落空，环境窗恒显「本仓环境未接入」，
  *  决策夹也只能挂一句「非本 issue 的真实决策」的补丁说明。
@@ -575,7 +575,7 @@ export const decisionsFixture: DecisionsResponse = {
  *  末条 `deny` 是**回放专属的治理拦截叙事**：契约 §6.6 规定 live 不应产出 deny，
  *  live 收到即渲染为违约警示（EventTimeline 的 `demo` 开关分流两种语义）。
  *
- *  放这里而不是 data/replay.ts：后者随 v1 退役整体删除，不给待删文件加新引用。 */
+ *  当初落在这里而不是 data/replay.ts，是因为后者已排期随 v1 退役——现已删除。 */
 export const roundEventsFixture: DeliveryEventsPage = {
   items: [
     { at: "2026-08-11T09:12:04Z", kind: "plan", text: "计划 v1 已生成 · 3 仓 2 批次", task_id: null, repository_id: null, payload_ref: "plan-snapshot:1" },
