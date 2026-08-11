@@ -30,6 +30,7 @@ from .mappings import (
     TERMINAL_CHANGE_SET_STATUSES,
     DeliveryPhase,
     GateDisplay,
+    IssueState,
     derive_issue_state,
     derive_phase,
     gate_display,
@@ -354,7 +355,12 @@ class DeliveryReadModelService:
     # ---------------------------------------------------------------- issues
 
     async def list_issues(
-        self, *, state: str = "open", organization_id: UUID | None = None
+        self,
+        *,
+        state: str = "open",
+        organization_id: UUID | None = None,
+        offset: int = 0,
+        limit: int = 100,
     ) -> dict:
         """Contract v0.2 §2: issue-grained listing (issue_id = project_id).
 
@@ -362,12 +368,16 @@ class DeliveryReadModelService:
         or a PlanSnapshot — the only persisted evidence an issue exists. Issues
         with neither (§2.1 rule 6) stay unreachable until a project registry
         lands; the rule is implemented so the write endpoint needs no change.
+
+        open_count / closed_count are the workspace totals behind the two tabs:
+        they honour organization_id but ignore `state` and the page window, so
+        the tab the caller is not looking at still shows a true total.
         """
 
         plans_by_project = await self._plans_by_project()
         project_ids = set(plans_by_project) | set(await self._snapshots.project_ids())
 
-        issues = []
+        scoped = []
         for project_id in sorted(project_ids, key=str):
             bundle = await self._issue_bundle(
                 project_id, plans_by_project.get(project_id, ())
@@ -375,11 +385,24 @@ class DeliveryReadModelService:
             issue = bundle.summary
             if organization_id is not None and issue["organization_id"] != organization_id:
                 continue
-            if state != "all" and issue["state"] != state:
-                continue
-            issues.append(issue)
+            scoped.append(issue)
+
+        open_count = sum(1 for issue in scoped if issue["state"] == IssueState.OPEN.value)
+        issues = (
+            scoped
+            if state == "all"
+            else [issue for issue in scoped if issue["state"] == state]
+        )
         issues.sort(key=_issue_recency, reverse=True)
-        return {"issues": issues, "next_cursor": None}
+        page = issues[offset : offset + limit]
+        return {
+            "issues": page,
+            "open_count": open_count,
+            "closed_count": len(scoped) - open_count,
+            "next_cursor": (
+                str(offset + limit) if offset + limit < len(issues) else None
+            ),
+        }
 
     async def get_issue(self, issue_id: UUID) -> dict | None:
         """Contract v0.2 §3: §2's fields plus the round index and chips."""

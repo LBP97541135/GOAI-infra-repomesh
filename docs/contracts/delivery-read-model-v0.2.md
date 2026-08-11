@@ -72,8 +72,22 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
   "opened_by_agent_id": "uuid|null",    // 最早 PlanSnapshot.created_by_agent_id
   "opened_at": "...",                   // 最早 PlanSnapshot.created_at
   "updated_at": "..."                   // §2.3
-} ], "next_cursor": null }
+} ],
+  "open_count": 3,                      // 见 §2.5（2026-08-11 主脑追认）
+  "closed_count": 12,
+  "next_cursor": "string|null" }
 ```
+
+`organization_id` 的取值链（**2026-08-11 主脑追认**，理由见 §2.5）：轮次
+`ExecutionPlan.organization_id` → 项目拓扑 `organization_id` → **最早 PlanSnapshot 的
+`created_by_agent_id` 所属组织**（`agent_directory` 持久化事实）；三者皆无为 `null`。
+第三级不可省：草稿态 issue 既无轮次也无拓扑，缺了它会被工作区筛选**静默丢弃**。
+
+以下字段在 issue 从未建团时**无持久化事实源，返回 `null` 或空数组**，不得填默认值
+（诚实数据红线，2026-08-11 主脑追认）：`operational_status`、`execution_mode`（→ `null`），
+`team_count`（→ `0`）；§3 的 `teams`、`human_grants`、`required_checkpoints`（→ `[]`），
+`repositories[].team_id`（→ `null`）。实测：5533 联调库 `project.agent_topologies` 为空表，
+故种子上这些字段全空——前端按「未接入」呈现，**禁止把缺拓扑显示成 `active`**。
 
 ### 2.1 `state`（Open/Closed）派生规则
 
@@ -110,9 +124,25 @@ issue 的 phase 不是新映射，而是 v0.1 §2 八相在 issue 粒度上的**
 ### 2.4 归档与筛选
 
 `GET /issues?state=open|closed|all`（默认 `open`）、`?organization_id=`（默认全部；
-Q2 见 §7）。v0.1 的交付归档（`delivery_archives`）是**轮次粒度**，不是 issue 粒度：
+Q2 见 §7）、`?cursor=&limit=`（Q7 的 offset 不透明游标，语义与 §4.1 events 完全一致：
+`cursor` 是不透明字符串，内部为 offset；`limit` 默认 100、上限 500；非法 cursor → 422）。
+v0.1 的交付归档（`delivery_archives`）是**轮次粒度**，不是 issue 粒度：
 issue 的所有轮次都归档时 phase 取 `archived`，但 `state` 仍按 §2.1 判定。**v0.2 不新增
 issue 级归档实体**。
+
+### 2.5 `open_count` / `closed_count`（**2026-08-11 主脑追认，契约增量**）
+
+GitHub 式列表的两个标签页各带总数（`Open 3 | Closed 12`）。消费方无法从条目数推出总数：
+翻页之下数出来的数是错的，等于编造；显「—」则丢掉关键信息量。故响应体增加两个总数字段。
+
+语义（三条，实现与本文本同批交付）：
+
+1. **不受 `state` 影响**——两个计数恒为全量，看 open 标签时 closed 总数依然为真；
+2. **不受分页影响**——`limit` / `cursor` 只裁剪 `issues` 数组，不动计数；
+3. **受 `organization_id` 影响**——计数是「当前工作区的总数」，否则切换工作区后
+   标签数与列表内容不一致。工作区隔离优先于计数便利。
+
+计数与条目同源于 §2.1 的 state 派生（同一次聚合内求和），不存在两套判定。
 
 ## 3. `GET /issues/{issue_id}`
 
@@ -397,6 +427,16 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | Q6 | ReviewRequest 与治理决策统一决策夹 | **不统一**，v0.2 只含治理决策；ReviewRequest 走 main 既有面；issue 概览**保留 `required_checkpoints`** 供提示与跳转 | §3、§6 |
 | Q7 | `/issues` 游标形状 | **沿用 offset 不透明游标**；v0.1 列表端点 `next_cursor` 恒 `null` 的现状一并收敛 | §2、§2.4 |
 | Q8 | 空 issue（无轮次无草稿）的 `state` | **open**（理由采纳原文：空 issue 是「待规划」不是「已完成」，显 Closed 会让人以为工作做完了） | §2.1 规则 6 |
+
+### 7.1 CONS-31 实现期追认（2026-08-11，随实现同批入文本）
+
+| 追认项 | 内容 | 落点 |
+| --- | --- | --- |
+| 标签计数 | `/issues` 响应增加 `open_count` / `closed_count`（前端问询升级主脑后裁决） | §2、§2.5 |
+| 列表分页 | `/issues` 落实 Q7 的 offer 游标（`?cursor=&limit=`），`next_cursor` 不再恒 null | §2.4 |
+| 工作区归属 | `organization_id` 三级取值链，第三级为开票 agent 所属组织 | §2 |
+| 拓扑降级 | 未建团时拓扑派生字段返 null/空数组，实测种子拓扑表为空 | §2 |
+| issue 全集 | 全集 = 有 ExecutionPlan 或 PlanSnapshot 的 project 并集；**§2.1 规则 6 当前不可达**（无注册表也无拓扑列举接口），issue 写端点落地后自动生效 | §2、§6.1 |
 
 ## 8. 实现顺序
 

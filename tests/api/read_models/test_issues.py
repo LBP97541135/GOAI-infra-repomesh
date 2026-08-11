@@ -361,6 +361,68 @@ async def test_topology_only_fields_degrade_to_null_without_a_team() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tab_counts_ignore_state_and_paging_but_honour_the_workspace() -> None:
+    """§2 (追认): the tab the caller is not looking at still shows a true total."""
+
+    other_workspace_project = uuid4()
+    open_projects = [uuid4() for _ in range(3)]
+    closed_project = uuid4()
+    plans, snapshots, change_sets = [], [], {}
+    organization_id = None
+    for index, project_id in enumerate(open_projects):
+        plan = _plan(project_id, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+        organization_id = organization_id or plan.organization_id
+        plan = replace(plan, organization_id=organization_id)
+        plans.append(plan)
+        snapshots.append(
+            _snapshot(project_id, plan.id, created_at=T0.replace(hour=10 + index))
+        )
+    closed_plan = replace(
+        _plan(closed_project, uuid4(), uuid4(), ExecutionPlanStatus.COMPLETED),
+        organization_id=organization_id,
+    )
+    plans.append(closed_plan)
+    snapshots.append(_snapshot(closed_project, closed_plan.id))
+    # A second workspace must not bleed into the first workspace's counts.
+    foreign_plan = _plan(
+        other_workspace_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS
+    )
+    plans.append(foreign_plan)
+    snapshots.append(_snapshot(other_workspace_project, foreign_plan.id))
+
+    service = _issue_service(
+        plans=tuple(plans), snapshots=tuple(snapshots), change_sets=change_sets
+    )
+
+    first = await service.list_issues(organization_id=organization_id, limit=2)
+
+    assert len(first["issues"]) == 2  # page window
+    assert first["open_count"] == 3  # unaffected by limit
+    assert first["closed_count"] == 1  # unaffected by state=open
+    assert first["next_cursor"] == "2"
+
+    second = await service.list_issues(
+        organization_id=organization_id, limit=2, offset=2
+    )
+    assert len(second["issues"]) == 1
+    assert second["next_cursor"] is None
+    assert (second["open_count"], second["closed_count"]) == (3, 1)
+    # The two pages together are the whole open tab, in order, no repeats.
+    paged = [item["issue_id"] for item in first["issues"] + second["issues"]]
+    whole = [
+        item["issue_id"]
+        for item in (await service.list_issues(organization_id=organization_id))["issues"]
+    ]
+    assert paged == whole
+
+    closed_tab = await service.list_issues(
+        state="closed", organization_id=organization_id
+    )
+    assert [item["issue_id"] for item in closed_tab["issues"]] == [closed_project]
+    assert (closed_tab["open_count"], closed_tab["closed_count"]) == (3, 1)
+
+
+@pytest.mark.asyncio
 async def test_draft_only_issue_inherits_its_opening_agent_organization() -> None:
     """Without this fallback the workspace filter would drop draft issues."""
 
