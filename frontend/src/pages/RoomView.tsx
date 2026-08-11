@@ -422,7 +422,11 @@ export function RoomView({
             /* 空房间不装满（§5.1） */
             <p className="py-8 text-center text-[12.5px] text-[#6b6046]">暂无消息</p>
           ) : (
-            stream.items.map((item) => <StreamEntry key={item.payload_ref ?? item.at} item={item} />)
+            // A11：payload_ref 可空（契约 §5.2），退化键必须带 source+下标——
+            // 同一秒的两条投影条目若共用 at 作键，轮询整表替换时会错误复用
+            stream.items.map((item, i) => (
+              <StreamEntry key={item.payload_ref ?? `${item.source}-${item.at}-${i}`} item={item} />
+            ))
           )}
 
           {stream.next_cursor ? (
