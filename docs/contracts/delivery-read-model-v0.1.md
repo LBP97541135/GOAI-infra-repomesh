@@ -202,6 +202,13 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 （2026-08-11 主脑追认）：`direction=leader_to_worker` 显式标记上述单向限制，
 前端以该字段辨识，勿以列表恒单向为前提硬编码。
 
+**本端点不分页**（2026-08-11 澄清，消费方问询后补写）：响应恒为 `{"items": [...]}`，
+**没有 `next_cursor`**，也不接受 `?cursor=`——与 §4.3 decisions 同风格，与 §4.1 events
+不同。一条交付的消息量以「一屏读完」为设计前提；真正需要翻页的是**房间流**，那是
+v0.2 §5.2 `/rooms/{room_id}/stream` 的职责，不在此端点重复一套游标。
+本段是澄清既有行为、不改变实现——写下来是因为消费方曾按 §4.1 的形状类推补了游标字段。
+v0.2 另为本端点补投影 `room_id`（见 v0.2 §5.2），与房间流共用同一投影函数。
+
 ### 4.3 `GET /deliveries/{delivery_id}/decisions`
 
 ```json
