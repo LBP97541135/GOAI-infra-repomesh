@@ -17,6 +17,8 @@ B) release    — single repository READY_TO_MERGE with green CI but no READY
                flips the merge gate open. contract is null here (degraded path).
 C) repairing  — CI failed candidate with a rework task in flight and a pending
                recovery plan: repairing/watch surfaces. contract is null.
+D) draft      — an un-materialized plan snapshot only: the list shows a virtual
+               draft delivery with delivery_id null and phase "plan".
 
 Idempotency: every id derives from a fixed UUIDv5 namespace. If scenario A's
 execution plan already exists the script prints the id map and exits without
@@ -217,6 +219,7 @@ async def seed(database_url: str) -> dict[str, object]:
                 "A_delivered": str(plan_a_id),
                 "B_release_awaiting_approval": str(stable_id("plan:b")),
                 "C_repairing_watch": str(stable_id("plan:c")),
+                "D_draft_project": str(stable_id("project:d")),
             }
 
         directory = PostgresAgentDirectory(database)
@@ -647,6 +650,29 @@ async def seed(database_url: str) -> dict[str, object]:
             "repository_id": str(billing_repo.id),
             "head_sha": C_HEAD,
             "contract": None,
+        }
+
+        # -------- Scenario D: virtual draft (snapshot not materialized) --------
+        project_d = stable_id("project:d")
+        await snapshots.save(
+            project_id=project_d,
+            plan_version=1,
+            engineering_spec="Draft: notification digest across mailer and web.",
+            contracts=[],
+            task_dag=[
+                {"repository": "repomesh-e2e-mailer", "depends_on": []},
+                {"repository": "repomesh-e2e-web", "depends_on": ["repomesh-e2e-mailer"]},
+            ],
+            execution_batches=[["repomesh-e2e-mailer"], ["repomesh-e2e-web"]],
+            graph_edges=[],
+            created_by_agent_id=leader_id,
+            execution_plan_id=None,
+            requirement_text="通知摘要：邮件与站内信合并为每日一封",
+        )
+        out["D_draft_project"] = {
+            "project_id": str(project_d),
+            "delivery_id": None,
+            "phase": "plan (virtual draft)",
         }
         return out
     finally:
