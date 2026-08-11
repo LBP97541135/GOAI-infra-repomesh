@@ -89,8 +89,9 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
 以下字段在 issue 从未建团时**无持久化事实源，返回 `null` 或空数组**，不得填默认值
 （诚实数据红线，2026-08-11 主脑追认）：`operational_status`、`execution_mode`（→ `null`），
 `team_count`（→ `0`）；§3 的 `teams`、`human_grants`、`required_checkpoints`（→ `[]`），
-`repositories[].team_id`（→ `null`）。实测：5533 联调库 `project.agent_topologies` 为空表，
-故种子上这些字段全空——前端按「未接入」呈现，**禁止把缺拓扑显示成 `active`**。
+`repositories[].team_id`（→ `null`）。前端按「未接入」呈现，**禁止把缺拓扑显示成 `active`**。
+联调锚点（CONS-33 扩种子后）：场景 A/B/C 有拓扑，**场景 D 故意不建团**，即降级路径的活体样本；
+起草期 `project.agent_topologies` 曾是空表，那时四个场景全走降级。
 
 ### 2.1 `state`（Open/Closed）派生规则
 
