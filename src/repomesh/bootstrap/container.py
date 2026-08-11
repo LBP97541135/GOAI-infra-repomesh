@@ -309,8 +309,10 @@ class ApplicationContainer:
         from repomesh.api.read_models.sources import (
             PlanSnapshotData,
             RepositoryData,
+            RepositoryProfileData,
             RepositorySpecData,
             RunnerEventData,
+            RuntimeSnapshot,
             SpecificationContractData,
         )
         from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
@@ -372,6 +374,11 @@ class ApplicationContainer:
                 return tuple(
                     task.to_view()
                     for task in await container.task_store.list_by_project(project_id)
+                )
+
+            async def list_all(self):
+                return tuple(
+                    task.to_view() for task in await container.task_store.list_all()
                 )
 
         class _ChangeSets:
@@ -463,6 +470,20 @@ class ApplicationContainer:
                     for profile in await container.repository_catalog.list()
                 )
 
+            async def profiles(self):
+                return tuple(
+                    RepositoryProfileData(
+                        id=profile.id,
+                        name=profile.name,
+                        url=profile.url,
+                        description=profile.description,
+                        topics=tuple(profile.topics),
+                        languages=tuple(profile.languages),
+                        profiled_at=profile.profiled_at,
+                    )
+                    for profile in await container.repository_catalog.list()
+                )
+
         class _Agents:
             async def name(self, agent_id: UUID):
                 principal = await container.agent_directory.get_view(agent_id)
@@ -472,12 +493,21 @@ class ApplicationContainer:
                 principal = await container.agent_directory.get_view(agent_id)
                 return principal.organization_id if principal else None
 
+            async def list_all(self):
+                return tuple(
+                    principal.to_view()
+                    for principal in await container.agent_directory.list()
+                )
+
         class _Topology:
             async def get_view(self, project_id: UUID):
                 return await container.topology_reader().get_view(project_id)
 
             async def find_by_room(self, room_id: str):
                 return await container.project_topology_store.find_view_by_room(room_id)
+
+            async def list_views(self):
+                return tuple(await container.project_topology_store.list_views())
 
             async def matrix_room_id(self, project_id: UUID):
                 topology = await self.get_view(project_id)
@@ -522,6 +552,64 @@ class ApplicationContainer:
                     )
                 )
 
+        class _Runtime:
+            """Live AgentTeams proxy for §4.4.
+
+            Translates the integration's error taxonomy into the read model's
+            two outcomes: None for 404 (no such resource) and a raised error for
+            anything else, which the read model degrades to reachable:false.
+            """
+
+            def __init__(self, control_plane) -> None:
+                self._control_plane = control_plane
+
+            async def worker(self, name: str):
+                ref = await self._not_found_as_none(
+                    self._control_plane.get_worker(name)
+                )
+                if ref is None:
+                    return None
+                return RuntimeSnapshot(
+                    phase=ref.phase,
+                    runtime_kind=ref.runtime,
+                    matrix_user_id=ref.matrix_user_id,
+                    room_id=ref.room_id,
+                    message=ref.message,
+                )
+
+            async def manager(self, name: str):
+                ref = await self._not_found_as_none(
+                    self._control_plane.get_manager(name)
+                )
+                if ref is None:
+                    return None
+                return RuntimeSnapshot(
+                    phase=ref.phase,
+                    matrix_user_id=ref.matrix_user_id,
+                    room_id=ref.room_id,
+                )
+
+            async def team(self, name: str):
+                ref = await self._not_found_as_none(self._control_plane.get_team(name))
+                if ref is None:
+                    return None
+                return RuntimeSnapshot(
+                    phase=ref.phase,
+                    ready_workers=ref.ready_workers,
+                    total_workers=ref.total_workers,
+                )
+
+            @staticmethod
+            async def _not_found_as_none(awaitable):
+                from repomesh.integrations.agentteams import AgentTeamsResponseError
+
+                try:
+                    return await awaitable
+                except AgentTeamsResponseError as error:
+                    if error.status_code == 404:
+                        return None
+                    raise
+
         return DeliveryReadModelService(
             plans=_Plans(),
             snapshots=_Snapshots(),
@@ -536,6 +624,11 @@ class ApplicationContainer:
             runner_events=_RunnerEvents(),
             messages=_Messages(),
             observations=_Observations(),
+            runtime=(
+                _Runtime(self.agent_team_control_plane)
+                if self.agent_team_control_plane is not None
+                else None
+            ),
         )
 
     def delivery_governance_service(self):

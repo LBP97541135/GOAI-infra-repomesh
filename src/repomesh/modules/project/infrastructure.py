@@ -160,6 +160,9 @@ class InMemoryProjectTopologyStore:
         topology = await self.get(project_id)
         return topology.to_view() if topology is not None else None
 
+    async def list_views(self) -> tuple:
+        return tuple(topology.to_view() for topology in self._topologies.values())
+
     async def find_view_by_room(self, room_id: str):
         for topology in self._topologies.values():
             if any(
@@ -336,6 +339,24 @@ class PostgresProjectTopologyStore:
     async def get_view(self, project_id: UUID):
         topology = await self.get(project_id)
         return topology.to_view() if topology is not None else None
+
+    async def list_views(self) -> tuple:
+        """Every topology, for the console's repository grid and team list."""
+
+        async with self._database.transaction() as session:
+            project_ids = (
+                await session.scalars(
+                    select(ProjectAgentTopologyRecord.project_id).order_by(
+                        ProjectAgentTopologyRecord.project_id
+                    )
+                )
+            ).all()
+        views = []
+        for project_id in project_ids:
+            view = await self.get_view(project_id)
+            if view is not None:
+                views.append(view)
+        return tuple(views)
 
     async def find_view_by_room(self, room_id: str):
         """The topology owning a team room or leader DM, or None.

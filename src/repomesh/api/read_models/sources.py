@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from repomesh.modules.agent_directory.contracts import AgentPrincipalView
 from repomesh.modules.collaboration.contracts import CollaborationMessageView
 from repomesh.modules.delivery.contracts import (
     ChangeSetView,
@@ -73,6 +74,10 @@ class PlanSnapshotSource(Protocol):
 class TaskSource(Protocol):
     async def list_by_project(self, project_id: UUID) -> tuple[TaskView, ...]: ...
 
+    async def list_all(self) -> tuple[TaskView, ...]:
+        """Every task, for the repository grid and the roster's task counts."""
+        ...
+
 
 class ChangeSetSource(Protocol):
     async def for_delivery(self, delivery_id: UUID) -> ChangeSetView | None: ...
@@ -117,8 +122,56 @@ class SpecificationSource(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryProfileData:
+    """The catalog fields the repository grid renders (v0.2 §4.1).
+
+    `auto_card` is deliberately absent: discovery evidence is not stored per
+    project (v0.1 §6.10), so the grid's evidence slot stays 未接入.
+    """
+
+    id: UUID
+    name: str
+    url: str
+    description: str
+    topics: tuple[str, ...]
+    languages: tuple[str, ...]
+    profiled_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSnapshot:
+    """One AgentTeams resource as the controller currently reports it.
+
+    `uptime_seconds` and `awake` are absent on purpose: the controller exposes
+    no start timestamp, and the desired state is not an observation (§4.4).
+    """
+
+    phase: str | None = None
+    runtime_kind: str | None = None
+    matrix_user_id: str | None = None
+    room_id: str | None = None
+    message: str | None = None
+    ready_workers: int | None = None
+    total_workers: int | None = None
+
+
+class RuntimeProbe(Protocol):
+    """Live proxy to the AgentTeams controller; None means 404 (§4.4)."""
+
+    async def worker(self, name: str) -> RuntimeSnapshot | None: ...
+
+    async def manager(self, name: str) -> RuntimeSnapshot | None: ...
+
+    async def team(self, name: str) -> RuntimeSnapshot | None: ...
+
+
 class RepositorySource(Protocol):
     async def list(self) -> tuple[RepositoryData, ...]: ...
+
+    async def profiles(self) -> tuple[RepositoryProfileData, ...]:
+        """The full catalog rows the grid needs, not just id and name."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +212,10 @@ class AgentNameSource(Protocol):
         """Owning organization of one agent; None when the agent is unknown."""
         ...
 
+    async def list_all(self) -> tuple[AgentPrincipalView, ...]:
+        """The whole registry, for the agent roster (§4.3)."""
+        ...
+
 
 class TopologySource(Protocol):
     async def matrix_room_id(self, project_id: UUID) -> str | None: ...
@@ -169,4 +226,8 @@ class TopologySource(Protocol):
 
     async def find_by_room(self, room_id: str) -> ProjectAgentTopologyView | None:
         """The topology owning a room, so a room id resolves without a scan."""
+        ...
+
+    async def list_views(self) -> tuple[ProjectAgentTopologyView, ...]:
+        """Every topology, for the repository grid and the team list (§4.1/§4.2)."""
         ...

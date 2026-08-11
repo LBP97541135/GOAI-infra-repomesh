@@ -125,6 +125,9 @@ class InMemoryTaskStore:
     async def list_by_project(self, project_id: UUID) -> tuple[Task, ...]:
         return tuple(task for task in self.tasks.values() if task.project_id == project_id)
 
+    async def list_all(self) -> tuple[Task, ...]:
+        return tuple(self.tasks.values())
+
     async def list_by_parent(self, parent_task_id: UUID) -> tuple[Task, ...]:
         return tuple(task for task in self.tasks.values() if task.parent_task_id == parent_task_id)
 
@@ -227,6 +230,16 @@ class PostgresTaskStore:
                     .where(TaskRecord.project_id == project_id)
                     .order_by(TaskRecord.id)
                 )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
+    async def list_all(self) -> tuple[Task, ...]:
+        """Every task; the read model's repository grid and roster count across
+        projects, and querying project by project would be one round trip each."""
+
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(select(TaskRecord).order_by(TaskRecord.id))
             ).all()
         return tuple(self._to_domain(record) for record in records)
 

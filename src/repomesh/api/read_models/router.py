@@ -7,6 +7,15 @@ from repomesh.settings import get_settings
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
 issues_router = APIRouter(prefix="/issues", tags=["issues"])
 rooms_router = APIRouter(prefix="/rooms", tags=["rooms"])
+grid_router = APIRouter(prefix="/console", tags=["console-grid"])
+"""§4's three list endpoints.
+
+Namespaced because `GET /api/v1/repositories` is already owned by
+repository_intelligence (its catalog view, registered earlier and therefore the
+one that wins at runtime). Mounting the grid at the bare path would have left it
+permanently shadowed while OpenAPI advertised it — a collision that reads as a
+working endpoint returning the wrong shape.
+"""
 
 _ISSUE_STATES = {"open", "closed", "all"}
 
@@ -136,6 +145,27 @@ async def get_repository_plan(
             status_code=404, detail=f"no plan for repository {repository_id}"
         )
     return payload
+
+
+@grid_router.get("/repositories")
+async def list_repositories(request: Request) -> dict:
+    """Contract v0.2 §4.1."""
+
+    return await _service(request).list_repositories()
+
+
+@grid_router.get("/teams")
+async def list_teams(request: Request, with_runtime: bool = True) -> dict:
+    """Contract v0.2 §4.2; the runtime block is proxied unless opted out."""
+
+    return await _service(request).list_teams(with_runtime=with_runtime)
+
+
+@grid_router.get("/agents")
+async def list_agents(request: Request, with_runtime: bool = True) -> dict:
+    """Contract v0.2 §4.3."""
+
+    return await _service(request).list_agents(with_runtime=with_runtime)
 
 
 @rooms_router.get("/{room_id}/stream")
