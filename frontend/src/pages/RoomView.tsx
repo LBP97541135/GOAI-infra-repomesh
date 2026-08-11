@@ -9,6 +9,7 @@ import type {
 } from "../api/contract";
 import type { RepositoryEnv } from "../types";
 import { EventTimeline, type EventsTimelineState } from "../components/EventTimeline";
+import { repositoryLabel } from "../display";
 import { eventTime } from "../viewmodel";
 
 /** 活体房间视图（CONS-43 骨架）。版式按原型 `#v-room`：
@@ -376,7 +377,8 @@ export function RoomView({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[13px] text-tx">
-              {room.repository_name} · {room.kind === "team_room" ? "teamRoom" : "leaderDM"}
+              {repositoryLabel(room.repository_name, room.repository_id)} ·{" "}
+              {room.kind === "team_room" ? "teamRoom" : "leaderDM"}
             </span>
             {room.live && (
               <span
@@ -439,7 +441,7 @@ export function RoomView({
       )}
 
       <EnvFloat
-        repositoryName={room.repository_name}
+        repositoryName={repositoryLabel(room.repository_name, room.repository_id)}
         repositoryId={room.repository_id}
         env={env}
         events={events}

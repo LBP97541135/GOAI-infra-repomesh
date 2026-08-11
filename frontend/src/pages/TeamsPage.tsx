@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { ConsoleTeamView, TeamRuntimeStatus } from "../api/contract";
 import { fetchConsoleTeams, gridSourceMode } from "../api/grid";
-import { shortId, type RuntimePhase } from "../display";
+import { repositoryLabel, shortId, type RuntimePhase } from "../display";
 import { RuntimeBadge } from "../components/RuntimeBadge";
 import { useRuntimeRows } from "./useRuntimeRows";
 
@@ -49,8 +49,8 @@ function TeamCard({
       <div className="flex flex-wrap items-baseline gap-2.5">
         <span className="font-mono text-[12.5px] text-tx">{team.agentteams_team_name}</span>
         <span className="text-[11.5px] text-tx2">
-          {/* 契约写 string，实现在 catalog 查不到时给 null——不拿 id 冒充仓库名 */}
-          {team.repository_name ?? `仓库 ${shortId(team.repository_id)}（catalog 未收录）`}
+          {/* catalog 查不到时为 null（§7.3 已把三处同源标注统一）——不拿 id 冒充仓库名 */}
+          {repositoryLabel(team.repository_name, team.repository_id)}
         </span>
         <button
           className="ml-auto rounded-hard border border-line px-2 py-px text-[11px] text-tx2 hover:border-amber hover:text-amber-hi"

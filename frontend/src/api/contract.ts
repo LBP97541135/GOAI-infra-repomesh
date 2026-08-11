@@ -164,7 +164,8 @@ export interface RoomListItemView {
   issue_id: string;
   team_id: string;
   repository_id: string;
-  repository_name: string;
+  /** §7.3 勘误：与 §4.2 同一派生，catalog 查不到 repository_id 时为 null */
+  repository_name: string | null;
   members: RoomMemberView[];
   /** 空房间为 null 且 message_count:0——**不装填占位消息** */
   last_message: { at: string; kind: string; subject: string; sender_agent_id: string } | null;

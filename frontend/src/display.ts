@@ -26,6 +26,14 @@ export function openedBy(item: Pick<IssueListItemView, "opened_by_name" | "opene
   return "发起人未关联";
 }
 
+/** 仓库展示名。`repository_name` 在 §4.2 / §5.1 / §4.3 三处**同一派生**，
+ *  catalog 查不到该 repository_id 时都是 `null`（拓扑驻扎的仓库未必在 catalog 里）——
+ *  契约 §7.3 勘误把三处统一标成 nullable 后，降级措辞也收敛到这一处：
+ *  三个页面各写一套「查不到怎么显示」，迟早会有一处漏判直接渲染出 `null`。 */
+export function repositoryLabel(name: string | null, repositoryId: string): string {
+  return name ?? `仓库 ${shortId(repositoryId)}（catalog 未收录）`;
+}
+
 /** 两段式取数的探测阶段（团队页 / 花名册页共用，见 pages/useRuntimeRows.ts）。 */
 export type RuntimePhase = "loading" | "done" | "failed";
 
