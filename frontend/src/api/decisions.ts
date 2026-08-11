@@ -13,13 +13,13 @@ import type {
 import { createApiClient } from "./client";
 import { fetchConsoleAgents } from "./grid";
 import { resolveDataSourceMode } from "./source";
-import { approvalFromContract, decisionsFromContract } from "../viewmodel";
+import { decisionsFromContract } from "../viewmodel";
 import { decisionsFixture, deliveryAggregateFixture } from "../data/issueDetail";
 
 export interface DecisionDeckData {
   deck: Decision[];
-  approval: ApprovalInfo | null;
-  /** 本轮聚合原文：证据面（B-3）从中切单仓证据，避免点击时二次取数 */
+  /** 本轮聚合原文：授权单（S1，按点击的卡构建）与证据面（B-3）都从中切，
+   *  点击时零额外取数 */
   aggregate: DeliveryAggregate;
 }
 
@@ -36,7 +36,6 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
     // 「本 issue 本轮的决策」——不再需要「非本 issue」那句补丁说明。
     return {
       deck: decisionsFromContract(decisionsFixture.items),
-      approval: approvalFromContract(deliveryAggregateFixture, decisionsFixture.items),
       aggregate: deliveryAggregateFixture,
     };
   }
@@ -44,7 +43,6 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
   const [agg, decisions] = await Promise.all([api.getDelivery(roundId), api.getDecisions(roundId)]);
   return {
     deck: decisionsFromContract(decisions.items),
-    approval: approvalFromContract(agg, decisions.items),
     aggregate: agg,
   };
 }

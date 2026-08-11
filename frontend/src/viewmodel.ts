@@ -52,27 +52,31 @@ export function decisionsFromContract(items: DecisionItem[]): Decision[] {
  *  `authority` 这个入参在 v1 用来接演示叙事层的审批人名；v2 的授权单改为显示
  *  从花名册派生的真实决策主体（见 api/decisions.ts），弹窗不再读这个字段，
  *  保留默认值只为形状不变。 */
-export function approvalFromContract(
+export function approvalForDecision(
   agg: DeliveryAggregate,
-  items: DecisionItem[],
+  decision: { id: string; repositoryId: string | null; headSha: string | null },
   authority = "治理审批人",
 ): ApprovalInfo | null {
-  const approve = items.find((d) => d.kind === "approve");
-  if (!approve) return null;
+  // S1 修复：授权单按**用户点击的那张决策卡**构建。此前这里 find 第一个 approve
+  // 项——多仓同时待批时，点 B 卡会弹出并提交 A 卡的仓库与 SHA（给未审仓库发
+  // READY 的治理级缺陷）。
+  if (!decision.repositoryId) return null;
   const cs = agg.change_set;
-  const repo = cs?.repositories.find((r) => r.repository_id === approve.repository_id);
-  const repoName = agg.repositories.find((r) => r.repository_id === approve.repository_id)?.name ?? "目标仓库";
+  const repo = cs?.repositories.find((r) => r.repository_id === decision.repositoryId);
+  const repoName =
+    agg.repositories.find((r) => r.repository_id === decision.repositoryId)?.name ?? "目标仓库";
   return {
+    decisionId: decision.id,
     authority,
     snapshotLabel: agg.validation_snapshot
       ? `${agg.validation_snapshot.id} · IMMUTABLE`
-      : approve.head_sha
-        ? `HEAD ${shortSha(approve.head_sha)}`
+      : decision.headSha
+        ? `HEAD ${shortSha(decision.headSha)}`
         : "—",
     scopeLabel: repo?.pull_request_number != null ? `${repoName}（仅合并 PR #${repo.pull_request_number}）` : repoName,
     changeSetId: cs?.change_set_id ?? null,
-    repositoryId: approve.repository_id,
-    headSha: approve.head_sha,
+    repositoryId: decision.repositoryId,
+    headSha: decision.headSha,
   };
 }
 

@@ -24,8 +24,10 @@ export interface Decision {
   headSha: string | null;
 }
 
-/** 审批弹窗（快照绑定授权单）数据；语义见 frontend-prototype/DESIGN-DECISION.md */
+/** 审批弹窗（快照绑定授权单）数据；语义见 frontend-prototype/DESIGN-DECISION.md。
+ *  授权单按点击的决策卡构建（S1），decisionId 用于消化后从决策夹移除对应项。 */
 export interface ApprovalInfo {
+  decisionId: string;
   authority: string;
   snapshotLabel: string;
   scopeLabel: string;

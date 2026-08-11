@@ -16,7 +16,7 @@ import { fetchIssueDetail, fetchRooms } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
 import { EvidenceModal } from "../components/EvidenceModal";
-import { evidenceFromAggregate } from "../viewmodel";
+import { approvalForDecision, evidenceFromAggregate } from "../viewmodel";
 import { IssueDetailPage } from "./IssueDetailPage";
 
 /** issue 详情取数容器（§3 概览 + §5.1 房间清单 + §4.3 决策夹 + §4.4 写回路）。
@@ -126,7 +126,8 @@ export function IssueDetailContainer({
       .then((data) => {
         if (cancelled) return;
         setDeck(data.deck);
-        setApproval(data.approval);
+        // S1：授权单不再在取数时预绑定「第一个 approve 项」——由点击的卡即时构建
+        setApproval(null);
         setDeckAggregate(data.aggregate);
         setDeckNote(
           // 夹具已与详情/房间同源（同一 issue 同一轮），所以只需说明这是回放数据，
@@ -211,6 +212,17 @@ export function IssueDetailContainer({
     (decision: Decision, actionIdx: number) => {
       const action = decision.actionKinds?.[actionIdx];
       if (action === "approve_merge") {
+        // S1：授权单绑定**这张卡**的仓库与 SHA。多仓同时待批时绝不能拿别的卡顶替
+        if (!deckAggregate) {
+          onToast("授权单不可用：本轮聚合未取到");
+          return;
+        }
+        const built = approvalForDecision(deckAggregate, decision);
+        if (!built) {
+          onToast("授权单不可用：该决策未指向仓库");
+          return;
+        }
+        setApproval(built);
         setApprovalError(null);
         setApprovalOpen(true);
         return;
@@ -232,7 +244,8 @@ export function IssueDetailContainer({
     if (!roundId || !approval) return;
     if (resolveDataSourceMode() === "replay") {
       setApprovalOpen(false);
-      setDeck((prev) => prev.filter((x) => x.kind !== "approve"));
+      // S1：只消化被批准的那一张卡，不整类抹除
+      setDeck((prev) => prev.filter((x) => x.id !== approval.decisionId));
       onToast("已批准（回放演示，未写入后端）");
       return;
     }
