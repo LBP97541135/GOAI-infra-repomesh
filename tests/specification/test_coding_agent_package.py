@@ -114,6 +114,7 @@ async def build_package_scenario():
             tests=("pytest tests/pricing",),
             dependencies=("pricing-contract v2.3",),
             allowed_paths=("src/pricing/**", "tests/pricing/**"),
+            forbidden_paths=("src/pricing/legacy/**",),
             interface_changes=("Expose the new field as nullable",),
         ),
         idempotency_key="package-task-spec",
@@ -153,11 +154,13 @@ async def test_package_contains_only_current_task_execution_context() -> None:
 
     assert package.instruction == "Add the new pricing field without breaking old clients"
     assert package.allowed_paths == ("src/pricing/**", "tests/pricing/**")
+    assert package.forbidden_paths == ("src/pricing/legacy/**",)
     assert package.test_commands == ("pytest tests/pricing",)
     assert len(package.context_files) == 1
     rendered = package.context_files[0]
     assert rendered.mount_path == ".repomesh/context/current-task.md"
     assert "BE-01 Pricing API" in rendered.content
+    assert "src/pricing/legacy/**" in rendered.content
     assert "pricing-contract v2.3" in rendered.content
     assert "Organization Leader" not in rendered.content
     assert package.content_hash.startswith("sha256:")

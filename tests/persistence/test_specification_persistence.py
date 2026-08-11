@@ -1,3 +1,6 @@
+import hashlib
+import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -10,6 +13,7 @@ from repomesh.modules.specification import (
     SpecificationVersion,
 )
 from repomesh.modules.specification.contracts import SpecificationKind
+from repomesh.modules.specification.infrastructure import SpecificationVersionRecord
 from repomesh.persistence import Database
 from repomesh.persistence.base import ALL_SCHEMAS
 
@@ -79,3 +83,42 @@ async def test_specification_versions_survive_database_round_trip(
     assert restored == revised
     assert original == first_version
     assert replay is not None and replay[0] == revised
+
+
+@pytest.mark.asyncio
+async def test_versions_persisted_before_forbidden_paths_load_with_empty_set(
+    database: Database,
+) -> None:
+    store = PostgresSpecificationStore(database)
+    specification_id = uuid4()
+    legacy_content = {
+        "goal": "Update pricing API",
+        "acceptance": ["Old clients remain compatible"],
+        "scope": [],
+        "constraints": [],
+        "tests": [],
+        "dependencies": [],
+        "allowed_paths": ["src/pricing/**"],
+        "interface_changes": [],
+    }
+    encoded = json.dumps(legacy_content, sort_keys=True, separators=(",", ":")).encode()
+    legacy_hash = f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+    async with database.transaction() as session:
+        session.add(
+            SpecificationVersionRecord(
+                id=uuid4(),
+                specification_id=specification_id,
+                version=1,
+                content=legacy_content,
+                content_hash=legacy_hash,
+                created_by_agent_id=uuid4(),
+                supersedes_version_id=None,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    restored = await store.get_version(specification_id, 1)
+
+    assert restored is not None
+    assert restored.content.forbidden_paths == ()
+    assert restored.content_hash == legacy_hash
