@@ -9,6 +9,7 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskView,
 )
 from repomesh.shared.domain import new_id
+from repomesh.shared.workflow import WorkflowBlocked
 
 
 class TaskOrchestrationError(Exception):
@@ -16,6 +17,10 @@ class TaskOrchestrationError(Exception):
 
 
 class TaskDenied(TaskOrchestrationError):
+    pass
+
+
+class TaskBlocked(TaskDenied, WorkflowBlocked):
     pass
 
 
@@ -27,12 +32,14 @@ class TaskNotFound(TaskOrchestrationError):
     pass
 
 
-FINAL_TASK_STATUSES = frozenset({
-    TaskStatus.SUCCEEDED,
-    TaskStatus.FAILED,
-    TaskStatus.CANCELLED,
-    TaskStatus.SUPERSEDED,
-})
+FINAL_TASK_STATUSES = frozenset(
+    {
+        TaskStatus.SUCCEEDED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+        TaskStatus.SUPERSEDED,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,20 +94,14 @@ class Task:
             version=self.version + 1,
         )
 
-    def supersede(
-        self, *, reason: str = "", superseded_by: UUID | None = None
-    ) -> "Task":
+    def supersede(self, *, reason: str = "", superseded_by: UUID | None = None) -> "Task":
         """Mark this task as superseded by a newer plan version."""
         if self.status in FINAL_TASK_STATUSES:
-            raise TaskConflict(
-                f"a {self.status.value} task cannot be superseded"
-            )
+            raise TaskConflict(f"a {self.status.value} task cannot be superseded")
         return replace(
             self,
             status=TaskStatus.SUPERSEDED,
-            result_summary=(
-                f"SUPERSEDED: {reason}" if reason else "SUPERSEDED"
-            ),
+            result_summary=(f"SUPERSEDED: {reason}" if reason else "SUPERSEDED"),
             version=self.version + 1,
         )
 
@@ -199,8 +200,7 @@ class ExecutionPlan:
             for planned, task_id in zip(batch, leader_task_ids, strict=True)
         )
         batches = tuple(
-            assigned if index == batch_index else item
-            for index, item in enumerate(self.batches)
+            assigned if index == batch_index else item for index, item in enumerate(self.batches)
         )
         return replace(self, batches=batches, version=self.version + 1)
 
@@ -230,9 +230,7 @@ class ExecutionPlan:
             created_by_agent_id=self.created_by_agent_id,
             status=self.status,
             current_batch_index=self.current_batch_index,
-            batches=tuple(
-                tuple(planned.to_view() for planned in batch) for batch in self.batches
-            ),
+            batches=tuple(tuple(planned.to_view() for planned in batch) for batch in self.batches),
         )
 
     def _require_in_progress(self) -> None:

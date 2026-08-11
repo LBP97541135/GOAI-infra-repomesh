@@ -83,6 +83,14 @@ class FailOnceMessenger(RecordingMessenger):
         )
 
 
+class EmptyReceiptMessenger(RecordingMessenger):
+    async def send_task(
+        self, room_id: str, body: str, *, transaction_id: str, **kwargs
+    ) -> str:
+        self.deliveries.append((room_id, json.loads(body), transaction_id))
+        return ""
+
+
 class StaticIdentityVerifier:
     def __init__(self, agent_id, matrix_user_id: str) -> None:
         self.agent_id = agent_id
@@ -398,6 +406,41 @@ async def test_worker_cannot_message_another_worker() -> None:
             ),
             idempotency_key="worker-peer-message",
         )
+
+
+@pytest.mark.asyncio
+async def test_empty_matrix_receipt_is_persisted_as_failed_delivery() -> None:
+    messenger = EmptyReceiptMessenger()
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        collaboration,
+        _,
+        _,
+        _,
+    ) = await build_flow(messenger=messenger)
+    with pytest.raises(ValueError, match="event_id"):
+        await collaboration.send(
+            SendCollaborationMessageCommand(
+                organization_id=organization_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                sender_agent_id=organization_leader.id,
+                recipient_agent_id=repository_team.leader.id,
+                kind=CollaborationMessageKind.TASK_ASSIGNMENT,
+                subject="Assign repository work",
+                body="Implement the approved repository specification.",
+            ),
+            idempotency_key="empty-matrix-receipt",
+        )
+
+    failed = await collaboration._store.list_failed()  # noqa: SLF001
+    assert len(failed) == 1
+    assert failed[0][1] == "empty-matrix-receipt"
 
 
 @pytest.mark.asyncio

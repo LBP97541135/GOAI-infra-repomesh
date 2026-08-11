@@ -1,7 +1,4 @@
-import hashlib
-import json
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -15,6 +12,7 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationMessageKind,
     SendCollaborationMessageCommand,
 )
+from repomesh.modules.project.checkpoint_fallback import TopologyAwareCheckpointFallback
 from repomesh.modules.project.contracts import (
     ProjectCheckpoint,
     ProjectCheckpointGateway,
@@ -25,7 +23,9 @@ from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
     DeliveryStatePort,
     ExecutionPlanStatus,
+    ExecutionPlanStatusSnapshot,
     ExecutionPlanView,
+    PlannedTaskExecutionStatus,
     ProjectTaskProgress,
     PublishedTaskPackage,
     ReportTaskCommand,
@@ -35,18 +35,72 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
+    WorkerTaskExecutionStatus,
 )
 from repomesh.modules.task_orchestration.domain import (
     FINAL_TASK_STATUSES,
     ExecutionPlan,
     Task,
+    TaskBlocked,
     TaskConflict,
     TaskDenied,
     TaskNotFound,
 )
 from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
+from repomesh.shared.idempotency import command_fingerprint
 
 _FAILED_TASK_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.CANCELLED})
+
+
+class ObserveExecutionPlan:
+    """Build the read model used to observe one execution plan and its tasks."""
+
+    def __init__(self, plans: ExecutionPlanStore, tasks: TaskStore) -> None:
+        self._plans = plans
+        self._tasks = tasks
+
+    async def execute(self, plan_id: UUID) -> ExecutionPlanStatusSnapshot | None:
+        plan = await self._plans.get(plan_id)
+        if plan is None:
+            return None
+        view = plan.to_view()
+        project_tasks = await self._tasks.list_by_project(view.project_id)
+        tasks_by_id = {task.id: task for task in project_tasks}
+        children_by_parent: dict[UUID, list[Task]] = {}
+        for task in project_tasks:
+            if task.parent_task_id is not None:
+                children_by_parent.setdefault(task.parent_task_id, []).append(task)
+        batches: list[tuple[PlannedTaskExecutionStatus, ...]] = []
+        for batch in view.batches:
+            statuses: list[PlannedTaskExecutionStatus] = []
+            for planned in batch:
+                leader = (
+                    tasks_by_id.get(planned.leader_task_id)
+                    if planned.leader_task_id is not None
+                    else None
+                )
+                children = (
+                    children_by_parent.get(planned.leader_task_id, ())
+                    if planned.leader_task_id is not None
+                    else ()
+                )
+                statuses.append(
+                    PlannedTaskExecutionStatus(
+                        repository_id=planned.repository_id,
+                        leader_task_id=planned.leader_task_id,
+                        leader_status=leader.status if leader is not None else None,
+                        worker_tasks=tuple(
+                            WorkerTaskExecutionStatus(child.id, child.status) for child in children
+                        ),
+                    )
+                )
+            batches.append(tuple(statuses))
+        return ExecutionPlanStatusSnapshot(
+            plan_id=view.id,
+            status=view.status,
+            current_batch_index=view.current_batch_index,
+            batches=tuple(batches),
+        )
 
 
 class TaskOrchestrator:
@@ -64,13 +118,13 @@ class TaskOrchestrator:
         self._tasks = tasks
         self._collaboration = collaboration
         self._publisher = publisher
-        self._checkpoints = checkpoints
+        self._checkpoints = checkpoints or TopologyAwareCheckpointFallback(topologies)
 
     async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
-        fingerprint = self._fingerprint(command)
+        fingerprint = command_fingerprint(command)
         if existing := await self._tasks.get_by_idempotency_key(key):
             task, previous_fingerprint = existing
             if fingerprint != previous_fingerprint:
@@ -85,10 +139,9 @@ class TaskOrchestrator:
         topology = await self._topologies.get_view(command.project_id)
         if topology is None or topology.organization_id != command.organization_id:
             raise TaskDenied("project topology does not exist")
-        if self._checkpoints is not None:
-            gate = await self._checkpoints.operational_gate(command.project_id)
-            if not gate.allowed:
-                raise TaskDenied(gate.reason)
+        gate = await self._checkpoints.operational_gate(command.project_id)
+        if not gate.allowed:
+            raise TaskBlocked(gate.reason)
         self._validate_membership(assigner, assignee, command.repository_id, topology)
         if command.parent_task_id is not None:
             parent = await self._tasks.get(command.parent_task_id)
@@ -128,15 +181,19 @@ class TaskOrchestrator:
             if self._publisher is None:
                 raise RuntimeError("Worker task publisher is not configured")
             topology = await self._topologies.get_view(task.project_id)
-            team = next(
-                (
-                    item
-                    for item in topology.repository_teams
-                    if item.repository_id == task.repository_id
-                    and task.assignee_agent_id in item.worker_agent_ids
-                ),
-                None,
-            ) if topology else None
+            team = (
+                next(
+                    (
+                        item
+                        for item in topology.repository_teams
+                        if item.repository_id == task.repository_id
+                        and task.assignee_agent_id in item.worker_agent_ids
+                    ),
+                    None,
+                )
+                if topology
+                else None
+            )
             if team is None or not team.room_id:
                 raise TaskDenied("Worker Team runtime is not ready for task publication")
             published = await self._publisher.publish(
@@ -171,15 +228,14 @@ class TaskOrchestrator:
         task = await self._required_task(task_id)
         if task.assignee_agent_id != agent_id:
             raise TaskDenied("only the assignee can start a task")
-        if self._checkpoints is not None:
-            gate = await self._checkpoints.evaluate(
-                task.project_id,
-                ProjectCheckpoint.EXECUTION,
-                f"task:{task.id}:v{task.version}",
-                repository_id=task.repository_id,
-            )
-            if not gate.allowed:
-                raise TaskDenied(gate.reason)
+        gate = await self._checkpoints.evaluate(
+            task.project_id,
+            ProjectCheckpoint.EXECUTION,
+            f"task:{task.id}:v{task.version}",
+            repository_id=task.repository_id,
+        )
+        if not gate.allowed:
+            raise TaskBlocked(gate.reason)
         updated = task.start()
         await self._tasks.update(updated, expected_version=task.version)
         return updated.to_view()
@@ -218,11 +274,10 @@ class TaskOrchestrator:
             ),
             idempotency_key=f"{idempotency_key}:message",
         )
-        if (
-            self._checkpoints is not None
-            and reporter.role is AgentRole.REPOSITORY_LEADER
-            and command.status in {TaskStatus.BLOCKED, TaskStatus.FAILED}
-        ):
+        if reporter.role is AgentRole.REPOSITORY_LEADER and command.status in {
+            TaskStatus.BLOCKED,
+            TaskStatus.FAILED,
+        }:
             await self._checkpoints.evaluate(
                 task.project_id,
                 ProjectCheckpoint.EXCEPTION_ESCALATION,
@@ -234,18 +289,15 @@ class TaskOrchestrator:
             )
         return updated.to_view()
 
-    async def supersede(
-        self, command: SupersedeTaskCommand, *, idempotency_key: str
-    ) -> TaskView:
+    async def supersede(self, command: SupersedeTaskCommand, *, idempotency_key: str) -> TaskView:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
         task = await self._required_task(command.task_id)
         reason = command.reason.strip()
         # Idempotent replay: same supersede already persisted.
-        if (
-            task.status is TaskStatus.SUPERSEDED
-            and task.result_summary == (f"SUPERSEDED: {reason}" if reason else "SUPERSEDED")
+        if task.status is TaskStatus.SUPERSEDED and task.result_summary == (
+            f"SUPERSEDED: {reason}" if reason else "SUPERSEDED"
         ):
             return task.to_view()
         updated = task.supersede(
@@ -270,6 +322,11 @@ class TaskOrchestrator:
             failed=counts[TaskStatus.FAILED],
             cancelled=counts[TaskStatus.CANCELLED],
         )
+
+    async def list_project_tasks(self, project_id: UUID) -> tuple[TaskView, ...]:
+        """Publish immutable task views without exposing the module store."""
+
+        return tuple(task.to_view() for task in await self._tasks.list_by_project(project_id))
 
     async def _required_agent(self, agent_id: UUID) -> AgentPrincipalView:
         profile = await self._directory.get_view(agent_id)
@@ -303,9 +360,7 @@ class TaskOrchestrator:
             raise TaskDenied("worker is not assigned to this project repository team")
 
     @staticmethod
-    def _assignment_body(
-        task: Task, published: PublishedTaskPackage | None = None
-    ) -> str:
+    def _assignment_body(task: Task, published: PublishedTaskPackage | None = None) -> str:
         if published is not None:
             return (
                 "A verified RepoMesh task package is ready. Do not edit code directly in this "
@@ -330,13 +385,6 @@ class TaskOrchestrator:
             '  "summary": "what changed, tests run, or the blocking question"\n'
             "}"
         )
-
-    @staticmethod
-    def _fingerprint(command: AssignTaskCommand) -> str:
-        encoded = json.dumps(
-            asdict(command), sort_keys=True, default=str, separators=(",", ":")
-        ).encode()
-        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 class TaskExecutionState:
@@ -420,8 +468,7 @@ class DecomposeRepositoryTask:
         worker_agent_id = team.worker_agent_ids[0]
         children = await self._tasks.list_by_parent(task.id)
         in_flight = any(
-            child.assignee_agent_id == worker_agent_id
-            and child.status not in FINAL_TASK_STATUSES
+            child.assignee_agent_id == worker_agent_id and child.status not in FINAL_TASK_STATUSES
             for child in children
         )
         if in_flight:
@@ -465,17 +512,11 @@ class DecomposeRepositoryTask:
             idempotency_key=f"{key}:spec:{worker_task.assignee_agent_id}",
         )
 
-    async def repository_team(
-        self, project_id: UUID, repository_id: UUID
-    ) -> RepositoryTeamView:
+    async def repository_team(self, project_id: UUID, repository_id: UUID) -> RepositoryTeamView:
         topology = await self._topologies.get_view(project_id)
         team = (
             next(
-                (
-                    item
-                    for item in topology.repository_teams
-                    if item.repository_id == repository_id
-                ),
+                (item for item in topology.repository_teams if item.repository_id == repository_id),
                 None,
             )
             if topology is not None
@@ -592,9 +633,7 @@ class AdvanceExecutionPlan:
         advanced = plan.advance()
         if not await self._settle(plan, advanced):
             return
-        await self._assign_batch(
-            advanced, advanced.current_batch_index, key_prefix=str(plan.id)
-        )
+        await self._assign_batch(advanced, advanced.current_batch_index, key_prefix=str(plan.id))
 
     async def _delivery_gate(self, plan: ExecutionPlan) -> bool:
         """True when every repository of the current batch is already merged."""
@@ -614,9 +653,7 @@ class AdvanceExecutionPlan:
     ) -> ExecutionPlan:
         leader_task_ids: list[UUID] = []
         for planned in plan.batches[batch_index]:
-            team = await self._decomposer.repository_team(
-                plan.project_id, planned.repository_id
-            )
+            team = await self._decomposer.repository_team(plan.project_id, planned.repository_id)
             leader_task = await self._assigner.assign(
                 AssignTaskCommand(
                     organization_id=plan.organization_id,
@@ -638,9 +675,7 @@ class AdvanceExecutionPlan:
         ):
             await self._decomposer.execute(
                 leader_task_id,
-                idempotency_key=(
-                    f"{key_prefix}:b{batch_index}:{planned.repository_id}:decompose"
-                ),
+                idempotency_key=(f"{key_prefix}:b{batch_index}:{planned.repository_id}:decompose"),
                 tests=planned.tests,
             )
         return assigned

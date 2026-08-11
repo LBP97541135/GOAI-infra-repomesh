@@ -250,7 +250,7 @@ def _parse_confirmation(raw: str, repo_name: str) -> ConfirmationResult:
             reason="Parse error, keeping as safety default",
         )
 
-    status = data.get("status", "REQUIRED").upper()
+    status = str(data.get("status", "REQUIRED")).upper()
     if status not in ("REQUIRED", "MAYBE", "EXCLUDED"):
         status = "REQUIRED"
 
@@ -258,22 +258,44 @@ def _parse_confirmation(raw: str, repo_name: str) -> ConfirmationResult:
     plan: RepositoryPlan | None = None
     if status != "EXCLUDED":
         plan = RepositoryPlan(
-            changed_apis=tuple(data.get("changed_apis", [])),
-            changed_modules=tuple(data.get("changed_modules", [])),
-            depends_on=tuple(data.get("depends_on", [])),
-            impacts=tuple(data.get("impacts", [])),
-            risk=str(data.get("risk", "medium")),
+            changed_apis=_string_tuple(data.get("changed_apis")),
+            changed_modules=_string_tuple(data.get("changed_modules")),
+            depends_on=_string_tuple(data.get("depends_on")),
+            impacts=_string_tuple(data.get("impacts")),
+            risk=(
+                risk
+                if (risk := str(data.get("risk", "medium")).lower())
+                in {"low", "medium", "high"}
+                else "medium"
+            ),
         )
 
     return ConfirmationResult(
         repository=repo_name,
         status=status,
-        confidence=max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
-        reason=data.get("reason", ""),
-        plan_summary=data.get("plan_summary", ""),
+        confidence=_confidence(data.get("confidence")),
+        reason=str(data.get("reason") or ""),
+        plan_summary=str(data.get("plan_summary") or ""),
         plan=plan,
-        missing_dependencies=data.get("missing_dependencies", []) if status != "EXCLUDED" else [],
+        missing_dependencies=(
+            list(_string_tuple(data.get("missing_dependencies")))
+            if status != "EXCLUDED"
+            else []
+        ),
     )
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
+
+
+def _confidence(value: object) -> float:
+    try:
+        return max(0.0, min(1.0, float(value if value is not None else 0.5)))
+    except (TypeError, ValueError):
+        return 0.5
 
 
 # ---------------------------------------------------------------------------

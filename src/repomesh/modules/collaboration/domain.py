@@ -80,10 +80,12 @@ class CollaborationMessage:
             raise ValueError("subject, body and room_id are required")
 
     def delivered(self, event_id: str) -> "CollaborationMessage":
+        if not event_id.strip():
+            raise ValueError("Matrix event_id is required for delivered messages")
         return replace(
             self,
             status=CollaborationDeliveryStatus.DELIVERED,
-            event_id=event_id,
+            event_id=event_id.strip(),
         )
 
     def failed(self) -> "CollaborationMessage":

@@ -24,17 +24,21 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Protocol
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from opentelemetry import trace
 
+from repomesh.modules.project.checkpoint_fallback import TopologyAwareCheckpointFallback
 from repomesh.modules.project.contracts import (
     ProjectCheckpoint,
     ProjectCheckpointGateway,
     ProjectTopologyReader,
+)
+from repomesh.modules.repository_intelligence.application.plan_integration import (
+    IntegratedPlan,
+    TaskNode,
 )
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification.contracts import (
@@ -43,14 +47,23 @@ from repomesh.modules.specification.contracts import (
     SpecificationView,
 )
 from repomesh.modules.task_orchestration.contracts import (
-    ExecutionPlanView,
     PlannedRepositoryTaskView,
     SupersedeTaskCommand,
+    TaskStatus,
     TaskView,
 )
+from repomesh.shared.workflow import WorkflowBlocked
 from repomesh.telemetry import SpanAttributes, traced
 
-from .plan_integration import IntegratedPlan, TaskNode
+from .contracts import MaterializationResult, ReplanResult
+from .ports import (
+    ExecutionPlanStarter,
+    HandoffDocGenerator,
+    PlanSnapshotWriter,
+    ProjectTaskReader,
+    SpecificationCreator,
+    TaskSupersederGateway,
+)
 
 if TYPE_CHECKING:
     from repomesh.modules.repository_intelligence.application.confirmation import (
@@ -68,134 +81,6 @@ _logger = logging.getLogger(__name__)
 
 class ExecutionPlaneUnavailable(RuntimeError):
     """The task orchestration plane is not configured; materialization refused."""
-
-
-# ---------------------------------------------------------------------------
-# Protocols (decouple from SpecificationService / AdvanceExecutionPlan)
-# ---------------------------------------------------------------------------
-
-
-class SpecificationCreator(Protocol):
-    """Subset of SpecificationService needed by the bridge."""
-
-    async def create(
-        self, command: CreateSpecificationCommand, *, idempotency_key: str
-    ) -> SpecificationView: ...
-
-
-@dataclass(frozen=True, slots=True)
-class StartedExecutionPlan:
-    """The execution plan created for a materialised :class:`IntegratedPlan`."""
-
-    plan: ExecutionPlanView
-    tasks: tuple[TaskView, ...] = ()
-
-
-class ExecutionPlanStarter(Protocol):
-    """Start a batched execution plan owned by *task_orchestration*.
-
-    The composition root adapts ``AdvanceExecutionPlan`` to this port so the
-    bridge never has to build another module's aggregate.
-    """
-
-    async def start_plan(
-        self,
-        *,
-        organization_id: UUID,
-        project_id: UUID,
-        created_by_agent_id: UUID,
-        batches: Sequence[Sequence[PlannedRepositoryTaskView]],
-        idempotency_key: str,
-    ) -> StartedExecutionPlan: ...
-
-
-class PlanSnapshotWriter(Protocol):
-    """Subset of PlanSnapshotStore needed by the bridge for DAG observability."""
-
-    async def next_version(self, project_id: UUID) -> int: ...
-
-    async def save(
-        self,
-        *,
-        project_id: UUID,
-        plan_version: int,
-        engineering_spec: str,
-        contracts: list[dict],
-        task_dag: list[dict],
-        execution_batches: list[list[str]],
-        graph_edges: list[dict],
-        created_by_agent_id: UUID | None = ...,
-        execution_plan_id: UUID | None = ...,
-        requirement_text: str | None = ...,
-        integration_method: str | None = ...,
-    ) -> object: ...
-
-
-class TaskSupersederGateway(Protocol):
-    """Cancel/supersede a task that has been replaced by a newer plan version."""
-
-    async def supersede(
-        self, command: SupersedeTaskCommand, *, idempotency_key: str
-    ) -> TaskView: ...
-
-
-class HandoffDocGenerator(Protocol):
-    """Subset of HandoffDocService needed by the bridge.
-
-    The bridge generates one handoff document per repository (the human
-    approval surface for each repository's proposed adjustment) when a plan
-    is materialised, and regenerates them for the affected repositories when
-    a replan produces a new plan version.
-    """
-
-    async def generate_for_plan(
-        self,
-        *,
-        project_id: UUID,
-        plan_version: int,
-        plan: IntegratedPlan,
-        requirement: str,
-        created_by_agent_id: UUID | None = ...,
-        repositories: Sequence[str] | None = ...,
-        details: Mapping[str, Mapping[str, Any]] | None = ...,
-    ) -> list[Any]: ...
-
-    async def supersede_for_repos(
-        self,
-        *,
-        project_id: UUID,
-        repositories: Sequence[str],
-        superseded_by_version: int,
-    ) -> int: ...
-
-
-# ---------------------------------------------------------------------------
-# Result
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class MaterializationResult:
-    """Outcome of :meth:`PlanExecutionBridge.materialize`."""
-
-    engineering_spec: SpecificationView
-    contract_specs: list[SpecificationView] = field(default_factory=list)
-    tasks: list[TaskView] = field(default_factory=list)
-    skipped_repos: list[str] = field(default_factory=list)
-    plan_id: UUID | None = None
-    handoff_doc_ids: list[UUID] = field(default_factory=list)
-
-
-@dataclass(frozen=True, slots=True)
-class ReplanResult:
-    """Outcome of :meth:`PlanExecutionBridge.replan`."""
-
-    new_plan_version: int
-    superseded_tasks: list[TaskView] = field(default_factory=list)
-    new_tasks: list[TaskView] = field(default_factory=list)
-    affected_repos: list[str] = field(default_factory=list)
-    feedback_summary: str = ""
-    handoff_doc_ids: list[UUID] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +123,7 @@ class PlanExecutionBridge:
         catalog: RepositoryCatalog,
         snapshot_store: PlanSnapshotWriter | None = None,
         superseder: TaskSupersederGateway | None = None,
+        task_reader: ProjectTaskReader | None = None,
         handoff_docs: HandoffDocGenerator | None = None,
         checkpoints: ProjectCheckpointGateway | None = None,
     ) -> None:
@@ -247,8 +133,9 @@ class PlanExecutionBridge:
         self._catalog = catalog
         self._snapshots = snapshot_store
         self._superseder = superseder
+        self._task_reader = task_reader
         self._handoff_docs = handoff_docs
-        self._checkpoints = checkpoints
+        self._checkpoints = checkpoints or TopologyAwareCheckpointFallback(topologies)
 
     @traced("planning.materialize")
     async def materialize(
@@ -298,8 +185,7 @@ class PlanExecutionBridge:
 
         org_id = topology.organization_id
 
-        if self._checkpoints is not None:
-            scope_payload = json.dumps(
+        scope_payload = json.dumps(
                 {
                     "repositories": sorted({task.repository for task in plan.task_dag}),
                     "contracts": sorted(
@@ -311,13 +197,13 @@ class PlanExecutionBridge:
                 sort_keys=True,
                 separators=(",", ":"),
             ).encode()
-            gate = await self._checkpoints.evaluate(
-                project_id,
-                ProjectCheckpoint.REPOSITORY_SCOPE,
-                f"sha256:{hashlib.sha256(scope_payload).hexdigest()}",
-            )
-            if not gate.allowed:
-                raise ValueError(gate.reason)
+        gate = await self._checkpoints.evaluate(
+            project_id,
+            ProjectCheckpoint.REPOSITORY_SCOPE,
+            f"sha256:{hashlib.sha256(scope_payload).hexdigest()}",
+        )
+        if not gate.allowed:
+            raise WorkflowBlocked(gate.reason)
 
         # --- 1b. Build name → UUID mappings -----------------------------------
         # catalog has RepositoryProfile(name, id) — gives us name → repository_id
@@ -758,17 +644,46 @@ class PlanExecutionBridge:
         resolved here; the API layer passes concrete task ids when available.
         """
 
-        # The bridge intentionally does not hold a TaskStore reference (it
-        # would cross module boundaries). Concrete task discovery happens in
-        # the API layer; here we only emit the structured log so operators
-        # can trace which repos were targeted.
+        if self._task_reader is None or self._superseder is None:
+            raise ExecutionPlaneUnavailable(
+                "task orchestration plane cannot enumerate project tasks; "
+                "refusing a replan that would leave old tasks active"
+            )
+
+        profiles = await self._catalog.list()
+        affected_repository_ids = {
+            profile.id for profile in profiles if profile.name in set(affected_repos)
+        }
+        reason = f"plan replan requested: {_truncate(feedback, limit=200)}"
+        expected_summary = f"SUPERSEDED: {reason}"
+        candidates = (
+            task
+            for task in await self._task_reader.list_project_tasks(project_id)
+            if task.repository_id in affected_repository_ids
+            and (
+                task.status
+                in {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
+                or (
+                    task.status is TaskStatus.SUPERSEDED
+                    and task.result_summary == expected_summary
+                )
+            )
+        )
+        superseded: list[TaskView] = []
+        for task in candidates:
+            superseded.append(
+                await self._superseder.supersede(
+                    SupersedeTaskCommand(task_id=task.id, reason=reason),
+                    idempotency_key=f"{idempotency_prefix}:supersede:{task.id}",
+                )
+            )
         _logger.info(
-            "replan: superseding tasks for repos=%s project=%s reason=%s",
+            "replan: superseded %d task(s) for repos=%s project=%s",
+            len(superseded),
             affected_repos,
             project_id,
-            _truncate(feedback, limit=120),
         )
-        return []
+        return superseded
 
     async def _start_replan_batch(
         self,

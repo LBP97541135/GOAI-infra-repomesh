@@ -15,6 +15,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from repomesh.bootstrap.container import ApplicationContainer
+from repomesh.modules.change_orchestration import (
+    PlanExecutionBridge,
+    StartedExecutionPlan,
+)
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
 from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
@@ -28,10 +32,6 @@ from repomesh.modules.repository_intelligence.application.handoff_docs import (
     HandoffDocStatus,
     build_doc_content,
     render_markdown,
-)
-from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (
-    PlanExecutionBridge,
-    StartedExecutionPlan,
 )
 from repomesh.modules.repository_intelligence.application.plan_integration import (
     ContractSpec,
@@ -591,6 +591,11 @@ class StubSuperseder:
         return command
 
 
+class EmptyProjectTaskReader:
+    async def list_project_tasks(self, project_id):  # noqa: ANN001
+        return ()
+
+
 class StubIntegrationService:
     def __init__(self, plan: IntegratedPlan) -> None:
         self._plan = plan
@@ -622,6 +627,7 @@ def _make_bridge(recorder: RecordingHandoffDocGenerator) -> PlanExecutionBridge:
         ),
         handoff_docs=recorder,
         superseder=StubSuperseder(),
+        task_reader=EmptyProjectTaskReader(),
     )
 
 

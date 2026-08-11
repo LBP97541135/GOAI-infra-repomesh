@@ -5,7 +5,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from repomesh.integrations.runner.gateway import RunnerControlGateway
-from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
+from repomesh.modules.agent_runtime.runner_store import (
+    PostgresRunnerGatewayStore,
+    RunnerGatewayConflict,
+)
 from repomesh.modules.task_orchestration.contracts import TaskStatus
 from repomesh.modules.task_orchestration.domain import Task
 from repomesh.modules.task_orchestration.infrastructure import PostgresTaskStore
@@ -19,6 +22,13 @@ from repomesh_runner.contracts import (
 )
 
 SHA = "sha256:" + "a" * 64
+
+
+@pytest.mark.asyncio
+async def test_runner_store_rejects_empty_idempotency_key_before_persistence() -> None:
+    store = PostgresRunnerGatewayStore(None)  # type: ignore[arg-type]
+    with pytest.raises(RunnerGatewayConflict, match="idempotency key"):
+        await store.enqueue({"idempotencyKey": "   "})
 
 
 @pytest.mark.asyncio

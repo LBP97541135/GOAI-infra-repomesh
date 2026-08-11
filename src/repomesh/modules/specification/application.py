@@ -1,6 +1,4 @@
-import hashlib
 import json
-from dataclasses import asdict
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import AgentPrincipalReader, AgentRole
@@ -16,6 +14,7 @@ from repomesh.modules.identity_access.contracts import (
     AuthorizationAction,
     AuthorizationRequest,
 )
+from repomesh.modules.project.checkpoint_fallback import TopologyAwareCheckpointFallback
 from repomesh.modules.project.contracts import (
     ProjectCheckpoint,
     ProjectCheckpointGateway,
@@ -33,6 +32,7 @@ from repomesh.modules.specification.contracts import (
 )
 from repomesh.modules.specification.domain import (
     Specification,
+    SpecificationBlocked,
     SpecificationConflict,
     SpecificationContent,
     SpecificationDenied,
@@ -41,6 +41,7 @@ from repomesh.modules.specification.domain import (
 )
 from repomesh.modules.specification.ports import SpecificationStore
 from repomesh.shared.domain import new_id
+from repomesh.shared.idempotency import command_fingerprint
 
 _CONTEXT_MAPPING = {
     SpecificationKind.ENGINEERING: (
@@ -77,7 +78,7 @@ class SpecificationService:
         self._specifications = specifications
         self._contexts = contexts
         self._authorizer = authorizer
-        self._checkpoints = checkpoints
+        self._checkpoints = checkpoints or TopologyAwareCheckpointFallback(topologies)
 
     async def create(
         self, command: CreateSpecificationCommand, *, idempotency_key: str
@@ -85,7 +86,7 @@ class SpecificationService:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
-        fingerprint = self._fingerprint(command)
+        fingerprint = command_fingerprint(command)
         if existing := await self._specifications.get_by_idempotency_key(key):
             specification, previous_fingerprint = existing
             if fingerprint != previous_fingerprint:
@@ -143,6 +144,7 @@ class SpecificationService:
             raise SpecificationConflict("specification revision changed")
         if specification.owner_agent_id != command.actor_agent_id:
             raise SpecificationDenied("only the specification owner can revise it")
+        await self._authorize_owner_write(specification, command.actor_agent_id)
         version = SpecificationVersion(
             specification_id=specification.id,
             version=specification.current_version.version + 1,
@@ -162,6 +164,7 @@ class SpecificationService:
             raise SpecificationConflict("specification revision changed")
         if specification.owner_agent_id != command.actor_agent_id:
             raise SpecificationDenied("only the specification owner can submit it")
+        await self._authorize_owner_write(specification, command.actor_agent_id)
         updated = specification.submit()
         await self._specifications.update(
             updated, expected_revision=specification.revision
@@ -200,10 +203,8 @@ class SpecificationService:
             raise SpecificationConflict("only approved specifications can be published")
         if command.actor_agent_id != specification.owner_agent_id:
             raise SpecificationDenied("only the specification owner can publish it")
-        if (
-            self._checkpoints is not None
-            and specification.kind is not SpecificationKind.TASK
-        ):
+        await self._authorize_owner_write(specification, command.actor_agent_id)
+        if specification.kind is not SpecificationKind.TASK:
             gate = await self._checkpoints.evaluate(
                 specification.project_id,
                 ProjectCheckpoint.SPECIFICATION,
@@ -211,7 +212,7 @@ class SpecificationService:
                 repository_id=specification.repository_id,
             )
             if not gate.allowed:
-                raise SpecificationDenied(gate.reason)
+                raise SpecificationBlocked(gate.reason)
         object_type, scope = _CONTEXT_MAPPING[specification.kind]
         spec_version = specification.current_version
         return await self._contexts.publish(
@@ -267,6 +268,24 @@ class SpecificationService:
             raise SpecificationDenied("project topology does not exist")
         return actor, topology
 
+    async def _authorize_owner_write(
+        self, specification: Specification, actor_agent_id: UUID
+    ) -> None:
+        actor, topology = await self._actor_and_topology(
+            actor_agent_id, specification.project_id
+        )
+        object_type, scope = _CONTEXT_MAPPING[specification.kind]
+        self._authorize(
+            actor,
+            topology,
+            AuthorizationAction.CONTEXT_PUBLISH,
+            specification.organization_id,
+            specification.project_id,
+            specification.repository_id,
+            object_type,
+            scope,
+        )
+
     def _authorize(
         self,
         actor,
@@ -305,8 +324,3 @@ class SpecificationService:
             allowed_paths=tuple(item.strip() for item in command.allowed_paths),
             interface_changes=tuple(item.strip() for item in command.interface_changes),
         )
-
-    @staticmethod
-    def _fingerprint(command: CreateSpecificationCommand) -> str:
-        payload = json.dumps(asdict(command), sort_keys=True, default=str, separators=(",", ":"))
-        return f"sha256:{hashlib.sha256(payload.encode()).hexdigest()}"

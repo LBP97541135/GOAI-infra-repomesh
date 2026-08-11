@@ -100,6 +100,31 @@ async def test_changeset_enforces_dependency_merge_order() -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_rejects_missing_idempotency_key_and_invalid_merge_sha() -> None:
+    create, upstream, _ = command()
+    service = DeliveryService(InMemoryChangeSetStore())
+    with pytest.raises(ValueError, match="idempotency_key"):
+        await service.prepare(create, idempotency_key="   ")
+
+    view = await service.prepare(create, idempotency_key="strict-delivery")
+    candidate = create.candidates[0]
+    await service.observe_pull_request(
+        PullRequestObservationCommand(
+            view.id,
+            upstream,
+            99,
+            "https://example.test/pulls/99",
+            candidate.commit_sha,
+        )
+    )
+    await service.observe_ci(
+        CIObservationCommand(view.id, upstream, True, "ci-99", "passed")
+    )
+    with pytest.raises(ValueError, match="merge_sha"):
+        await service.observe_merge(MergeObservationCommand(view.id, upstream, ""))
+
+
+@pytest.mark.asyncio
 async def test_merge_gate_explains_ci_and_dependency_blocks() -> None:
     create, upstream, downstream = command()
     service = DeliveryService(InMemoryChangeSetStore())

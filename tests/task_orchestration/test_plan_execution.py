@@ -16,6 +16,7 @@ from repomesh.modules.project.contracts import (
 from repomesh.modules.task_orchestration.application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    ObserveExecutionPlan,
 )
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
@@ -121,9 +122,7 @@ class FakeDeliveryState:
     def __init__(self, merged: dict[UUID, bool] | None = None) -> None:
         self.merged: dict[UUID, bool] = dict(merged or {})
 
-    async def repository_states(
-        self, project_id: UUID
-    ) -> tuple[DeliveryGatedRepositoryView, ...]:
+    async def repository_states(self, project_id: UUID) -> tuple[DeliveryGatedRepositoryView, ...]:
         return tuple(
             DeliveryGatedRepositoryView(repository_id=repository_id, merged=merged)
             for repository_id, merged in self.merged.items()
@@ -310,23 +309,17 @@ async def test_decompose_assigns_one_worker_task_under_the_repository_task() -> 
     assert worker_task.title == repository_task.title
     assert worker_task.instruction == repository_task.instruction
     assert worker_task.acceptance == repository_task.acceptance
-    assert environment.assigner.commands[-1][1] == (
-        f"decompose:worker:{environment.worker_ids[0]}"
-    )
+    assert environment.assigner.commands[-1][1] == (f"decompose:worker:{environment.worker_ids[0]}")
 
 
 @pytest.mark.asyncio
 async def test_decompose_reuses_an_in_flight_worker_task() -> None:
     environment = Environment()
     repository_task = await environment.assign_repository_task()
-    first = await environment.decomposer.execute(
-        repository_task.id, idempotency_key="decompose-1"
-    )
+    first = await environment.decomposer.execute(repository_task.id, idempotency_key="decompose-1")
     assignments_after_first = len(environment.assigner.commands)
 
-    second = await environment.decomposer.execute(
-        repository_task.id, idempotency_key="decompose-2"
-    )
+    second = await environment.decomposer.execute(repository_task.id, idempotency_key="decompose-2")
 
     assert second == first
     assert len(environment.assigner.commands) == assignments_after_first
@@ -448,6 +441,29 @@ async def test_start_is_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_plan_observation_reads_all_project_tasks_once() -> None:
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0, 1),))
+    await environment.advancer.start(plan, idempotency_key="plan-observe")
+    calls = 0
+    original = environment.tasks.list_by_project
+
+    async def counted(project_id):  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        return await original(project_id)
+
+    environment.tasks.list_by_project = counted
+
+    snapshot = await ObserveExecutionPlan(environment.plans, environment.tasks).execute(plan.id)
+
+    assert snapshot is not None
+    assert calls == 1
+    assert len(snapshot.batches[0]) == 2
+    assert all(len(item.worker_tasks) == 1 for item in snapshot.batches[0])
+
+
+@pytest.mark.asyncio
 async def test_worker_success_completes_the_repository_task_and_the_plan() -> None:
     environment = Environment()
     plan = environment.plan(((0,),))
@@ -466,6 +482,32 @@ async def test_worker_success_completes_the_repository_task_and_the_plan() -> No
     # Replaying the same terminal task must not change anything.
     await environment.advancer.on_task_terminal(worker_task.id)
     assert (await environment.plans.get(plan.id)) == stored_plan
+
+
+@pytest.mark.asyncio
+async def test_concurrent_terminal_notifications_release_the_next_batch_once() -> None:
+    import asyncio
+
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-concurrent")
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker_task = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker_task.id, TaskStatus.SUCCEEDED, "Repository 0 done.")
+
+    await asyncio.gather(
+        environment.advancer.on_task_terminal(worker_task.id),
+        environment.advancer.on_task_terminal(worker_task.id),
+    )
+
+    stored = await environment.plans.get(plan.id)
+    assert stored is not None and stored.current_batch_index == 1
+    second_repository_assignments = [
+        command
+        for command, _ in environment.assigner.commands
+        if command.repository_id == environment.repository_ids[1]
+    ]
+    assert len(second_repository_assignments) == 2  # one Leader and one Worker task
 
 
 @pytest.mark.asyncio
@@ -623,8 +665,7 @@ async def test_every_batch_permits_its_worker_with_the_verification_of_that_batc
     assert first.task.assignee_agent_id == environment.worker_ids[0]
     assert first.tests == ("uv run pytest tests/checkout",)
     assert first.idempotency_key == (
-        f"plan-start:b0:{environment.repository_ids[0]}:decompose"
-        f":spec:{environment.worker_ids[0]}"
+        f"plan-start:b0:{environment.repository_ids[0]}:decompose:spec:{environment.worker_ids[0]}"
     )
 
     leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
@@ -637,8 +678,7 @@ async def test_every_batch_permits_its_worker_with_the_verification_of_that_batc
     assert second.task.assignee_agent_id == environment.worker_ids[1]
     assert second.tests == ("uv run pytest tests/billing",)
     assert second.idempotency_key == (
-        f"{plan.id}:b1:{environment.repository_ids[1]}:decompose"
-        f":spec:{environment.worker_ids[1]}"
+        f"{plan.id}:b1:{environment.repository_ids[1]}:decompose:spec:{environment.worker_ids[1]}"
     )
 
 

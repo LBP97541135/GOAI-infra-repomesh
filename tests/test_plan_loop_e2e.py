@@ -37,6 +37,10 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
+from repomesh.modules.change_orchestration import (
+    MaterializationResult,
+    PlanExecutionBridge,
+)
 from repomesh.modules.collaboration.contracts import (
     CollaborationDeliveryStatus,
     CollaborationMessageView,
@@ -51,10 +55,6 @@ from repomesh.modules.project.contracts import (
     RepositoryTeamView,
 )
 from repomesh.modules.repository_intelligence.api.router import build_execution_plan_status
-from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (
-    MaterializationResult,
-    PlanExecutionBridge,
-)
 from repomesh.modules.repository_intelligence.application.plan_integration import (
     IntegratedPlan,
     TaskNode,
@@ -71,6 +71,7 @@ from repomesh.modules.specification.contracts import (
     SpecificationView,
 )
 from repomesh.modules.specification.domain import Specification, SpecificationStatus
+from repomesh.modules.task_orchestration import ObserveExecutionPlan
 from repomesh.modules.task_orchestration.application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
@@ -404,8 +405,7 @@ class LoopEnvironment:
         bound = [
             specification
             for specification in stored
-            if specification.kind is SpecificationKind.TASK
-            and specification.task_id == task_id
+            if specification.kind is SpecificationKind.TASK and specification.task_id == task_id
         ]
         assert len(bound) == 1
         return bound[0]
@@ -467,21 +467,9 @@ class LoopEnvironment:
     async def status_view(self, plan_id: UUID):
         """Aggregate the plan the way the observation endpoint does."""
 
-        view = (await self.plan_state(plan_id)).to_view()
-        leader_tasks: dict[UUID, TaskView] = {}
-        worker_tasks: dict[UUID, tuple[TaskView, ...]] = {}
-        for batch in view.batches:
-            for planned in batch:
-                leader_task_id = planned.leader_task_id
-                if leader_task_id is None:
-                    continue
-                leader = await self.tasks.get(leader_task_id)
-                if leader is not None:
-                    leader_tasks[leader_task_id] = leader.to_view()
-                worker_tasks[leader_task_id] = tuple(
-                    child.to_view() for child in await self.tasks.list_by_parent(leader_task_id)
-                )
-        return build_execution_plan_status(view, leader_tasks, worker_tasks)
+        snapshot = await ObserveExecutionPlan(self.plans, self.tasks).execute(plan_id)
+        assert snapshot is not None
+        return build_execution_plan_status(snapshot)
 
     @staticmethod
     def _event(
@@ -622,8 +610,10 @@ async def test_runner_results_drive_the_plan_from_the_first_batch_to_completion(
     assert status.status == "completed"
     assert status.current_batch_index == 1
     assert [
-        [(planned.leader_status, [worker.status for worker in planned.worker_tasks])
-         for planned in batch]
+        [
+            (planned.leader_status, [worker.status for worker in planned.worker_tasks])
+            for planned in batch
+        ]
         for batch in status.batches
     ] == [[("succeeded", ["succeeded"])], [("succeeded", ["succeeded"])]]
 
@@ -699,9 +689,7 @@ async def test_decomposing_a_live_leader_task_again_reuses_the_worker_task(
     assert len(await loop.tasks.list_by_parent(leader_task_id)) == 1
     assert len(loop.publisher.published) == published_before
     # Healing the permit on replay must not mint a second Task Specification.
-    assert (await loop.task_specification(worker_task.id)).status is (
-        SpecificationStatus.FROZEN
-    )
+    assert (await loop.task_specification(worker_task.id)).status is (SpecificationStatus.FROZEN)
 
 
 async def _repository_tasks(loop: LoopEnvironment, repository_id: UUID) -> tuple[Task, ...]:

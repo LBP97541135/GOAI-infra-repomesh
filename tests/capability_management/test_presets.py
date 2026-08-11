@@ -1,3 +1,4 @@
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -97,3 +98,11 @@ async def test_resolve_capabilities_for_registered_agent() -> None:
 async def test_unknown_agent_has_no_capabilities() -> None:
     with pytest.raises(AgentCapabilityNotFound):
         await ResolveAgentCapabilities(StubDirectory(None)).execute(uuid4())
+
+
+async def test_disabled_agent_has_no_capabilities() -> None:
+    agent = replace(
+        principal(AgentRole.WORKER), status=AgentPrincipalStatus.DISABLED
+    )
+    with pytest.raises(AgentCapabilityNotFound, match="disabled"):
+        await ResolveAgentCapabilities(StubDirectory(agent)).execute(agent.id)

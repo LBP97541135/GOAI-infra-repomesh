@@ -1,0 +1,5 @@
+name = "change_orchestration"
+owner = "orchestration"
+status = "active"
+schema = "change_orchestration"
+responsibilities = ["cross-repository workflow", "plan materialization", "partial replan", "handoff coordination"]

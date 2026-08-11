@@ -3,12 +3,14 @@
 from .application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    ObserveExecutionPlan,
     TaskExecutionState,
     TaskOrchestrator,
 )
 from .contracts import (
     AssignTaskCommand,
     ExecutionPlanStatus,
+    ExecutionPlanStatusSnapshot,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
     ProjectTaskProgress,
@@ -42,10 +44,12 @@ __all__ = [
     "DecomposeRepositoryTask",
     "ExecutionPlan",
     "ExecutionPlanStatus",
+    "ExecutionPlanStatusSnapshot",
     "ExecutionPlanStore",
     "ExecutionPlanView",
     "InMemoryExecutionPlanStore",
     "InMemoryTaskStore",
+    "ObserveExecutionPlan",
     "PlannedRepositoryTask",
     "PlannedRepositoryTaskView",
     "ProjectTaskProgress",

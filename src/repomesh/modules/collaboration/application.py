@@ -1,9 +1,7 @@
 import asyncio
-import hashlib
 import json
 import logging
 from contextlib import suppress
-from dataclasses import asdict
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -48,6 +46,7 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskReportGateway,
     TaskStatus,
 )
+from repomesh.shared.idempotency import command_fingerprint
 
 
 class SendCollaborationMessage:
@@ -74,7 +73,7 @@ class SendCollaborationMessage:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
-        fingerprint = self._fingerprint(command)
+        fingerprint = command_fingerprint(command)
         if existing := await self._store.get_by_idempotency_key(key):
             message, previous_fingerprint = existing
             if fingerprint != previous_fingerprint:
@@ -139,10 +138,10 @@ class SendCollaborationMessage:
                 transaction_id=transaction_id,
                 recipient_resource_name=recipient.agentteams_resource_name,
             )
+            delivered = message.delivered(event_id)
         except Exception:
             await self._store.update(message.failed())
             raise
-        delivered = message.delivered(event_id)
         await self._store.update(delivered)
         return delivered.to_view()
 
@@ -234,14 +233,6 @@ class SendCollaborationMessage:
             sort_keys=True,
             separators=(",", ":"),
         )
-
-    @staticmethod
-    def _fingerprint(command: SendCollaborationMessageCommand) -> str:
-        encoded = json.dumps(
-            asdict(command), sort_keys=True, default=str, separators=(",", ":")
-        ).encode()
-        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
 
 class CollaborationDeliveryRetryWorker:
     """Retry persisted failed collaboration messages without duplicating delivery."""

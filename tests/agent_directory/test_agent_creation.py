@@ -10,6 +10,7 @@ from repomesh.modules.agent_directory.application import (
     CreateRepositoryAgentTeamRequest,
 )
 from repomesh.modules.agent_directory.contracts import (
+    AgentPrincipalStatus,
     AgentRole,
 )
 from repomesh.modules.agent_directory.domain import (
@@ -139,6 +140,27 @@ async def test_worker_must_match_repository_leader_scope() -> None:
                 agentteams_resource_name="native-wrong-repository",
             ),
             idempotency_key="wrong-repository-worker",
+        )
+
+
+@pytest.mark.asyncio
+async def test_disabled_leader_cannot_create_worker() -> None:
+    directory, create, organization_id, repository_id, leader = await create_hierarchy()
+    directory._principals[leader.principal.id] = replace(  # noqa: SLF001
+        directory._principals[leader.principal.id],  # noqa: SLF001
+        status=AgentPrincipalStatus.DISABLED,
+    )
+    with pytest.raises(AgentHierarchyViolation, match="disabled"):
+        await create.execute(
+            CreateAgentRequest(
+                organization_id=organization_id,
+                repository_id=repository_id,
+                leader_agent_id=leader.principal.id,
+                responsibility_paths=("src/**",),
+                role=AgentRole.WORKER,
+                agentteams_resource_name="disabled-leader-worker",
+            ),
+            idempotency_key="disabled-leader-worker",
         )
 
 

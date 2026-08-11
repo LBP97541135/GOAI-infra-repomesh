@@ -1,6 +1,4 @@
-import hashlib
-import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -24,6 +22,7 @@ from repomesh.modules.project.domain import (
     RepositoryTeam,
 )
 from repomesh.modules.project.ports import ProjectTopologyStore
+from repomesh.shared.idempotency import command_fingerprint
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +64,7 @@ class CreateProjectAgentTopology:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
-        fingerprint = self._fingerprint(request)
+        fingerprint = command_fingerprint(request)
         if existing := await self._store.get_by_idempotency_key(key):
             topology, existing_fingerprint = existing
             if fingerprint != existing_fingerprint:
@@ -158,10 +157,3 @@ class CreateProjectAgentTopology:
             raise ProjectTopologyViolation(f"agent {profile.id} belongs to another repository")
         if leader_agent_id is not None and profile.leader_agent_id != leader_agent_id:
             raise ProjectTopologyViolation(f"agent {profile.id} belongs to another leader")
-
-    @staticmethod
-    def _fingerprint(request: CreateProjectAgentTopologyRequest) -> str:
-        encoded = json.dumps(
-            asdict(request), sort_keys=True, default=str, separators=(",", ":")
-        ).encode()
-        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"

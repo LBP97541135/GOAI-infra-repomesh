@@ -304,6 +304,9 @@ class DeliveryService:
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
     ) -> ChangeSetView:
+        idempotency_key = idempotency_key.strip()
+        if not idempotency_key:
+            raise ValueError("idempotency_key is required")
         fingerprint = self._fingerprint(command)
         existing = await self._store.get_by_idempotency_key(idempotency_key)
         if existing is not None:
@@ -362,6 +365,8 @@ class DeliveryService:
         here. Re-appending the same batch is idempotent: repositories already
         present in the ChangeSet are skipped.
         """
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
         change_set = await self._required(command.change_set_id)
         known_ids = {item.repository_id for item in change_set.repositories}
         fresh = tuple(

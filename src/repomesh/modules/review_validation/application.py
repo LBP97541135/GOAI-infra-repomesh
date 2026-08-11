@@ -3,6 +3,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from repomesh.shared.git import normalize_full_sha
+
 from .contracts import (
     CreateValidationSnapshotCommand,
     ValidationDecision,
@@ -82,7 +84,4 @@ class ValidationSnapshotService:
 
     @staticmethod
     def _full_sha(value: str) -> str:
-        normalized = value.strip().lower()
-        if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
-            raise ValueError("candidate head must be a full Git object id")
-        return normalized
+        return normalize_full_sha(value, field="candidate head")

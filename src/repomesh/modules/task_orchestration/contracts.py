@@ -59,6 +59,28 @@ class ExecutionPlanView:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerTaskExecutionStatus:
+    task_id: UUID
+    status: TaskStatus
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedTaskExecutionStatus:
+    repository_id: UUID
+    leader_task_id: UUID | None
+    leader_status: TaskStatus | None
+    worker_tasks: tuple[WorkerTaskExecutionStatus, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionPlanStatusSnapshot:
+    plan_id: UUID
+    status: ExecutionPlanStatus
+    current_batch_index: int
+    batches: tuple[tuple[PlannedTaskExecutionStatus, ...], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedTaskPackage:
     team_name: str
     task_path: str
@@ -192,6 +214,12 @@ class TaskSuperseder(Protocol):
 
 class TaskReader(Protocol):
     async def get_view(self, task_id: UUID) -> TaskView | None: ...
+
+
+class ProjectTaskReader(Protocol):
+    """Read task views for cross-module project coordination."""
+
+    async def list_project_tasks(self, project_id: UUID) -> tuple[TaskView, ...]: ...
 
 
 class TaskExecutionStateGateway(Protocol):

@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from repomesh.shared.domain import new_id
+from repomesh.shared.git import normalize_full_sha
 
 from .contracts import (
     CandidateRevisionView,
@@ -312,9 +313,7 @@ class RepositoryDelivery:
 
     def __post_init__(self) -> None:
         for value, label in ((self.commit_sha, "commit_sha"), (self.base_sha, "base_sha")):
-            normalized = value.strip().lower()
-            if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
-                raise ValueError(f"{label} must be a full Git object id")
+            normalize_full_sha(value, field=label)
         if not self.branch_name.strip():
             raise ValueError("branch_name is required")
         normalized = tuple(name.strip().lower() for name in self.required_checks)
@@ -411,10 +410,11 @@ class RepositoryDelivery:
             RepositoryDeliveryStatus.MERGE_REQUESTED,
         }:
             raise DeliveryConflict("repository is not ready to merge")
+        normalized = normalize_full_sha(merge_sha, field="merge_sha")
         return replace(
             self,
             status=RepositoryDeliveryStatus.MERGED,
-            merge_sha=merge_sha.strip().lower(),
+            merge_sha=normalized,
         )
 
     def request_merge(self, head_sha: str) -> "RepositoryDelivery":
@@ -433,9 +433,7 @@ class RepositoryDelivery:
             raise DeliveryConflict("merged candidate cannot be revised")
         if previous_head_sha.strip().lower() != self.commit_sha:
             raise DeliveryConflict("candidate revision is based on a stale head")
-        normalized = new_head_sha.strip().lower()
-        if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
-            raise ValueError("new candidate head must be a full Git object id")
+        normalized = normalize_full_sha(new_head_sha, field="new candidate head")
         if normalized == self.commit_sha:
             raise DeliveryConflict("candidate revision must change the head SHA")
         return replace(
@@ -554,9 +552,7 @@ class GovernanceDecision:
     decided_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
-        normalized = self.head_sha.strip().lower()
-        if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
-            raise ValueError("governance decision head_sha must be a full Git object id")
+        normalize_full_sha(self.head_sha, field="governance decision head_sha")
         if not self.reason.strip():
             raise ValueError("governance decision reason is required")
 

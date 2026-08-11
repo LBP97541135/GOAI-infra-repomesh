@@ -11,6 +11,7 @@ from repomesh.modules.specification.contracts import (
     SpecificationView,
 )
 from repomesh.shared.domain import new_id
+from repomesh.shared.workflow import WorkflowBlocked
 
 
 class SpecificationError(Exception):
@@ -22,6 +23,10 @@ class SpecificationConflict(SpecificationError):
 
 
 class SpecificationDenied(SpecificationError):
+    pass
+
+
+class SpecificationBlocked(SpecificationDenied, WorkflowBlocked):
     pass
 
 

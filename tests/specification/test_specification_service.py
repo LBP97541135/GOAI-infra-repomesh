@@ -9,7 +9,7 @@ from repomesh.modules.agent_directory.application import (
     CreateRepositoryAgentTeam,
     CreateRepositoryAgentTeamRequest,
 )
-from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_directory.contracts import AgentPrincipalStatus, AgentRole
 from repomesh.modules.agent_directory.infrastructure import InMemoryAgentDirectory
 from repomesh.modules.context.application import ContextPublicationGateway
 from repomesh.modules.context.contracts import ContextObjectType, ContextScope
@@ -283,3 +283,76 @@ async def test_idempotency_replay_requires_the_same_request() -> None:
     conflicting = replace(command, title="Different specification")
     with pytest.raises(SpecificationConflict):
         await service.create(conflicting, idempotency_key="same-key")
+
+
+@pytest.mark.asyncio
+async def test_disabled_owner_cannot_revise_submit_or_publish() -> None:
+    (
+        service,
+        _,
+        _,
+        organization_id,
+        project_id,
+        repository_id,
+        _,
+        repository_leader,
+        _,
+    ) = await build_service()
+    created = await service.create(
+        create_command(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor_id=repository_leader.id,
+            kind=SpecificationKind.REPOSITORY,
+        ),
+        idempotency_key="disabled-owner",
+    )
+    approved_candidate = await service.create(
+        create_command(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            actor_id=repository_leader.id,
+            kind=SpecificationKind.REPOSITORY,
+        ),
+        idempotency_key="disabled-owner-publish",
+    )
+    submitted = await service.submit(
+        SubmitSpecificationCommand(
+            approved_candidate.id,
+            repository_leader.id,
+            approved_candidate.revision,
+        )
+    )
+    approved = await service.approve(
+        ApproveSpecificationCommand(
+            submitted.id, repository_leader.id, submitted.revision
+        )
+    )
+    directory = service._directory  # noqa: SLF001
+    directory._principals[repository_leader.id] = replace(  # noqa: SLF001
+        directory._principals[repository_leader.id],  # noqa: SLF001
+        status=AgentPrincipalStatus.DISABLED,
+    )
+
+    with pytest.raises(SpecificationDenied, match="agent_disabled"):
+        await service.revise(
+            ReviseSpecificationCommand(
+                specification_id=created.id,
+                actor_agent_id=repository_leader.id,
+                expected_revision=created.revision,
+                goal="change after disable",
+                acceptance=("must be denied",),
+            )
+        )
+    with pytest.raises(SpecificationDenied, match="agent_disabled"):
+        await service.submit(
+            SubmitSpecificationCommand(
+                created.id, repository_leader.id, created.revision
+            )
+        )
+    with pytest.raises(SpecificationDenied, match="agent_disabled"):
+        await service.publish_to_context(
+            PublishSpecificationContextCommand(approved.id, repository_leader.id)
+        )

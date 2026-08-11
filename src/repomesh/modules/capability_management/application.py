@@ -1,6 +1,9 @@
 from uuid import UUID
 
-from repomesh.modules.agent_directory.contracts import AgentPrincipalReader
+from repomesh.modules.agent_directory.contracts import (
+    AgentPrincipalReader,
+    AgentPrincipalStatus,
+)
 
 from .contracts import AgentCapabilityBundle
 from .presets import PresetCapabilityAssembler
@@ -30,5 +33,7 @@ class ResolveAgentCapabilities:
         principal = await self._directory.get_view(agent_id)
         if principal is None:
             raise AgentCapabilityNotFound(f"agent {agent_id} is not registered")
+        if principal.status is not AgentPrincipalStatus.ACTIVE:
+            raise AgentCapabilityNotFound(f"agent {agent_id} is disabled")
         return self._assembler.assemble(principal, task_features=task_features)
 

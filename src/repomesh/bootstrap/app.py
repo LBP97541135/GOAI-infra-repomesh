@@ -11,6 +11,9 @@ from repomesh.integrations.agentteams import (
     AgentTeamsMatrixIdentityVerifier,
     AgentTeamsMatrixInboundPoller,
 )
+from repomesh.integrations.agentteams.human_decisions import (
+    HumanDecisionCollaborationNotifier,
+)
 from repomesh.integrations.agentteams.task_publishing import (
     AgentTeamsObjectTaskPublisher,
     AgentTeamsTaskPublisher,
@@ -138,6 +141,12 @@ def build_default_container() -> ApplicationContainer:
             collaboration_store,
             messenger,
         )
+        checkpoint_service = ProjectCheckpointService(
+            topology_store,
+            PostgresProjectCheckpointDecisionStore(database),
+            PostgresHumanReviewRequestStore(database),
+            HumanDecisionCollaborationNotifier(collaboration),
+        )
         tasks = TaskOrchestrator(
             agent_directory,
             topology_store,
@@ -260,6 +269,7 @@ def build_default_container() -> ApplicationContainer:
         task_report_gateway=task_report_gateway,
         scm_adapter=scm_adapter,
         scm_token_provider=scm_token_provider,
+        project_checkpoint_service_instance=checkpoint_service,
     )
 
 

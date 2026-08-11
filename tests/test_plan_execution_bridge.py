@@ -17,16 +17,16 @@ from repomesh.modules.agent_directory.contracts import (  # noqa: E402
     AgentPrincipalView,
     AgentRole,
 )
-from repomesh.modules.project.contracts import (  # noqa: E402
-    ProjectAgentTopologyView,
-    ProjectTeamRuntimeStatus,
-    RepositoryTeamView,
-)
-from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (  # noqa: E402
+from repomesh.modules.change_orchestration import (  # noqa: E402
     ExecutionPlaneUnavailable,
     MaterializationResult,
     PlanExecutionBridge,
     StartedExecutionPlan,
+)
+from repomesh.modules.project.contracts import (  # noqa: E402
+    ProjectAgentTopologyView,
+    ProjectTeamRuntimeStatus,
+    RepositoryTeamView,
 )
 from repomesh.modules.repository_intelligence.application.plan_integration import (  # noqa: E402
     ContractSpec,
@@ -125,6 +125,59 @@ class StubPlanStarter:
             ),
             tasks=(),
         )
+
+
+class StubProjectTaskReader:
+    def __init__(self, tasks: tuple[TaskView, ...]) -> None:
+        self.tasks = tasks
+
+    async def list_project_tasks(self, project_id: UUID) -> tuple[TaskView, ...]:
+        return tuple(task for task in self.tasks if task.project_id == project_id)
+
+
+class RecordingSuperseder:
+    def __init__(self, tasks: tuple[TaskView, ...]) -> None:
+        self.tasks = tasks
+        self.calls = []
+
+    async def supersede(self, command, *, idempotency_key):
+        self.calls.append((command, idempotency_key))
+        task = next(task for task in self.tasks if task.id == command.task_id)
+        return TaskView(
+            id=task.id,
+            organization_id=task.organization_id,
+            project_id=task.project_id,
+            repository_id=task.repository_id,
+            parent_task_id=task.parent_task_id,
+            assigned_by_agent_id=task.assigned_by_agent_id,
+            assignee_agent_id=task.assignee_agent_id,
+            title=task.title,
+            instruction=task.instruction,
+            acceptance=task.acceptance,
+            status=TaskStatus.SUPERSEDED,
+            result_summary=f"SUPERSEDED: {command.reason}",
+            version=task.version + 1,
+        )
+
+
+def _task_view(
+    *, project_id: UUID, repository_id: UUID, status: TaskStatus = TaskStatus.ASSIGNED
+) -> TaskView:
+    return TaskView(
+        id=uuid4(),
+        organization_id=uuid4(),
+        project_id=project_id,
+        repository_id=repository_id,
+        parent_task_id=None,
+        assigned_by_agent_id=uuid4(),
+        assignee_agent_id=uuid4(),
+        title="repository task",
+        instruction="implement approved change",
+        acceptance=("tests pass",),
+        status=status,
+        result_summary=None,
+        version=1,
+    )
 
 
 class StubTopologyReader:
@@ -736,6 +789,55 @@ async def test_materialize_result_reports_the_assigned_leader_and_worker_tasks()
     leader_task_id = stored.batches[0][0].leader_task_id
     workers = await environment.tasks.list_by_parent(leader_task_id)
     assert {task.id for task in result.tasks} == {leader_task_id, workers[0].id}
+
+
+async def test_replan_supersedes_only_tasks_in_affected_repositories() -> None:
+    project_id = uuid4()
+    affected_repository_id = uuid4()
+    unaffected_repository_id = uuid4()
+    affected = _task_view(
+        project_id=project_id, repository_id=affected_repository_id
+    )
+    unaffected = _task_view(
+        project_id=project_id, repository_id=unaffected_repository_id
+    )
+    tasks = (affected, unaffected)
+    superseder = RecordingSuperseder(tasks)
+    topology = ProjectAgentTopologyView(
+        id=uuid4(),
+        organization_id=uuid4(),
+        project_id=project_id,
+        organization_leader_id=uuid4(),
+        repository_teams=(),
+    )
+    bridge = PlanExecutionBridge(
+        StubSpecService(),
+        StubPlanStarter(),
+        StubTopologyReader(topology),
+        StubCatalog(
+            {
+                "affected": affected_repository_id,
+                "unaffected": unaffected_repository_id,
+            }
+        ),
+        superseder=superseder,
+        task_reader=StubProjectTaskReader(tasks),
+    )
+
+    result = await bridge.replan(
+        project_id=project_id,
+        leader_agent_id=topology.organization_leader_id,
+        feedback="the public contract changed",
+        change_source_repo="affected",
+        plan_version=1,
+        requirement="implement the feature",
+        idempotency_prefix="replan-2",
+        all_repos=["affected", "unaffected"],
+    )
+
+    assert [task.id for task in result.superseded_tasks] == [affected.id]
+    assert [call[0].task_id for call in superseder.calls] == [affected.id]
+    assert superseder.calls[0][1] == f"replan-2:supersede:{affected.id}"
 
 
 async def test_materialize_stores_the_verification_commands_on_the_planned_task() -> None:

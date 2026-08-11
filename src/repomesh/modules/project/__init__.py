@@ -9,6 +9,7 @@ from .checkpoint_control import (
     ProjectCheckpointService,
     RecordCheckpointDecisionCommand,
 )
+from .checkpoint_fallback import TopologyAwareCheckpointFallback
 from .contracts import (
     CheckpointDecisionKind,
     CheckpointGateDecision,
@@ -57,5 +58,6 @@ __all__ = [
     "RepositoryTeamAssignment",
     "RepositoryTeamView",
     "RecordCheckpointDecisionCommand",
+    "TopologyAwareCheckpointFallback",
     "requires_human_checkpoint",
 ]

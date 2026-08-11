@@ -1,4 +1,3 @@
-from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from typing import Annotated
 from uuid import UUID
@@ -6,9 +5,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
+from repomesh.modules.change_orchestration import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
-    ExecutionPlaneUnavailable,
     HandoffDocError,
     RegisterRepository,
     RepositoryDiscoveryService,
@@ -29,11 +28,8 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
 )
 from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
-from repomesh.modules.task_orchestration.contracts import (
-    ExecutionPlanView,
-    PlannedRepositoryTaskView,
-    TaskView,
-)
+from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatusSnapshot
+from repomesh.shared.workflow import WorkflowBlocked
 
 from .models import (
     ConfirmationRequest,
@@ -109,9 +105,7 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
 
 
 @router.post("/repositories/scan-org", response_model=OrgScanResult)
-async def scan_organization(
-    body: OrgScanRequest, catalog: CatalogDependency
-) -> OrgScanResult:
+async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) -> OrgScanResult:
     """Batch-scan all repos under a GitHub/GitLab organization.
 
     Fetches file trees, dependency files, and commits for every repo,
@@ -137,9 +131,7 @@ async def scan_organization(
     )
 
     try:
-        profiles = await scan_org(
-            url, fetcher, max_workers=body.max_workers
-        )
+        profiles = await scan_org(url, fetcher, max_workers=body.max_workers)
     except Exception as exc:
         raise HTTPException(502, f"Scan failed: {exc}") from exc
 
@@ -374,6 +366,8 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
             }
             or None,
         )
+    except WorkflowBlocked as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ExecutionPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
@@ -430,6 +424,8 @@ async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
             confirmation_summary=confirmation_summary,
             graph=graph,
         )
+    except WorkflowBlocked as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ExecutionPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
 
@@ -482,12 +478,8 @@ async def get_handoff_doc(doc_id: UUID, request: Request) -> HandoffDocView:
     return HandoffDocView.model_validate(doc)
 
 
-@router.get(
-    "/handoff-docs/{doc_id}/markdown", response_class=PlainTextResponse
-)
-async def get_handoff_doc_markdown(
-    doc_id: UUID, request: Request
-) -> PlainTextResponse:
+@router.get("/handoff-docs/{doc_id}/markdown", response_class=PlainTextResponse)
+async def get_handoff_doc_markdown(doc_id: UUID, request: Request) -> PlainTextResponse:
     """Render a handoff document as Markdown for a repository owner to read."""
     container = request.app.state.container
     doc = await container.handoff_doc_service().get_doc(doc_id)
@@ -496,9 +488,7 @@ async def get_handoff_doc_markdown(
     return PlainTextResponse(render_markdown(doc))
 
 
-@router.post(
-    "/handoff-docs/{doc_id}/decision", response_model=HandoffDocView
-)
+@router.post("/handoff-docs/{doc_id}/decision", response_model=HandoffDocView)
 async def decide_handoff_doc(
     doc_id: UUID, body: HandoffDocDecisionRequest, request: Request
 ) -> HandoffDocView:
@@ -521,39 +511,29 @@ async def decide_handoff_doc(
     return HandoffDocView.model_validate(doc)
 
 
-def _planned_task_status(
-    planned: PlannedRepositoryTaskView,
-    leader_tasks: Mapping[UUID, TaskView],
-    worker_tasks: Mapping[UUID, Sequence[TaskView]],
-) -> PlannedTaskStatusView:
-    leader_task_id = planned.leader_task_id
-    leader = leader_tasks.get(leader_task_id) if leader_task_id is not None else None
-    workers = worker_tasks.get(leader_task_id, ()) if leader_task_id is not None else ()
-    return PlannedTaskStatusView(
-        repository_id=planned.repository_id,
-        leader_task_id=leader_task_id,
-        leader_status=leader.status.value if leader is not None else None,
-        worker_tasks=[
-            WorkerTaskStatusView(task_id=worker.id, status=worker.status.value)
-            for worker in workers
-        ],
-    )
-
-
 def build_execution_plan_status(
-    plan: ExecutionPlanView,
-    leader_tasks: Mapping[UUID, TaskView],
-    worker_tasks: Mapping[UUID, Sequence[TaskView]],
+    snapshot: ExecutionPlanStatusSnapshot,
 ) -> ExecutionPlanStatusView:
-    """Enrich a stored execution plan with the current status of its tasks."""
-
     return ExecutionPlanStatusView(
-        plan_id=plan.id,
-        status=plan.status.value,
-        current_batch_index=plan.current_batch_index,
+        plan_id=snapshot.plan_id,
+        status=snapshot.status.value,
+        current_batch_index=snapshot.current_batch_index,
         batches=[
-            [_planned_task_status(planned, leader_tasks, worker_tasks) for planned in batch]
-            for batch in plan.batches
+            [
+                PlannedTaskStatusView(
+                    repository_id=planned.repository_id,
+                    leader_task_id=planned.leader_task_id,
+                    leader_status=(
+                        planned.leader_status.value if planned.leader_status is not None else None
+                    ),
+                    worker_tasks=[
+                        WorkerTaskStatusView(task_id=worker.task_id, status=worker.status.value)
+                        for worker in planned.worker_tasks
+                    ],
+                )
+                for planned in batch
+            ]
+            for batch in snapshot.batches
         ],
     )
 
@@ -562,27 +542,10 @@ def build_execution_plan_status(
 async def observe_execution_plan(plan_id: UUID, request: Request) -> ExecutionPlanStatusView:
     """Report how far an execution plan has progressed, task status included."""
 
-    container = request.app.state.container
-    plan = await container.execution_plan_store().get(plan_id)
-    if plan is None:
+    snapshot = await request.app.state.container.execution_plan_observer().execute(plan_id)
+    if snapshot is None:
         raise HTTPException(status_code=404, detail="execution plan not found")
-
-    tasks = container.task_store
-    view = plan.to_view()
-    leader_tasks: dict[UUID, TaskView] = {}
-    worker_tasks: dict[UUID, tuple[TaskView, ...]] = {}
-    for batch in view.batches:
-        for planned in batch:
-            leader_task_id = planned.leader_task_id
-            if leader_task_id is None:
-                continue
-            leader = await tasks.get(leader_task_id)
-            if leader is not None:
-                leader_tasks[leader_task_id] = leader.to_view()
-            worker_tasks[leader_task_id] = tuple(
-                child.to_view() for child in await tasks.list_by_parent(leader_task_id)
-            )
-    return build_execution_plan_status(view, leader_tasks, worker_tasks)
+    return build_execution_plan_status(snapshot)
 
 
 @router.get("/dependency-graph", response_model=DependencyGraphView)
@@ -606,17 +569,13 @@ async def latest_plan_snapshot(project_id: UUID, request: Request) -> PlanSnapsh
 
 
 @router.get("/plans/{project_id}/versions", response_model=list[PlanSnapshotSummaryView])
-async def list_plan_snapshots(
-    project_id: UUID, request: Request
-) -> list[PlanSnapshotSummaryView]:
+async def list_plan_snapshots(project_id: UUID, request: Request) -> list[PlanSnapshotSummaryView]:
     snapshots = await request.app.state.container.plan_snapshot_store().list_all(project_id)
     return [PlanSnapshotSummaryView.model_validate(snapshot) for snapshot in snapshots]
 
 
 @router.get("/plans/{project_id}/versions/{version}", response_model=PlanSnapshotView)
-async def get_plan_snapshot(
-    project_id: UUID, version: int, request: Request
-) -> PlanSnapshotView:
+async def get_plan_snapshot(project_id: UUID, version: int, request: Request) -> PlanSnapshotView:
     snapshot = await request.app.state.container.plan_snapshot_store().get_by_version(
         project_id, version
     )

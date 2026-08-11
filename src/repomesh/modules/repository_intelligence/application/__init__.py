@@ -18,13 +18,6 @@ from .handoff_docs import (
     build_doc_content,
     render_markdown,
 )
-from .plan_execution_bridge import (
-    ExecutionPlaneUnavailable,
-    MaterializationResult,
-    PlanExecutionBridge,
-    ReplanResult,
-    TaskSupersederGateway,
-)
 from .plan_integration import (
     ContractSpec,
     IntegratedPlan,
@@ -37,7 +30,6 @@ from .scan import infer_languages, infer_name, scan_repo
 from .scan_remote import (
     extract_entry_repo_name,
     load_requirement,
-    parse_user_input,
     scan_org,
 )
 
@@ -47,7 +39,6 @@ __all__ = [
     "ConfirmationSummary",
     "ContractSpec",
     "DependencyGraphService",
-    "ExecutionPlaneUnavailable",
     "GraphEdge",
     "HandoffDoc",
     "HandoffDocError",
@@ -56,24 +47,19 @@ __all__ = [
     "HandoffDocStore",
     "IntegratedPlan",
     "LLMClient",
-    "MaterializationResult",
-    "PlanExecutionBridge",
     "PlanIntegrationService",
     "RegisterRepository",
     "RepositoryDiscoveryService",
     "RepositoryPlan",
     "RequirementAnalysis",
     "RequirementAnalyzer",
-    "ReplanResult",
     "TaskNode",
-    "TaskSupersederGateway",
     "TopoResult",
     "build_doc_content",
     "extract_entry_repo_name",
     "infer_languages",
     "infer_name",
     "load_requirement",
-    "parse_user_input",
     "render_markdown",
     "scan_org",
     "scan_repo",

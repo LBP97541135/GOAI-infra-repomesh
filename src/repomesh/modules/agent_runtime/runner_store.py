@@ -70,7 +70,9 @@ class PostgresRunnerGatewayStore:
         self._database = database
 
     async def enqueue(self, payload: dict[str, object]) -> None:
-        idempotency_key = str(payload.get("idempotencyKey", ""))
+        idempotency_key = str(payload.get("idempotencyKey", "")).strip()
+        if not idempotency_key:
+            raise RunnerGatewayConflict("runner idempotency key is required")
         existing = await self._get_by_idempotency_key(idempotency_key)
         if existing is not None:
             if existing.task_payload == payload:

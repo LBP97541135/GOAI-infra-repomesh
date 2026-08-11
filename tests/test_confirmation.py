@@ -188,6 +188,30 @@ class TestParseConfirmation:
         result_low = _parse_confirmation(raw_low, "ts-test-service")
         assert result_low.confidence == 0.0
 
+    def test_valid_json_with_invalid_field_types_uses_safe_defaults(self) -> None:
+        raw = json.dumps(
+            {
+                "status": None,
+                "confidence": "high",
+                "changed_apis": None,
+                "changed_modules": "pricing",
+                "depends_on": ["orders", 42, ""],
+                "risk": "critical",
+                "missing_dependencies": "billing",
+            }
+        )
+
+        result = _parse_confirmation(raw, "ts-pricing-service")
+
+        assert result.status == "REQUIRED"
+        assert result.confidence == 0.5
+        assert result.plan is not None
+        assert result.plan.changed_apis == ()
+        assert result.plan.changed_modules == ()
+        assert result.plan.depends_on == ("orders",)
+        assert result.plan.risk == "medium"
+        assert result.missing_dependencies == []
+
     def test_maybe_status(self) -> None:
         raw = json.dumps(
             {

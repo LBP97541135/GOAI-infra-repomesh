@@ -4,6 +4,7 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskAssignmentGateway,
     TaskView,
 )
+from repomesh.shared.git import normalize_full_sha
 
 
 class CIReworkTaskCreator:
@@ -13,9 +14,7 @@ class CIReworkTaskCreator:
         self._tasks = tasks
 
     async def create(self, command: CreateCIReworkTaskCommand) -> TaskView:
-        sha = command.failed_head_sha.strip().lower()
-        if len(sha) != 40 or any(char not in "0123456789abcdef" for char in sha):
-            raise ValueError("failed_head_sha must be a full Git object id")
+        sha = normalize_full_sha(command.failed_head_sha, field="failed_head_sha")
         return await self._tasks.assign(
             AssignTaskCommand(
                 organization_id=command.organization_id,

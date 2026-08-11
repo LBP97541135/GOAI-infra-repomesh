@@ -1,8 +1,14 @@
-from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from functools import wraps
 from typing import Protocol, cast
 from uuid import UUID
 
+from repomesh.integrations.orchestration import (
+    AdvanceExecutionPlanStarter,
+    ApprovedTaskSpecificationAuthor,
+    DeliveryStateAdapter,
+)
 from repomesh.integrations.scm.contracts import RepositoryRef, SCMAdapter
 from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.ports.agent_team import (
@@ -15,6 +21,7 @@ from repomesh.modules.capability_management import (
     PresetCapabilityAssembler,
     ResolveAgentCapabilities,
 )
+from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
 from repomesh.modules.collaboration.ports import CollaborationMessageStore
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
@@ -25,15 +32,10 @@ from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
     HandoffDocService,
-    PlanExecutionBridge,
     PlanIntegrationService,
 )
 from repomesh.modules.repository_intelligence.application.confirmation import ConfirmationService
 from repomesh.modules.repository_intelligence.application.discovery import LLMClient
-from repomesh.modules.repository_intelligence.application.plan_execution_bridge import (
-    StartedExecutionPlan,
-    TaskSupersederGateway,
-)
 from repomesh.modules.repository_intelligence.application.requirement_analysis import (
     RequirementAnalyzer,
 )
@@ -44,30 +46,17 @@ from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store
     PlanSnapshotStore,
 )
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
-from repomesh.modules.specification import (
-    ApproveSpecificationCommand,
-    BuildCodingAgentPackage,
-    CreateSpecificationCommand,
-    PublishSpecificationContextCommand,
-    SpecificationKind,
-    SpecificationService,
-    SpecificationStatus,
-    SubmitSpecificationCommand,
-)
+from repomesh.modules.specification import BuildCodingAgentPackage, SpecificationService
 from repomesh.modules.specification.ports import SpecificationStore
 from repomesh.modules.task_orchestration import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
-    ExecutionPlan,
-    PlannedRepositoryTask,
+    ObserveExecutionPlan,
     PostgresExecutionPlanStore,
 )
 from repomesh.modules.task_orchestration.contracts import (
-    ExecutionPlanView,
-    PlannedRepositoryTaskView,
     TaskAssignmentGateway,
     TaskReportGateway,
-    TaskView,
 )
 from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
 from repomesh.persistence import Database
@@ -89,151 +78,19 @@ class BackgroundService(Protocol):
     async def close(self) -> None: ...
 
 
-class AdvanceExecutionPlanStarter:
-    """Adapt ``AdvanceExecutionPlan`` to the plan bridge's starter port.
+def cached_service(factory):
+    """Cache a zero-argument container factory for the process lifetime."""
 
-    The bridge owns repository-intelligence concerns and may only speak the
-    published task-orchestration contracts, so building the execution plan
-    aggregate belongs to the composition root.
-    """
+    @wraps(factory)
+    def resolve(self, *args, **kwargs):
+        if args or kwargs:
+            return factory(self, *args, **kwargs)
+        key = factory.__name__
+        if key not in self._service_cache:
+            self._service_cache[key] = factory(self)
+        return self._service_cache[key]
 
-    def __init__(self, advancer: AdvanceExecutionPlan, tasks: TaskStore) -> None:
-        self._advancer = advancer
-        self._tasks = tasks
-
-    async def start_plan(
-        self,
-        *,
-        organization_id: UUID,
-        project_id: UUID,
-        created_by_agent_id: UUID,
-        batches: Sequence[Sequence[PlannedRepositoryTaskView]],
-        idempotency_key: str,
-    ) -> StartedExecutionPlan:
-        plan = ExecutionPlan(
-            organization_id=organization_id,
-            project_id=project_id,
-            created_by_agent_id=created_by_agent_id,
-            batches=tuple(
-                tuple(
-                    PlannedRepositoryTask(
-                        repository_id=planned.repository_id,
-                        title=planned.title,
-                        instruction=planned.instruction,
-                        acceptance=planned.acceptance,
-                        tests=planned.tests,
-                    )
-                    for planned in batch
-                )
-                for batch in batches
-            ),
-        )
-        view = await self._advancer.start(plan, idempotency_key=idempotency_key)
-        return StartedExecutionPlan(plan=view, tasks=await self._assigned_tasks(view))
-
-    async def _assigned_tasks(self, view: ExecutionPlanView) -> tuple[TaskView, ...]:
-        """Read back the leader tasks the plan assigned and their Worker children."""
-
-        assigned: list[TaskView] = []
-        for batch in view.batches:
-            for planned in batch:
-                if planned.leader_task_id is None:
-                    continue
-                leader = await self._tasks.get(planned.leader_task_id)
-                if leader is None:
-                    continue
-                assigned.append(leader.to_view())
-                for child in await self._tasks.list_by_parent(leader.id):
-                    assigned.append(child.to_view())
-        return tuple(assigned)
-
-
-class ApprovedTaskSpecificationAuthor:
-    """Create, approve, freeze and publish the Task Spec a Worker task executes under.
-
-    ``start_assigned_task`` refuses to run a Worker task without an approved
-    (or frozen) ``SpecificationKind.TASK`` bound to that task, and it reads the
-    Runner's test commands out of the spec.  Producing that permit needs the
-    specification service, which *task_orchestration* may not import, so the
-    composition root adapts it to the published ``TaskSpecificationAuthor`` port.
-
-    The four steps mirror the manual ritual proven by
-    ``scripts/run-live-worker-e2e.py``: create → submit → approve(freeze) →
-    publish.  Steps the stored specification already went through are skipped,
-    and a task that already holds a permit is left alone entirely -- a second
-    approved spec for the same task would make ``start_assigned_task`` fail with
-    "multiple approved task specifications found", so the guard is keyed on the
-    task rather than only on the caller's idempotency key.
-    """
-
-    def __init__(self, specifications: SpecificationService, stored: SpecificationStore) -> None:
-        self._specifications = specifications
-        self._stored = stored
-
-    async def ensure_approved(
-        self,
-        task: TaskView,
-        *,
-        allowed_paths: tuple[str, ...],
-        tests: tuple[str, ...],
-        idempotency_key: str,
-    ) -> None:
-        if await self._has_permit(task):
-            return
-        # The repository leader that assigned the Worker task owns its spec.
-        owner_agent_id = task.assigned_by_agent_id
-        current = await self._specifications.create(
-            CreateSpecificationCommand(
-                organization_id=task.organization_id,
-                project_id=task.project_id,
-                repository_id=task.repository_id,
-                task_id=task.id,
-                kind=SpecificationKind.TASK,
-                title=self._title(task),
-                created_by_agent_id=owner_agent_id,
-                goal=task.instruction,
-                acceptance=task.acceptance,
-                tests=self._clean(tests),
-                allowed_paths=self._clean(allowed_paths),
-            ),
-            idempotency_key=idempotency_key,
-        )
-        if current.status is SpecificationStatus.DRAFT:
-            current = await self._specifications.submit(
-                SubmitSpecificationCommand(current.id, owner_agent_id, current.revision)
-            )
-        if current.status is SpecificationStatus.IN_REVIEW:
-            current = await self._specifications.approve(
-                ApproveSpecificationCommand(
-                    current.id, owner_agent_id, current.revision, freeze=True
-                )
-            )
-            # Publishing is the last step, and it has no idempotency key of its
-            # own: only publish the approval this call produced.
-            await self._specifications.publish_to_context(
-                PublishSpecificationContextCommand(current.id, owner_agent_id)
-            )
-
-    async def _has_permit(self, task: TaskView) -> bool:
-        """Report whether *task* already has the permit the Runner path requires."""
-
-        return any(
-            specification.kind is SpecificationKind.TASK
-            and specification.task_id == task.id
-            and specification.repository_id == task.repository_id
-            and specification.status in {SpecificationStatus.APPROVED, SpecificationStatus.FROZEN}
-            for specification in await self._stored.list_by_project(task.project_id)
-        )
-
-    @staticmethod
-    def _title(task: TaskView) -> str:
-        return f"Task spec: {task.title}".strip()[:500]
-
-    @staticmethod
-    def _clean(values: Sequence[str]) -> tuple[str, ...]:
-        """Drop blanks: specification content rejects empty list entries."""
-
-        return tuple(value.strip() for value in values if value.strip())
+    return resolve
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,10 +118,15 @@ class ApplicationContainer:
     task_report_gateway: TaskReportGateway | None = None
     scm_adapter: SCMAdapter | None = None
     scm_token_provider: Callable[[RepositoryRef], Awaitable[str]] | None = None
+    project_checkpoint_service_instance: object | None = None
+    _service_cache: dict[str, object] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def capability_assembler(self) -> PresetCapabilityAssembler:
         return PresetCapabilityAssembler()
 
+    @cached_service
     def local_account_service(self):
         return LocalAccountService(
             PostgresLocalAccountStore(self.database),
@@ -299,6 +161,7 @@ class ApplicationContainer:
             return True
         return self.agentteams_probe is not None and await self.agentteams_probe.health()
 
+    @cached_service
     def specification_service(self) -> SpecificationService:
         return SpecificationService(
             self.agent_directory,
@@ -318,6 +181,7 @@ class ApplicationContainer:
             PolicyAuthorizationGateway(),
         )
 
+    @cached_service
     def topology_reader(self) -> ProjectTopologyReader:
         """Adapt ProjectTopologyStore to ProjectTopologyReader."""
 
@@ -355,6 +219,7 @@ class ApplicationContainer:
     def plan_snapshot_store(self) -> PlanSnapshotStore:
         return PlanSnapshotStore(self.database)
 
+    @cached_service
     def delivery_service(self):
         from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
 
@@ -439,6 +304,7 @@ class ApplicationContainer:
             self.task_store,
         )
 
+    @cached_service
     def validation_snapshot_service(self):
         from repomesh.modules.review_validation import (
             PostgresValidationSnapshotStore,
@@ -450,6 +316,7 @@ class ApplicationContainer:
     def scm_webhook_event_store(self):
         return self.scm_observation_service()
 
+    @cached_service
     def scm_observation_service(self):
         from repomesh.modules.delivery import (
             PostgresSCMObservationStore,
@@ -458,6 +325,7 @@ class ApplicationContainer:
 
         return SCMObservationService(PostgresSCMObservationStore(self.database))
 
+    @cached_service
     def scm_command_service(self):
         from repomesh.modules.delivery import PostgresSCMCommandStore, SCMCommandService
 
@@ -473,6 +341,7 @@ class ApplicationContainer:
         advancer = self.execution_plan_advancer()
         on_observed = None
         if advancer is not None and get_settings().delivery_auto_enabled:
+
             async def _on_observed(change_set):
                 # After a delivery observation (e.g. a merge) re-evaluate the
                 # affected plan so a waiting batch can advance.
@@ -537,7 +406,10 @@ class ApplicationContainer:
             ),
         )
 
+    @cached_service
     def project_checkpoint_service(self):
+        if self.project_checkpoint_service_instance is not None:
+            return self.project_checkpoint_service_instance
         from repomesh.modules.project import ProjectCheckpointService
         from repomesh.modules.project.infrastructure import (
             PostgresHumanReviewRequestStore,
@@ -567,11 +439,13 @@ class ApplicationContainer:
             notifier,
         )
 
+    @cached_service
     def human_review_request_store(self):
         from repomesh.modules.project.infrastructure import PostgresHumanReviewRequestStore
 
         return PostgresHumanReviewRequestStore(self.database)
 
+    @cached_service
     def project_lifecycle_service(self):
         from repomesh.modules.project import ProjectLifecycleService
 
@@ -601,8 +475,22 @@ class ApplicationContainer:
             return None
         return cast(TaskSupersederGateway, self.task_report_gateway)
 
+    def project_task_reader(self):
+        """Expose task views through the TaskOrchestrator public read port."""
+
+        if self.task_report_gateway is None:
+            return None
+        from repomesh.modules.task_orchestration.contracts import ProjectTaskReader
+
+        return cast(ProjectTaskReader, self.task_report_gateway)
+
+    @cached_service
     def execution_plan_store(self) -> ExecutionPlanStore:
         return PostgresExecutionPlanStore(self.database)
+
+    @cached_service
+    def execution_plan_observer(self) -> ObserveExecutionPlan:
+        return ObserveExecutionPlan(self.execution_plan_store(), self.task_store)
 
     def handoff_doc_store(self) -> PostgresHandoffDocStore:
         return PostgresHandoffDocStore(self.database)
@@ -610,6 +498,7 @@ class ApplicationContainer:
     def handoff_doc_service(self) -> HandoffDocService:
         return HandoffDocService(self.handoff_doc_store())
 
+    @cached_service
     def execution_plan_advancer(self) -> AdvanceExecutionPlan | None:
         assigner = self.task_assignment_gateway()
         if assigner is None:
@@ -649,31 +538,7 @@ class ApplicationContainer:
         status is projected here in the composition root.
         """
 
-        from repomesh.modules.delivery.contracts import RepositoryDeliveryStatus
-        from repomesh.modules.task_orchestration.contracts import (
-            DeliveryGatedRepositoryView,
-        )
-
-        class _DeliveryStatePort:
-            def __init__(self, delivery) -> None:
-                self._delivery = delivery
-
-            async def repository_states(self, project_id):
-                by_repository: dict[UUID, DeliveryGatedRepositoryView] = {}
-                for change_set in await self._delivery.find_by_project(project_id):
-                    for repository in change_set.repositories:
-                        merged = repository.status is RepositoryDeliveryStatus.MERGED
-                        previous = by_repository.get(repository.repository_id)
-                        if previous is None or (merged and not previous.merged):
-                            by_repository[repository.repository_id] = (
-                                DeliveryGatedRepositoryView(
-                                    repository_id=repository.repository_id,
-                                    merged=merged,
-                                )
-                            )
-                return tuple(by_repository.values())
-
-        return _DeliveryStatePort(self.delivery_service())
+        return DeliveryStateAdapter(self.delivery_service())
 
     def execution_plan_starter(self) -> AdvanceExecutionPlanStarter | None:
         advancer = self.execution_plan_advancer()
@@ -681,6 +546,7 @@ class ApplicationContainer:
             return None
         return AdvanceExecutionPlanStarter(advancer, self.task_store)
 
+    @cached_service
     def plan_execution_bridge(self) -> PlanExecutionBridge:
         return PlanExecutionBridge(
             specifications=self.specification_service(),
@@ -689,6 +555,7 @@ class ApplicationContainer:
             catalog=self.repository_catalog,
             snapshot_store=self.plan_snapshot_store(),
             superseder=self.task_superseder(),
+            task_reader=self.project_task_reader(),
             handoff_docs=self.handoff_doc_service(),
             checkpoints=self.project_checkpoint_service(),
         )

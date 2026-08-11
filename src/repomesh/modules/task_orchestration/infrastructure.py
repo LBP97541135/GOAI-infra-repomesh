@@ -109,9 +109,7 @@ class InMemoryTaskStore:
         task = await self.get(task_id)
         return task.to_view() if task is not None else None
 
-    async def get_by_idempotency_key(
-        self, idempotency_key: str
-    ) -> tuple[Task, str] | None:
+    async def get_by_idempotency_key(self, idempotency_key: str) -> tuple[Task, str] | None:
         binding = self.idempotency.get(idempotency_key)
         if binding is None:
             return None
@@ -128,9 +126,7 @@ class InMemoryTaskStore:
         return tuple(task for task in self.tasks.values() if task.project_id == project_id)
 
     async def list_by_parent(self, parent_task_id: UUID) -> tuple[Task, ...]:
-        return tuple(
-            task for task in self.tasks.values() if task.parent_task_id == parent_task_id
-        )
+        return tuple(task for task in self.tasks.values() if task.parent_task_id == parent_task_id)
 
 
 class InMemoryExecutionPlanStore:
@@ -197,9 +193,7 @@ class PostgresTaskStore:
         task = await self.get(task_id)
         return task.to_view() if task is not None else None
 
-    async def get_by_idempotency_key(
-        self, idempotency_key: str
-    ) -> tuple[Task, str] | None:
+    async def get_by_idempotency_key(self, idempotency_key: str) -> tuple[Task, str] | None:
         async with self._database.transaction() as session:
             record = await session.scalar(
                 select(TaskRecord).where(TaskRecord.idempotency_key == idempotency_key)
@@ -397,9 +391,7 @@ class PostgresExecutionPlanStore:
                     "instruction": planned.instruction,
                     "acceptance": list(planned.acceptance),
                     "leader_task_id": (
-                        str(planned.leader_task_id)
-                        if planned.leader_task_id is not None
-                        else None
+                        str(planned.leader_task_id) if planned.leader_task_id is not None else None
                     ),
                     "tests": list(planned.tests),
                 }

@@ -10,13 +10,14 @@ message transport.
 The repository contains the team, persistence, runtime integration, and Context foundations:
 
 - A composition root that wires modules to replaceable adapters.
-- Thirteen business modules with machine-readable owners and boundaries.
+- Fifteen business modules with machine-readable owners and boundaries.
 - A working Repository Intelligence vertical slice.
 - A provider-neutral Agent Runtime port, 23 CLI adapters, and a seven-scenario mock adapter.
 - AgentTeams v1.2.0 source embedded as a pinned subtree under components/agentteams.
 - Runtime v1 JSON contracts and the Python RepoMesh Runner execution foundation.
 - Versioned Context objects, permission intersection, immutable bundles, deltas, and access audit.
-- Module-local API routers aggregated by a behavior-free top-level router.
+- Module-local business API routers plus platform entry points, aggregated by a behavior-free
+  top-level router.
 - CODEOWNERS, a pull-request checklist, adapter contract tests, and architecture tests.
 - PostgreSQL persistence, Alembic migrations, transactional events, audit, outbox, and readiness.
 

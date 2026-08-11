@@ -1,10 +1,9 @@
-import hashlib
-import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
     AgentCreated,
+    AgentPrincipalStatus,
     AgentRole,
 )
 from repomesh.modules.agent_directory.domain import (
@@ -17,6 +16,7 @@ from repomesh.modules.agent_directory.domain import (
 from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.shared.domain import new_id
 from repomesh.shared.events import ActorType, EventEnvelope
+from repomesh.shared.idempotency import command_fingerprint
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +46,7 @@ class CreateAgent:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
-        fingerprint = self._fingerprint(request)
+        fingerprint = command_fingerprint(request)
         if existing := await self._directory.get_by_idempotency_key(key):
             principal, existing_fingerprint = existing
             if existing_fingerprint != fingerprint:
@@ -106,6 +106,8 @@ class CreateAgent:
             raise AgentHierarchyViolation("leader agent does not exist")
         if leader.organization_id != request.organization_id:
             raise AgentHierarchyViolation("leader agent belongs to another organization")
+        if leader.status is not AgentPrincipalStatus.ACTIVE:
+            raise AgentHierarchyViolation("leader agent is disabled")
         if leader.role not in policy.allowed_parent_roles:
             raise AgentHierarchyViolation(
                 f"{leader.role.value} cannot lead {request.role.value}"
@@ -137,10 +139,3 @@ class CreateAgent:
         if request.role is AgentRole.REPOSITORY_LEADER:
             return f"repository:{request.repository_id}:leader"
         return None
-
-    @staticmethod
-    def _fingerprint(request: CreateAgentRequest) -> str:
-        encoded = json.dumps(
-            asdict(request), sort_keys=True, default=str, separators=(",", ":")
-        ).encode()
-        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"

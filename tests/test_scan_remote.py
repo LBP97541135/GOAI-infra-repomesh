@@ -9,12 +9,12 @@ from repomesh.modules.repository_intelligence.application import (
     RepositoryDiscoveryService,
     extract_entry_repo_name,
     load_requirement,
-    parse_user_input,
 )
 from repomesh.modules.repository_intelligence.application.scan_remote import (
     _extract_top_dirs,
     _find_dep_files,
     _parse_dep_file,
+    parse_user_input,
 )
 from repomesh.modules.repository_intelligence.domain import (
     AutoCard,

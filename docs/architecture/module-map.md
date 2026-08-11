@@ -1,8 +1,9 @@
 # Module Ownership Map
 
-This map is the source of truth for team ownership. Each module also has a machine-readable
-`module.toml`. Replace the provisional team labels with GitHub teams when the repository moves
-into an organization.
+This map is the source of truth for team ownership. RepoMesh currently has fifteen business
+modules. Each module also has a machine-readable `module.toml`; its `status` field distinguishes
+active modules from planned boundaries. Replace the provisional team labels with GitHub teams
+when the repository moves into an organization.
 
 | Module | Owner | Owns | Does not own |
 | --- | --- | --- | --- |
@@ -16,6 +17,7 @@ into an organization.
 | Collaboration | orchestration | questions, answers, published findings | business state hidden in chat |
 | Review And Validation | quality-delivery | reviews, test plans, snapshots, evidence | remote merge |
 | Change Control | project-planning | impact assessment and change decisions | silent task mutation |
+| Change Orchestration | orchestration | cross-repository materialization, replan and handoff coordination | repository scanning, task state, code execution, PR delivery |
 | Delivery | quality-delivery | ChangeSets, Push/PR, SCM approval facts, CI gates, merge order, rollback | code generation and internal review content |
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
@@ -35,6 +37,14 @@ into an organization.
 The runtime integration composes approved Task Specifications, immutable Context Grants and
 role capability presets into a Runner task. The Workspace adapter owns repository mirror caching,
 run-scoped worktree creation and immutable base revision resolution; it does not own task state.
+
+## Standard module layout
+
+Every business module must publish `README.md` and `module.toml`. Small modules may use flat
+`contracts.py`, `application.py`, `ports.py`, and `infrastructure.py` files. Once one layer needs
+multiple cohesive files, convert that layer into a package instead of adding unrelated files to
+the module root. Business APIs live under the owning module's `api` package; the top-level API
+package is reserved for health checks, external webhooks, and router composition.
 
 ## Change protocol
 
