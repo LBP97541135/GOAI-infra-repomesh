@@ -202,7 +202,8 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 ```json
 { "teams": [ {
   "team_id": "uuid", "agentteams_team_name": "rm-team-...",
-  "issue_id": "uuid", "repository_id": "uuid", "repository_name": "string",
+  "issue_id": "uuid", "repository_id": "uuid",
+  "repository_name": "string|null",                  // catalog 查不到该仓库时为 null
   "runtime_status": "pending|ready|failed",          // 拓扑持久化字段
   "team_room_id": "string|null", "leader_room_id": "string|null",
   "leader": { "agent_id": "uuid", "name": "string|null", "role": "repository_leader" },
@@ -284,9 +285,27 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 （`asyncio.gather`），整页墙钟时间收敛到 ≈ 单条超时量级，隔离语义不变。定向测试须断言
 N 条不可达的总耗时 < 单条超时的小倍数——**只测「降级正确」会漏掉这个缺陷**。
 
-**`?with_runtime=`（Q3 裁决）**：默认 `true`（Demo 需要看到运行时）。置 `false` 时整块
-`runtime` 省略、不发任何 Controller 请求。当前实现按 `directory.list()` 全量列出后逐个
-代理，N 个 agent = N 次 HTTP；规模变大时改默认值或加分页，届时修订本节。
+**`?with_runtime=`（Q3 裁决）**：默认 `true`（Demo 需要看到运行时）。置 `false` 时**不发任何
+Controller 请求**，`runtime` 字段仍在响应里、**恒为 `null`**（起草原文写「整块省略」，与实现
+不符，已按实现勘正——字段常在、值为 null，消费方不必对字段缺失做兼容）。当前实现按
+`directory.list()` 全量列出后逐个代理，N 个 agent = N 次 HTTP；规模变大时改默认值或加分页，
+届时修订本节。
+
+**`runtime: null` 是同形的三义，消费方必须靠请求参数消歧（勘误补充，2026-08-11）**：
+`null` 同时是「404 资源不存在」「未配置」与「`with_runtime=false` 未探测」三种情况的取值，
+**响应体自身无法区分**。故本契约明文规定消费方指引：
+
+- **发起过探测**（`with_runtime` 省略或 `true`）时，`null` 表示**无运行时事实**，呈现「未接入」；
+  `{"reachable": false}` 表示**探测发生了但不可达**，呈现「不可达」——两者不可合并成一个态。
+- **未发起探测**（`with_runtime=false`）时，`null` **只表示未探测，不表示无事实**。此时
+  **禁止呈现为「未接入」**：那是把「没问」说成「问了没有」，属编造。正确呈现是运行时区域
+  留白 + 「未探测」或独立加载态。
+- 推荐做法（前端 CONS-44 已按此实现，作为消费方参照）：**按探测阶段门控渲染**——首屏若为
+  求快走 `with_runtime=false`，运行时区域一律不下结论；待发起真实探测的请求返回后，再按上一条
+  区分 `null` 与 `{"reachable": false}`。
+
+补齐路径（本版不做）：若日后要让响应自述，可在顶层加 `runtime_probed: bool`，届时本节改为
+以该字段消歧，消费方不再依赖自己记住请求参数。
 
 ### 4.5 路径冲突与命名空间（**2026-08-11 主脑裁决，已生效**）
 
@@ -315,7 +334,7 @@ N 条不可达的总耗时 < 单条超时的小倍数——**只测「降级正�
 { "rooms": [ {
   "room_id": "string", "kind": "team_room|leader_dm",
   "issue_id": "uuid", "team_id": "uuid", "repository_id": "uuid",
-  "repository_name": "string",
+  "repository_name": "string|null",                 // 同 §4.2：catalog 查不到时为 null
   "members": [ { "agent_id": "uuid", "name": "string|null", "role": "..." } ],
   "last_message": { "at": "...", "kind": "...", "subject": "string",
                     "sender_agent_id": "uuid" },   // nullable：空房间为 null
@@ -495,6 +514,24 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 名称解析恢复 | 补注册 principals 后 `members[].name`、v0.1 `messages[].sender_name`、`tasks[].agent` 不再恒 null（值仍是 agent 资源名） | §5.1、v0.1 §4.2 |
 | live 锚点 | 派生自 in_progress 任务。**场景 C 的返工任务处于 in_progress，故 `!rm-team-c-billing` 与 `!rm-leader-c-billing` 实测 `live: true`**；A/B 任务全终态故 false。两个房间同属一仓，所以一仓在途时该仓两个房间都 live——这是 §5.3 原文「该房间所属仓库存在 in_progress 任务」的直接结果，不是 bug | §5.3 |
 | 丢弃边留痕 | §5.4 丢弃无法解析的依赖名时**记 warning 日志**（含丢弃条数与 issue/仓库），不静默截断。选日志而非响应字段是因为 plan 端点形状已对前端冻结；如需自述字段再加 | §5.4 |
+
+### 7.3 CONS-44 消费期勘误（2026-08-11，主脑允诺后同批入文本）
+
+缘由：前端施工 CONS-44（仓库/团队/智能体/设置四页）消费 `console/*` 三端点时，发现两处
+**契约文本与实现不符**。两项均为**纯文本勘正，实现零改动**——文本原就该这么写。
+
+| 勘误项 | 原文 | 勘正后 | 落点 |
+| --- | --- | --- | --- |
+| `with_runtime=false` 的形状 | 「置 `false` 时整块 `runtime` 省略」 | 实现是**字段常在、值恒 `null`**（`service.py` 建行时即置 `"runtime": None`，`with_runtime` 只决定是否覆写）。按实现勘正，消费方不必兼容字段缺失 | §4.4 |
+| `null` 同形歧义 | 未述 | `null` 是「404 / 未配置 / 未探测」三义同形，响应体不可自辨。**补消费方指引**：探测过的 `null` = 未接入；`with_runtime=false` 的 `null` **只表示未探测**，禁止呈现为「未接入」。前端按探测阶段门控的做法写入契约作参照 | §4.4 |
+| `§4.2 repository_name` | `"string"` | `"string|null"`——`service.py:1189` 在 catalog 查不到 `repository_id` 时返 `None`（拓扑驻扎的仓库未必在 catalog 里） | §4.2 |
+| `§5.1 repository_name`（**同源第三例，后端自行增补，请追认**） | `"string"` | 同上，`service.py:873` 同一失效模式。主脑只点名 §4.2；若只改一处，契约仍在另一处撒同样的谎，故一并勘正 | §5.1 |
+
+`§4.3` 的 `repository_name` 起草时即标 `"string|null"`，无需改动——三处同一派生、原本只有一处写对。
+
+**教训（承 §4.5 的「新增端点先查路径占用」）**：字段表的 nullable 标注若不是从实现逐字段对读
+生成的，就会**只在作者当时想到的那一处写对**。同一派生出现在多节时，勘正必须全量搜索
+（本次 `grep -n repository_name` 一次命中三处），否则等于把谎言从一处搬到另一处。
 
 ## 8. 实现顺序
 
