@@ -73,48 +73,59 @@ export function PlanView({ view }: { view: DeliveryView }) {
           <div>
             <h2 className="text-[17px] font-extrabold tracking-[0.02em]">交付计划 · {view.title}</h2>
             <span className="mt-0.5 block font-mono text-[10.5px] tracking-[0.12em] text-paper-dim">
-              REV {view.planRev} · CONTRACT V{contract.version} {contract.status.toUpperCase()} · {view.createdAt}
+              REV {view.planRev} ·{" "}
+              {contract ? `CONTRACT V${contract.version} ${contract.status.toUpperCase()}` : "CONTRACT —"} ·{" "}
+              {view.createdAt}
             </span>
           </div>
         </div>
 
-        <section className="mt-6">
-          <SectionBar num="1.0" title="目标与验收" />
-          <p className="max-w-[640px] pt-1 pb-2 text-[13.5px]">{contract.goal}</p>
-          {contract.acceptance.map((a, i) => (
-            <Item key={a} n={`1.${i + 1}`}>
-              <span>{a}</span>
-            </Item>
-          ))}
-          {contract.nonGoals && contract.nonGoals.length > 0 && (
-            <Item n="非目标" neg>
-              <span className="text-paper-dim">{contract.nonGoals.join("；")}</span>
-            </Item>
-          )}
-        </section>
+        {contract ? (
+          <>
+            <section className="mt-6">
+              <SectionBar num="1.0" title="目标与验收" />
+              <p className="max-w-[640px] pt-1 pb-2 text-[13.5px]">{contract.goal}</p>
+              {contract.acceptance.map((a, i) => (
+                <Item key={a} n={`1.${i + 1}`}>
+                  <span>{a}</span>
+                </Item>
+              ))}
+              {contract.nonGoals && contract.nonGoals.length > 0 && (
+                <Item n="非目标" neg>
+                  <span className="text-paper-dim">{contract.nonGoals.join("；")}</span>
+                </Item>
+              )}
+            </section>
 
-        <section className="mt-6">
-          <SectionBar num="2.0" title="变更范围" />
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {contract.repositories.map((r) => (
-              <span key={r} className="bg-[#17130a] px-2.5 py-[3px] font-mono text-[11px] tracking-[0.04em] text-cream">
-                {r}
-              </span>
-            ))}
-          </div>
-          {contract.allowedPaths.length > 0 && (
-            <Item n="2.1">
-              <span className="font-mono text-[11.5px]">允许 {contract.allowedPaths.join("  ")}</span>
-            </Item>
-          )}
-          {contract.forbiddenPaths.length > 0 && (
-            <Item n="2.2" neg>
-              <span className="font-mono text-[11.5px] text-paper-neg">
-                禁止 {contract.forbiddenPaths.join("  ")}
-              </span>
-            </Item>
-          )}
-        </section>
+            <section className="mt-6">
+              <SectionBar num="2.0" title="变更范围" />
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {contract.repositories.map((r) => (
+                  <span key={r} className="bg-[#17130a] px-2.5 py-[3px] font-mono text-[11px] tracking-[0.04em] text-cream">
+                    {r}
+                  </span>
+                ))}
+              </div>
+              {contract.allowedPaths.length > 0 && (
+                <Item n="2.1">
+                  <span className="font-mono text-[11.5px]">允许 {contract.allowedPaths.join("  ")}</span>
+                </Item>
+              )}
+              {contract.forbiddenPaths.length > 0 && (
+                <Item n="2.2" neg>
+                  <span className="font-mono text-[11.5px] text-paper-neg">
+                    禁止 {contract.forbiddenPaths.join("  ")}
+                  </span>
+                </Item>
+              )}
+            </section>
+          </>
+        ) : (
+          <section className="mt-6">
+            <SectionBar num="1.0" title="目标与验收" />
+            <p className="pt-1 pb-2 text-[13.5px] text-paper-dim">该交付尚未冻结 ENGINEERING 契约。</p>
+          </section>
+        )}
 
         <section className="mt-6">
           <SectionBar

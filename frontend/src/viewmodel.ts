@@ -194,18 +194,21 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
     stagingNote: ov?.stagingNote ?? null,
     planRev: agg.plan.plan_version,
     mergeOrderLabel,
-    contract: {
-      version: agg.contract.version,
-      status: agg.contract.status,
-      goal: agg.contract.goal,
-      acceptance: agg.contract.acceptance,
-      // 契约 §6.2：non_goals 为 null → 隐藏区块（overlay 提供演示值）
-      nonGoals: agg.contract.non_goals ?? ov?.nonGoals ?? null,
-      repositories: lanes,
-      allowedPaths: agg.contract.allowed_paths,
-      forbiddenPaths: agg.contract.forbidden_paths,
-      tests: agg.contract.tests,
-    },
+    // 契约 4744c71：contract 整块可为 null（未建 ENGINEERING spec）
+    contract: agg.contract
+      ? {
+          version: agg.contract.version,
+          status: agg.contract.status,
+          goal: agg.contract.goal,
+          acceptance: agg.contract.acceptance,
+          // 契约 §6.2：non_goals 为 null → 隐藏区块（overlay 提供演示值）
+          nonGoals: agg.contract.non_goals ?? ov?.nonGoals ?? null,
+          repositories: lanes,
+          allowedPaths: agg.contract.allowed_paths,
+          forbiddenPaths: agg.contract.forbidden_paths,
+          tests: agg.contract.tests,
+        }
+      : null,
     repos: agg.repositories.map((r) => ({ id: r.name, evidence: r.evidence })),
     lanes,
     tasks,

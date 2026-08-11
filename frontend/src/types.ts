@@ -149,7 +149,8 @@ export interface DeliveryView {
   stagingNote: string | null;
   planRev: number;
   mergeOrderLabel: string | null;
-  contract: ContractCard;
+  /** null = 该交付未建 ENGINEERING spec（契约 4744c71），纸面 1.0/2.0 显示占位 */
+  contract: ContractCard | null;
   repos: RepoInfo[];
   lanes: string[];
   tasks: DeliveryTask[];

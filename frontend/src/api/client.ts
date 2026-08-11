@@ -7,6 +7,7 @@ import type {
   DeliveryListResponse,
   DeliveryMessagesPage,
   GovernanceDecisionRequest,
+  GovernanceDecisionView,
 } from "./contract";
 
 export class ApiError extends Error {
@@ -41,7 +42,17 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
     throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`);
   }
   if (!res.ok) {
-    const detail = await res.text().catch(() => "");
+    // FastAPI 错误体 {"detail": "<message>"}（422 时 detail 为数组）
+    const raw = await res.text().catch(() => "");
+    let detail = raw;
+    try {
+      const parsed = JSON.parse(raw) as { detail?: unknown };
+      if (parsed.detail !== undefined) {
+        detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail);
+      }
+    } catch {
+      /* 非 JSON 体，原样展示 */
+    }
     throw new ApiError(res.status, url, `${method} ${path} → HTTP ${res.status}${detail ? ` · ${detail.slice(0, 200)}` : ""}`);
   }
   return (await res.json()) as T;
@@ -73,7 +84,7 @@ export function createApiClient(config: ApiClientConfig) {
       request<DecisionsResponse>(config, "GET", `/deliveries/${deliveryId}/decisions`),
 
     postGovernanceDecision: (deliveryId: string, payload: GovernanceDecisionRequest) =>
-      request<unknown>(config, "POST", `/deliveries/${deliveryId}/governance-decisions`, payload),
+      request<GovernanceDecisionView>(config, "POST", `/deliveries/${deliveryId}/governance-decisions`, payload),
 
     archiveDelivery: (deliveryId: string) =>
       request<unknown>(config, "POST", `/deliveries/${deliveryId}/archive`),

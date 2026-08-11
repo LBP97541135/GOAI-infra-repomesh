@@ -61,13 +61,15 @@ export interface DeliveryListItem {
 
 export interface DeliveryProjectGroup {
   project_id: string;
-  project_key: string;
+  /** nullable：Project 实体/注册表未落地前为 null（§6.9） */
+  project_key: string | null;
   title: string;
   deliveries: DeliveryListItem[];
 }
 
 export interface DeliveryListResponse {
   projects: DeliveryProjectGroup[];
+  /** v0.1 数据量下恒为 null，游标语义保留待后续实现 */
   next_cursor: string | null;
 }
 
@@ -75,7 +77,9 @@ export interface DeliveryListResponse {
 
 export interface DeliveryProjectInfo {
   project_id: string;
-  project_key: string;
+  /** nullable：Project 实体/注册表未落地前为 null（§6.9） */
+  project_key: string | null;
+  /** 暂以 plan snapshot requirement_text 截断，Project 落地后切换 */
   title: string;
   /** nullable：plan snapshot.requirement_text */
   requirement_text: string | null;
@@ -213,7 +217,8 @@ export interface DeliveryDiffView {
 export interface DeliveryAggregate {
   delivery_id: string;
   project: DeliveryProjectInfo;
-  contract: DeliveryContractView;
+  /** 整体可为 null：该交付未建 ENGINEERING spec（契约 4744c71） */
+  contract: DeliveryContractView | null;
   repositories: DeliveryRepositoryInfo[];
   plan: DeliveryPlanView;
   tasks: DeliveryTaskView[];
