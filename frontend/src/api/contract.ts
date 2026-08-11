@@ -145,7 +145,8 @@ export interface IssueRoundView {
   phase: Phase;
   status: string;
   plan_version: number;
-  created_at: string;
+  /** §3：取该轮次 PlanSnapshot 的时间，**无快照为 null**（A8 勘正漏标） */
+  created_at: string | null;
   updated_at: string;
 }
 
@@ -587,7 +588,10 @@ export interface DeliveryEventsPage {
 }
 
 /** §4.2 CollaborationMessageView 直投影 + 追认附加字段（1df9ebf：direction/
- *  sender_name/recipient_name/created_at）。方向以 direction 辨识，勿假定恒单向。 */
+ *  sender_name/recipient_name/created_at）。方向以 direction 辨识，勿假定恒单向。
+ *  `room_id` 为 v0.2 §5.2 前置改动补投影（与房间流共用同一投影函数）。
+ *  ⚠ id/repository_id/task_id 不在契约文本字段表内——已横向问询后端核实中
+ *  （在响应里=待补追认注记；不在=幻影照删），暂保留。 */
 export interface CollaborationMessageView {
   id: string;
   kind: string;
@@ -599,6 +603,7 @@ export interface CollaborationMessageView {
   recipient_name: string | null;
   repository_id: string | null;
   task_id: string | null;
+  room_id: string | null;
   status: string;
   event_id: string | null;
   correlation_id: string | null;
