@@ -3,8 +3,8 @@
 The delivery read-model events timeline (contract v0.1 §4.1) dates its
 matrix entries with this column; existing rows are backfilled with now().
 
-Revision ID: 20260811_0017
-Revises: 20260811_0016
+Revision ID: 20260811_0020
+Revises: 20260811_0019
 """
 
 from collections.abc import Sequence
@@ -12,8 +12,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260811_0017"
-down_revision: str | None = "20260811_0016"
+revision: str = "20260811_0020"
+down_revision: str | None = "20260811_0019"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
