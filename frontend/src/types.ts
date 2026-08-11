@@ -1,7 +1,8 @@
 /** 交付控制台前端数据模型。字段对齐 frontend-prototype/data.js，
  *  未来由 GET /api/v1/deliveries* 读模型 API 提供（契约另行同步）。 */
 
-export type TaskStatus = "succeeded" | "running" | "repairing" | "pending" | "failed";
+/** 展示 6 态，映射规则见 docs/contracts/delivery-read-model-v0.1.md §5.1 */
+export type TaskStatus = "succeeded" | "running" | "repairing" | "blocked" | "pending" | "failed";
 export type GateState = "open" | "blocked" | "running" | "waiting";
 export type CheckStatus = "pass" | "fail" | "run" | "wait";
 export type DecisionKind = "approve" | "watch" | "clarify";

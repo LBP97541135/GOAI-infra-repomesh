@@ -32,6 +32,7 @@ const SKINS: Record<"room" | "paper", DagSkin> = {
     status: {
       succeeded: { stroke: "#94a35a", fill: "#94a35a" },
       repairing: { stroke: "#c99e52", fill: "#e3c078" },
+      blocked: { stroke: "#c26d51", fill: "#e8a184" },
       running: { stroke: "#8aa0b4", fill: "#8aa0b4" },
       pending: { stroke: "#6b6046", fill: "#6b6046" },
       failed: { stroke: "#c26d51", fill: "#c26d51" },
@@ -48,6 +49,7 @@ const SKINS: Record<"room" | "paper", DagSkin> = {
     status: {
       succeeded: { stroke: "#5b6d2c", fill: "#5b6d2c" },
       repairing: { stroke: "#a3702e", fill: "#a3702e" },
+      blocked: { stroke: "#a34a2e", fill: "#a34a2e" },
       running: { stroke: "#3d617a", fill: "#3d617a" },
       pending: { stroke: "#8a7f63", fill: "#8a7f63" },
       failed: { stroke: "#a34a2e", fill: "#a34a2e" },
@@ -59,6 +61,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   succeeded: "已完成",
   running: "执行中",
   repairing: "修复中 2/3",
+  blocked: "受阻",
   pending: "等待依赖",
   failed: "失败",
 };

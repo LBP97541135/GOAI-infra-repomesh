@@ -8,6 +8,7 @@ const STATUS_WORD: Record<TaskStatus, string> = {
   succeeded: "COMPLETE",
   running: "IN PROGRESS",
   repairing: "REPAIR 2/3",
+  blocked: "BLOCKED",
   pending: "HOLD",
   failed: "FAILED",
 };
@@ -16,6 +17,7 @@ const STATUS_COLOR: Record<TaskStatus, string> = {
   succeeded: "text-[#5b6d2c]",
   running: "text-[#3d617a]",
   repairing: "text-[#a3702e]",
+  blocked: "text-paper-neg",
   pending: "text-[#8a7f63]",
   failed: "text-paper-neg",
 };

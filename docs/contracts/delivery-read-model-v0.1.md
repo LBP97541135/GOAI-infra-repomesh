@@ -1,34 +1,41 @@
 # 交付读模型契约 v0.1（Delivery Read Model）
 
-- 状态：草案，待前后端 Owner 评审
+- 状态：草案（已按 2026-08-11 评审结论修订），待后端 Owner 认领
 - 版本：0.1
 - 更新日期：2026-08-11
 - 生产方：`api`（聚合视图，无独立事实源）
 - 消费方：`frontend/`（交付控制台，见 `frontend-prototype/DESIGN-DECISION.md`）
 - 关联：`docs/contracts/public-contracts-v0.1.md`（标识符与版本引用规则沿用）
 
-本契约只定义**只读聚合**。它不引入新事实源：每个字段都注明来源模块；来源模块的
-`contracts.py` 变化时本契约同步修订。后端未实现的字段显式标记 `nullable`，
-返回 `null`，前端降级展示——禁止编造。
+本契约只定义**只读聚合**（外加两个治理写端点）。它不引入新事实源：每个字段都注明
+来源模块；来源模块的 `contracts.py` 变化时本契约同步修订。后端未实现的字段显式标记
+`nullable`，返回 `null`，前端降级展示——禁止编造。
 
 ## 0. 聚合根定义
 
-**一次「交付」（delivery）= 一个 Project 驱动的完整闭环**，对外以 `project_id` 为主键。
-ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。理由：
+**一次「交付」（delivery）= 一个 ExecutionPlan 的完整生命周期**，对外
+`delivery_id = execution_plan_id`。Project 是组织容器，一个 Project 可挂多次交付
+（失败重来、后续需求各成一轮）。理由：
 
-- 后端没有单一 delivery 实体；Project 是唯一贯穿需求→计划→执行→交付的稳定 ID；
-- 一个 Project 当前至多一个活跃 ExecutionPlan / ChangeSet（历史版本经 plan snapshots 保留）。
+- 产品定义的交付单元是「一次需求 → 一个 Release Candidate」，即一个 plan 的生命周期；
+- 已有事实：一个 Project 会积累多个 plan（live-github-delivery-e2e §8.3 的遗留计划问题）；
+- ChangeSet、PlanSnapshot 均已携带 `execution_plan_id` / `plan_id`，聚合天然成立。
+
+ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚无 plan id，由「Project 下
+最新未物化的 Specification/PlanSnapshot」构成一个**虚拟草稿交付**（`delivery_id: null`，
+`phase: contract|plan`），materialize 后获得正式 id。
 
 ## 1. 端点
 
 | 端点 | 用途 | 前端消费位置 |
 | --- | --- | --- |
-| `GET /api/v1/deliveries` | 交付列表（分页） | 左栏项目树 |
-| `GET /api/v1/deliveries/{project_id}` | 交付全貌聚合 | 中栏 artifact 卡、计划纸面、环境窗 |
-| `GET /api/v1/deliveries/{project_id}/events` | 合并事件流（游标分页） | 环境窗/未来房间流 |
-| `GET /api/v1/deliveries/{project_id}/messages` | 协作消息流 | 对话主线程 |
-| `GET /api/v1/deliveries/{project_id}/decisions` | 待决策项 | 决策夹 |
-| `POST /api/v1/deliveries/{project_id}/governance-decisions` | 记录 head-bound 治理决策（唯一写端点） | 审批弹窗 |
+| `GET /api/v1/deliveries` | 交付列表，按 project 分组（分页） | 左栏项目树 |
+| `GET /api/v1/deliveries/{delivery_id}` | 交付全貌聚合 | 中栏 artifact 卡、计划纸面、环境窗 |
+| `GET /api/v1/deliveries/{delivery_id}/events` | 合并事件流（游标分页） | 环境窗/未来房间流 |
+| `GET /api/v1/deliveries/{delivery_id}/messages` | 协作消息流 | 对话主线程 |
+| `GET /api/v1/deliveries/{delivery_id}/decisions` | 待决策项 | 决策夹 |
+| `POST /api/v1/deliveries/{delivery_id}/governance-decisions` | 记录 head-bound 治理决策 | 审批弹窗 |
+| `POST /api/v1/deliveries/{delivery_id}/archive` | 归档旧交付（运维缺口补齐） | 侧栏管理 |
 
 鉴权沿用现有 `Authorization: Bearer`（读端点可用会话票据替代，另行定）。
 
@@ -36,15 +43,21 @@ ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。�
 
 ```json
 {
-  "items": [
+  "projects": [
     {
       "project_id": "uuid",
       "project_key": "PRJ-2026-0042",
-      "title": "string",                      // project 标题
-      "phase": "contract|plan|execute|validate|release|delivered|failed",
-      "phase_note": "string",                 // 人类可读补充，如 "2 完成 · 1 修复中"
-      "pending_decision_count": 0,
-      "updated_at": "UTC ISO 8601"
+      "title": "string",
+      "deliveries": [
+        {
+          "delivery_id": "uuid|null",          // null = §0 虚拟草稿交付
+          "title": "string",                    // plan 需求摘要或 project 标题
+          "phase": "contract|plan|execute|validate|release|delivered|failed|archived",
+          "phase_note": "string",               // 人类可读补充，如 "2 完成 · 1 修复中"
+          "pending_decision_count": 0,
+          "updated_at": "UTC ISO 8601"
+        }
+      ]
     }
   ],
   "next_cursor": "string|null"
@@ -55,18 +68,20 @@ ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。�
 
 | 条件（按序判定） | phase |
 | --- | --- |
+| 已归档 | `archived` |
+| ExecutionPlan/ChangeSet 任一 FAILED / MANUAL_INTERVENTION 且无活跃恢复 | `failed` |
 | ChangeSet.status = DELIVERED | `delivered` |
 | ChangeSet 存在且未终态 | `release` |
 | ValidationSnapshot 存在且 ChangeSet 不存在 | `validate` |
 | ExecutionPlan.status = IN_PROGRESS | `execute` |
-| Plan snapshot 存在但 ExecutionPlan 未建 | `plan` |
+| PlanSnapshot 存在但未 materialize | `plan` |
 | 仅有 Specification | `contract` |
-| ExecutionPlan/ChangeSet 任一 FAILED / MANUAL_INTERVENTION | `failed` |
 
-## 3. `GET /deliveries/{project_id}` — 全貌聚合
+## 3. `GET /deliveries/{delivery_id}` — 全貌聚合
 
 ```json
 {
+  "delivery_id": "uuid",
   "project": {
     "project_id": "uuid", "project_key": "string", "title": "string",
     "requirement_text": "string|null",        // plan snapshot.requirement_text
@@ -78,16 +93,16 @@ ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。�
     "acceptance": ["string"],
     "constraints": ["string"],
     "allowed_paths": ["string"],
+    "forbidden_paths": ["string"],             // specification 新增可选字段，随本读模型同批实现（§6.2）
     "tests": ["string"],
-    "non_goals": null,                         // nullable：specification 暂无此字段（§6.2）
-    "forbidden_paths": null,                   // nullable：同上
-    "release_rules": null                      // nullable：同上（human_approval / rollback_condition）
+    "non_goals": null,                         // nullable：暂缓（§6.2）
+    "release_rules": null                      // nullable：暂缓（§6.2）
   },
   "repositories": [                            // repository_intelligence
     { "repository_id": "uuid", "name": "string", "evidence": "string|null" }
   ],
   "plan": {                                    // plan snapshot + execution plan status
-    "plan_id": "uuid", "plan_version": 2, "status": "in_progress",
+    "plan_version": 2, "status": "in_progress",
     "current_batch_index": 1,
     "execution_batches": [["repo-name"]],
     "merge_order": ["repository_id"]           // 由 ChangeSet depends_on 拓扑排序导出
@@ -98,14 +113,15 @@ ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。�
       "repository_id": "uuid",
       "title": "string",
       "backend_status": "assigned|in_progress|blocked|succeeded|failed|cancelled|superseded",
-      "display_status": "pending|running|repairing|succeeded|failed",   // §5.1 映射
+      "display_status": "pending|running|repairing|blocked|succeeded|failed",   // §5.1 映射（6 态）
       "agent": "string|null",                  // 由 assignee agent_directory 解析
       "attempt": 1,                            // 1 + 同仓 rework 链长度（§5.2）
       "depends_on": ["task_id"],               // plan snapshot task_dag
       "result_summary": "string|null",
       "repair_timeline": [                     // rework task + recovery action 合成，可为空
         { "at": "...", "what": "string" }
-      ]
+      ],
+      "escalated_to_human": false              // §5.2：仅转述 recovery plan 的 MANUAL_INTERVENTION
     }
   ],
   "change_set": {                              // delivery ChangeSetView 直投影，可为 null
@@ -151,7 +167,7 @@ ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。�
 
 ## 4. 事件、消息与决策
 
-### 4.1 `GET /deliveries/{project_id}/events`
+### 4.1 `GET /deliveries/{delivery_id}/events`
 
 合并三个来源为统一时间线（游标分页，`kind` 过滤）：
 
@@ -166,13 +182,13 @@ ExecutionPlan、ChangeSet、Task、ValidationSnapshot 都是它的子对象。�
 delivery CI/review/merge observations（gate）、plan snapshot 版本变化（plan）。
 `deny`（权限拒绝）目前无审计存储，v0.1 不产出该 kind——出现即为契约违约。
 
-### 4.2 `GET /deliveries/{project_id}/messages`
+### 4.2 `GET /deliveries/{delivery_id}/messages`
 
 `CollaborationMessageView` 直投影（kind、subject、body、sender/recipient、status、
 event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方向；Worker→Leader 回报
 摄取是审计缺口（closed-loop-gap-analysis §4.2），补齐后本端点自然包含，契约不变。
 
-### 4.3 `GET /deliveries/{project_id}/decisions`
+### 4.3 `GET /deliveries/{delivery_id}/decisions`
 
 ```json
 { "items": [ {
@@ -184,11 +200,15 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 } ] }
 ```
 
-- `approve`：ChangeSet 中 `merge_gate.allowed=true` 且缺 READY 治理决策的仓库，每仓一项。
-- `watch`：存在未终态 recovery plan / rework task 的仓库，每仓一项（纯派生，只读）。
-- `clarify`：**v0.1 不提供**（无后端实体，见 §6.5）。
+两类均为**纯派生只读**，不新建实体：
 
-### 4.4 `POST /deliveries/{project_id}/governance-decisions`（唯一写端点）
+- `approve`：ChangeSet 中 `merge_gate.allowed=true` 且缺 READY 治理决策的仓库，每仓一项。
+- `watch`：存在未终态 recovery plan / rework task 的仓库，每仓一项。
+- `clarify`：**v0.1 不提供**。它需要「Agent 提问 → 定向到人 → 回答结构化回写契约 →
+  通知 Worker」的完整 ChangeRequest 回路（team-handoff §5.4），不做只读残缺版；
+  Demo 演示走前端回放模式（mock 数据），不受影响。
+
+### 4.4 `POST /deliveries/{delivery_id}/governance-decisions`
 
 包装既有 `RecordGovernanceDecisionCommand`，补上 API 层缺口（live-github-delivery-e2e
 §8.4 遗留项）：
@@ -204,24 +224,33 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 鉴权主体必须解析为有治理权的 agent/人类身份并写审计事件。前端审批弹窗的
 「任一 SHA 变化即失效」由 head-bound 语义 + merge gate fail-closed 保证，无需前端轮询锁。
 
+### 4.5 `POST /deliveries/{delivery_id}/archive`
+
+归档非活跃交付（幂等）。仅允许终态（delivered / failed / 无活跃 ChangeSet 且 plan 非
+IN_PROGRESS）；活跃交付返回 409。归档不删数据，列表默认过滤 `archived`。
+
 ## 5. 状态映射（读模型内唯一实现，禁止前端另行映射）
 
-### 5.1 Task：后端 7 态 → 展示 5 态
+### 5.1 Task：后端 7 态 → 展示 6 态
 
 | backend_status | display_status | 备注 |
 | --- | --- | --- |
 | assigned | pending | |
 | in_progress | running | |
 | in_progress 且存在未终态 rework 链 | repairing | §5.2 |
-| blocked | repairing | 展示层归入修复中，note 说明 |
+| blocked | blocked | 独立展示态，不并入 repairing |
 | succeeded | succeeded | |
 | failed / cancelled | failed | |
 | superseded | —（列表默认过滤） | 计划改版被替代 |
 
-### 5.2 attempt 与修复时间线
+### 5.2 attempt、修复时间线与人工升级
 
-`attempt = 1 + 指向同一 (repository, parent_task) 的 CI rework task 链长度`。
-`repair_timeline` 由 rework task 创建事件 + recovery action 状态变化按时间合成。
+- `attempt = 1 + 指向同一 (repository, parent_task) 的 CI rework task 链长度`。
+- `repair_timeline` 由 rework task 创建事件 + recovery action 状态变化按时间合成。
+- `escalated_to_human`：**读模型不做任何升级判断**。「第 N 次失败升级人工」是业务策略，
+  其结论已表达为 delivery recovery plan 中的 `MANUAL_INTERVENTION` action；读模型仅当
+  该 action 存在且未终态时置 `true`。策略调整发生在 delivery/task_orchestration，
+  与本契约无关。
 
 ### 5.3 RepositoryDelivery：12 态 → 门禁展示 4 态
 
@@ -237,7 +266,7 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 | # | 缺口 | v0.1 行为 | 补齐路径 |
 | --- | --- | --- | --- |
 | 6.1 | 交付列表/聚合此前不存在 | 本契约补齐 | — |
-| 6.2 | Specification 无 non_goals / forbidden_paths / release_rules | 返回 `null`，前端隐藏区块 | specification 增可选字段（小版本兼容） |
+| 6.2 | Specification 缺三字段 | `forbidden_paths` **随读模型同批实现**（治理语义，Runner 限权另一半）；`non_goals` / `release_rules` 返回 `null`，前端隐藏 | specification 增可选字段（小版本兼容） |
 | 6.3 | Runner 无 diffstat（±行数） | `diffstat: null`，前端只列文件名 | Runner 变更采集时补 `git diff --numstat` |
 | 6.4 | 无 token/成本采集 | `cost: null`，前端隐藏成本行 | 独立观测任务 |
 | 6.5 | clarify 决策无实体 | 决策夹不出现 clarify 类 | ChangeRequest / 澄清问答机制（另行设计） |
@@ -249,11 +278,12 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 
 | 聚合字段 | 生产模块 |
 | --- | --- |
-| project / phase | project + 读模型推导 |
+| delivery_id / plan / phase | repository_intelligence（execution plan、plan snapshots）+ 读模型推导 |
+| project | project |
 | contract | specification |
-| repositories / plan | repository_intelligence（plan snapshots） |
+| repositories | repository_intelligence |
 | tasks / attempt | task_orchestration（+ agent_directory 解析 agent 名） |
-| change_set / governance / merge_gate | delivery |
+| escalated_to_human / change_set / governance / merge_gate | delivery |
 | validation_snapshot | review_validation |
 | diffs | agent_runtime（runner_events 终态载荷） |
 | messages | collaboration |
