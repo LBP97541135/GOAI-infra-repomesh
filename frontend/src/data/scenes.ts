@@ -165,18 +165,14 @@ function executeScene(): DeliveryData {
 }
 
 /** S3 失败修复：隐藏验收测试失败、治理拦截、Repair Loop 第 2 次尝试。
- *  docs 的候选 commit 尚未产出（T5 未执行）→ change_set 不含 docs 仓（主脑裁决时序）。 */
+ *  主脑裁决（2026-08-11）：change_set 置 null——PrepareChangeSetCommand 要求全部候选
+ *  到位才创建，不存在部分仓的中间态；此场景是交付前验证段的故事，门禁线尚未开场，
+ *  失败修复由任务层 repairing + deny 事件 + watch 决策表达。 */
 function repairScene(): DeliveryData {
   const data = releaseScene();
   const agg = data.aggregate!;
-  const cs = agg.change_set!;
-  cs.repositories = cs.repositories.filter((r) => r.repository_id !== IDS.repo.docs);
+  agg.change_set = null;
   if (agg.validation_snapshot) delete agg.validation_snapshot.candidate_heads[IDS.repo.docs];
-  const core = cs.repositories.find((r) => r.repository_id === IDS.repo.core)!;
-  core.status = "review_pending";
-  core.gate_display = "running";
-  core.reviews = [];
-  core.merge_gate = { allowed: false, reasons: ["等待独立 Review"] };
   data.events.items = data.events.items.filter((e) => !e.at.includes("16:15:02"));
   data.decisions.items = data.decisions.items.filter((d) => d.kind === "watch");
   if (data.overlay) {
