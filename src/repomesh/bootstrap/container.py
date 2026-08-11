@@ -631,6 +631,59 @@ class ApplicationContainer:
             ),
         )
 
+    def organization_registry_service(self):
+        from repomesh.modules.agent_directory.application import (
+            CreateAgent,
+            CreateAgentRequest,
+        )
+        from repomesh.modules.agent_directory.contracts import (
+            AgentPrincipalStatus,
+            AgentRole,
+        )
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.identity_access.infrastructure import (
+            PostgresOrganizationStore,
+        )
+        from repomesh.modules.identity_access.organizations import (
+            OrganizationRegistryService,
+        )
+
+        directory = self.agent_directory
+
+        # Composition-root adapters: identity_access only knows its own ports;
+        # the agent_directory coupling lives here (same pattern as the read
+        # model's inline sources).
+        class _LeaderRegistrar:
+            async def ensure_leader(
+                self, organization_id: UUID, resource_name: str, idempotency_key: str
+            ) -> UUID:
+                created = await CreateAgent(directory).execute(
+                    CreateAgentRequest(
+                        organization_id=organization_id,
+                        role=AgentRole.ORGANIZATION_LEADER,
+                        agentteams_resource_name=resource_name,
+                    ),
+                    idempotency_key=idempotency_key,
+                )
+                return created.principal.id
+
+        class _AgentCounter:
+            async def count_active(self, organization_id: UUID) -> int:
+                principals = await directory.list()
+                return sum(
+                    1
+                    for principal in principals
+                    if principal.organization_id == organization_id
+                    and principal.status is AgentPrincipalStatus.ACTIVE
+                )
+
+        return OrganizationRegistryService(
+            PostgresOrganizationStore(self.database),
+            _LeaderRegistrar(),
+            _AgentCounter(),
+            PostgresDeliveryAuditLog(self.database),
+        )
+
     def issue_intake_service(self):
         from repomesh.modules.delivery import PostgresDeliveryAuditLog
         from repomesh.modules.repository_intelligence.application import (

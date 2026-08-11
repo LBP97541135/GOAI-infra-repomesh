@@ -484,6 +484,19 @@ async def bind_messages_to_team_rooms(database: Database) -> None:
             )
 
 
+async def seed_organization_registry(database: Database) -> None:
+    """Contract v0.3 §2 backfill (Q4 ruling): the seed organization predates
+    the registry table and has no name — without this row the workspace
+    switcher lists nothing. Idempotent: insert-if-absent by stable id."""
+
+    from repomesh.modules.identity_access.infrastructure import OrganizationRecord
+
+    organization_id = stable_id("organization")
+    async with database.transaction() as session:
+        if await session.get(OrganizationRecord, organization_id) is None:
+            session.add(OrganizationRecord(id=organization_id, name="console-demo"))
+
+
 async def seed_room_stream(database: Database) -> None:
     """Idempotently seed the live room stream (runner / matrix / gate facts).
 
@@ -688,6 +701,7 @@ async def seed(database_url: str) -> dict[str, object]:
             await seed_repository_specs(
                 PostgresSpecificationStore(database), replay.principal.id
             )
+            await seed_organization_registry(database)
             return {
                 "already_seeded": True,
                 "decided_by_agent_id": str(replay.principal.id),
@@ -1152,6 +1166,7 @@ async def seed(database_url: str) -> dict[str, object]:
         await seed_room_stream(database)
         await seed_project_topologies(database, leader_id)
         await seed_repository_specs(specifications, leader_id)
+        await seed_organization_registry(database)
         out["rooms"] = {
             key: {"team_room": team_room(key), "leader_room": leader_room(key)}
             for key, *_ in TEAM_SCENARIOS

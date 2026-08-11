@@ -1,4 +1,5 @@
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, String, delete, func, select
@@ -10,6 +11,7 @@ from repomesh.modules.identity_access.local_accounts import (
     LocalHumanAccount,
     LocalHumanSession,
 )
+from repomesh.modules.identity_access.organizations import OrganizationStore
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
@@ -35,6 +37,67 @@ class LocalHumanSessionRecord(Base):
     account_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OrganizationRecord(Base):
+    """Contract v0.3 §2.1: the workspace registry keeps only what the
+    switcher consumes — extra columns with no consumer would be invented."""
+
+    __tablename__ = "organizations"
+    __table_args__ = ({"schema": "identity_access"},)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationRow:
+    organization_id: UUID
+    name: str
+    created_at: str
+
+
+class PostgresOrganizationStore(OrganizationStore):
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def add(self, organization_id: UUID, name: str) -> None:
+        async with self._database.transaction() as session:
+            session.add(OrganizationRecord(id=organization_id, name=name))
+
+    async def get(self, organization_id: UUID) -> OrganizationRow | None:
+        async with self._database.transaction() as session:
+            record = await session.get(OrganizationRecord, organization_id)
+        return self._row(record)
+
+    async def get_by_name(self, name: str) -> OrganizationRow | None:
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(OrganizationRecord).where(OrganizationRecord.name == name)
+            )
+        return self._row(record)
+
+    async def list_all(self) -> tuple[OrganizationRow, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(OrganizationRecord).order_by(OrganizationRecord.created_at)
+                )
+            ).all()
+        return tuple(row for record in records if (row := self._row(record)))
+
+    @staticmethod
+    def _row(record: OrganizationRecord | None) -> OrganizationRow | None:
+        if record is None:
+            return None
+        return OrganizationRow(
+            organization_id=record.id,
+            name=record.name,
+            created_at=record.created_at.isoformat(),
+        )
 
 
 class InMemoryLocalAccountStore(LocalAccountStore):

@@ -54,3 +54,39 @@ class AgentAuthorizationGateway(Protocol):
         *,
         topology: ProjectAgentTopologyView | None = None,
     ) -> AuthorizationDecision: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationView:
+    """Contract v0.3 §2.2: one workspace row in the registry."""
+
+    organization_id: UUID
+    name: str
+    created_at: str
+    agent_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CreateOrganizationCommand:
+    """Contract v0.3 §2.3. Creating a workspace = organization row plus its
+    ORGANIZATION_LEADER registration (a desired-state directory row, not a
+    running agent — the roster reports its runtime honestly as absent)."""
+
+    name: str
+    idempotency_key: str
+    leader_resource_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationReceipt:
+    organization_id: UUID
+    name: str
+    created_at: str
+    leader_agent_id: UUID
+    created: bool
+
+
+class OrganizationRegistry(Protocol):
+    async def list_views(self) -> tuple[OrganizationView, ...]: ...
+
+    async def create(self, command: CreateOrganizationCommand) -> OrganizationReceipt: ...

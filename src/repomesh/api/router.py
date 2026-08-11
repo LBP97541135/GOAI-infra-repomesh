@@ -10,6 +10,7 @@ from repomesh.api.worker_mcp import router as worker_mcp_router
 from repomesh.modules.agent_runtime.api.router import router as agent_runtime_router
 from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
+from repomesh.modules.identity_access.api import router as identity_console_router
 from repomesh.modules.repository_intelligence.api.router import (
     router as repository_intelligence_router,
 )
@@ -26,5 +27,6 @@ api_router.include_router(delivery_read_model_router, prefix="/api/v1")
 api_router.include_router(issues_router, prefix="/api/v1")
 api_router.include_router(rooms_router, prefix="/api/v1")
 api_router.include_router(grid_router, prefix="/api/v1")
+api_router.include_router(identity_console_router, prefix="/api/v1")
 api_router.include_router(scm_webhook_router, prefix="/api/v1")
 api_router.include_router(scm_reconciliation_router, prefix="/api/v1")
