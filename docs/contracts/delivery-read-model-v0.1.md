@@ -210,7 +210,10 @@ event_id、correlation_id）。已知限制：当前仅含 Leader→Worker 方�
 
 两类均为**纯派生只读**，不新建实体：
 
-- `approve`：ChangeSet 中 `merge_gate.allowed=true` 且缺 READY 治理决策的仓库，每仓一项。
+- `approve`：merge gate 评估中**除「缺 head-bound READY 治理决策」外无其他阻塞原因**的仓库
+  （CI/审批/依赖/验证全过、仅差治理放行），每仓一项。原「allowed=true 且缺 READY」表述
+  为自相矛盾（gate 本身把缺 READY 计入 allowed=false），2026-08-11 修正。治理缺失的
+  reason 由 delivery contracts 导出常量，读模型据此判定，禁止散落魔法字符串。
 - `watch`：存在未终态 recovery plan / rework task 的仓库，每仓一项。
 - `clarify`：**v0.1 不提供**。它需要「Agent 提问 → 定向到人 → 回答结构化回写契约 →
   通知 Worker」的完整 ChangeRequest 回路（team-handoff §5.4），不做只读残缺版；
