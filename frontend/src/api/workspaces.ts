@@ -21,10 +21,13 @@ export async function fetchWorkspaces(): Promise<OrganizationView[] | null> {
   return res.organizations;
 }
 
-/** 幂等键按 §1.3/§2.3 客户端生成：每次逻辑创建一个新随机 UUID。 */
-export async function createWorkspace(name: string): Promise<OrganizationCreateResponse> {
+/** 幂等键由调用方持有并传入（A2）：每次逻辑创建新键、重试沿用同键（§1.3/§2.3）。 */
+export async function createWorkspace(
+  name: string,
+  idempotencyKey: string,
+): Promise<OrganizationCreateResponse> {
   return client().createOrganization({
     name,
-    idempotency_key: crypto.randomUUID(),
+    idempotency_key: idempotencyKey,
   });
 }

@@ -13,6 +13,7 @@ import { resolveGovernanceAgent, type GovernanceAgent } from "../api/decisions";
 export function NewIssueModal({
   open,
   workspaceLabel,
+  organizationId,
   mode,
   onClose,
   onToast,
@@ -20,11 +21,14 @@ export function NewIssueModal({
 }: {
   open: boolean;
   workspaceLabel: string;
+  /** 当前工作区（A1）：芯片解析与实际提交必须用同一个键，否则「显示的人」
+   *  和「记名的人」可能不同 */
+  organizationId: string | null;
   mode: "live" | "replay";
   onClose: () => void;
   onToast: (text: string) => void;
   /** live 创建回路（成功后由外层负责刷新列表与跳转）；失败原因原样抛回 */
-  onCreate: (text: string) => Promise<void>;
+  onCreate: (text: string, idempotencyKey: string) => Promise<void>;
 }) {
   // 草稿**有意跨开关保留**：误按 Esc 不该让用户重写一遍需求；
   // 提交**成功**才清空（主脑 2026-08-11 裁决，写端点接入后的约定行为）。
@@ -33,21 +37,25 @@ export function NewIssueModal({
   const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
   const [principalResolving, setPrincipalResolving] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  /** A2（§1.3）：幂等键随「逻辑创建」而非「请求」——文本一变/提交成功即换新键，
+   *  失败重试沿用同键，超时重点不会创建第二个 issue */
+  const keyRef = useRef<string>(crypto.randomUUID());
 
   useEffect(() => {
     if (!open) return;
     areaRef.current?.focus();
-    // 处理者芯片：与治理决策同一个派生单点（缓存命中时无额外请求）
+    // 处理者芯片：与治理决策同一个派生单点（缓存命中时无额外请求）。
+    // A1：按当前工作区解析——与提交路径同键，芯片显示谁就以谁记名
     let cancelled = false;
     setPrincipalResolving(true);
-    resolveGovernanceAgent(null)
+    resolveGovernanceAgent(organizationId)
       .then((agent) => !cancelled && setPrincipal(agent))
       .catch(() => !cancelled && setPrincipal(null))
       .finally(() => !cancelled && setPrincipalResolving(false));
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, organizationId]);
 
   const submit = useCallback(() => {
     if (submitting) return;
@@ -61,8 +69,11 @@ export function NewIssueModal({
       return;
     }
     setSubmitting(true);
-    onCreate(text.trim())
-      .then(() => setText(""))
+    onCreate(text.trim(), keyRef.current)
+      .then(() => {
+        setText("");
+        keyRef.current = crypto.randomUUID(); // 本次逻辑创建已完成，下一次换新键
+      })
       .catch((err: unknown) => {
         onToast(`创建失败：${err instanceof Error ? err.message : String(err)}`);
       })
@@ -127,7 +138,11 @@ export function NewIssueModal({
           className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-[#6b6046] focus:outline-none"
           placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            // A2：文本已变 = 新的逻辑创建，换新键（改完再重试不会被旧键归并）
+            keyRef.current = crypto.randomUUID();
+          }}
         />
 
         <div className="flex items-center gap-2.5 border-t border-line px-3.5 py-2.5">

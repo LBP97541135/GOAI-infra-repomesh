@@ -44,6 +44,8 @@ export default function ConsoleShell() {
   const [workspaceNote, setWorkspaceNote] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspacesReload, setWorkspacesReload] = useState(0);
+  /** 列表代际号（A3）：主取数 effect 每次执行 +1，「加载更多」按代际丢弃过期响应 */
+  const issuesEpoch = useRef(0);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -102,6 +104,8 @@ export default function ConsoleShell() {
   useEffect(() => {
     if (authState !== "authenticated") return;
     let cancelled = false;
+    // A3：换 tab/工作区即换代——在途「加载更多」响应按代际丢弃，不污染新列表
+    issuesEpoch.current += 1;
     setIssuesLoading(true);
     setIssuesError(null);
     fetchIssues({ state: issueTab, organizationId: workspaceId ?? undefined })
@@ -123,12 +127,14 @@ export default function ConsoleShell() {
   const loadMoreIssues = () => {
     const cursor = issues?.next_cursor;
     if (!cursor || issuesMore) return;
+    const epoch = issuesEpoch.current;
     setIssuesMore(true);
     fetchIssues({ state: issueTab, cursor, organizationId: workspaceId ?? undefined })
-      .then((page) =>
+      .then((page) => {
+        if (epoch !== issuesEpoch.current) return; // A3：已切 tab/工作区，丢弃
         // 续读只追加条目；计数是全量值，以最新一页为准即可
-        setIssues((prev) => (prev ? { ...page, issues: [...prev.issues, ...page.issues] } : page)),
-      )
+        setIssues((prev) => (prev ? { ...page, issues: [...prev.issues, ...page.issues] } : page));
+      })
       .catch((err: unknown) => showToast(`加载更多失败：${err instanceof Error ? err.message : String(err)}`))
       .finally(() => setIssuesMore(false));
   };
@@ -149,9 +155,10 @@ export default function ConsoleShell() {
   };
 
   /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
-   *  处理者按当前工作区派生（选「全部」时 null = 花名册唯一活跃 Org Leader）。 */
-  const handleCreateIssue = async (text: string) => {
-    const issue = await createIssue(text, workspaceId);
+   *  处理者按当前工作区派生（选「全部」时 null = 花名册唯一活跃 Org Leader）；
+   *  幂等键由弹窗持有（A2）。 */
+  const handleCreateIssue = async (text: string, idempotencyKey: string) => {
+    const issue = await createIssue(text, workspaceId, idempotencyKey);
     setNewIssueOpen(false);
     showToast(`issue 已创建：#${issue.issue_id.slice(0, 8)}（虚拟草稿，等待规划）`);
     setIssuesReload((n) => n + 1);
@@ -159,8 +166,8 @@ export default function ConsoleShell() {
   };
 
   /** B-2 创建回路：建组织 + 登记 Org Leader → 刷新列表 → 选中新工作区。 */
-  const handleCreateWorkspace = async (name: string) => {
-    const created = await createWorkspace(name);
+  const handleCreateWorkspace = async (name: string, idempotencyKey: string) => {
+    const created = await createWorkspace(name, idempotencyKey);
     showToast(`工作区已创建：${created.name}（Org Leader 已登记，运行时未拉起）`);
     setWorkspacesReload((n) => n + 1);
     setWorkspaceId(created.organization_id);
@@ -271,6 +278,7 @@ export default function ConsoleShell() {
         workspaceLabel={
           workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? "全部工作区"
         }
+        organizationId={workspaceId}
         mode={issuesSourceMode()}
         onClose={() => setNewIssueOpen(false)}
         onToast={showToast}

@@ -38,11 +38,15 @@ export function issuesSourceMode(): DataSourceMode {
  *  「模拟创建」会篡改夹具世界，调用方在弹窗层挡掉。
  *
  *  处理者 = 花名册派生的 Org Leader（与治理决策同一个单点 resolveGovernanceAgent，
- *  不新增第二条主体取数路径）。幂等键按 §1.3 由客户端生成：每次逻辑创建一个新的
- *  随机 UUID，请求内重试（fetch 层如有）沿用同键；禁止用文本 hash 之类低熵键。 */
+ *  不新增第二条主体取数路径）。
+ *
+ *  幂等键由**调用方**持有并传入（A2 修正）：§1.3 要求「每次逻辑创建一个新键、
+ *  **重试沿用同键**」——键在这里现取的话，失败重试就是新键，超时后重点会创建
+ *  两个 issue。弹窗在文本变化/提交成功时换键，重试期间键不变。 */
 export async function createIssue(
   requirementText: string,
   organizationId: string | null,
+  idempotencyKey: string,
 ): Promise<IssueListItemView> {
   const principal = await resolveGovernanceAgent(organizationId);
   if (!principal) {
@@ -55,7 +59,7 @@ export async function createIssue(
   return client.createIssue({
     requirement_text: requirementText,
     created_by_agent_id: principal.agentId,
-    idempotency_key: crypto.randomUUID(),
+    idempotency_key: idempotencyKey,
   });
 }
 

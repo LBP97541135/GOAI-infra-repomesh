@@ -86,8 +86,9 @@ export function SidebarV2({
   /** null = 全部工作区 */
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (organizationId: string | null) => void;
-  /** 创建回路（成功后由外层刷新列表并选中新工作区）；失败原因原样抛回 */
-  onCreateWorkspace: (name: string) => Promise<void>;
+  /** 创建回路（成功后由外层刷新列表并选中新工作区）；失败原因原样抛回。
+   *  幂等键由本组件持有（A2：名称变化/成功才换键，重试沿用同键） */
+  onCreateWorkspace: (name: string, idempotencyKey: string) => Promise<void>;
   onNavigate: (nav: NavKey) => void;
   onNewIssue: () => void;
   onLogout: () => void;
@@ -98,21 +99,25 @@ export function SidebarV2({
   const [createName, setCreateName] = useState("");
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
+  /** A2（§2.3）：键随逻辑创建走——名称一变/成功即换，重试沿用同键 */
+  const createKeyRef = useRef<string>(crypto.randomUUID());
 
   const selected = workspaces?.find((w) => w.organization_id === selectedWorkspaceId) ?? null;
   const switcherLabel =
     workspaces === null ? (workspaceNote ?? "工作区未接入") : (selected?.name ?? "全部工作区");
 
   const submitCreate = () => {
+    if (createSubmitting) return; // Enter 连击/键盘 repeat 不发第二次
     const name = createName.trim();
     if (!name) {
       onToast("请先输入工作区名称");
       return;
     }
     setCreateSubmitting(true);
-    onCreateWorkspace(name)
+    onCreateWorkspace(name, createKeyRef.current)
       .then(() => {
         setCreateName("");
+        createKeyRef.current = crypto.randomUUID();
         setCreating(false);
         setDropOpen(false);
       })
@@ -223,7 +228,10 @@ export function SidebarV2({
                       placeholder="工作区名称"
                       value={createName}
                       disabled={createSubmitting}
-                      onChange={(e) => setCreateName(e.target.value)}
+                      onChange={(e) => {
+                        setCreateName(e.target.value);
+                        createKeyRef.current = crypto.randomUUID(); // A2：改名=新逻辑创建
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") submitCreate();
                         if (e.key === "Escape") setCreating(false);
