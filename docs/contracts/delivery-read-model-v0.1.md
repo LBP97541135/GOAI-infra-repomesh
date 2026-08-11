@@ -131,8 +131,9 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
         "repository_id": "uuid", "task_id": "uuid",
         "status": "pr_open|ci_pending|...|merged",          // 12 态原样透出
         "gate_display": "open|blocked|running|waiting",     // §5.3 映射
-        "pull_request_url": "string|null", "pull_request_number": 1,
-        "head_sha": "string", "base_sha": "string", "branch_name": "string",
+        "pull_request_url": "string|null", "pull_request_number": "number|null",  // PR 创建前为 null
+        "head_sha": "string",              // 候选 commit SHA（Runner 产出），非 base；ChangeSet 创建即存在，恒非空
+        "base_sha": "string", "branch_name": "string",
         "depends_on": ["repository_id"], "merge_order": 1,
         "ci_checks": [{ "check_name": "string", "passed": true, "summary": "string" }],
         "required_checks": ["string"], "required_approvals": 1,
