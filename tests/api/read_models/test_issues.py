@@ -344,6 +344,38 @@ async def test_cancelled_topology_closes_an_otherwise_open_issue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_opened_by_name_resolves_the_agent_resource_name() -> None:
+    """§2 (追认): same source as v0.1 sender_name — a resource name, not a
+    person's name — and null when there is nothing to resolve."""
+
+    named_project, anonymous_project = uuid4(), uuid4()
+    named_plan = _plan(named_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+    anonymous_plan = _plan(
+        anonymous_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS
+    )
+    service = _issue_service(
+        plans=(named_plan, anonymous_plan),
+        snapshots=(
+            _snapshot(named_project, named_plan.id, agent_id=uuid4()),
+            # No created_by_agent_id: nothing to resolve, so no name.
+            _snapshot(anonymous_project, anonymous_plan.id, agent_id=None),
+        ),
+        change_sets={},
+        agents=StubAgents(),
+    )
+
+    by_issue = {
+        item["issue_id"]: item for item in (await service.list_issues())["issues"]
+    }
+
+    assert by_issue[named_project]["opened_by_name"] == "leader-01"
+    assert by_issue[anonymous_project]["opened_by_name"] is None
+    assert by_issue[anonymous_project]["opened_by_agent_id"] is None
+    # The overview spreads the same summary, so the field is on both endpoints.
+    assert (await service.get_issue(named_project))["opened_by_name"] == "leader-01"
+
+
+@pytest.mark.asyncio
 async def test_topology_only_fields_degrade_to_null_without_a_team() -> None:
     """Honest data: no topology row means no fact, not a fabricated default."""
 

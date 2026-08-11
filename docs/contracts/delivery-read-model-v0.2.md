@@ -71,6 +71,8 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
   "operational_status": "active|paused|cancelled|null",   // project 拓扑，main 引入
   "execution_mode": "auto|supervised|manual_controlled|null",
   "opened_by_agent_id": "uuid|null",    // 最早 PlanSnapshot.created_by_agent_id
+  "opened_by_name": "string|null",      // **agent 资源名（rm-worker-01），非人名**；
+                                        // 与 v0.1 §4.2 sender_name 同源同精度，解析不到为 null
   "opened_at": "...",                   // 最早 PlanSnapshot.created_at
   "updated_at": "..."                   // §2.3
 } ],
@@ -416,6 +418,7 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 会话票据鉴权 | 读端点仍用共享动作 token（Q1） | 与 main 的 `/auth` 会话体系对齐，单独立项 |
 | SSE 推送 | 房间刷新仍为轮询（Q5） | 先定「哪些事实值得推」，再复用 main 的 SSE 模式 |
 | 统一决策夹 | 治理决策与 ReviewRequest 并存两面（Q6） | 产品级整合，需先统一审批对象语义 |
+| 列表服务端筛选 | `/issues` 无 `?repository_id=` / `?phase=`（§7.1 裁决撤按钮） | issue 规模变大后再议：`repository_id` 需定义「issue 含该仓」的跨轮次包含语义 |
 | 运行时时长与醒睡 | `uptime_seconds` / `awake` 恒 null（§4.4） | AgentTeams Controller 在 status 暴露启动时间与观测态 |
 
 ## 7. 裁决记录（2026-08-11，八项全部裁决 · 生效）
@@ -440,6 +443,8 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 标签计数 | `/issues` 响应增加 `open_count` / `closed_count`（前端问询升级主脑后裁决） | §2、§2.5 |
 | 列表分页 | `/issues` 落实 Q7 的 offer 游标（`?cursor=&limit=`），`next_cursor` 不再恒 null | §2.4 |
 | 工作区归属 | `organization_id` 三级取值链，第三级为开票 agent 所属组织 | §2 |
+| 发起者名 | `/issues` 与 `/issues/{id}` 增加 `opened_by_name`（nullable）。**值为 agent 资源名，不是人名**——与 v0.1 §4.2 `sender_name` 同源同精度；前端文案须写「AGENT xxx 发起」，不得呈现为同事姓名 | §2 |
+| 列表筛选 | `?repository_id=` / `?phase=` **v0.2 不做**：列表响应无仓库字段、分页下的本地过滤是部分结果冒充全量。前端两个筛选按钮撤掉，另立 backlog | §2.4、§6.1 |
 | 拓扑降级 | 未建团时拓扑派生字段返 null/空数组，实测种子拓扑表为空 | §2 |
 | issue 全集 | 全集 = 有 ExecutionPlan 或 PlanSnapshot 的 project 并集；**§2.1 规则 6 当前不可达**（无注册表也无拓扑列举接口），issue 写端点落地后自动生效 | §2、§6.1 |
 

@@ -568,6 +568,16 @@ class DeliveryReadModelService:
             }
 
         opened_at = earliest.created_at if earliest is not None else None
+        opened_by_agent_id = (
+            earliest.created_by_agent_id if earliest is not None else None
+        )
+        # Same source and precision as v0.1's messages sender_name: an
+        # AgentTeams resource name, never a human name.
+        opened_by_name = (
+            await self._agents.name(opened_by_agent_id)
+            if opened_by_agent_id is not None
+            else None
+        )
         # §2.3: the latest persisted fact across every round and snapshot.
         timestamps = [facts.updated_at for facts in rounds if facts.updated_at] + [
             snapshot.created_at for snapshot in snapshots
@@ -613,9 +623,8 @@ class DeliveryReadModelService:
                 topology.operational_status.value if topology else None
             ),
             "execution_mode": topology.execution_mode.value if topology else None,
-            "opened_by_agent_id": (
-                earliest.created_by_agent_id if earliest is not None else None
-            ),
+            "opened_by_agent_id": opened_by_agent_id,
+            "opened_by_name": opened_by_name,
             "opened_at": opened_at,
             "updated_at": max(timestamps) if timestamps else opened_at,
         }
