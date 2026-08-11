@@ -34,6 +34,26 @@ export interface ApprovalInfo {
   headSha: string | null;
 }
 
+/** 证据面（B-3 最小版）：治理决策的支撑证据，从 v0.1 交付聚合切单仓作用域派生。
+ *  全部字段原样透传或 nullable 降级（diffstat 缺失只列文件名、快照 null 显未接入），
+ *  不做状态映射。 */
+export interface EvidenceView {
+  repositoryName: string;
+  headSha: string;
+  baseSha: string;
+  branchName: string;
+  prLabel: string | null;
+  prUrl: string | null;
+  ciChecks: Array<{ name: string; passed: boolean; summary: string; required: boolean }>;
+  reviews: Array<{ reviewer: string; state: string; summary: string }>;
+  requiredApprovals: number;
+  /** null = 合并请求已发出或已过（§6.4），不等于「不允许」 */
+  mergeGate: { allowed: boolean; reasons: string[] } | null;
+  governance: Array<{ decision: string; headSha: string; reason: string; decidedAt: string }>;
+  commits: Array<{ sha: string; files: string[] }>;
+  snapshot: { id: string; status: string; environmentHash: string; expiresAt: string } | null;
+}
+
 /** 环境窗（CONS-43）的单仓切片：轮次粒度的交付聚合切到本仓作用域。
  *  gate 相关字段原样透传读模型，前端不映射。 */
 export interface RepositoryEnv {

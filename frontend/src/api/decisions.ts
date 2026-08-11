@@ -5,7 +5,11 @@
  *  `active_round_id ?? latest_round_id` 这一轮的决策，并在 UI 上标明是第几轮——
  *  `pending_decision_count` 是跨轮求和，与单轮决策数不一定相等，不能混为一谈。 */
 import type { ApprovalInfo, Decision } from "../types";
-import type { GovernanceDecisionRequest, GovernanceDecisionView } from "./contract";
+import type {
+  DeliveryAggregate,
+  GovernanceDecisionRequest,
+  GovernanceDecisionView,
+} from "./contract";
 import { createApiClient } from "./client";
 import { fetchConsoleAgents } from "./grid";
 import { resolveDataSourceMode } from "./source";
@@ -15,6 +19,8 @@ import { decisionsFixture, deliveryAggregateFixture } from "../data/issueDetail"
 export interface DecisionDeckData {
   deck: Decision[];
   approval: ApprovalInfo | null;
+  /** 本轮聚合原文：证据面（B-3）从中切单仓证据，避免点击时二次取数 */
+  aggregate: DeliveryAggregate;
 }
 
 function client() {
@@ -31,6 +37,7 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
     return {
       deck: decisionsFromContract(decisionsFixture.items),
       approval: approvalFromContract(deliveryAggregateFixture, decisionsFixture.items),
+      aggregate: deliveryAggregateFixture,
     };
   }
   const api = client();
@@ -38,6 +45,7 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
   return {
     deck: decisionsFromContract(decisions.items),
     approval: approvalFromContract(agg, decisions.items),
+    aggregate: agg,
   };
 }
 

@@ -10,9 +10,13 @@ import {
   type GovernanceAgent,
 } from "../api/decisions";
 import type { RoundHistoryState } from "../components/RoundsPanel";
+import type { DeliveryAggregate } from "../api/contract";
+import type { EvidenceView } from "../types";
 import { fetchIssueDetail, fetchRooms } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
+import { EvidenceModal } from "../components/EvidenceModal";
+import { evidenceFromAggregate } from "../viewmodel";
 import { IssueDetailPage } from "./IssueDetailPage";
 
 /** issue 详情取数容器（§3 概览 + §5.1 房间清单 + §4.3 决策夹 + §4.4 写回路）。
@@ -58,6 +62,11 @@ export function IssueDetailContainer({
    *  点击其他轮次或成功/失败后确认态复位。 */
   const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+
+  /** 证据面（B-3）：决策夹取数时保留的本轮聚合 + 当前打开的单仓证据 */
+  const [deckAggregate, setDeckAggregate] = useState<DeliveryAggregate | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceView | null>(null);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,6 +127,7 @@ export function IssueDetailContainer({
         if (cancelled) return;
         setDeck(data.deck);
         setApproval(data.approval);
+        setDeckAggregate(data.aggregate);
         setDeckNote(
           // 夹具已与详情/房间同源（同一 issue 同一轮），所以只需说明这是回放数据，
           // 不必再声明「非本 issue」——那句是借用 v1 演示交付时期的补丁
@@ -128,6 +138,7 @@ export function IssueDetailContainer({
         if (cancelled) return;
         setDeck([]);
         setApproval(null);
+        setDeckAggregate(null);
         setDeckNote(`${roundLabel} · 决策取用失败：${err instanceof Error ? err.message : String(err)}`);
       });
     return () => {
@@ -204,10 +215,17 @@ export function IssueDetailContainer({
         setApprovalOpen(true);
         return;
       }
-      // 证据面本就是既有缺口；原文案把人指向 v1 控制台，v1 退役后如实说明缺口
-      onToast("证据面（CI 报告 / 变更详情）未接入。门禁与变更可在房间视图的环境窗查看");
+      // 证据面（B-3 最小版）：从本轮聚合切该决策指向仓库的既有证据
+      if (action === "view_evidence") {
+        if (!deckAggregate || !decision.repositoryId) {
+          onToast("证据不可用：本轮聚合未取到或决策未指向仓库");
+          return;
+        }
+        setEvidence(evidenceFromAggregate(deckAggregate, decision.repositoryId));
+        setEvidenceOpen(true);
+      }
     },
-    [onToast],
+    [onToast, deckAggregate],
   );
 
   const handleApprove = (comment: string) => {
@@ -311,6 +329,12 @@ export function IssueDetailContainer({
         }
         onCancel={() => setApprovalOpen(false)}
         onApprove={handleApprove}
+      />
+      <EvidenceModal
+        open={evidenceOpen}
+        roundLabel={deckNote ?? ""}
+        evidence={evidence}
+        onClose={() => setEvidenceOpen(false)}
       />
     </>
   );

@@ -11,7 +11,7 @@ import type {
   DeliveryAggregate,
   RepositoryDeliveryView,
 } from "./api/contract";
-import type { ApprovalInfo, Decision, RepositoryEnv } from "./types";
+import type { ApprovalInfo, Decision, EvidenceView, RepositoryEnv } from "./types";
 
 /** 用 Record<DecisionAction,…> 而非 Record<string,…>：契约新增动作枚举时，
  *  这里缺一项就是编译错误，而不是运行期渲染出 undefined。 */
@@ -102,6 +102,46 @@ export function repositoryEnvFromAggregate(agg: DeliveryAggregate, repositoryId:
       gate: r.gate_display,
       isCurrent: r.repository_id === repositoryId,
     })),
+  };
+}
+
+/** 证据面（B-3 最小版）：把决策指向的仓库在本轮聚合里的全部既有证据切出来。
+ *  没有新数据源——CI/评审/门禁/治理/变更/快照全部来自 v0.1 §3 聚合；
+ *  完整证据面（CI 原始报告、变更 diff 正文）是另一个后端能力，届时本函数只加字段。 */
+export function evidenceFromAggregate(agg: DeliveryAggregate, repositoryId: string): EvidenceView | null {
+  const mine = (agg.change_set?.repositories ?? []).find((r) => r.repository_id === repositoryId);
+  if (!mine) return null;
+  const info = agg.repositories.find((r) => r.repository_id === repositoryId);
+  const runs = agg.diffs.filter((d) => d.repository_id === repositoryId);
+
+  return {
+    repositoryName: info?.name ?? repositoryId.slice(0, 8),
+    headSha: mine.head_sha,
+    baseSha: mine.base_sha,
+    branchName: mine.branch_name,
+    prLabel: mine.pull_request_url ? prLabel(mine) : null,
+    prUrl: mine.pull_request_url,
+    ciChecks: mine.ci_checks.map((c) => ({
+      name: c.check_name,
+      passed: c.passed,
+      summary: c.summary,
+      required: mine.required_checks.includes(c.check_name),
+    })),
+    reviews: mine.reviews.map((r) => ({ reviewer: r.reviewer, state: r.state, summary: r.summary })),
+    requiredApprovals: mine.required_approvals,
+    mergeGate: mine.merge_gate,
+    governance: (agg.change_set?.governance_decisions ?? [])
+      .filter((g) => g.repository_id === repositoryId)
+      .map((g) => ({ decision: g.decision, headSha: g.head_sha, reason: g.reason, decidedAt: g.decided_at })),
+    commits: runs.map((r) => ({ sha: shortSha(r.commit_sha), files: r.changed_files })),
+    snapshot: agg.validation_snapshot
+      ? {
+          id: agg.validation_snapshot.id,
+          status: agg.validation_snapshot.status,
+          environmentHash: agg.validation_snapshot.environment_hash,
+          expiresAt: agg.validation_snapshot.expires_at,
+        }
+      : null,
   };
 }
 
