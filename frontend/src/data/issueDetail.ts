@@ -5,6 +5,8 @@
  *
  *  红线：state / phase / phase_note / runtime_status / live 均由读模型派生，只渲染不映射。 */
 import type {
+  DecisionsResponse,
+  DeliveryAggregate,
   DeliveryEventsPage,
   IssueDetailView,
   RepositoryPlanView,
@@ -382,6 +384,188 @@ export const repositoryPlanFixture: RepositoryPlanView = {
     tests: ["pytest tests/order"],
   },
   engineering_contract: null,
+};
+
+// ══════════ 当前轮次的交付聚合与决策夹（v0.1 §3 / §4.3，环境窗与决策夹消费） ══════════
+
+/** 决策夹与环境窗原先借用 data/replay.ts 的 v1 演示交付。那份夹具的 `project_id`
+ *  其实与本文件是同一个 issue，**但仓库 id 与轮次 id 是另一套**——于是 replay 模式下
+ *  用本文件的 `REPO_API` 去那份聚合里取环境切片必然落空，环境窗恒显「本仓环境未接入」，
+ *  决策夹也只能挂一句「非本 issue 的真实决策」的补丁说明。
+ *
+ *  现在改为本文件自产，id 与房间/计划夹具同源，replay 世界自洽。
+ *
+ *  只保留 v2 两个消费面真正要的部分：`repositoryEnvFromAggregate` 要 change_set /
+ *  diffs / validation_snapshot / plan.merge_order，`approvalFromContract` 要
+ *  change_set 与仓库名。`tasks` 在 v2 没有消费面（任务列表是 v1 的），故为空数组——
+ *  照抄一份没人读的任务列表，只会让下一个人以为它有用。 */
+const ROUND_ID = "2ebf564b-3bf2-5af1-ae24-3ccc4dd9d721";
+const CHANGE_SET_ID = "cc84f1d0-51be-4b7e-9d02-88a3c67e2042";
+const BASE_SHA = "d4c8b21a7e90f5d36b18a04c92e7f6531c80ee55";
+const HEAD_API = "8825f6bb9c31d4a07e5f2b6d8a19c3e4f701aa42";
+const HEAD_WEB = "6f21d3a8b90c47e12d5a8f3b6c94e07d1b28cc17";
+const HEAD_DOCS = "9e04d5f127c8b3a6e0f49d21c75b8ae3f612dd90";
+
+export const deliveryAggregateFixture: DeliveryAggregate = {
+  delivery_id: ROUND_ID,
+  project: {
+    project_id: ISSUE_ID,
+    project_key: null,
+    title: issueDetailFixture.title,
+    requirement_text: issueDetailFixture.requirement_text,
+    created_at: issueDetailFixture.opened_at,
+  },
+  contract: issueDetailFixture.contract,
+  repositories: [
+    { repository_id: REPO_API, name: "saleor-core", evidence: null },
+    { repository_id: REPO_WEB, name: "saleor-dashboard", evidence: null },
+    { repository_id: REPO_DOCS, name: "saleor-docs", evidence: null },
+  ],
+  plan: {
+    plan_version: 2,
+    status: "in_progress",
+    current_batch_index: 1,
+    execution_batches: [["saleor-core"], ["saleor-dashboard"], ["saleor-docs"]],
+    merge_order: [REPO_API, REPO_WEB, REPO_DOCS],
+  },
+  // v2 没有任务列表消费面（那是 v1 的）——空数组而不是照抄一份没人读的数据
+  tasks: [],
+  change_set: {
+    change_set_id: CHANGE_SET_ID,
+    status: "delivering",
+    merge_cursor: 0,
+    repositories: [
+      {
+        repository_id: REPO_API,
+        task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a002",
+        status: "ready_to_merge",
+        gate_display: "open",
+        pull_request_url: "https://github.com/saleor/saleor/pull/19466",
+        pull_request_number: 19466,
+        head_sha: HEAD_API,
+        base_sha: BASE_SHA,
+        branch_name: "repomesh/dlv-0042-core",
+        depends_on: [],
+        merge_order: 1,
+        ci_checks: [
+          { check_name: "单元测试", passed: true, summary: "412 通过" },
+          { check_name: "隐藏验收测试", passed: true, summary: "9/9" },
+          { check_name: "安全扫描", passed: true, summary: "0 高危" },
+        ],
+        required_checks: ["单元测试", "隐藏验收测试", "安全扫描"],
+        required_approvals: 1,
+        reviews: [{ reviewer: "security-reviewer", state: "approved", summary: "Security Reviewer 通过" }],
+        // 与后端语义一致：缺 head-bound 治理决策时不放行，批准后才 allowed=true
+        merge_gate: { allowed: false, reasons: ["head-bound governance decision is missing"] },
+        merge_sha: null,
+      },
+      {
+        repository_id: REPO_WEB,
+        task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a003",
+        status: "ci_failed",
+        gate_display: "blocked",
+        pull_request_url: "https://github.com/saleor/saleor-dashboard/pull/6732",
+        pull_request_number: 6732,
+        head_sha: HEAD_WEB,
+        base_sha: BASE_SHA,
+        branch_name: "repomesh/dlv-0042-dashboard",
+        depends_on: [REPO_API],
+        merge_order: 2,
+        ci_checks: [
+          { check_name: "单元测试", passed: true, summary: "203 通过" },
+          { check_name: "隐藏验收测试", passed: false, summary: "3/9 失败 · 空值渲染" },
+        ],
+        required_checks: ["单元测试", "隐藏验收测试"],
+        required_approvals: 1,
+        reviews: [],
+        merge_gate: { allowed: false, reasons: ["required check 隐藏验收测试 失败", "缺少必需 Review"] },
+        merge_sha: null,
+      },
+      {
+        repository_id: REPO_DOCS,
+        task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a005",
+        status: "pending",
+        gate_display: "waiting",
+        pull_request_url: null,
+        pull_request_number: null,
+        head_sha: HEAD_DOCS,
+        base_sha: BASE_SHA,
+        branch_name: "repomesh/dlv-0042-docs",
+        depends_on: [REPO_API],
+        merge_order: 3,
+        ci_checks: [],
+        required_checks: [],
+        required_approvals: 0,
+        reviews: [],
+        merge_gate: { allowed: false, reasons: ["依赖仓库尚未合并"] },
+        merge_sha: null,
+      },
+    ],
+    governance_decisions: [],
+    recovery_plans: [],
+  },
+  validation_snapshot: {
+    id: "b0626c42-9f18-4d3a-8e57-2c9a1f0b7d64",
+    status: "active",
+    candidate_heads: { [REPO_API]: HEAD_API, [REPO_WEB]: HEAD_WEB, [REPO_DOCS]: HEAD_DOCS },
+    environment_hash: "env-9f31c2d8",
+    expires_at: "2026-08-11T18:00:00Z",
+  },
+  diffs: [
+    {
+      repository_id: REPO_API,
+      run_id: "3bb524ce-8f01-4e2a-9d37-51c6a2e4b001",
+      commit_sha: HEAD_API,
+      changed_files: [
+        "saleor/order/models.py",
+        "saleor/graphql/order/types.py",
+        "migrations/0042_price_override_reason.py",
+        "tests/order/test_price_override_reason.py",
+      ],
+      // §6.3：Runner 未采集 ± 行数，恒 null——前端只列文件名
+      diffstat: null,
+    },
+    {
+      repository_id: REPO_WEB,
+      run_id: "3bb524ce-8f01-4e2a-9d37-51c6a2e4b003",
+      commit_sha: HEAD_WEB,
+      changed_files: [
+        "src/orders/components/OrderPriceOverrideNote.tsx",
+        "src/graphql/types.generated.ts",
+      ],
+      diffstat: null,
+    },
+  ],
+  cost: null,
+  matrix_room_id: "!room-core-team:local",
+  trace_id: null,
+};
+
+/** 本轮决策夹（§4.3）。approve 指向 REPO_API，与上面 change_set 里那条
+ *  `merge_gate.allowed: false / 缺 head-bound 治理决策` 对应——批准它正是补上那一条。 */
+export const decisionsFixture: DecisionsResponse = {
+  items: [
+    {
+      id: "dec-approve-core",
+      kind: "approve",
+      title: "批准 saleor-core 合并",
+      body: "3 项必需检查全绿，独立 Review 通过。合并顺序第 1 位，后续两仓依赖此合并。",
+      repository_id: REPO_API,
+      head_sha: HEAD_API,
+      created_at: "2026-08-11T16:10:00Z",
+      actions: ["approve_merge", "view_evidence"],
+    },
+    {
+      id: "dec-watch-dashboard",
+      kind: "watch",
+      title: "dashboard 修复循环进行中",
+      body: "隐藏验收测试失败已定位（空值渲染），返工任务第 2 次尝试执行中；恢复计划未终态。",
+      repository_id: REPO_WEB,
+      head_sha: HEAD_WEB,
+      created_at: "2026-08-11T16:06:00Z",
+      actions: ["view_evidence"],
+    },
+  ],
 };
 
 /** 本轮事件时间线（v0.1 §4.1）。**轮次粒度**，故刻意混了三种归属：

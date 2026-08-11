@@ -10,7 +10,7 @@ import { createApiClient } from "./client";
 import { fetchConsoleAgents } from "./grid";
 import { resolveDataSourceMode } from "./source";
 import { approvalFromContract, decisionsFromContract } from "../viewmodel";
-import { aggregate as replayAggregate, decisionsResponse as replayDecisions } from "../data/replay";
+import { decisionsFixture, deliveryAggregateFixture } from "../data/issueDetail";
 
 export interface DecisionDeckData {
   deck: Decision[];
@@ -26,11 +26,11 @@ function client() {
 
 export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckData> {
   if (resolveDataSourceMode() === "replay") {
-    // 回放模式复用 v1 的演示交付（DLV-0042）——它与 v2 详情夹具不是同一 issue，
-    // 所以调用方必须把这块标注为「回放演示」，不能让人以为是本 issue 的真决策。
+    // 夹具与详情/房间/计划同源（同一 issue、同一套仓库与轮次 id），所以这里就是
+    // 「本 issue 本轮的决策」——不再需要「非本 issue」那句补丁说明。
     return {
-      deck: decisionsFromContract(replayDecisions.items),
-      approval: approvalFromContract(replayAggregate, replayDecisions.items),
+      deck: decisionsFromContract(decisionsFixture.items),
+      approval: approvalFromContract(deliveryAggregateFixture, decisionsFixture.items),
     };
   }
   const api = client();

@@ -103,10 +103,9 @@ export function IssueDetailContainer({
         setDeck(data.deck);
         setApproval(data.approval);
         setDeckNote(
-          replay
-            ? // 回放夹具取自 v1 演示交付，不是本 issue 的决策——必须说明，否则是冒充
-              "回放演示数据（非本 issue 的真实决策）"
-            : `${roundLabel} · live`,
+          // 夹具已与详情/房间同源（同一 issue 同一轮），所以只需说明这是回放数据，
+          // 不必再声明「非本 issue」——那句是借用 v1 演示交付时期的补丁
+          replay ? `${roundLabel} · 回放夹具` : `${roundLabel} · live`,
         );
       })
       .catch((err: unknown) => {

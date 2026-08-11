@@ -12,8 +12,8 @@ import type { RepositoryEnv } from "../types";
 import { createApiClient } from "./client";
 import { resolveDataSourceMode } from "./source";
 import { repositoryEnvFromAggregate } from "../viewmodel";
-import { aggregate as replayAggregate } from "../data/replay";
 import {
+  deliveryAggregateFixture,
   issueDetailFixture,
   repositoryPlanFixture,
   roomStreamFixtures,
@@ -88,7 +88,7 @@ export async function fetchRepositoryEnv(
   repositoryId: string,
 ): Promise<RepositoryEnv | null> {
   if (resolveDataSourceMode() === "replay") {
-    return repositoryEnvFromAggregate(replayAggregate, repositoryId);
+    return repositoryEnvFromAggregate(deliveryAggregateFixture, repositoryId);
   }
   return repositoryEnvFromAggregate(await client().getDelivery(roundId), repositoryId);
 }
