@@ -384,12 +384,23 @@ class ApplicationContainer:
         )
 
         delivery = self.delivery_service()
+        advancer = self.execution_plan_advancer()
+        on_observed = None
+        if advancer is not None and get_settings().delivery_auto_enabled:
+            async def _on_observed(change_set):
+                # After a delivery observation (e.g. a merge) re-evaluate the
+                # affected plan so a waiting batch can advance.
+                for repository in change_set.repositories:
+                    await advancer.reconsider_task(repository.task_id)
+
+            on_observed = _on_observed
         return GitHubObservationProcessor(
             self.scm_observation_service(),
             delivery,
             self.repository_catalog,
             ChangeSetSCMCoordinator(delivery, self.repository_catalog, self.scm_adapter),
             auto_merge=get_settings().delivery_auto_enabled,
+            on_observed=on_observed,
         )
 
     def changeset_scm_coordinator(self):
@@ -475,15 +486,56 @@ class ApplicationContainer:
             ),
         )
         completion_handler = None
+        on_batch_deliver = None
+        delivery_state = None
         if get_settings().delivery_auto_enabled:
-            completion_handler = self.plan_delivery_finalizer().handle
+            # Batch-by-batch delivery: each successful batch is delivered and
+            # the plan advances only once that batch's pull requests merged.
+            # The one-shot ``handle`` is superseded by ``handle_batch``.
+            on_batch_deliver = self.plan_delivery_finalizer().handle_batch
+            delivery_state = self.delivery_state_adapter()
         return AdvanceExecutionPlan(
             self.execution_plan_store(),
             self.task_store,
             assigner,
             decomposer,
             on_plan_completed=completion_handler,
+            delivery_state=delivery_state,
+            on_batch_deliver=on_batch_deliver,
         )
+
+    def delivery_state_adapter(self):
+        """Adapt DeliveryService into the task orchestration delivery gate.
+
+        The gate only needs a merged flag per repository; ChangeSet delivery
+        status is projected here in the composition root.
+        """
+
+        from repomesh.modules.delivery.contracts import RepositoryDeliveryStatus
+        from repomesh.modules.task_orchestration.contracts import (
+            DeliveryGatedRepositoryView,
+        )
+
+        class _DeliveryStatePort:
+            def __init__(self, delivery) -> None:
+                self._delivery = delivery
+
+            async def repository_states(self, project_id):
+                by_repository: dict[UUID, DeliveryGatedRepositoryView] = {}
+                for change_set in await self._delivery.find_by_project(project_id):
+                    for repository in change_set.repositories:
+                        merged = repository.status is RepositoryDeliveryStatus.MERGED
+                        previous = by_repository.get(repository.repository_id)
+                        if previous is None or (merged and not previous.merged):
+                            by_repository[repository.repository_id] = (
+                                DeliveryGatedRepositoryView(
+                                    repository_id=repository.repository_id,
+                                    merged=merged,
+                                )
+                            )
+                return tuple(by_repository.values())
+
+        return _DeliveryStatePort(self.delivery_service())
 
     def execution_plan_starter(self) -> AdvanceExecutionPlanStarter | None:
         advancer = self.execution_plan_advancer()

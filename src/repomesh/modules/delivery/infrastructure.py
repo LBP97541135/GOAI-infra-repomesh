@@ -582,6 +582,13 @@ class InMemoryChangeSetStore:
             )
         )
 
+    async def find_by_project(self, project_id: UUID) -> tuple[ChangeSet, ...]:
+        return tuple(
+            change_set
+            for change_set in self.items.values()
+            if change_set.project_id == project_id
+        )
+
     async def list_active(self) -> tuple[ChangeSet, ...]:
         terminal = {ChangeSetStatus.DELIVERED, ChangeSetStatus.COMPENSATED}
         return tuple(item for item in self.items.values() if item.status not in terminal)
@@ -644,7 +651,18 @@ class PostgresChangeSetStore:
                 ).all()
             }
             for candidate in change_set.repositories:
-                item = existing[candidate.repository_id]
+                item = existing.get(candidate.repository_id)
+                if item is None:
+                    session.add(
+                        ChangeSetRepositoryRecord(
+                            change_set_id=change_set.id,
+                            repository_id=candidate.repository_id,
+                            head_sha=candidate.commit_sha,
+                            pull_request_number=candidate.pull_request_number,
+                            status=candidate.status.value,
+                        )
+                    )
+                    continue
                 item.head_sha = candidate.commit_sha
                 item.pull_request_number = candidate.pull_request_number
                 item.status = candidate.status.value
@@ -664,6 +682,17 @@ class PostgresChangeSetStore:
                 return ()
             records = (
                 await session.scalars(select(ChangeSetRecord).where(ChangeSetRecord.id.in_(ids)))
+            ).all()
+        return tuple(self._hydrate(record) for record in records)
+
+    async def find_by_project(self, project_id: UUID) -> tuple[ChangeSet, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(ChangeSetRecord)
+                    .where(ChangeSetRecord.project_id == project_id)
+                    .order_by(ChangeSetRecord.updated_at)
+                )
             ).all()
         return tuple(self._hydrate(record) for record in records)
 

@@ -19,6 +19,8 @@ from repomesh.modules.task_orchestration.application import (
 )
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
+    DeliveryGatedRepositoryView,
+    DeliveryStatePort,
     ExecutionPlanStatus,
     TaskStatus,
     TaskView,
@@ -113,6 +115,21 @@ class RecordingSpecificationAuthor:
         )
 
 
+class FakeDeliveryState:
+    """Mutable delivery gate: merged flags per repository of the project."""
+
+    def __init__(self, merged: dict[UUID, bool] | None = None) -> None:
+        self.merged: dict[UUID, bool] = dict(merged or {})
+
+    async def repository_states(
+        self, project_id: UUID
+    ) -> tuple[DeliveryGatedRepositoryView, ...]:
+        return tuple(
+            DeliveryGatedRepositoryView(repository_id=repository_id, merged=merged)
+            for repository_id, merged in self.merged.items()
+        )
+
+
 class Environment:
     def __init__(
         self,
@@ -120,6 +137,8 @@ class Environment:
         *,
         with_spec_author: bool = True,
         worker_paths: tuple[str, ...] = ("src/**",),
+        delivery_state: DeliveryStatePort | None = None,
+        on_batch_deliver=None,
     ) -> None:
         self.organization_id = uuid4()
         self.project_id = uuid4()
@@ -202,7 +221,12 @@ class Environment:
             self.directory, self.topologies, self.tasks, self.assigner, self.spec_author
         )
         self.advancer = AdvanceExecutionPlan(
-            self.plans, self.tasks, self.assigner, self.decomposer
+            self.plans,
+            self.tasks,
+            self.assigner,
+            self.decomposer,
+            delivery_state=delivery_state,
+            on_batch_deliver=on_batch_deliver,
         )
 
     @property
@@ -499,6 +523,89 @@ async def test_next_batch_starts_only_after_every_leader_task_of_the_batch_succe
     assert next_worker.assignee_agent_id == environment.worker_ids[2]
     keys = [key for _, key in environment.assigner.commands]
     assert f"{plan.id}:b1:{environment.repository_ids[2]}" in keys
+
+
+@pytest.mark.asyncio
+async def test_batch_waits_for_merged_delivery_before_advancing() -> None:
+    delivery = FakeDeliveryState()
+    delivered: list[UUID] = []
+
+    async def _deliver(plan) -> None:
+        delivered.append(plan.id)
+
+    environment = Environment(
+        repository_count=2,
+        delivery_state=delivery,
+        on_batch_deliver=_deliver,
+    )
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    first_leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    first_worker = await environment.worker_task_of(first_leader_task_id)
+    await environment.finish(first_worker.id, TaskStatus.SUCCEEDED, "Repo 0 done.")
+    await environment.advancer.on_task_terminal(first_worker.id)
+
+    # The batch succeeded and was delivered, but its PR is not merged yet.
+    waiting = await environment.plans.get(plan.id)
+    assert waiting is not None and waiting.current_batch_index == 0
+    assert delivered == [plan.id]
+
+    # The merge is observed: re-evaluation advances the plan.
+    delivery.merged = {environment.repository_ids[0]: True}
+    await environment.advancer.reconsider_task(first_worker.id)
+
+    advanced = await environment.plans.get(plan.id)
+    assert advanced is not None and advanced.current_batch_index == 1
+    assert advanced.status is ExecutionPlanStatus.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_unmerged_repository_keeps_the_batch_waiting() -> None:
+    delivery = FakeDeliveryState()
+    environment = Environment(repository_count=2, delivery_state=delivery)
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    first_leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    first_worker = await environment.worker_task_of(first_leader_task_id)
+    await environment.finish(first_worker.id, TaskStatus.SUCCEEDED, "Repo 0 done.")
+    await environment.advancer.on_task_terminal(first_worker.id)
+
+    # A different repository merged does not unblock this batch.
+    delivery.merged = {uuid4(): True}
+    await environment.advancer.reconsider_task(first_worker.id)
+
+    waiting = await environment.plans.get(plan.id)
+    assert waiting is not None and waiting.current_batch_index == 0
+
+    delivery.merged = {environment.repository_ids[0]: True}
+    await environment.advancer.reconsider_task(first_worker.id)
+    advanced = await environment.plans.get(plan.id)
+    assert advanced is not None and advanced.current_batch_index == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_delivery_is_not_triggered_before_the_batch_succeeds() -> None:
+    delivered: list[UUID] = []
+
+    async def _deliver(plan) -> None:
+        delivered.append(plan.id)
+
+    environment = Environment(repository_count=2, on_batch_deliver=_deliver)
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    # Batch 0 has a single repository; until its leader task reports success
+    # the batch delivery callback must not fire.
+    first_leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    first_worker = await environment.worker_task_of(first_leader_task_id)
+    await environment.advancer.on_task_terminal(first_worker.id)
+    assert delivered == []
+
+    await environment.finish(first_worker.id, TaskStatus.SUCCEEDED, "Repo 0 done.")
+    await environment.advancer.on_task_terminal(first_worker.id)
+    assert delivered == [plan.id]
 
 
 @pytest.mark.asyncio

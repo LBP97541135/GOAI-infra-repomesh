@@ -18,6 +18,7 @@ from repomesh.modules.collaboration.contracts import (
 from repomesh.modules.project.contracts import ProjectTopologyReader, RepositoryTeamView
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
+    DeliveryStatePort,
     ExecutionPlanStatus,
     ExecutionPlanView,
     ProjectTaskProgress,
@@ -461,12 +462,18 @@ class AdvanceExecutionPlan:
         assigner: TaskAssignmentGateway,
         decomposer: DecomposeRepositoryTask,
         on_plan_completed: Callable[[ExecutionPlanView], Awaitable[None]] | None = None,
+        delivery_state: DeliveryStatePort | None = None,
+        on_batch_deliver: Callable[[ExecutionPlanView], Awaitable[None]] | None = None,
     ) -> None:
         self._plans = plans
         self._tasks = tasks
         self._assigner = assigner
         self._decomposer = decomposer
         self._on_plan_completed = on_plan_completed
+        # When wired, batch advancement is gated on the merged state of the
+        # current batch's delivery pull requests (delivery-gated mode).
+        self._delivery_state = delivery_state
+        self._on_batch_deliver = on_batch_deliver
 
     async def start(self, plan: ExecutionPlan, *, idempotency_key: str) -> ExecutionPlanView:
         key = idempotency_key.strip()
@@ -503,7 +510,45 @@ class AdvanceExecutionPlan:
         if leader_task.status is not TaskStatus.SUCCEEDED:
             await self._settle(plan, plan.fail())
             return
+        await self._advance_if_ready(plan)
+
+    async def reconsider_task(self, task_id: UUID) -> None:
+        """Re-evaluate batch advancement, e.g. after a delivery merge is observed.
+
+        Delivery observations arrive asynchronously (webhook or 15s replay
+        worker); once a repository of the current batch is merged this entry
+        point lets the plan advance without waiting for another task event.
+
+        The observed task may be a worker task or its repository leader task;
+        resolve the owning repository task before locating the plan.
+        """
+        task = await self._tasks.get(task_id)
+        if task is None:
+            return
+        leader_task = task
+        if task.parent_task_id is not None:
+            parent = await self._tasks.get(task.parent_task_id)
+            if parent is None:
+                return
+            leader_task = parent
+        plan = await self._plans.find_by_leader_task(leader_task.id)
+        if plan is None or plan.status is not ExecutionPlanStatus.IN_PROGRESS:
+            return
+        await self._advance_if_ready(plan)
+
+    async def _advance_if_ready(self, plan: ExecutionPlan) -> None:
+        """Advance the plan only when the batch succeeded and delivery merged.
+
+        In delivery-gated mode (delivery_state wired) the batch is delivered
+        first and the plan waits for every repository of the batch to be
+        merged before assigning the next batch. Delivery observation events
+        drive the waiting plan forward via ``reconsider_task``.
+        """
         if not await self._batch_succeeded(plan):
+            return
+        if self._on_batch_deliver is not None:
+            await self._on_batch_deliver(plan.to_view())
+        if not await self._delivery_gate(plan):
             return
         if plan.is_last_batch:
             completed = plan.complete()
@@ -515,6 +560,19 @@ class AdvanceExecutionPlan:
             return
         await self._assign_batch(
             advanced, advanced.current_batch_index, key_prefix=str(plan.id)
+        )
+
+    async def _delivery_gate(self, plan: ExecutionPlan) -> bool:
+        """True when every repository of the current batch is already merged."""
+        if self._delivery_state is None:
+            return True
+        states = {
+            item.repository_id: item.merged
+            for item in await self._delivery_state.repository_states(plan.project_id)
+        }
+        return all(
+            states.get(planned.repository_id, False)
+            for planned in plan.batches[plan.current_batch_index]
         )
 
     async def _assign_batch(

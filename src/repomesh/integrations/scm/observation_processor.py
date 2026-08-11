@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from uuid import UUID
@@ -48,12 +49,16 @@ class GitHubObservationProcessor:
         coordinator: ChangeSetSCMCoordinator,
         *,
         auto_merge: bool = False,
+        on_observed: Callable[[ChangeSetView], Awaitable[None]] | None = None,
     ) -> None:
         self._observations = observations
         self._delivery = delivery
         self._catalog = catalog
         self._coordinator = coordinator
         self._auto_merge = auto_merge
+        # Notified with the resulting ChangeSet view after each processed
+        # observation (e.g. to re-evaluate batch advancement after a merge).
+        self._on_observed = on_observed
 
     async def process(self, observation_id: UUID) -> ProcessedSCMObservation:
         claimed = await self._observations.claim(observation_id)
@@ -113,6 +118,8 @@ class GitHubObservationProcessor:
                 )
             if self._auto_merge and self._coordinator.can_mutate:
                 result = await self._coordinator.merge_ready_repositories(change_set_id)
+            if self._on_observed is not None and result is not None:
+                await self._on_observed(result)
             await self._observations.complete(observation_id)
             return ProcessedSCMObservation(
                 ignored=False,

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from .contracts import (
+    AppendCandidatesCommand,
     ChangeSetStatus,
     ChangeSetView,
     CIObservationCommand,
@@ -25,6 +26,7 @@ from .contracts import (
     RecoveryActionKind,
     RecoveryActionStatus,
     RecoveryTrigger,
+    RepositoryCandidateInput,
     RepositoryDeliveryStatus,
     ReviewObservationCommand,
     SCMCommandStatus,
@@ -347,6 +349,57 @@ class DeliveryService:
         existing = await self._store.get_by_idempotency_key(key)
         return existing[0].to_view() if existing is not None else None
 
+    async def append_candidates(
+        self, command: AppendCandidatesCommand, *, idempotency_key: str
+    ) -> ChangeSetView:
+        """Extend a ChangeSet with a later batch's delivery candidates.
+
+        Batch-by-batch delivery keeps one ChangeSet per plan: the first batch
+        creates it via ``prepare`` and later batches append their candidates
+        here. Re-appending the same batch is idempotent: repositories already
+        present in the ChangeSet are skipped.
+        """
+        change_set = await self._required(command.change_set_id)
+        known_ids = {item.repository_id for item in change_set.repositories}
+        fresh = tuple(
+            item for item in command.candidates if item.repository_id not in known_ids
+        )
+        if not fresh:
+            return change_set.to_view()
+        combined = known_ids | {item.repository_id for item in fresh}
+        for item in fresh:
+            if not set(item.depends_on) <= combined:
+                raise DeliveryConflict("repository dependency is outside the ChangeSet")
+        order = self._merge_order_for_append(change_set, fresh)
+        repositories = tuple(
+            RepositoryDelivery(
+                repository_id=item.repository_id,
+                task_id=item.task_id,
+                commit_sha=item.commit_sha,
+                base_sha=item.base_sha,
+                branch_name=item.branch_name,
+                depends_on=item.depends_on,
+                merge_order=order[item.repository_id],
+                required_checks=tuple(name.strip().lower() for name in item.required_checks),
+                required_approvals=item.required_approvals,
+            )
+            for item in fresh
+        )
+        appended = change_set.append_repositories(repositories)
+        await self._store.update(appended, expected_version=change_set.version)
+        return appended.to_view()
+
+    async def find_by_project(self, project_id: UUID) -> tuple[ChangeSetView, ...]:
+        """Return delivery state views for all ChangeSets of a project.
+
+        Used by the batch-advancement gate to learn whether the repositories
+        of the current batch are already merged.
+        """
+        return tuple(
+            change_set.to_view()
+            for change_set in await self._store.find_by_project(project_id)
+        )
+
     async def observe_pull_request(self, command: PullRequestObservationCommand) -> ChangeSetView:
         return await self._update_repository(
             command.change_set_id,
@@ -608,6 +661,33 @@ class DeliveryService:
             for repository_id in ready:
                 order[repository_id] = index
                 index += 1
+                remaining.pop(repository_id)
+        return order
+
+    @staticmethod
+    def _merge_order_for_append(
+        change_set: ChangeSet, candidates: tuple[RepositoryCandidateInput, ...]
+    ) -> dict[UUID, int]:
+        """Assign merge orders for appended candidates after existing ones.
+
+        Existing repositories keep their merge order; appended candidates are
+        ordered after the current maximum and must only depend on repositories
+        already present in the ChangeSet.
+        """
+        order = {item.repository_id: item.merge_order for item in change_set.repositories}
+        next_index = max(order.values(), default=-1) + 1
+        dependencies = {item.repository_id: set(item.depends_on) for item in candidates}
+        remaining = dict(dependencies)
+        while remaining:
+            ready = sorted(
+                (repo for repo, deps in remaining.items() if deps <= order.keys()),
+                key=str,
+            )
+            if not ready:
+                raise DeliveryConflict("repository dependency graph contains a cycle")
+            for repository_id in ready:
+                order[repository_id] = next_index
+                next_index += 1
                 remaining.pop(repository_id)
         return order
 

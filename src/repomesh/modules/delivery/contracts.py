@@ -205,6 +205,20 @@ class RepositoryCandidateInput:
 
 
 @dataclass(frozen=True, slots=True)
+class AppendCandidatesCommand:
+    """Add a later batch's candidates to an already-delivered ChangeSet.
+
+    Batch-by-batch delivery keeps one ChangeSet per plan: the first batch
+    creates the ChangeSet via ``prepare`` and later batches extend it with
+    this command. Appended repositories must depend only on repositories
+    already present in the ChangeSet.
+    """
+
+    change_set_id: UUID
+    candidates: tuple[RepositoryCandidateInput, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RecordCandidateRevisionCommand:
     change_set_id: UUID
     repository_id: UUID

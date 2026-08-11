@@ -1,5 +1,6 @@
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -341,3 +342,112 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
 
     assert completed.status is ChangeSetStatus.DELIVERED
     assert [command.repository.name for command in adapter.merges] == ["api", "web"]
+
+
+@pytest.mark.asyncio
+async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
+    tmp_path: Path,
+) -> None:
+    first_remote, first_workspace, first_base, first_head = _repository(tmp_path, "api")
+    second_remote, second_workspace, second_base, second_head = _repository(
+        tmp_path, "web"
+    )
+    organization_id = uuid4()
+    project_id = uuid4()
+    creator_id = uuid4()
+    first_repository_id = uuid4()
+    second_repository_id = uuid4()
+    tasks = InMemoryTaskStore()
+    first_leader, _ = await _store_candidate(
+        tasks,
+        organization_id=organization_id,
+        project_id=project_id,
+        repository_id=first_repository_id,
+        leader_id=uuid4(),
+        workspace=first_workspace,
+        base_sha=first_base,
+        commit_sha=first_head,
+    )
+    second_leader, _ = await _store_candidate(
+        tasks,
+        organization_id=organization_id,
+        project_id=project_id,
+        repository_id=second_repository_id,
+        leader_id=uuid4(),
+        workspace=second_workspace,
+        base_sha=second_base,
+        commit_sha=second_head,
+    )
+    plan = ExecutionPlanView(
+        id=uuid4(),
+        organization_id=organization_id,
+        project_id=project_id,
+        created_by_agent_id=creator_id,
+        status=ExecutionPlanStatus.IN_PROGRESS,
+        current_batch_index=0,
+        batches=(
+            (
+                PlannedRepositoryTaskView(
+                    first_repository_id, "api", "implement", (), first_leader.id
+                ),
+            ),
+            (
+                PlannedRepositoryTaskView(
+                    second_repository_id, "web", "implement", (), second_leader.id
+                ),
+            ),
+        ),
+    )
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(
+            id=first_repository_id,
+            name="api",
+            url="https://github.com/acme/api",
+        )
+    )
+    await catalog.add(
+        RepositoryProfile(
+            id=second_repository_id,
+            name="web",
+            url="https://github.com/acme/web",
+        )
+    )
+    delivery = DeliveryService(InMemoryChangeSetStore())
+    adapter = RecordingGitHubAdapter()
+    coordinator = ChangeSetSCMCoordinator(
+        delivery, catalog, adapter, GitBranchPublisher(tmp_path)
+    )
+    finalizer = PlanDeliveryFinalizer(
+        delivery,
+        coordinator,
+        tasks,
+        PlanDeliveryPolicy(required_checks=("unit",), required_approvals=1),
+    )
+
+    # Batch 0 succeeded: one PR opens and the plan's ChangeSet exists.
+    await finalizer.handle_batch(plan)
+    change_set, _ = await delivery.resolve_candidate(first_repository_id, first_head)
+    assert len(adapter.pull_requests) == 1
+    assert [item.repository_id for item in change_set.repositories] == [
+        first_repository_id
+    ]
+
+    # Replaying the same batch must not open a duplicate pull request.
+    await finalizer.handle_batch(plan)
+    assert len(adapter.pull_requests) == 1
+
+    # Batch 1 appends to the SAME ChangeSet, ordered after batch 0.
+    advanced = replace(plan, current_batch_index=1)
+    await finalizer.handle_batch(advanced)
+    change_set, _ = await delivery.resolve_candidate(first_repository_id, first_head)
+    assert len(adapter.pull_requests) == 2
+    assert len(change_set.repositories) == 2
+    orders = {item.repository_id: item.merge_order for item in change_set.repositories}
+    assert orders[second_repository_id] > orders[first_repository_id]
+    second = next(
+        item
+        for item in change_set.repositories
+        if item.repository_id == second_repository_id
+    )
+    assert second.depends_on == (first_repository_id,)

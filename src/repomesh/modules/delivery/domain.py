@@ -648,6 +648,32 @@ class ChangeSet:
             updated_at=datetime.now(UTC),
         )
 
+    def append_repositories(self, repositories: tuple[RepositoryDelivery, ...]) -> "ChangeSet":
+        """Extend an existing ChangeSet with a later batch's repositories.
+
+        Used by batch-by-batch delivery: the first batch prepares the
+        ChangeSet and subsequent batches append their candidates. Existing
+        repository delivery records and their merge order are preserved.
+        """
+        known = {item.repository_id for item in self.repositories}
+        for item in repositories:
+            if item.repository_id in known:
+                raise DeliveryConflict("ChangeSet already contains the repository candidate")
+        merged = self.repositories + repositories
+        revisions = self.candidate_revisions + tuple(
+            CandidateRevision(
+                repository_id=item.repository_id,
+                task_id=item.task_id,
+                sequence=0,
+                head_sha=item.commit_sha,
+                previous_head_sha=None,
+                reason="initial candidate",
+            )
+            for item in repositories
+        )
+        updated = self.with_repositories(merged)
+        return replace(updated, candidate_revisions=revisions)
+
     def add_recovery(self, plan: RecoveryPlan) -> "ChangeSet":
         return replace(
             self,

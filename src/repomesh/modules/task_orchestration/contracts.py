@@ -126,6 +126,32 @@ class ProjectTaskProgress:
     cancelled: int
 
 
+@dataclass(frozen=True, slots=True)
+class DeliveryGatedRepositoryView:
+    """Delivery state of one repository within a project's ChangeSet.
+
+    Used by the batch-advancement gate; it deliberately carries no delivery
+    module types so task orchestration only depends on the merged flag.
+    """
+
+    repository_id: UUID
+    merged: bool
+
+
+class DeliveryStatePort(Protocol):
+    """Read-only delivery state used to gate batch advancement on merged PRs.
+
+    When a batch's repository tasks all succeed, the plan waits until every
+    repository of the batch is merged before advancing to the next batch.
+    The port returns delivery state for all repositories of a project; the
+    adapter is wired in the composition root.
+    """
+
+    async def repository_states(
+        self, project_id: UUID
+    ) -> tuple[DeliveryGatedRepositoryView, ...]: ...
+
+
 class TaskAssignmentGateway(Protocol):
     async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView: ...
 
