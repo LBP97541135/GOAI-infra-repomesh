@@ -588,10 +588,9 @@ export interface DeliveryEventsPage {
 }
 
 /** §4.2 CollaborationMessageView 直投影 + 追认附加字段（1df9ebf：direction/
- *  sender_name/recipient_name/created_at）。方向以 direction 辨识，勿假定恒单向。
- *  `room_id` 为 v0.2 §5.2 前置改动补投影（与房间流共用同一投影函数）。
- *  ⚠ id/repository_id/task_id 不在契约文本字段表内——已横向问询后端核实中
- *  （在响应里=待补追认注记；不在=幻影照删），暂保留。 */
+ *  sender_name/recipient_name/created_at；fed7da2：id/repository_id/task_id——
+ *  投影一直输出这三列，契约文本已补追认）。方向以 direction 辨识，勿假定恒单向。
+ *  `room_id` 为 v0.2 §5.2 前置改动补投影（与房间流共用同一投影函数）。 */
 export interface CollaborationMessageView {
   id: string;
   kind: string;

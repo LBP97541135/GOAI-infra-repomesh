@@ -21,6 +21,16 @@ export interface Route {
   roomId: string | null;
 }
 
+/** B7：hash 可能被手改/外部粘贴出裸 `%`——decodeURIComponent 抛 URIError 的话
+ *  `readRoute` 在首屏渲染期执行会直接白屏。坏段原样返回，比白屏诚实。 */
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function parseRoute(hash: string): Route {
   const h = hash.replace(/^#/, "");
 
@@ -29,13 +39,13 @@ export function parseRoute(hash: string): Route {
   if (room) {
     return {
       nav: "issues",
-      issueId: decodeURIComponent(room[1]),
-      roomId: decodeURIComponent(room[2]),
+      issueId: safeDecode(room[1]),
+      roomId: safeDecode(room[2]),
     };
   }
 
   const detail = h.match(/^\/issues\/([^/?]+)/);
-  if (detail) return { nav: "issues", issueId: decodeURIComponent(detail[1]), roomId: null };
+  if (detail) return { nav: "issues", issueId: safeDecode(detail[1]), roomId: null };
 
   // 未知 hash（含已退役的 #/delivery-v1）回落到 issue 列表，不留半死路由
   const found = (Object.keys(NAV_HASH) as NavKey[]).find((k) => h.startsWith(NAV_HASH[k].slice(1)));

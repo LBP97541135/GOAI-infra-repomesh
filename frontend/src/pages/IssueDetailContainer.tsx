@@ -65,6 +65,14 @@ export function IssueDetailContainer({
   const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
 
+  // B5：「确认归档？」不能永久驻留——用户点了第一步后转头看别的，几分钟后
+  // 误触同一按钮就是真归档。8 秒无第二击自动复位回「归档本轮」。
+  useEffect(() => {
+    if (!archiveConfirmId) return;
+    const id = window.setTimeout(() => setArchiveConfirmId(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [archiveConfirmId]);
+
   /** 证据面（B-3）：决策夹取数时保留的本轮聚合 + 当前打开的单仓证据 */
   const [deckAggregate, setDeckAggregate] = useState<DeliveryAggregate | null>(null);
   const [evidence, setEvidence] = useState<EvidenceView | null>(null);
@@ -149,7 +157,11 @@ export function IssueDetailContainer({
     return () => {
       cancelled = true;
     };
-  }, [roundId, detail, reload]);
+    // B2：依赖 detail.rounds 而非 detail 整体——reload 时 detail 对象 identity 必变，
+    // 依赖整个对象会让每次刷新多发一对 getDelivery+getDecisions（4 请求应为 2）。
+    // roundLabel 只消费 rounds，够用。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundId, detail?.rounds, reload]);
 
   const handleToggleRound = useCallback(
     (round: IssueRoundView) => {
