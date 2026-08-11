@@ -1,8 +1,8 @@
-import type { IssueDetailView, IssueRoundView, IssueTeamRef, RoomListItemView } from "../api/contract";
+import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { Decision } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
-import { dayLabel, openedBy, shortId } from "../display";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, openedBy, shortId } from "../display";
 import { eventTime } from "../viewmodel";
 
 /** issue 详情页（CONS-42）。版式按原型 redesign-issue-centric.html 的 `#v-detail`：
@@ -16,28 +16,7 @@ import { eventTime } from "../viewmodel";
  *   2. 原型的「王倩 发起于」→ agent 短版（只有 `opened_by_agent_id`，无人名）；
  *   3. 原型的「契约 c3f1a29e」→ 契约投影无 hash 字段，改显 specification 短版 + 版本。 */
 
-const PHASE_BADGE: Record<string, string> = {
-  contract: "border-line text-tx2",
-  plan: "border-line text-tx2",
-  execute: "border-bluegray text-bluegray",
-  validate: "border-salmon text-salmon",
-  release: "border-amber text-amber",
-  delivered: "border-olive text-olive",
-  failed: "border-salmon text-salmon",
-  archived: "border-line text-tx2",
-};
-
-const RUNTIME_LABEL: Record<IssueTeamRef["runtime_status"], string> = {
-  pending: "团队待建",
-  ready: "团队就绪",
-  failed: "建团失败",
-};
-
-const RUNTIME_SKIN: Record<IssueTeamRef["runtime_status"], string> = {
-  pending: "border-line text-tx2",
-  ready: "border-olive text-olive",
-  failed: "border-salmon text-salmon",
-};
+// X2/X3：八相皮肤与建团三态措辞均用 display.ts 唯一表
 
 function RoomRow({ room, onOpen }: { room: RoomListItemView; onOpen: (room: RoomListItemView) => void }) {
   const empty = room.last_message === null;
@@ -165,7 +144,7 @@ export function IssueDetailPage({
           {detail.operational_status === "cancelled" && (
             <span className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2">已取消</span>
           )}
-          <span className={`rounded-hard border px-2 py-px text-[11px] ${PHASE_BADGE[detail.phase] ?? "border-line text-tx2"}`}>
+          <span className={`rounded-hard border px-2 py-px text-[11px] ${PHASE_SKIN[detail.phase]?.badge ?? PHASE_SKIN_FALLBACK.badge}`}>
             {detail.phase}
           </span>
         </div>
@@ -202,10 +181,10 @@ export function IssueDetailPage({
       <div className="flex flex-wrap gap-2">
         {detail.repositories.map((repo) => {
           const team = teamOf(repo.repository_id);
-          const skin = team ? RUNTIME_SKIN[team.runtime_status] : "border-line text-tx2";
+          const skin = team ? TEAM_STATUS_SKIN[team.runtime_status] : "border-line text-tx2";
           return (
             <span key={repo.repository_id} className={`rounded-hard border px-2 py-px font-mono text-[11px] ${skin}`}>
-              {repo.name} · {team ? RUNTIME_LABEL[team.runtime_status] : "无团队"}
+              {repo.name} · {team ? TEAM_STATUS_LABEL[team.runtime_status] : "无团队"}
               {/* role_in_issue 恒 null：拓扑不记录仓库在 issue 中的角色语义（§3） */}
               {repo.role_in_issue ? ` · ${repo.role_in_issue}` : ""}
             </span>
@@ -269,7 +248,7 @@ export function IssueDetailPage({
             >
               <span className="font-mono text-[11.5px] text-tx2">{repo.name}</span>
               <span className="text-[11px] text-[#6b6046]">
-                无房间 · {team ? RUNTIME_LABEL[team.runtime_status] : "无团队"}
+                无房间 · {team ? TEAM_STATUS_LABEL[team.runtime_status] : "无团队"}
               </span>
             </div>
           );

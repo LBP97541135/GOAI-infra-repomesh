@@ -3,11 +3,10 @@ import type { Decision, DecisionKind } from "../types";
 /** 决策夹：VARIADEX 档案柜隐喻。待决策事项是牛皮纸文件夹，堆叠收在输入框后方，
  *  彩色标签错位露头；点后排置顶、可整堆收起、处理完即消化移除。deck 末位为最前。 */
 
-const KIND_LABEL: Record<DecisionKind, string> = { approve: "审批", watch: "关注", clarify: "澄清" };
+const KIND_LABEL: Record<DecisionKind, string> = { approve: "审批", watch: "关注" };
 const KIND_TAB: Record<DecisionKind, string> = {
   approve: "bg-olive",
   watch: "bg-amber",
-  clarify: "bg-salmon",
 };
 
 const folderFace = "border border-[#8a7648] bg-kraft";

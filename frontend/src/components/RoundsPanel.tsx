@@ -1,6 +1,6 @@
 import type { GovernanceDecisionView, IssueDetailView, IssueRoundView } from "../api/contract";
 import type { Decision } from "../types";
-import { dayLabel, shortId } from "../display";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, shortId } from "../display";
 import { eventTime } from "../viewmodel";
 
 /** 轮次索引 + 跨轮决策查看（验收缺陷 B-6）。
@@ -13,16 +13,7 @@ import { eventTime } from "../viewmodel";
  *  待决策条目在这里是**只读信息**——批准动作只存在于上方决策夹（当前轮），历史轮
  *  没有授权单语义，放一个不能点的「批准」按钮比不放更糟。 */
 
-const PHASE_SKIN: Record<string, string> = {
-  contract: "border-line text-tx2",
-  plan: "border-line text-tx2",
-  execute: "border-bluegray text-bluegray",
-  validate: "border-salmon text-salmon",
-  release: "border-amber text-amber",
-  delivered: "border-olive text-olive",
-  failed: "border-salmon text-salmon",
-  archived: "border-line text-tx2",
-};
+// X2：八相皮肤用 display.ts 唯一表
 
 const DECISION_LABEL: Record<GovernanceDecisionView["decision"], string> = {
   ready: "READY",
@@ -92,7 +83,7 @@ export function RoundsPanel({
                 >
                   <span className="font-mono text-[11.5px] text-tx">第 {i + 1} 轮</span>
                   <span
-                    className={`rounded-hard border px-1.5 font-mono text-[10px] ${PHASE_SKIN[round.phase] ?? "border-line text-tx2"}`}
+                    className={`rounded-hard border px-1.5 font-mono text-[10px] ${PHASE_SKIN[round.phase]?.badge ?? PHASE_SKIN_FALLBACK.badge}`}
                   >
                     {round.phase}
                   </span>

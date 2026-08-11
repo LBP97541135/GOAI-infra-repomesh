@@ -1,8 +1,38 @@
-import type { IssueListItemView, RuntimeBlock } from "./api/contract";
+import type { IssueListItemView, Phase, RuntimeBlock } from "./api/contract";
 
 /** issue 与网格页的展示辅助。**纯格式化**，不含任何状态派生——state/phase/
  *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。
  *  （放这里而不是 viewmodel.ts：后者依赖 v1 的 DeliveryData，随清理批次 #17 退役。） */
+
+/** 八相皮肤唯一表（X2 合并：此前三页各持一份，release 在列表页灰、详情页琥珀——
+ *  主脑裁决琥珀为正）。展示皮肤，不是状态映射；类型收窄到 Phase（缺项=编译错误），
+ *  消费方保留运行时兜底（X6：服务端先于前端演进时优雅降级）。 */
+export const PHASE_SKIN: Record<Phase, { dot: string; badge: string }> = {
+  contract: { dot: "bg-tx2", badge: "border-line text-tx2" },
+  plan: { dot: "bg-tx2", badge: "border-line text-tx2" },
+  execute: { dot: "bg-bluegray", badge: "border-bluegray text-bluegray" },
+  validate: { dot: "bg-salmon", badge: "border-salmon text-salmon" },
+  release: { dot: "bg-amber", badge: "border-amber text-amber" },
+  delivered: { dot: "bg-olive", badge: "border-olive text-olive" },
+  failed: { dot: "bg-salmon", badge: "border-salmon text-salmon" },
+  archived: { dot: "bg-tx2", badge: "border-line text-tx2" },
+};
+
+export const PHASE_SKIN_FALLBACK = { dot: "bg-tx2", badge: "border-line text-tx2" };
+
+/** 建团三态措辞与皮肤唯一表（X3 合并：主脑裁决「团队待建」为正——「建团中」暗示
+ *  进行中动作，而拓扑只记录「未就绪」，措辞不得超出事实精度）。 */
+export const TEAM_STATUS_LABEL: Record<"pending" | "ready" | "failed", string> = {
+  pending: "团队待建",
+  ready: "团队就绪",
+  failed: "建团失败",
+};
+
+export const TEAM_STATUS_SKIN: Record<"pending" | "ready" | "failed", string> = {
+  pending: "border-line text-tx2",
+  ready: "border-olive text-olive",
+  failed: "border-salmon text-salmon",
+};
 
 /** uuid 短版。`issue_key` 恒 null（无 Project 注册表，§0/§6.1），所以 issue 的
  *  人类可读标识只能是它，不得自造 GitHub 式序号。 */

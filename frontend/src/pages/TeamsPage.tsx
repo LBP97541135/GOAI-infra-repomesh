@@ -1,7 +1,7 @@
 import { useCallback } from "react";
-import type { ConsoleTeamView, TeamRuntimeStatus } from "../api/contract";
+import type { ConsoleTeamView } from "../api/contract";
 import { fetchConsoleTeams, gridSourceMode } from "../api/grid";
-import { repositoryLabel, shortId, type RuntimePhase } from "../display";
+import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, repositoryLabel, shortId, type RuntimePhase } from "../display";
 import { RuntimeBadge } from "../components/RuntimeBadge";
 import { useRuntimeRows } from "./useRuntimeRows";
 
@@ -14,17 +14,7 @@ import { useRuntimeRows } from "./useRuntimeRows";
  *
  *  联调环境正是这个样本：四个团队 runtime_status 全 ready，runtime 全 {reachable:false}。 */
 
-const TEAM_STATUS_LABEL: Record<TeamRuntimeStatus, string> = {
-  ready: "建团就绪",
-  pending: "建团中",
-  failed: "建团失败",
-};
-
-const TEAM_STATUS_SKIN: Record<TeamRuntimeStatus, string> = {
-  ready: "border-olive text-olive",
-  pending: "border-line text-tx2",
-  failed: "border-salmon text-salmon",
-};
+// X3：建团三态措辞与皮肤用 display.ts 唯一表（「团队待建」为正）
 
 function TeamCard({
   team,

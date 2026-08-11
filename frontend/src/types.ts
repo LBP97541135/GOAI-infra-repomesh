@@ -8,8 +8,9 @@
  *  那张交付全貌页，随它一同移除。 */
 import type { DecisionAction, GateDisplay } from "./api/contract";
 
-/** approve|watch 来自契约 §4.3；clarify 无后端实体（§6.5），仅回放模式演示 */
-export type DecisionKind = "approve" | "watch" | "clarify";
+/** 契约 §4.3 仅此两类。clarify 已删（X4 裁决：无消费方；真机制落地时按
+ *  ChangeRequest 回路立项重建，届时是真实体不是演示枚举） */
+export type DecisionKind = "approve" | "watch";
 
 export interface Decision {
   id: string;
@@ -18,7 +19,6 @@ export interface Decision {
   title: string;
   body: string;
   actions: string[];
-  /** 契约 actions 枚举（clarify 演示项为 null） */
   actionKinds: DecisionAction[] | null;
   repositoryId: string | null;
   headSha: string | null;

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import type { ConsoleRepositoryView, TeamRuntimeStatus } from "../api/contract";
+import type { ConsoleRepositoryView } from "../api/contract";
 import { fetchConsoleRepositories, gridSourceMode } from "../api/grid";
-import { dayLabel, shortId } from "../display";
+import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, shortId } from "../display";
 
 /** 仓库网格页（CONS-44 / 契约 v0.2 §4.1）。
  *
@@ -17,17 +17,7 @@ import { dayLabel, shortId } from "../display";
  *   - `description` / `topics` / `languages` 是**有源字段**，空就是真的空，
  *     留白即可，不写「未接入」（那是无源字段的措辞，混用会让读者以为数据丢了）。 */
 
-const TEAM_STATUS_LABEL: Record<TeamRuntimeStatus, string> = {
-  ready: "建团就绪",
-  pending: "建团中",
-  failed: "建团失败",
-};
-
-const TEAM_STATUS_SKIN: Record<TeamRuntimeStatus, string> = {
-  ready: "border-olive text-olive",
-  pending: "border-line text-tx2",
-  failed: "border-salmon text-salmon",
-};
+// X3：建团三态措辞与皮肤用 display.ts 唯一表（「团队待建」为正）
 
 function RepositoryCard({
   repo,

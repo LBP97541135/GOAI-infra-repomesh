@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { IssueListItemView, IssueListResponse, Phase } from "../api/contract";
-import { dayLabel, openedBy } from "../display";
+import type { IssueListItemView, IssueListResponse } from "../api/contract";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, openedBy } from "../display";
 
 /** issue 列表页：GitHub 式扁平列表 + Open/Closed 二元 + 行内徽标。
  *  设计定稿 DESIGN-DECISION-V2.md §1.4：流程感只存在于徽标，不存在于结构。
@@ -12,19 +12,9 @@ import { dayLabel, openedBy } from "../display";
  *  状态维度在分页之下做本地过滤等于拿部分结果冒充全量。服务端筛选进 backlog。
  *  保留的「待决策」是**当页过滤**，文案已标明，不装作全量。 */
 
-const PHASE_SKIN: Record<Phase, { dot: string; badge: string }> = {
-  contract: { dot: "bg-tx2", badge: "border-line text-tx2" },
-  plan: { dot: "bg-tx2", badge: "border-line text-tx2" },
-  execute: { dot: "bg-bluegray", badge: "border-bluegray text-bluegray" },
-  validate: { dot: "bg-salmon", badge: "border-salmon text-salmon" },
-  release: { dot: "bg-amber", badge: "border-line text-tx2" },
-  delivered: { dot: "bg-olive", badge: "border-olive text-olive" },
-  failed: { dot: "bg-salmon", badge: "border-salmon text-salmon" },
-  archived: { dot: "bg-tx2", badge: "border-line text-tx2" },
-};
-
 function IssueRow({ item, onOpen }: { item: IssueListItemView; onOpen: (item: IssueListItemView) => void }) {
-  const skin = PHASE_SKIN[item.phase] ?? { dot: "bg-tx2", badge: "border-line text-tx2" };
+  // X2：八相皮肤唯一表在 display.ts（release 从灰改琥珀=主脑裁决，已记交付说明）
+  const skin = PHASE_SKIN[item.phase] ?? PHASE_SKIN_FALLBACK;
 
   const meta = [
     // issue_key 恒 null（无 Project 注册表）→ 显 issue_id 短版，不造 GitHub 式编号
