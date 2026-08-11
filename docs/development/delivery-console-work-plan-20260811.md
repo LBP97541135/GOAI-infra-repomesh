@@ -49,6 +49,7 @@ CONS-13 回放模式（Demo）
 | CONS-11 | 三视图接入真实数据 | CONS-03/04 + CONS-10 | 侧栏列表（分组+phase 徽标）、对话流/计划纸面/环境窗改 live 数据；轮询或 SSE 待定 | 对 8-10 验收数据（repomesh-e2e-* 双仓）完整展示一次真实交付；blocked/虚拟草稿交付可见 | L |
 | CONS-12 | 决策夹写回路 | CONS-02/05 + CONS-10 | 决策夹接 `GET decisions`；审批弹窗提交 `POST governance-decisions`（head_sha 绑定、幂等键、409 冲突提示） | 真实批准后 merge gate 放行可在界面观察到；SHA 漂移时弹窗内失效提示 | M |
 | CONS-13 | 回放模式（Demo 叙事） | CONS-10 | 场景状态机（参考原型 4 状态）驱动 replay 夹具推进，含 clarify 决策演示 | 一键回放完整闭环：需求→DAG→失败修复→治理拦截→审批→合并；clarify 仅存在于回放 | M |
+| CONS-14 | 事件时间线消费面（2026-08-11 主线闭幕后补立项） | CONS-04 + CONS-10 | 接 `GET .../events`：四 kind 视觉区分（沿用定稿令牌）、kind 过滤、游标「加载更早」续读；落位环境窗或房间流由前端按定稿判断并说明理由 | live 三种子实走时间线可见、续读精确衔接、过滤纯净；replay 四场景不回归；不渲染 deny（出现即上报违约） | M |
 
 ## 4. 明确不在本批（引用既有缺口任务）
 
