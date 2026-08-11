@@ -46,7 +46,7 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
   "projects": [
     {
       "project_id": "uuid",
-      "project_key": "PRJ-2026-0042",
+      "project_key": "string|null",         // 同 §3：Project 注册表未落地前为 null（§6.9）
       "title": "string",
       "deliveries": [
         {
