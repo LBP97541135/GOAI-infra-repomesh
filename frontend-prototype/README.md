@@ -1,20 +1,11 @@
-# RepoMesh 交付控制台 — UI 原型（THROWAWAY）
+# 交付控制台 UI 原型 — 归档
 
-> 一次性原型，不进生产。回答的问题：交付控制台（Delivery Run 叙事页）应该长什么样。
-> 计划：单入口 `index.html`，`?variant=` 切换 3 个结构不同的方案，底部悬浮条可循环切换。
+设计已定稿并在 `frontend/` 落地，本目录只留决策依据，不再是可运行的原型。
 
-- A — 流水叙事：置顶阶段管道，纵向分段讲完一条交付
-- B — 指挥中心：暗色三栏，DAG 主视觉 + 实时事件流 + 决策收件箱
-- C — 决策收件箱（默认）：PM 视角，待决策卡片优先，细节收进标签页
+- `DESIGN-DECISION-V2.md` — **现行信息架构**（issue 中心）的定稿与决策链
+- `DESIGN-DECISION.md` — v1（Delivery Run 叙事页）的方案对比与 Variant D 选型
+- `redesign-issue-centric.html` — v2 可点击原型，**自包含单文件**，浏览器直接打开即可
 
-## 运行
-
-```bash
-python -m http.server 8788 --directory frontend-prototype
-```
-
-打开 http://localhost:8788/（默认 C），或用 `?variant=a|b|c` 切换方案。
-页面底部切换条和键盘左右方向键也可以循环切换。
-
-数据全部为 mock（`data.js`），场景取自 docs/agentic-delivery-product-brief.md 第 9 节的
-Saleor 四仓回放案例。任何按钮都不产生真实副作用。
+v1 的四方案原型（`index.html` + `variant-a|b|c|d.js` + `styles.css` + mock 数据）已随 v1
+控制台一同退役。Variant D 的视觉令牌不在原型里了，它们的现行归属是
+`frontend/src/index.css` 的 `@theme` 段。

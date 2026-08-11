@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-/* 设计令牌 —— 来源：frontend-prototype/styles.css「Variant D」段（复古未来主义 · 硬朗） */
+/* 设计令牌 —— Variant D「复古未来主义 · 硬朗」的选型见
+   frontend-prototype/DESIGN-DECISION.md。原型的 styles.css 已随 v1 退役，
+   本段即这套令牌的现行归属，不再有上游文件可对照。 */
 @theme {
   --color-ink: #16130d; /* 暖黑背景 */
   --color-ink-deep: #131009; /* 左栏更深一档 */
