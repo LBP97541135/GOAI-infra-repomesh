@@ -3,6 +3,27 @@
 > 原型回答的问题：RepoMesh 交付控制台应该长什么样。
 > 结论：**选定 Variant D「融合工作台 · 复古未来主义」**，A/B/C 落选但保留为一手材料。
 
+## 原型文件位置
+
+分支 `UI_Design`（基线 commit `7c2218d`），目录 `frontend-prototype/`（仓库根相对路径）：
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend-prototype/index.html` | 单入口，按序加载下列脚本 |
+| `frontend-prototype/app.js` | `?variant=` 路由、底部切换条、toast（默认 variant=d） |
+| `frontend-prototype/data.js` | 共享 mock 数据（Saleor 四仓回放案例，DLV-0042） |
+| `frontend-prototype/dag.js` | 共享 DAG SVG 生成器（结构共享、按 variant 换肤） |
+| `frontend-prototype/variant-d.js` | **胜出方案 D**：融合工作台（对话流/决策夹/悬浮环境窗/计划纸面/审批弹窗） |
+| `frontend-prototype/styles.css` | 全部样式；D 的令牌与皮肤在 `Variant D` 段 |
+| `frontend-prototype/variant-a.js` | 落选 A：流水叙事 |
+| `frontend-prototype/variant-b.js` | 落选 B：指挥中心 |
+| `frontend-prototype/variant-c.js` | 落选 C：决策收件箱 |
+| `frontend-prototype/ref-agent-workspace.html` | 队友 7 月对话式单文件原型存档（自包含，独立打开） |
+| `frontend-prototype/README.md` | 运行方式 |
+
+本地运行：`python -m http.server 8788 --directory frontend-prototype`
+→ http://localhost:8788/?variant=d （或双击 index.html）。
+
 ## 胜出方案：Variant D
 
 结构（三层职责：对话讲过程、卡片要决策、面板给事实）：
