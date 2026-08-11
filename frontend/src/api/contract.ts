@@ -290,6 +290,10 @@ export interface GovernanceDecisionRequest {
   /** 必填：head-bound，SHA 漂移即 409 */
   head_sha: string;
   decision: GovernanceDecisionValue;
+  /** 必填：决策主体（bearer 为共享动作 token，无法承载身份）；
+   *  须为同组织活跃 ORGANIZATION_LEADER 或该仓库 REPOSITORY_LEADER，否则 403 */
+  decided_by_agent_id: string;
   reason: string;
+  /** 幂等语义为内容重放去重（相同决策重放 no-op、版本不涨） */
   idempotency_key: string;
 }
