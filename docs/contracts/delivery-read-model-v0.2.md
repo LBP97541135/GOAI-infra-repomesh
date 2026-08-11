@@ -37,9 +37,9 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
 | --- | --- | --- | --- |
 | `GET /api/v1/issues` | issue 列表（Open/Closed + 徽标） | 主屏 GitHub 式列表 | CONS-31 |
 | `GET /api/v1/issues/{issue_id}` | issue 概览（元数据 + 轮次索引 + 关联芯片） | issue 详情页头部 | CONS-31 |
-| `GET /api/v1/repositories` | 仓库网格（驻扎团队数 + 业务活动） | 仓库页 | CONS-32 |
-| `GET /api/v1/teams` | 团队清单（归属仓库/issue + 成员 + 状态） | 团队页 | CONS-32 |
-| `GET /api/v1/agents` | 智能体花名册（状态/归属/运行时/时长） | 智能体页 | CONS-32 |
+| `GET /api/v1/console/repositories` | 仓库网格（驻扎团队数 + 业务活动） | 仓库页 | CONS-32 |
+| `GET /api/v1/console/teams` | 团队清单（归属仓库/issue + 成员 + 状态） | 团队页 | CONS-32 |
+| `GET /api/v1/console/agents` | 智能体花名册（状态/归属/运行时/时长） | 智能体页 | CONS-32 |
 | `GET /api/v1/issues/{issue_id}/rooms` | 房间清单（每仓 teamRoom + leaderDM） | issue 详情页房间区 | CONS-33 |
 | `GET /api/v1/rooms/{room_id}/stream` | 单房间合并流（消息 + 投影事实） | 活体房间视图 | CONS-33 |
 | `GET /api/v1/issues/{issue_id}/repositories/{repository_id}/plan` | 单仓 DAG·PLAN·SPEC 纸面 | 房间视图右侧双视图 | CONS-33 |
@@ -245,8 +245,15 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 
 ### 4.4 AgentTeams 实时代理与降级（**诚实说明，重要**）
 
-`runtime` 整块经 `AgentTeamControlPlane.get_worker/get_manager/ensure_team` 实时代理，
-**不落库**（避免读模型持有过期运行时事实）。可得字段以 Controller 返回为准：
+`runtime` 整块经 `AgentTeamControlPlane.get_worker/get_manager/**get_team**` 实时代理，
+**不落库**（避免读模型持有过期运行时事实）。
+
+**勘正（2026-08-11 主脑追认）**：起草时本节写团队运行时走 `ensure_team`，那是错的——
+`ensure_team` 在资源不存在时会**创建**团队，读端点调用它等于让一个 GET 具备建团副作用。
+已为 `AgentTeamControlPlane` 与 AgentTeams 客户端补只读的 **`get_team`**（镜像既有
+`get_worker`/`get_manager`），读路径一律走它；`ensure_team` 仅供拓扑 reconcile 等写路径使用。
+
+可得字段以 Controller 返回为准：
 
 - `WorkerRuntimeRef` 实际返回：`name / phase / runtime / room_id / matrix_user_id / message`；
 - `TeamRuntimeRef` 实际返回：`name / phase / team_room_id / leader_room_id / leader_name /
@@ -271,25 +278,34 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 且失败逐条隔离**——一条超时或报错只降级该条 `runtime`，禁止拖垮整页。这不是实现建议
 而是契约约束：违反它会让「智能体页整页 500」成为可能，而持久化花名册本来是可用的。
 
+**并发探测（硬性要求，2026-08-11 主脑实测后追加）**：隔离只防住失败传播，防不住**串行等待**。
+首版逐条 await，controller 离线时花名册 9 条 × 2s 超时 = **实测 18.1s**（团队页 8.2s），
+体验上与故障无异，而每一行其实都正确降级了。故要求：**一页内的所有探测并发发起**
+（`asyncio.gather`），整页墙钟时间收敛到 ≈ 单条超时量级，隔离语义不变。定向测试须断言
+N 条不可达的总耗时 < 单条超时的小倍数——**只测「降级正确」会漏掉这个缺陷**。
+
 **`?with_runtime=`（Q3 裁决）**：默认 `true`（Demo 需要看到运行时）。置 `false` 时整块
 `runtime` 省略、不发任何 Controller 请求。当前实现按 `directory.list()` 全量列出后逐个
 代理，N 个 agent = N 次 HTTP；规模变大时改默认值或加分页，届时修订本节。
 
-### 4.5 路径冲突与命名空间（**实现期发现，待主脑裁决**）
+### 4.5 路径冲突与命名空间（**2026-08-11 主脑裁决，已生效**）
 
-§1 与 §4 原文把三个端点定在 `GET /api/v1/repositories|teams|agents`。**实测 `/api/v1/repositories`
+§1 与 §4 起草时把三个端点定在 `GET /api/v1/repositories|teams|agents`。**实测 `/api/v1/repositories`
 已被 `repository_intelligence/api/router.py:102` 占用**（它的 catalog 视图，返回裸数组带
 `auto_card`），且该路由**注册在前、运行时胜出**——把网格挂在裸路径上会得到一个永远不可达的
 端点，而 OpenAPI 反而显示网格的定义（字典按方法覆盖），即「看起来在工作、实际返回别人的形状」。
 
-**当前实现（待裁决，改动量一行）**：三条统一收进 `console` 命名空间——
-`GET /api/v1/console/repositories`、`/console/teams`、`/console/agents`。
+**裁决结果**：三条统一收进 `console` 命名空间——
+`GET /api/v1/console/repositories`、`/console/teams`、`/console/agents`（§1 表格已同步）。
 理由：（一）不遮蔽也不改动他人已有端点（main 的审核台可能在消费它）；（二）三条同批同前缀，
 消费方不必记「哪条有前缀哪条没有」；（三）main 的 API 面还在扩张，`teams` / `agents`
 这类通名日后同样可能撞车，前缀是一次性的隔离。
+备选方案「只给 `repositories` 加前缀、另两条保持裸路径」**已否决**：路径风格不一致的代价
+会长期由消费方承担。
 
-备选：只给 `repositories` 加前缀而 `teams` / `agents` 保持裸路径（当前无冲突）——不推荐，
-路径风格不一致的代价会长期由消费方承担。裁决后本节转为正式条文并同步 §1 表格。
+**由此得到的通用做法**：新增端点前先查路径占用。本次的失效模式是——同 path+method
+先注册者在运行时胜出，而 OpenAPI 字典里后写者覆盖前者，于是**文档与实际行为相反，
+且冒烟测返回 200 完全看不出来**。
 
 ## 5. 房间读模型（CONS-33）
 

@@ -6,6 +6,7 @@ uptime_seconds / awake stay null because the controller exposes neither.
 """
 
 import asyncio
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -373,6 +374,38 @@ async def test_runtime_failures_are_isolated_to_their_own_row(monkeypatch) -> No
     # 404 is not the same as unreachable: the resource simply does not exist.
     assert runtimes["missing"] is None
     assert len(payload["agents"]) == 4  # nothing was dropped
+
+
+@pytest.mark.asyncio
+async def test_unreachable_probes_run_concurrently(monkeypatch) -> None:
+    """Isolation alone is not enough: probing serially makes an offline
+    controller cost rows x timeout, which reads as an outage even though every
+    row degrades correctly. The page must cost about one timeout, not N."""
+
+    timeout = 0.2
+    monkeypatch.setattr(service_module, "_RUNTIME_PROBE_TIMEOUT", timeout)
+    principals = [
+        _principal(AgentRole.WORKER, f"hanging-{index}", repository_id=uuid4())
+        for index in range(6)
+    ]
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        agents=StubRoster(*principals),
+        runtime=StubRuntime({item.agentteams_resource_name: "hang" for item in principals}),
+    )
+
+    started = time.monotonic()
+    payload = await service.list_agents()
+    elapsed = time.monotonic() - started
+
+    assert len(payload["agents"]) == 6
+    assert all(item["runtime"] == {"reachable": False} for item in payload["agents"])
+    # Serial would be 6 x 0.2 = 1.2s; concurrent is ~0.2s.
+    assert elapsed < timeout * 3
 
 
 @pytest.mark.asyncio

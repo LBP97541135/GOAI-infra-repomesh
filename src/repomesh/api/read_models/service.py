@@ -1176,8 +1176,10 @@ class DeliveryReadModelService:
 
         catalog = {item.id: item for item in await self._repositories.list()}
         teams: list[dict] = []
+        probes: list[str] = []
         for topology in await self._topology.list_views():
             for team in topology.repository_teams:
+                probes.append(team.agentteams_team_name)
                 teams.append(
                     {
                         "team_id": team.id,
@@ -1199,17 +1201,13 @@ class DeliveryReadModelService:
                             await self._member(worker_id, "worker")
                             for worker_id in team.worker_agent_ids
                         ],
-                        "runtime": (
-                            await self._runtime_block(
-                                "team",
-                                team.agentteams_team_name,
-                                _team_runtime_fields,
-                            )
-                            if with_runtime
-                            else None
-                        ),
+                        "runtime": None,
                     }
                 )
+        if with_runtime:
+            await self._attach_runtime(
+                teams, [("team", name) for name in probes], _team_runtime_fields
+            )
         return {"teams": teams}
 
     async def list_agents(self, *, with_runtime: bool = True) -> dict:
@@ -1231,9 +1229,16 @@ class DeliveryReadModelService:
                 )
 
         agents: list[dict] = []
+        probes: list[tuple[str, str]] = []
         for principal in await self._agents.list_all():
             team_id, issue_id = team_by_agent.get(principal.id, (None, None))
             is_manager = principal.role is AgentRole.ORGANIZATION_LEADER
+            probes.append(
+                (
+                    "manager" if is_manager else "worker",
+                    principal.agentteams_resource_name,
+                )
+            )
             agents.append(
                 {
                     "agent_id": principal.id,
@@ -1252,18 +1257,31 @@ class DeliveryReadModelService:
                     "team_id": team_id,
                     "issue_id": issue_id,
                     "active_task_count": active_tasks.get(principal.id, 0),
-                    "runtime": (
-                        await self._runtime_block(
-                            "manager" if is_manager else "worker",
-                            principal.agentteams_resource_name,
-                            _agent_runtime_fields,
-                        )
-                        if with_runtime
-                        else None
-                    ),
+                    "runtime": None,
                 }
             )
+        if with_runtime:
+            await self._attach_runtime(agents, probes, _agent_runtime_fields)
         return {"agents": agents}
+
+    async def _attach_runtime(
+        self, rows: list[dict], probes: list[tuple[str, str]], shape
+    ) -> None:
+        """Probe every row concurrently and fill its runtime block in place.
+
+        Concurrency is not a micro-optimisation here: probes are bounded by a
+        timeout, so running them one after another makes an offline controller
+        cost `rows x timeout` — a roster of nine agents took 18s before this,
+        which is indistinguishable from an outage even though every row
+        degrades correctly. Isolation is unchanged: _runtime_block absorbs its
+        own failures, so gather never propagates one row's problem to another.
+        """
+
+        blocks = await asyncio.gather(
+            *(self._runtime_block(kind, name, shape) for kind, name in probes)
+        )
+        for row, block in zip(rows, blocks, strict=True):
+            row["runtime"] = block
 
     async def _runtime_block(self, kind: str, name: str, shape) -> dict | None:
         """§4.4 live proxy with the per-item isolation the contract mandates.
