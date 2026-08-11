@@ -251,16 +251,24 @@ export interface DeliveryEventsPage {
   next_cursor: string | null;
 }
 
-/** §4.2 CollaborationMessageView 直投影（当前仅 Leader→Worker 方向，§6.7） */
+/** §4.2 CollaborationMessageView 直投影 + 追认附加字段（1df9ebf：direction/
+ *  sender_name/recipient_name/created_at）。方向以 direction 辨识，勿假定恒单向。 */
 export interface CollaborationMessageView {
+  id: string;
   kind: string;
   subject: string;
   body: string;
-  sender: string;
-  recipient: string;
+  sender_agent_id: string;
+  sender_name: string | null;
+  recipient_agent_id: string;
+  recipient_name: string | null;
+  repository_id: string | null;
+  task_id: string | null;
   status: string;
   event_id: string | null;
   correlation_id: string | null;
+  created_at: string;
+  direction: string;
 }
 
 export interface DeliveryMessagesPage {

@@ -239,15 +239,20 @@ export function deriveView(data: DeliveryData): DeliveryView | null {
   };
 }
 
-/** 房间流初始消息：回放用叙事层；live 用 §4.2 CollaborationMessageView 直投影 */
+/** 房间流初始消息：回放用叙事层；live 用 §4.2 CollaborationMessageView 直投影。
+ *  sender_name/recipient_name 可 null（§6 降级：回退 agent id 短版，不编名字）。 */
 export function deriveChat(data: DeliveryData): ChatMessage[] {
   if (data.overlay) return data.overlay.chat;
-  return data.messages.items.map((m: CollaborationMessageView, i) => ({
-    id: m.event_id ?? `msg-${i}`,
-    author: m.sender,
-    role: "AGENT",
-    time: m.status,
-    tone: "agent",
-    text: `${m.subject} — ${m.body}（→ ${m.recipient}）`,
-  }));
+  return data.messages.items.map((m: CollaborationMessageView): ChatMessage => {
+    const author = m.sender_name ?? `AGENT ${m.sender_agent_id.slice(0, 8)}`;
+    const recipient = m.recipient_name ?? m.recipient_agent_id.slice(0, 8);
+    return {
+      id: m.id,
+      author,
+      role: "AGENT",
+      time: eventTime(m.created_at),
+      tone: "agent",
+      text: `${m.subject} — ${m.body}（→ ${recipient} · ${m.status}）`,
+    };
+  });
 }
