@@ -8,6 +8,8 @@ import { Sidebar } from "./components/Sidebar";
 import { ReplayBar } from "./components/ReplayBar";
 import { createDataSource, resolveDataSourceMode } from "./api/source";
 import type { DeliveryData } from "./api/source";
+import type { DeliveryEventKind } from "./api/contract";
+import type { EventsTimelineState } from "./components/EventTimeline";
 import { SCENES } from "./data/scenes";
 import { deriveChat, deriveView } from "./viewmodel";
 import type { ChatMessage, Decision } from "./types";
@@ -34,6 +36,9 @@ export default function App() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
+  const [events, setEvents] = useState<EventsTimelineState>({ items: [], nextCursor: null, kind: null, loading: false });
+  // 过滤/续读请求竞态防护：只采纳最后一次请求的结果
+  const eventsReqSeq = useRef(0);
   const [toast, setToast] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const toastTimer = useRef<number | undefined>(undefined);
@@ -58,6 +63,9 @@ export default function App() {
         const derived = deriveView(d);
         // 决策夹数组末位为最前的文件夹（与原型语义一致）
         setDeck(derived ? derived.decisions.slice().reverse() : []);
+        // 时间线重置为首页（无过滤）；后续过滤/续读走 fetchEvents
+        eventsReqSeq.current += 1;
+        setEvents({ items: d.events.items, nextCursor: d.events.next_cursor, kind: null, loading: false });
       })
       .catch((err: unknown) => {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
@@ -122,6 +130,30 @@ export default function App() {
   const handleApprovalCancel = () => {
     setApprovalOpen(false);
     setApprovalError(null);
+  };
+
+  /** 时间线过滤切换（替换式重拉）与游标续读（追加式）。契约 §4.1。 */
+  const requestEvents = (kind: DeliveryEventKind | null, cursor: string | null) => {
+    const deliveryId = data?.aggregate?.delivery_id;
+    if (!source.fetchEvents || !deliveryId) return;
+    const seq = ++eventsReqSeq.current;
+    setEvents((s) => ({ ...s, kind, loading: true }));
+    source
+      .fetchEvents(deliveryId, { kind: kind ?? undefined, cursor: cursor ?? undefined })
+      .then((page) => {
+        if (seq !== eventsReqSeq.current) return;
+        setEvents((s) => ({
+          items: cursor ? [...s.items, ...page.items] : page.items,
+          nextCursor: page.next_cursor,
+          kind,
+          loading: false,
+        }));
+      })
+      .catch((err: unknown) => {
+        if (seq !== eventsReqSeq.current) return;
+        setEvents((s) => ({ ...s, loading: false }));
+        showToast(`事件时间线加载失败：${err instanceof Error ? err.message : String(err)}`);
+      });
   };
 
   const handleApprovalSubmit = (comment: string) => {
@@ -313,7 +345,14 @@ export default function App() {
               </div>
             </form>
 
-            <EnvPanel view={delivery} onToast={showToast} />
+            <EnvPanel
+              view={delivery}
+              events={events}
+              demo={mode === "replay"}
+              onEventsFilter={(kind) => requestEvents(kind, null)}
+              onEventsMore={() => requestEvents(events.kind, events.nextCursor)}
+              onToast={showToast}
+            />
           </>
         ) : (
           <div className="grid flex-1 place-items-center">

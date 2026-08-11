@@ -1,5 +1,7 @@
 import { useState } from "react";
+import type { DeliveryEventKind } from "../api/contract";
 import type { DeliveryView, GateState } from "../types";
+import { EventTimeline, type EventsTimelineState } from "./EventTimeline";
 import { ChevronIcon, DiffIcon, EnvIcon, PlusIcon, PrIcon, RepoIcon, TermIcon } from "./icons";
 
 /** 悬浮环境窗（Codex 式）：关联仓库 diff → ChangeSet → 环境 → 后台进程。
@@ -39,7 +41,21 @@ function StaticRow({
   );
 }
 
-export function EnvPanel({ view, onToast }: { view: DeliveryView; onToast: (text: string) => void }) {
+export function EnvPanel({
+  view,
+  events,
+  demo,
+  onEventsFilter,
+  onEventsMore,
+  onToast,
+}: {
+  view: DeliveryView;
+  events: EventsTimelineState;
+  demo: boolean;
+  onEventsFilter: (kind: DeliveryEventKind | null) => void;
+  onEventsMore: () => void;
+  onToast: (text: string) => void;
+}) {
   const [minimized, setMinimized] = useState(false);
   const [openRepos, setOpenRepos] = useState<Set<string>>(() => new Set(view.repoDiffs.slice(0, 1).map((r) => r.id)));
 
@@ -200,6 +216,9 @@ export function EnvPanel({ view, onToast }: { view: DeliveryView; onToast: (text
               ))}
             </>
           )}
+
+          <Label>事件时间线</Label>
+          <EventTimeline state={events} demo={demo} onFilter={onEventsFilter} onLoadMore={onEventsMore} />
         </div>
       )}
     </aside>

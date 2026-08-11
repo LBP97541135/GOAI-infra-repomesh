@@ -128,7 +128,7 @@ function deriveApproval(data: DeliveryData): ApprovalInfo | null {
 
 /** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。
  *  防御：联调发现后端 repair_timeline.at 可为 null（契约写 string，已报后端），空值渲染 "—"。 */
-function eventTime(at: string | null | undefined): string {
+export function eventTime(at: string | null | undefined): string {
   if (!at) return "—";
   const m = at.match(/T(\d{2}:\d{2}:\d{2})/);
   return m ? m[1] : at;

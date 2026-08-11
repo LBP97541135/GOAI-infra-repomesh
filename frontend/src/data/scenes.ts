@@ -200,5 +200,13 @@ export function createReplaySource(): DeliveryDataSource {
       scene = Math.max(0, Math.min(SCENES.length - 1, index));
     },
     fetchAll: () => Promise.resolve(SCENES[scene].build()),
+    // 回放：当前场景全量内存过滤，无分页（next_cursor 恒 null → 续读按钮隐藏）
+    fetchEvents: (_deliveryId, opts) => {
+      const all = SCENES[scene].build().events.items;
+      return Promise.resolve({
+        items: opts?.kind ? all.filter((e) => e.kind === opts.kind) : all,
+        next_cursor: null,
+      });
+    },
   };
 }

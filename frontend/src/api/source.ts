@@ -5,6 +5,7 @@
 import type {
   DecisionsResponse,
   DeliveryAggregate,
+  DeliveryEventKind,
   DeliveryEventsPage,
   DeliveryListResponse,
   DeliveryMessagesPage,
@@ -37,7 +38,16 @@ export interface DeliveryDataSource {
   readonly sceneCount?: number;
   /** 治理决策写回（契约 §4.4；仅 live 数据源提供，回放为前端演示） */
   submitGovernanceDecision?(deliveryId: string, payload: GovernanceDecisionRequest): Promise<GovernanceDecisionView>;
+  /** 事件时间线过滤/续读（契约 §4.1）：kind 单值过滤；cursor 不透明回传。
+   *  live 打端点分页；replay 返回当前场景全量（next_cursor 恒 null）。 */
+  fetchEvents?(
+    deliveryId: string,
+    opts?: { cursor?: string; kind?: DeliveryEventKind; limit?: number },
+  ): Promise<DeliveryEventsPage>;
 }
+
+/** 时间线单页条数：种子数据十余条，小页方便演示「加载更早」衔接 */
+export const EVENTS_PAGE_LIMIT = 6;
 
 export function resolveDataSourceMode(): DataSourceMode {
   const param = new URLSearchParams(window.location.search).get("source");
@@ -82,13 +92,15 @@ function createLiveSource(): DeliveryDataSource {
       }
       const [aggregate, events, messages, decisions] = await Promise.all([
         client.getDelivery(target),
-        optional(client.getEvents(target), { items: [], next_cursor: null }),
+        optional(client.getEvents(target, { limit: EVENTS_PAGE_LIMIT }), { items: [], next_cursor: null }),
         optional(client.getMessages(target), { items: [], next_cursor: null }),
         optional(client.getDecisions(target), { items: [] }),
       ]);
       return { list, aggregate, events, messages, decisions, overlay: null };
     },
     submitGovernanceDecision: (deliveryId, payload) => client.postGovernanceDecision(deliveryId, payload),
+    fetchEvents: (deliveryId, opts) =>
+      client.getEvents(deliveryId, { ...opts, limit: opts?.limit ?? EVENTS_PAGE_LIMIT }),
   };
 }
 

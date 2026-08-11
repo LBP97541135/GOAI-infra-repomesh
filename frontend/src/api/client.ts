@@ -66,12 +66,15 @@ export function createApiClient(config: ApiClientConfig) {
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),
 
-    getEvents: (deliveryId: string, cursor?: string) =>
-      request<DeliveryEventsPage>(
-        config,
-        "GET",
-        `/deliveries/${deliveryId}/events${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
-      ),
+    // §4.1：kind 单值过滤；cursor 为不透明字符串，原样回传续读
+    getEvents: (deliveryId: string, opts?: { cursor?: string; kind?: string; limit?: number }) => {
+      const params = new URLSearchParams();
+      if (opts?.kind) params.set("kind", opts.kind);
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      const q = params.toString();
+      return request<DeliveryEventsPage>(config, "GET", `/deliveries/${deliveryId}/events${q ? `?${q}` : ""}`);
+    },
 
     getMessages: (deliveryId: string, cursor?: string) =>
       request<DeliveryMessagesPage>(
