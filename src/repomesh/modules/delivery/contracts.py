@@ -91,6 +91,12 @@ class GovernanceDecisionView:
     decided_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class DeliveryArchiveView:
+    delivery_id: UUID
+    archived_at: datetime
+
+
 class SCMObservationSource(StrEnum):
     WEBHOOK = "webhook"
     POLLER = "poller"

@@ -67,6 +67,7 @@ class SpecificationRenderer:
             *_section("Required dependencies", content.dependencies),
             *_section("Interface requirements", content.interface_changes),
             *_section("Allowed paths", content.allowed_paths),
+            *_section("Forbidden paths", content.forbidden_paths),
             *_section("Required tests", content.tests),
         ]
         rendered = "\n".join(lines).rstrip() + "\n"
@@ -159,6 +160,7 @@ class BuildCodingAgentPackage:
             "dependencies": list(content.dependencies),
             "interface_changes": list(content.interface_changes),
             "allowed_paths": list(content.allowed_paths),
+            "forbidden_paths": list(content.forbidden_paths),
             "test_commands": list(content.tests),
             "context_files": [
                 {
@@ -182,6 +184,7 @@ class BuildCodingAgentPackage:
             dependencies=content.dependencies,
             interface_changes=content.interface_changes,
             allowed_paths=content.allowed_paths,
+            forbidden_paths=content.forbidden_paths,
             test_commands=content.tests,
             context_files=(rendered,),
             content_hash=_sha256(encoded),

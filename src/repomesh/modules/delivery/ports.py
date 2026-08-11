@@ -2,7 +2,10 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from .contracts import ValidationEvidenceDecision
+from repomesh.modules.task_orchestration.contracts import ExecutionPlanView
+from repomesh.shared.events import EventEnvelope
+
+from .contracts import DeliveryArchiveView, ValidationEvidenceDecision
 from .domain import ChangeSet, SCMCommand, SCMObservation, SCMPollCursor
 
 
@@ -62,6 +65,24 @@ class SCMCommandStore(Protocol):
     async def list_dispatchable(
         self, *, stale_before: datetime, max_attempts: int, limit: int
     ) -> tuple[SCMCommand, ...]: ...
+
+
+class DeliveryArchiveStore(Protocol):
+    async def add(self, archive: DeliveryArchiveView) -> None: ...
+
+    async def get(self, delivery_id: UUID) -> DeliveryArchiveView | None: ...
+
+    async def list_ids(self) -> tuple[UUID, ...]: ...
+
+
+class ExecutionPlanStatusReader(Protocol):
+    """Read the execution plan a delivery aggregates; adapted in the composition root."""
+
+    async def get_view(self, plan_id: UUID) -> ExecutionPlanView | None: ...
+
+
+class DeliveryAuditLog(Protocol):
+    async def append(self, event: EventEnvelope) -> None: ...
 
 
 class ValidationSnapshotReader(Protocol):

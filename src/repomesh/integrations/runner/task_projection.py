@@ -112,7 +112,9 @@ class RunnerTaskProjector:
                 disallowed_tools=denied_tools,
                 network_targets=grant.network_policy,
                 allowed_paths=allowed_paths,
-                denied_paths=grant.denied_paths,
+                denied_paths=tuple(
+                    dict.fromkeys((*grant.denied_paths, *package.forbidden_paths))
+                ),
             ),
             test_commands=package.test_commands,
             resume_session_id=request.resume_session_id,

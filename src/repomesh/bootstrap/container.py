@@ -334,6 +334,180 @@ class ApplicationContainer:
             validation_reader=validation,
         )
 
+    def delivery_read_model_service(self):
+        from repomesh.api.read_models import DeliveryReadModelService
+        from repomesh.api.read_models.sources import (
+            PlanSnapshotData,
+            RepositoryData,
+            SpecificationContractData,
+        )
+        from repomesh.modules.delivery import (
+            PostgresDeliveryArchiveStore,
+            delivery_change_set_key,
+        )
+        from repomesh.modules.review_validation import PostgresValidationSnapshotStore
+        from repomesh.modules.specification.contracts import (
+            SpecificationKind,
+            SpecificationStatus,
+        )
+
+        container = self
+        delivery = self.delivery_service()
+        plan_store = self.execution_plan_store()
+        snapshot_store = self.plan_snapshot_store()
+        archive_store = PostgresDeliveryArchiveStore(self.database)
+        validation_store = PostgresValidationSnapshotStore(self.database)
+
+        class _Plans:
+            async def list_all(self):
+                return tuple(plan.to_view() for plan in await plan_store.list_all())
+
+            async def get(self, plan_id: UUID):
+                plan = await plan_store.get(plan_id)
+                return plan.to_view() if plan is not None else None
+
+        class _Snapshots:
+            async def project_ids(self):
+                return await snapshot_store.list_project_ids()
+
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    PlanSnapshotData(
+                        id=record.id,
+                        project_id=record.project_id,
+                        plan_version=record.plan_version,
+                        created_at=record.created_at,
+                        engineering_spec=record.engineering_spec,
+                        requirement_text=record.requirement_text,
+                        execution_batches=tuple(
+                            tuple(batch) for batch in record.execution_batches
+                        ),
+                        task_dag=tuple(record.task_dag),
+                        execution_plan_id=record.execution_plan_id,
+                    )
+                    for record in await snapshot_store.list_all(project_id)
+                )
+
+        class _Tasks:
+            async def list_by_project(self, project_id: UUID):
+                return tuple(
+                    task.to_view()
+                    for task in await container.task_store.list_by_project(project_id)
+                )
+
+        class _ChangeSets:
+            async def for_delivery(self, delivery_id: UUID):
+                return await delivery.get_by_idempotency_key(
+                    delivery_change_set_key(delivery_id)
+                )
+
+            async def merge_gate(self, change_set_id: UUID, repository_id: UUID):
+                return await delivery.evaluate_merge_gate(change_set_id, repository_id)
+
+        class _Validations:
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    snapshot.to_view()
+                    for snapshot in await validation_store.list_by_project(project_id)
+                )
+
+        class _Specifications:
+            async def engineering_contract(self, project_id: UUID):
+                candidates = [
+                    specification
+                    for specification in await container.specification_store.list_by_project(
+                        project_id
+                    )
+                    if specification.kind is SpecificationKind.ENGINEERING
+                ]
+                if not candidates:
+                    return None
+                frozen = [
+                    item
+                    for item in candidates
+                    if item.status is SpecificationStatus.FROZEN
+                ]
+                chosen = (frozen or candidates)[-1]
+                content = chosen.current_version.content
+                return SpecificationContractData(
+                    specification_id=chosen.id,
+                    version=chosen.current_version.version,
+                    status=chosen.status.value,
+                    goal=content.goal,
+                    acceptance=content.acceptance,
+                    constraints=content.constraints,
+                    allowed_paths=content.allowed_paths,
+                    forbidden_paths=content.forbidden_paths,
+                    tests=content.tests,
+                )
+
+        class _Repositories:
+            async def list(self):
+                return tuple(
+                    RepositoryData(
+                        id=profile.id, name=profile.name, description=profile.description
+                    )
+                    for profile in await container.repository_catalog.list()
+                )
+
+        class _Agents:
+            async def name(self, agent_id: UUID):
+                principal = await container.agent_directory.get_view(agent_id)
+                return principal.agentteams_resource_name if principal else None
+
+        class _Topology:
+            async def matrix_room_id(self, project_id: UUID):
+                topology = await container.topology_reader().get_view(project_id)
+                if topology is None or len(topology.repository_teams) != 1:
+                    return None
+                return topology.repository_teams[0].room_id
+
+        return DeliveryReadModelService(
+            plans=_Plans(),
+            snapshots=_Snapshots(),
+            tasks=_Tasks(),
+            change_sets=_ChangeSets(),
+            archives=archive_store,
+            validations=_Validations(),
+            specifications=_Specifications(),
+            repositories=_Repositories(),
+            agents=_Agents(),
+            topology=_Topology(),
+        )
+
+    def delivery_governance_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryGovernanceService,
+            PostgresDeliveryAuditLog,
+        )
+
+        return DeliveryGovernanceService(
+            self.delivery_service(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def delivery_archive_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryArchiveService,
+            PostgresDeliveryArchiveStore,
+            PostgresDeliveryAuditLog,
+        )
+
+        plans = self.execution_plan_store()
+
+        class _PlanViewReader:
+            async def get_view(self, plan_id: UUID):
+                plan = await plans.get(plan_id)
+                return plan.to_view() if plan is not None else None
+
+        return DeliveryArchiveService(
+            PostgresDeliveryArchiveStore(self.database),
+            self.delivery_service(),
+            _PlanViewReader(),
+            PostgresDeliveryAuditLog(self.database),
+        )
+
     def validation_snapshot_service(self):
         from repomesh.modules.review_validation import (
             PostgresValidationSnapshotStore,
