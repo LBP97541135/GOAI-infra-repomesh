@@ -33,11 +33,13 @@ export const IDS = {
   },
 } as const;
 
+/** head_sha 恒非空 = Runner 产出的候选 commit SHA（主脑裁决 2026-08-11，契约 e9851ba）；
+ *  pending 仅表示 PR 未创建，候选 commit 在 ChangeSet 创建时已存在。 */
 const HEAD = {
   core: "8825f6bb9c31d4a07e5f2b6d8a19c3e4f701aa42",
   dashboard: "6f21d3a8b90c47e12d5a8f3b6c94e07d1b28cc17",
   apps: "4b09e7c2d18f43a6b5c290d7e83f1a64c507bb93",
-  docsBase: "2c57a9e0f4b18d36c7a4e92b05d8f13a6e94dd08",
+  docs: "9e04d5f127c8b3a6e0f49d21c75b8ae3f612dd90",
 } as const;
 
 const BASE = "d4c8b21a7e90f5d36b18a04c92e7f6531c80ee55";
@@ -239,8 +241,8 @@ const changeSet: ChangeSetView = {
       gate_display: "waiting",
       pull_request_url: null,
       pull_request_number: null,
-      head_sha: HEAD.docsBase,
-      base_sha: HEAD.docsBase,
+      head_sha: HEAD.docs,
+      base_sha: BASE,
       branch_name: "repomesh/dlv-0042-docs",
       depends_on: [IDS.repo.dashboard, IDS.repo.apps],
       merge_order: 3,
@@ -311,6 +313,7 @@ export const aggregate: DeliveryAggregate = {
       [IDS.repo.core]: HEAD.core,
       [IDS.repo.dashboard]: HEAD.dashboard,
       [IDS.repo.apps]: HEAD.apps,
+      [IDS.repo.docs]: HEAD.docs,
     },
     environment_hash: "env-9f31c2d8",
     expires_at: "2026-08-09T18:00:00Z",

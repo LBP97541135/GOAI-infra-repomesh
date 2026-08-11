@@ -164,11 +164,14 @@ function executeScene(): DeliveryData {
   return data;
 }
 
-/** S3 失败修复：隐藏验收测试失败、治理拦截、Repair Loop 第 2 次尝试 */
+/** S3 失败修复：隐藏验收测试失败、治理拦截、Repair Loop 第 2 次尝试。
+ *  docs 的候选 commit 尚未产出（T5 未执行）→ change_set 不含 docs 仓（主脑裁决时序）。 */
 function repairScene(): DeliveryData {
   const data = releaseScene();
   const agg = data.aggregate!;
   const cs = agg.change_set!;
+  cs.repositories = cs.repositories.filter((r) => r.repository_id !== IDS.repo.docs);
+  if (agg.validation_snapshot) delete agg.validation_snapshot.candidate_heads[IDS.repo.docs];
   const core = cs.repositories.find((r) => r.repository_id === IDS.repo.core)!;
   core.status = "review_pending";
   core.gate_display = "running";
