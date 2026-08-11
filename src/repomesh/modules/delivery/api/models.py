@@ -3,6 +3,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from repomesh.modules.delivery.contracts import (
+    GovernanceDecisionKind,
     RecoveryActionStatus,
     RecoveryTrigger,
     ReviewState,
@@ -70,3 +71,13 @@ class RecoveryPlanCreate(BaseModel):
 class RecoveryActionUpdate(BaseModel):
     status: RecoveryActionStatus
     detail: str
+
+
+class GovernanceDecisionCreate(BaseModel):
+    change_set_id: UUID
+    repository_id: UUID
+    head_sha: str
+    decision: GovernanceDecisionKind
+    reason: str
+    idempotency_key: str
+    decided_by_agent_id: UUID

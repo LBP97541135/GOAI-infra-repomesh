@@ -334,6 +334,39 @@ class ApplicationContainer:
             validation_reader=validation,
         )
 
+    def delivery_governance_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryGovernanceService,
+            PostgresDeliveryAuditLog,
+        )
+
+        return DeliveryGovernanceService(
+            self.delivery_service(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def delivery_archive_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryArchiveService,
+            PostgresDeliveryArchiveStore,
+            PostgresDeliveryAuditLog,
+        )
+
+        plans = self.execution_plan_store()
+
+        class _PlanViewReader:
+            async def get_view(self, plan_id: UUID):
+                plan = await plans.get(plan_id)
+                return plan.to_view() if plan is not None else None
+
+        return DeliveryArchiveService(
+            PostgresDeliveryArchiveStore(self.database),
+            self.delivery_service(),
+            _PlanViewReader(),
+            PostgresDeliveryAuditLog(self.database),
+        )
+
     def validation_snapshot_service(self):
         from repomesh.modules.review_validation import (
             PostgresValidationSnapshotStore,

@@ -18,9 +18,12 @@ from sqlalchemy.types import Uuid
 
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
+from repomesh.persistence.models import AuditEventRecord
+from repomesh.shared.events import EventEnvelope
 
 from .contracts import (
     ChangeSetStatus,
+    DeliveryArchiveView,
     GovernanceDecisionKind,
     RecoveryActionKind,
     RecoveryActionStatus,
@@ -93,6 +96,81 @@ class ChangeSetRepositoryRecord(Base):
     head_sha: Mapped[str] = mapped_column(String(40), index=True)
     pull_request_number: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(40), index=True)
+
+
+class DeliveryArchiveRecord(Base):
+    __tablename__ = "delivery_archives"
+    __table_args__ = ({"schema": "delivery"},)
+
+    delivery_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class InMemoryDeliveryArchiveStore:
+    def __init__(self) -> None:
+        self.items: dict[UUID, DeliveryArchiveView] = {}
+
+    async def add(self, archive: DeliveryArchiveView) -> None:
+        if archive.delivery_id in self.items:
+            raise DeliveryConflict("delivery is already archived")
+        self.items[archive.delivery_id] = archive
+
+    async def get(self, delivery_id: UUID) -> DeliveryArchiveView | None:
+        return self.items.get(delivery_id)
+
+    async def list_ids(self) -> tuple[UUID, ...]:
+        return tuple(self.items)
+
+
+class PostgresDeliveryArchiveStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def add(self, archive: DeliveryArchiveView) -> None:
+        try:
+            async with self._database.transaction() as session:
+                session.add(
+                    DeliveryArchiveRecord(
+                        delivery_id=archive.delivery_id,
+                        archived_at=archive.archived_at,
+                    )
+                )
+        except IntegrityError as error:
+            raise DeliveryConflict("delivery is already archived") from error
+
+    async def get(self, delivery_id: UUID) -> DeliveryArchiveView | None:
+        async with self._database.transaction() as session:
+            record = await session.get(DeliveryArchiveRecord, delivery_id)
+        if record is None:
+            return None
+        return DeliveryArchiveView(
+            delivery_id=record.delivery_id,
+            archived_at=_aware(record.archived_at),
+        )
+
+    async def list_ids(self) -> tuple[UUID, ...]:
+        async with self._database.transaction() as session:
+            ids = (
+                await session.scalars(select(DeliveryArchiveRecord.delivery_id))
+            ).all()
+        return tuple(ids)
+
+
+class InMemoryDeliveryAuditLog:
+    def __init__(self) -> None:
+        self.events: list[EventEnvelope] = []
+
+    async def append(self, event: EventEnvelope) -> None:
+        self.events.append(event)
+
+
+class PostgresDeliveryAuditLog:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def append(self, event: EventEnvelope) -> None:
+        async with self._database.transaction() as session:
+            session.add(AuditEventRecord.from_envelope(event))
 
 
 class SCMObservationRecord(Base):

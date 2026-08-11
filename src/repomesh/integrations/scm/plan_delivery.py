@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from repomesh.modules.delivery import DeliveryService
+from repomesh.modules.delivery import DeliveryService, delivery_change_set_key
 from repomesh.modules.delivery.contracts import (
     PrepareChangeSetCommand,
     RepositoryCandidateInput,
@@ -51,7 +51,7 @@ class PlanDeliveryFinalizer:
         candidates, workspaces, tests = await self._candidates(plan)
         if not candidates:
             return
-        idempotency_key = f"execution-plan:{plan.id}:delivery"
+        idempotency_key = delivery_change_set_key(plan.id)
         existing = await self._delivery.get_by_idempotency_key(idempotency_key)
         validation_snapshot_id = (
             existing.validation_snapshot_id if existing is not None else None
