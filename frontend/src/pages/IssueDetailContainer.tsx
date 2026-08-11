@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { ApprovalInfo, Decision } from "../types";
 import {
@@ -54,9 +54,11 @@ export function IssueDetailContainer({
   const [principalResolving, setPrincipalResolving] = useState(true);
 
   /** 轮次区（B-6）：展开态与逐轮决策取数结果。懒取——首次展开才发请求，
-   *  已取到的轮次收起再展开不重取（issue 或 reload 变化时整体清空）。 */
+   *  已取到的轮次收起再展开不重取（issue 或 reload 变化时整体清空）。
+   *  代际号防 A6：清空后在途响应落回旧数据且不再重取。 */
   const [roundsExpanded, setRoundsExpanded] = useState<Record<string, boolean>>({});
   const [roundsHistory, setRoundsHistory] = useState<Record<string, RoundHistoryState>>({});
+  const roundsEpoch = useRef(0);
 
   /** 轮次归档（B-4）：两步确认——第一次点击进入确认态，再点才发请求；
    *  点击其他轮次或成功/失败后确认态复位。 */
@@ -73,6 +75,7 @@ export function IssueDetailContainer({
     setLoading(true);
     setError(null);
     // 换 issue / 手动刷新时清空轮次区缓存：真批后决策集合已变，旧缓存是过期事实
+    roundsEpoch.current += 1;
     setRoundsExpanded({});
     setRoundsHistory({});
     Promise.all([fetchIssueDetail(issueId), fetchRooms(issueId)])
@@ -115,6 +118,7 @@ export function IssueDetailContainer({
       setDeck([]);
       setDeckNote(null);
       setApproval(null);
+      setDeckAggregate(null); // 切到草稿 issue 时不留上一 issue 的聚合
       return;
     }
     let cancelled = false;
@@ -157,15 +161,18 @@ export function IssueDetailContainer({
       // 取数完成前用户可能已收起，结果照常落桶——再展开即命中缓存，无副作用。
       const existing = roundsHistory[id];
       if (!willExpand || (existing && !existing.loading && !existing.error)) return;
+      const epoch = roundsEpoch.current;
       setRoundsHistory((prev) => ({ ...prev, [id]: { loading: true, error: null, pending: [], recorded: [] } }));
       fetchRoundDecisionHistory(id)
-        .then((data) =>
+        .then((data) => {
+          if (epoch !== roundsEpoch.current) return; // A6：缓存已整体清空，旧响应不落桶
           setRoundsHistory((p) => ({
             ...p,
             [id]: { loading: false, error: null, pending: data.pending, recorded: data.recorded },
-          })),
-        )
-        .catch((err: unknown) =>
+          }));
+        })
+        .catch((err: unknown) => {
+          if (epoch !== roundsEpoch.current) return;
           setRoundsHistory((p) => ({
             ...p,
             [id]: {
@@ -174,8 +181,8 @@ export function IssueDetailContainer({
               pending: [],
               recorded: [],
             },
-          })),
-        );
+          }));
+        });
     },
     [roundsExpanded, roundsHistory],
   );
