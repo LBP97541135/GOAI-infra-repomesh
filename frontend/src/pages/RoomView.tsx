@@ -243,8 +243,12 @@ function EnvFloat({
                 <div className="pt-1 pl-1 text-[10px] text-[#6b6046]">± 行数未接入（diffstat 无源）</div>
               </>
             )}
+            {/* 这行是候选 commit 列表，不是 diffstat：`±` 属于增删行数的语汇，
+                用在 sha 前会读成「改了 8825f6bb 行」。前缀改为自述的 commit。 */}
             {env.commitShas.length > 0 && (
-              <div className="pt-1 pl-1 font-mono text-[10.5px] text-[#6b6046]">± {env.commitShas.join(" · ")}</div>
+              <div className="pt-1 pl-1 font-mono text-[10.5px] text-[#6b6046]">
+                commit {env.commitShas.join(" · ")}
+              </div>
             )}
 
             <div className="microlabel pt-3 pb-1">CHANGESET · 本仓位置</div>
