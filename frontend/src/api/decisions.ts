@@ -105,7 +105,10 @@ export async function submitGovernanceDecision(
     decision: "ready",
     reason,
     decided_by_agent_id: decidedByAgentId,
-    idempotency_key: `console-${info.repositoryId}-${info.headSha.slice(0, 12)}-ready`,
+    // A7：键含 change_set_id——补偿后 change_set 重建而 head 未变时，新一轮批准
+    // 不能被判成旧决策的重放。reason **有意不入键**（主脑裁决）：决策一旦记录即
+    // 不可通过重提改写，「改意见重提被去重丢弃」是审计完整性而非缺陷。
+    idempotency_key: `console-${info.changeSetId}-${info.repositoryId}-${info.headSha.slice(0, 12)}-ready`,
   };
   return client().postGovernanceDecision(roundId, payload);
 }
