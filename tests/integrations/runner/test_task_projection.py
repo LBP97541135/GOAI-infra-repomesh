@@ -58,6 +58,7 @@ def scenario(tmp_path: Path):
         dependencies=(),
         interface_changes=(),
         allowed_paths=("src/**", "tests/**"),
+        forbidden_paths=("src/legacy/**",),
         test_commands=("pytest tests/pricing",),
         context_files=(
             RenderedSpecification(
@@ -112,6 +113,7 @@ def test_project_materialize_and_verify_context(tmp_path: Path) -> None:
     mounted = RunnerContextMaterializer(Path.cwd()).materialize(task, package, capabilities)
 
     assert task.permissions.allowed_tools == ("read", "edit", "test", "context7.query-docs")
+    assert task.permissions.denied_paths == (".github/**", "src/legacy/**")
     assert "github.pull_requests.merge" in task.permissions.disallowed_tools
     assert task.test_commands == ("pytest tests/pricing",)
     assert mounted.manifest_path.is_file()

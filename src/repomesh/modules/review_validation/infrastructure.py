@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import JSON, DateTime, String
+from sqlalchemy import JSON, DateTime, String, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -41,6 +41,11 @@ class InMemoryValidationSnapshotStore:
 
     async def get(self, snapshot_id: UUID) -> ValidationSnapshot | None:
         return self.items.get(snapshot_id)
+
+    async def list_by_project(self, project_id: UUID) -> tuple[ValidationSnapshot, ...]:
+        return tuple(
+            item for item in self.items.values() if item.project_id == project_id
+        )
 
 
 class PostgresValidationSnapshotStore:
@@ -83,6 +88,21 @@ class PostgresValidationSnapshotStore:
             record = await session.get(ValidationSnapshotRecord, snapshot_id)
         if record is None:
             return None
+        return self._to_domain(record)
+
+    async def list_by_project(self, project_id: UUID) -> tuple[ValidationSnapshot, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(ValidationSnapshotRecord)
+                    .where(ValidationSnapshotRecord.project_id == project_id)
+                    .order_by(ValidationSnapshotRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
+    @staticmethod
+    def _to_domain(record: ValidationSnapshotRecord) -> ValidationSnapshot:
         payload = record.payload
         return ValidationSnapshot(
             id=record.id,

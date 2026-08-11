@@ -84,7 +84,7 @@ class PlanSnapshotStore:
         self, project_id: UUID
     ) -> PlanSnapshotRecord | None:
         """Get the highest-version snapshot for a project."""
-        async with self._database.sessions() as session:
+        async with self._database.transaction() as session:
             stmt = (
                 select(PlanSnapshotRecord)
                 .where(PlanSnapshotRecord.project_id == project_id)
@@ -98,7 +98,7 @@ class PlanSnapshotStore:
         self, project_id: UUID, plan_version: int
     ) -> PlanSnapshotRecord | None:
         """Get a specific version."""
-        async with self._database.session() as session:
+        async with self._database.transaction() as session:
             stmt = select(PlanSnapshotRecord).where(
                 PlanSnapshotRecord.project_id == project_id,
                 PlanSnapshotRecord.plan_version == plan_version,
@@ -110,7 +110,7 @@ class PlanSnapshotStore:
         self, project_id: UUID
     ) -> list[PlanSnapshotRecord]:
         """List all snapshots for a project, ordered by version descending."""
-        async with self._database.session() as session:
+        async with self._database.transaction() as session:
             stmt = (
                 select(PlanSnapshotRecord)
                 .where(PlanSnapshotRecord.project_id == project_id)
@@ -118,6 +118,14 @@ class PlanSnapshotStore:
             )
             result = await session.execute(stmt)
             return list(result.scalars().all())
+
+    async def list_project_ids(self) -> tuple[UUID, ...]:
+        """All project ids that ever produced a plan snapshot."""
+        async with self._database.transaction() as session:
+            result = await session.execute(
+                select(PlanSnapshotRecord.project_id).distinct()
+            )
+            return tuple(result.scalars().all())
 
     async def next_version(self, project_id: UUID) -> int:
         """Get the next available plan_version for a project (starts at 1)."""

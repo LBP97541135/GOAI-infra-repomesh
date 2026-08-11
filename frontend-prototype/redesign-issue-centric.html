@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepoMesh 控制台重设计原型 — issue 中心</title>
+<style>
+:root{
+  --ink:#16130d; --panel:#201b12; --line:#3a3123; --line2:#2b2416;
+  --tx:#e9dec2; --tx2:#9c8f6d; --tx3:#6b6046;
+  --amber:#c99e52; --amber-hi:#e0b96b; --kraft:#dcc99c; --ochre:#c26d51; --olive:#94a35a; --blue:#8aa0b4;
+  --mono:ui-monospace,SFMono-Regular,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--tx);font:13px/1.5 system-ui,"Segoe UI",sans-serif;height:100vh;display:flex;overflow:hidden}
+.micro{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--tx2)}
+.mono{font-family:var(--mono)}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;text-align:left}
+
+aside{width:216px;flex:none;border-right:1px solid var(--line2);display:flex;flex-direction:column;background:#151209}
+.brand{display:flex;align-items:center;gap:10px;padding:16px 14px 12px}
+.brand .logo{width:30px;height:30px;background:var(--amber);color:#191308;border-radius:2px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700}
+.brand .t{font-family:var(--mono);font-size:12.5px;letter-spacing:.14em}
+.brand .s{font-size:11px;color:var(--tx2)}
+.newissue{margin:2px 12px 12px;background:var(--amber);color:#191308;border-radius:2px;padding:9px 0;text-align:center;font-weight:600;font-size:13px}
+.newissue:hover{background:var(--amber-hi)}
+nav{padding:0 8px}
+.nav{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border-left:2px solid transparent;color:var(--tx2);border-radius:0}
+.nav svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6}
+.nav .n{margin-left:auto;font-family:var(--mono);font-size:11px}
+.nav:hover{color:var(--tx)}
+.nav.active{background:var(--line2);border-left-color:var(--amber);color:var(--tx)}
+.nav.active svg{color:var(--amber)}
+.foot{margin-top:auto;border-top:1px solid var(--line2);padding:8px}
+.who{display:flex;align-items:center;gap:10px;padding:8px 10px 6px}
+.who .av{width:26px;height:26px;background:var(--line2);border-radius:2px;display:flex;align-items:center;justify-content:center;color:var(--tx2);font-size:12px}
+.who .r{font-size:11px;color:var(--tx2)}
+
+main{flex:1;overflow-y:auto;padding:18px 26px 40px}
+.view{display:none;max-width:860px}
+.view.on{display:block}
+.pagehead{display:flex;align-items:baseline;gap:12px;border-bottom:1px solid var(--line2);padding-bottom:12px;margin-bottom:4px}
+.pagehead h1{font-size:16px;font-weight:600}
+.pagehead .sum{font-family:var(--mono);font-size:12px;color:var(--tx2)}
+
+.tabs{display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--line2);padding:2px 0 0}
+.tab{padding:8px 2px;font-size:13px;color:var(--tx2);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:var(--tx);border-bottom-color:var(--amber)}
+.tab .c{font-family:var(--mono);font-size:11px;background:var(--line2);border-radius:2px;padding:1px 6px;margin-left:4px}
+.tab.on .c{color:var(--amber)}
+.filters{margin-left:auto;display:flex;gap:8px}
+.chip{font-size:11.5px;border:1px solid var(--line);border-radius:2px;padding:3px 10px;color:var(--tx2)}
+.chip.amber{border-color:var(--amber);color:var(--amber)}
+.chip:hover{border-color:var(--tx2)}
+
+.irow{display:flex;gap:11px;padding:13px 6px;border-bottom:1px solid var(--panel);align-items:flex-start;width:100%}
+.irow:hover{background:#1a160e}
+.dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
+.irow .body{flex:1}
+.irow .title{font-size:13.5px;color:var(--tx)}
+.irow .meta{font-size:11.5px;color:var(--tx2);margin-top:3px}
+.badge{font-size:11px;border-radius:2px;padding:2px 8px;flex:none;margin-top:2px}
+.b-solid{background:var(--amber);color:#191308}
+.b-line{border:1px solid var(--line);color:var(--tx2)}
+.b-ochre{border:1px solid var(--ochre);color:var(--ochre)}
+.b-blue{border:1px solid var(--blue);color:var(--blue)}
+.b-olive{border:1px solid var(--olive);color:var(--olive)}
+
+.card{background:var(--panel);border:1px solid var(--line);padding:11px 13px;margin-bottom:8px;border-radius:0}
+.card.quiet{background:transparent;border-color:var(--line2)}
+.rowline{display:flex;align-items:baseline;gap:8px}
+.teamchips{display:flex;gap:8px;flex-wrap:wrap;margin-top:7px}
+
+table{width:100%;border-collapse:collapse;margin-top:6px}
+th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--tx2);font-weight:400;padding:10px 6px 7px;border-bottom:1px solid var(--line2)}
+td{padding:9px 6px;border-bottom:1px solid var(--panel);font-size:12.5px}
+td.mono,th.r,td.r{font-family:var(--mono);font-size:11.5px}
+th.r,td.r{text-align:right}
+tr.sleep td{color:var(--tx3)}
+.st{display:inline-flex;align-items:center;gap:6px}
+.st i{width:6px;height:6px;border-radius:50%;display:inline-block}
+
+.sect{margin-top:20px}
+.rt{display:flex;align-items:center;gap:11px}
+.rt .body{flex:1}
+.btn{font-size:11.5px;border:1px solid var(--line);border-radius:2px;padding:4px 12px;color:var(--tx2)}
+.btn:hover{border-color:var(--tx2);color:var(--tx)}
+.btn.amber{border-color:var(--amber);color:var(--amber)}
+.conn{display:flex;gap:8px;flex-wrap:wrap}
+.hint{font-size:11.5px;color:var(--tx3);padding:10px 4px 0}
+
+#toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:var(--kraft);color:#2a2210;border-radius:2px;padding:9px 18px;font-size:12.5px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+
+.crumb{font-size:11.5px;color:var(--tx2);padding-bottom:12px;display:inline-block}
+.crumb:hover{color:var(--tx)}
+.dhead{display:flex;align-items:flex-start;gap:12px}
+.dhead h1{font-size:17px;font-weight:600;line-height:1.4}
+.dhead .meta{font-size:12px;color:var(--tx2);margin-top:5px}
+.reqcard{background:var(--panel);border:1px solid var(--line);padding:12px 14px;margin-top:14px}
+.reqcard .txt{font-size:12.5px;line-height:1.7;color:var(--kraft)}
+.roomgroup{border:1px solid var(--line);margin-bottom:10px}
+.roomgroup .ghead{display:flex;align-items:baseline;gap:8px;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line2);font-family:var(--mono);font-size:11.5px}
+.roomrow{display:flex;align-items:center;gap:11px;padding:10px 12px;width:100%;border-bottom:1px solid var(--panel)}
+.roomrow:last-child{border-bottom:none}
+.roomrow:hover{background:#241e13}
+.roomrow.live{background:#1a160e}
+.roomrow .rav{width:32px;height:32px;background:var(--line2);border-radius:2px;display:flex;align-items:center;justify-content:center;color:var(--kraft);font-size:11px;font-family:var(--mono);flex:none}
+.roomrow .prev{font-size:11.5px;color:var(--tx2);margin-top:2px}
+.roomrow .t{font-family:var(--mono);font-size:10.5px;color:var(--tx3);flex:none}
+.livetag{font-size:10px;font-family:var(--mono);letter-spacing:.1em;color:var(--ochre);border:1px solid var(--ochre);border-radius:2px;padding:0 5px}
+.livetag i{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ochre);margin-right:3px;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.msg{display:flex;gap:10px;padding:6px 0}
+.msg .mav{width:28px;height:28px;background:var(--line2);border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:10px;font-family:var(--mono);flex:none;color:var(--amber)}
+.msg .mhead{display:flex;align-items:baseline;gap:8px}
+.msg .who{font-size:11.5px;color:var(--amber)}
+.msg .kind{font-size:10px;border:1px solid var(--kraft);color:var(--kraft);border-radius:2px;padding:0 5px}
+.msg .kind.ochre{border-color:var(--ochre);color:var(--ochre)}
+.msg .time{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--tx3)}
+.msg .bubble{background:var(--panel);border:1px solid var(--line);padding:8px 11px;margin-top:4px;font-size:12px;line-height:1.6}
+.msg.ghost{opacity:.55}
+.msg.ghost .mav{background:transparent;border:1px dashed var(--line);color:var(--tx3)}
+.msg.ghost .bubble{background:transparent;border:1px dashed var(--line);color:var(--tx3);font-size:11.5px}
+.roomtop{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line2);background:var(--panel);margin:-18px -26px 14px;padding-left:26px}
+
+.envfloat{position:fixed;right:16px;top:64px;width:252px;background:#1c1710;border:1px solid var(--line);border-radius:2px;z-index:8;box-shadow:0 12px 30px rgba(0,0,0,.5);max-height:calc(100vh - 90px);overflow-y:auto}
+.envfloat .ehead{display:flex;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line2);position:sticky;top:0;background:#1c1710}
+.envfloat .ehead .t{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--tx)}
+.envfloat .ehead button{margin-left:auto;color:var(--tx2);font-size:13px;padding:0 2px}
+.envfloat .esec{padding:10px 12px 4px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--tx2)}
+.envfloat .erow{display:flex;align-items:baseline;gap:6px;padding:5px 12px;font-family:var(--mono);font-size:11.5px}
+.envfloat .erow .nm{color:var(--tx)}
+.envfloat .erow .add{margin-left:auto;color:var(--olive)}
+.envfloat .erow .del{color:var(--ochre)}
+.envfloat .efile{display:flex;gap:6px;padding:3px 12px 3px 26px;font-family:var(--mono);font-size:10.5px;color:var(--tx2)}
+.envfloat .efile .add{margin-left:auto;color:var(--olive)}
+.envfloat .efile .del{color:var(--ochre)}
+.envfloat .pr{display:flex;gap:8px;padding:5px 12px;font-family:var(--mono);font-size:11.5px;align-items:baseline}
+.envfloat .pr .st{margin-left:auto;font-size:10.5px}
+.envfloat.min .ebody{display:none}
+
+.brandbtn{width:100%;display:flex;align-items:center;gap:10px;padding:16px 14px 12px;position:relative}
+.brandbtn:hover{background:#1a160e}
+.wsdrop{position:absolute;top:58px;left:10px;width:210px;background:#221c12;border:1px solid var(--line);border-radius:2px;z-index:20;box-shadow:0 14px 34px rgba(0,0,0,.6);display:none}
+.wsdrop.on{display:block}
+.wsdrop .u{display:flex;gap:10px;align-items:center;padding:12px;border-bottom:1px solid var(--line2)}
+.wsdrop .item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 12px;font-size:12.5px;color:var(--tx)}
+.wsdrop .item:hover{background:#2b2416}
+.wsdrop .sec{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--tx3);padding:10px 12px 4px}
+.wsdrop .out{color:var(--ochre);border-top:1px solid var(--line2)}
+
+#modal{position:fixed;inset:0;background:rgba(10,8,4,.72);z-index:30;display:none;align-items:center;justify-content:center}
+#modal.on{display:flex}
+.mbox{width:560px;max-width:92vw;background:#1c1710;border:1px solid var(--line);border-radius:2px}
+.mbox .mh{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--line2)}
+.mbox textarea{width:100%;background:transparent;border:none;outline:none;resize:none;color:var(--tx);font:13px/1.7 inherit;padding:16px;min-height:150px}
+.mbox textarea::placeholder{color:var(--tx3)}
+.mbox .mf{display:flex;align-items:center;gap:10px;padding:11px 14px;border-top:1px solid var(--line2)}
+.newws-wrap{display:flex;flex-direction:column;align-items:center;padding-top:60px}
+.newws-card{width:400px;max-width:90%;background:var(--panel);border:1px solid var(--line);padding:22px 24px}
+.newws-card label{display:block;font-size:12px;color:var(--tx2);padding:12px 0 6px}
+.newws-card input{width:100%;background:#16130d;border:1px solid var(--line);border-radius:2px;color:var(--tx);font:12.5px inherit;padding:9px 11px;outline:none}
+.newws-card input:focus{border-color:var(--amber)}
+</style>
+</head>
+<body>
+
+<aside>
+  <button class="brandbtn" onclick="document.getElementById('wsdrop').classList.toggle('on');event.stopPropagation()">
+    <div class="logo" style="width:30px;height:30px;background:var(--amber);color:#191308;border-radius:2px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700">R</div>
+    <div style="text-align:left"><div class="t" style="font-family:var(--mono);font-size:12.5px;letter-spacing:.14em">REPOMESH</div><div class="s" style="font-size:11px;color:var(--tx2)">acme-org · 工作区 ▾</div></div>
+  </button>
+  <div class="wsdrop" id="wsdrop">
+    <div class="u">
+      <div style="width:30px;height:30px;background:var(--line2);border-radius:2px;display:flex;align-items:center;justify-content:center;color:var(--tx2);font-size:12px">王</div>
+      <div><div style="font-size:12.5px">王倩</div><div style="font-size:10.5px;color:var(--tx2)">wangqian@acme.co</div></div>
+    </div>
+    <div class="sec">工作区</div>
+    <button class="item" onclick="document.getElementById('wsdrop').classList.remove('on')"><span style="width:22px;height:22px;background:var(--amber);color:#191308;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-family:var(--mono)">A</span>acme-org<span style="margin-left:auto;color:var(--olive)">✓</span></button>
+    <button class="item" onclick="toast('切换工作区 = 切换组织上下文（全部实体按 organization_id 隔离）')"><span style="width:22px;height:22px;background:var(--line2);color:var(--tx2);border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-family:var(--mono)">B</span>beta-lab</button>
+    <button class="item" onclick="document.getElementById('wsdrop').classList.remove('on');go('newws')">＋ 创建工作区</button>
+    <button class="item out" onclick="toast('身份系统未接入 · 登录/登出为二期能力')">［→ 退出登录</button>
+  </div>
+  <button class="newissue" onclick="document.getElementById('modal').classList.add('on')">+ 新建 issue</button>
+  <nav>
+    <button class="nav active" data-v="issues" onclick="go('issues')">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+      issue<span class="n">3</span></button>
+    <button class="nav" data-v="repos" onclick="go('repos')">
+      <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+      仓库<span class="n">13</span></button>
+    <button class="nav" data-v="teams" onclick="go('teams')">
+      <svg viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M2 20v-1a5 5 0 0 1 6-4.9M22 20v-1a5 5 0 0 0-6-4.9"/></svg>
+      团队<span class="n">5</span></button>
+    <button class="nav" data-v="agents" onclick="go('agents')">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 16 0v1"/></svg>
+      智能体<span class="n">11</span></button>
+  </nav>
+  <div class="foot">
+    <button class="nav" data-v="settings" onclick="go('settings')">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg>
+      设置</button>
+    <div class="who">
+      <div class="av">王</div>
+      <div><div>王倩</div><div class="r">产品经理</div></div>
+    </div>
+  </div>
+</aside>
+
+<main>
+
+<section class="view on" id="v-issues">
+  <div class="tabs">
+    <button class="tab on" id="tab-open" onclick="tab('open')">Open<span class="c">3</span></button>
+    <button class="tab" id="tab-closed" onclick="tab('closed')">Closed<span class="c">12</span></button>
+    <div class="filters">
+      <span class="chip">仓库 ▾</span><span class="chip">状态 ▾</span><span class="chip amber">待决策</span>
+    </div>
+  </div>
+
+  <div id="list-open">
+    <button class="irow" onclick="go('detail')">
+      <span class="dot" style="background:var(--amber)"></span>
+      <span class="body"><span class="title">结账价格修改原因：记录、暴露并在后台展示</span>
+      <span class="meta">#42 · 王倩 发起于 2 天前 · 第 2 轮交付 · 3 仓</span></span>
+      <span class="badge b-solid">1 项待决策</span>
+      <span class="badge b-line">发布门禁</span>
+    </button>
+    <button class="irow" onclick="toast('→ 进入交付控制台详情')">
+      <span class="dot" style="background:var(--ochre)"></span>
+      <span class="body"><span class="title">账单金额四舍五入错误修复</span>
+      <span class="meta">#41 · 王倩 发起于 3 天前 · 第 1 轮交付 · 1 仓</span></span>
+      <span class="badge b-ochre">修复中</span>
+    </button>
+    <button class="irow" onclick="toast('→ 进入交付控制台详情')">
+      <span class="dot" style="background:var(--blue)"></span>
+      <span class="body"><span class="title">通知摘要：邮件与站内信合并为每日一封</span>
+      <span class="meta">#40 · 李明 发起于 5 天前 · 第 1 轮交付 · 2 仓</span></span>
+      <span class="badge b-blue">执行中 4/6</span>
+    </button>
+  </div>
+
+  <div id="list-closed" style="display:none">
+    <button class="irow" onclick="toast('→ 进入交付控制台详情（已交付回放）')">
+      <span class="dot" style="background:var(--olive)"></span>
+      <span class="body"><span class="title">购物车库存提示优化</span>
+      <span class="meta">#39 · 王倩 发起于 08-02 · 已交付 · 08-06 · 2 仓</span></span>
+      <span class="badge b-olive">已交付</span>
+    </button>
+    <button class="irow" onclick="toast('→ 进入交付控制台详情（失败复盘）')">
+      <span class="dot" style="background:var(--ochre)"></span>
+      <span class="body"><span class="title">API 定价结果增加 discount_amount</span>
+      <span class="meta">#38 · 李明 发起于 07-28 · 已交付 · 08-10 · 2 仓</span></span>
+      <span class="badge b-olive">已交付</span>
+    </button>
+    <div class="hint">+ 10 个已完结 issue</div>
+  </div>
+</section>
+
+<section class="view" id="v-repos">
+  <div class="pagehead"><h1>仓库</h1><span class="sum">13 个 · 4 个有驻扎团队</span></div>
+  <div class="card">
+    <div class="rowline"><span class="mono" style="font-size:12.5px">saleor-core</span><span style="margin-left:auto;font-size:11.5px;color:var(--tx2)">2 团队</span></div>
+    <div class="teamchips">
+      <span class="badge b-ochre">#42 结账价格 · 就绪 · 修复中</span>
+      <span class="badge b-line">#37 税率导出 · 就绪 · 空闲</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="rowline"><span class="mono" style="font-size:12.5px">billing-service</span><span style="margin-left:auto;font-size:11.5px;color:var(--tx2)">1 团队</span></div>
+    <div class="teamchips"><span class="badge b-blue">#41 账单修复 · 就绪 · 执行中</span></div>
+  </div>
+  <div class="card">
+    <div class="rowline"><span class="mono" style="font-size:12.5px">saleor-dashboard</span><span style="margin-left:auto;font-size:11.5px;color:var(--tx2)">1 团队</span></div>
+    <div class="teamchips"><span class="badge b-olive">#42 结账价格 · 就绪 · 已合并</span></div>
+  </div>
+  <div class="card quiet">
+    <div class="rowline"><span class="mono" style="font-size:12.5px;color:var(--tx2)">saleor-docs</span><span style="margin-left:auto;font-size:11.5px;color:var(--tx3)">1 团队</span></div>
+    <div class="teamchips"><span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)">#42 结账价格 · 就绪 · 等待中</span></div>
+  </div>
+  <div class="hint">+ 9 个仓库 · 无驻扎团队 · 团队随 issue 范围确认自动组建（rm-team-*，teamRoom + leaderDM 双房间）</div>
+</section>
+
+<section class="view" id="v-teams">
+  <div class="pagehead"><h1>团队</h1><span class="sum">5 个 · 2 个工作中 · 3 个空闲</span></div>
+
+  <div class="card">
+    <div class="rowline">
+      <span class="mono" style="font-size:12.5px">rm-team-a1b2c3</span>
+      <span style="font-size:11.5px;color:var(--tx2)">saleor-core</span>
+      <span class="badge b-ochre" style="margin-left:auto">#42 结账价格 · 修复中</span>
+    </div>
+    <div class="teamchips">
+      <span class="badge b-line"><span style="color:var(--amber)">LD</span> leader · core · 在岗</span>
+      <span class="badge b-blue">WK worker · 597869c4 · 执行中</span>
+      <span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)">WK worker · b6b2f051 · 休眠</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="rowline">
+      <span class="mono" style="font-size:12.5px">rm-team-f7a8b9</span>
+      <span style="font-size:11.5px;color:var(--tx2)">billing-service</span>
+      <span class="badge b-blue" style="margin-left:auto">#41 账单修复 · 执行中</span>
+    </div>
+    <div class="teamchips">
+      <span class="badge b-line"><span style="color:var(--amber)">LD</span> leader · billing · 在岗</span>
+      <span class="badge b-blue">WK worker · fc9082cb · 执行中</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="rowline">
+      <span class="mono" style="font-size:12.5px">rm-team-d4e5f6</span>
+      <span style="font-size:11.5px;color:var(--tx2)">saleor-dashboard</span>
+      <span class="badge b-olive" style="margin-left:auto">#42 结账价格 · 已合并</span>
+    </div>
+    <div class="teamchips">
+      <span class="badge b-line"><span style="color:var(--amber)">LD</span> leader · dashboard · 在岗</span>
+      <span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)">WK worker · 8a1c22de · 休眠</span>
+    </div>
+  </div>
+
+  <div class="card quiet">
+    <div class="rowline">
+      <span class="mono" style="font-size:12.5px;color:var(--tx2)">rm-team-90cc11</span>
+      <span style="font-size:11.5px;color:var(--tx3)">saleor-docs</span>
+      <span class="badge b-line" style="margin-left:auto;color:var(--tx3);border-color:var(--line2)">#42 结账价格 · 等待中</span>
+    </div>
+    <div class="teamchips">
+      <span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)"><span>LD</span> leader · docs · 在岗</span>
+      <span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)">WK worker · 3e9f01aa · 休眠</span>
+    </div>
+  </div>
+
+  <div class="card quiet">
+    <div class="rowline">
+      <span class="mono" style="font-size:12.5px;color:var(--tx2)">rm-team-77ab02</span>
+      <span style="font-size:11.5px;color:var(--tx3)">saleor-core</span>
+      <span class="badge b-line" style="margin-left:auto;color:var(--tx3);border-color:var(--line2)">#37 税率导出 · 空闲</span>
+    </div>
+    <div class="teamchips">
+      <span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)"><span>LD</span> leader · core · 在岗</span>
+      <span class="badge b-line" style="color:var(--tx3);border-color:var(--line2)">WK worker · 5d2e88bc · 休眠</span>
+    </div>
+  </div>
+
+  <div class="hint">团队 = issue 范围确认时按「issue × 仓库」自动组建（每团队 teamRoom + leaderDM 双房间）· 同一 agent 可服务多个团队</div>
+</section>
+
+<section class="view" id="v-agents">
+  <div class="pagehead"><h1>智能体</h1><span class="sum">11 个 · 3 在岗 · 1 执行中 · 7 休眠</span></div>
+  <table>
+    <thead><tr><th>智能体</th><th>状态</th><th>归属</th><th>运行时</th><th class="r">时长</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">manager · default</td><td><span class="st"><i style="background:var(--olive)"></i>在岗</span></td><td style="color:var(--tx2)">组织 · 管 2 issue</td><td class="mono" style="color:var(--tx2)">—</td><td class="r">3h12m</td></tr>
+      <tr><td class="mono">leader · core</td><td><span class="st"><i style="background:var(--olive)"></i>在岗</span></td><td style="color:var(--tx2)">saleor-core</td><td class="mono" style="color:var(--tx2)">claude-code</td><td class="r">1h05m</td></tr>
+      <tr><td class="mono">worker · 597869c4</td><td><span class="st"><i style="background:var(--blue)"></i>执行中</span></td><td style="color:var(--tx2)">saleor-core</td><td class="mono" style="color:var(--tx2)">codex</td><td class="r" style="color:var(--blue)">22m</td></tr>
+      <tr><td class="mono">leader · billing</td><td><span class="st"><i style="background:var(--olive)"></i>在岗</span></td><td style="color:var(--tx2)">billing-service</td><td class="mono" style="color:var(--tx2)">claude-code</td><td class="r">41m</td></tr>
+      <tr class="sleep"><td class="mono">worker · fc9082cb</td><td><span class="st"><i style="background:var(--tx3)"></i>休眠</span></td><td>billing-service</td><td class="mono">claude-code</td><td class="r">—</td></tr>
+      <tr class="sleep"><td class="mono">worker · b6b2f051</td><td><span class="st"><i style="background:var(--tx3)"></i>休眠</span></td><td>saleor-core</td><td class="mono">codex</td><td class="r">—</td></tr>
+    </tbody>
+  </table>
+  <div class="hint">+ 5 个休眠 · 运行时/时长字段来自 AgentTeams Controller 实时代理，不可达时显示「未接入」</div>
+</section>
+
+<section class="view" id="v-settings">
+  <div class="pagehead"><h1>设置</h1></div>
+  <div class="micro" style="padding:6px 0 10px">AGENT RUNTIME</div>
+  <div class="card rt">
+    <span class="st"><i style="background:var(--olive)"></i></span>
+    <span class="body"><span class="mono" style="font-size:12.5px">claude-code</span>
+    <div style="font-size:11px;color:var(--tx2);margin-top:2px">已配置 · CLI v2.1 · 4 个 worker 在用</div></span>
+    <span class="badge" style="background:var(--line2);color:var(--amber)">默认</span>
+    <button class="btn" onclick="toast('runtime 配置写路径为二期能力（适配器注册表 API 未立项），当前为只读展示')">配置</button>
+  </div>
+  <div class="card rt">
+    <span class="st"><i style="background:var(--olive)"></i></span>
+    <span class="body"><span class="mono" style="font-size:12.5px">codex</span>
+    <div style="font-size:11px;color:var(--tx2);margin-top:2px">已配置 · CLI v0.4 · 2 个 worker 在用</div></span>
+    <button class="btn" onclick="toast('runtime 配置写路径为二期能力，当前为只读展示')">配置</button>
+  </div>
+  <div class="card quiet rt">
+    <span class="st"><i style="border:1px solid var(--tx3);background:transparent"></i></span>
+    <span class="body"><span class="mono" style="font-size:12.5px;color:var(--tx2)">hermes</span>
+    <div style="font-size:11px;color:var(--tx3);margin-top:2px">未配置</div></span>
+    <button class="btn amber" onclick="toast('接入向导为二期能力')">接入</button>
+  </div>
+  <div class="hint">+ 添加 runtime 适配器</div>
+  <div class="sect">
+    <div class="micro" style="padding:0 0 10px">连接</div>
+    <div class="conn">
+      <span class="chip"><span style="color:var(--olive)">●</span> AgentTeams Controller · :8090</span>
+      <span class="chip"><span style="color:var(--olive)">●</span> Matrix · 已连接</span>
+      <span class="chip"><span style="color:var(--olive)">●</span> GitHub App · 3 仓授权</span>
+    </div>
+  </div>
+</section>
+
+<section class="view" id="v-detail">
+  <button class="crumb" onclick="go('issues')">‹ issue</button>
+  <div class="dhead">
+    <div style="flex:1">
+      <h1>结账价格修改原因：记录、暴露并在后台展示</h1>
+      <div class="meta">#42 · 王倩 发起于 2 天前 · 第 2 轮交付 · 3 仓 · 契约 c3f1a29e</div>
+    </div>
+    <span class="badge b-solid" style="margin-top:4px">Open · 发布门禁</span>
+  </div>
+
+  <div class="reqcard">
+    <div class="micro" style="padding-bottom:8px">原始需求 · 契约已冻结 c3f1a29e</div>
+    <div class="txt">运营侧需要在订单结账时记录价格被修改的原因（促销、议价、纠错），原因随订单落库并在后台订单详情页展示。价格修改入口不变，新增原因必填校验与审计字段。</div>
+  </div>
+
+  <div class="micro" style="padding:16px 0 8px">关联仓库 · 团队</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <span class="badge b-ochre mono">saleor-core · 团队就绪 · 修复中</span>
+    <span class="badge b-olive mono">saleor-dashboard · 团队就绪 · 已合并</span>
+    <span class="badge b-line mono">saleor-docs · 团队就绪 · 等待中</span>
+  </div>
+
+  <div class="micro" style="padding:18px 0 8px">房间</div>
+
+  <div class="roomgroup">
+    <div class="ghead">saleor-core <span style="color:var(--tx3);font-size:10.5px">rm-team-a1b2c3</span></div>
+    <button class="roomrow live" onclick="go('room')">
+      <span class="rav">TR</span>
+      <span style="flex:1">
+        <span style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12.5px">teamRoom</span>
+          <span style="font-size:10.5px;color:var(--tx2)">3 成员</span>
+          <span class="livetag"><i></i>LIVE</span>
+        </span>
+        <span class="prev" style="display:block">返工指派：修复 core 的失败候选 — 隐藏验收测试未过…</span>
+      </span>
+      <span class="t">14:31</span>
+    </button>
+    <button class="roomrow" onclick="toast('leaderDM 房间视图同构（治理决策投影为 org→leader 消息，读模型待立项）')">
+      <span class="rav" style="color:var(--tx2)">DM</span>
+      <span style="flex:1">
+        <span style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:12.5px">leaderDM</span>
+          <span style="font-size:10.5px;color:var(--tx2)">2 成员</span>
+        </span>
+        <span class="prev" style="display:block">治理决策：READY · head c1a0b2c3 · 门禁全绿放行合并</span>
+      </span>
+      <span class="t">15:30</span>
+    </button>
+  </div>
+
+  <div class="roomgroup">
+    <div class="ghead">saleor-dashboard <span style="color:var(--tx3);font-size:10.5px">rm-team-d4e5f6</span></div>
+    <button class="roomrow" onclick="toast('静默房间 → 打开即完整历史（同一房间的两种时态）')">
+      <span class="rav">TR</span>
+      <span style="flex:1">
+        <span style="display:flex;align-items:center;gap:8px"><span style="font-size:12.5px">teamRoom</span><span style="font-size:10.5px;color:var(--tx2)">2 成员 · 静默</span></span>
+        <span class="prev" style="display:block">任务指派：dashboard 订单详情展示修改原因</span>
+      </span>
+      <span class="t">12:14</span>
+    </button>
+    <button class="roomrow" onclick="toast('暂无消息的房间：不装满，等真实消息')">
+      <span class="rav" style="background:#1d1810;color:var(--tx3)">DM</span>
+      <span style="flex:1">
+        <span style="font-size:12.5px;color:var(--tx2)">leaderDM</span>
+        <span class="prev" style="display:block;color:var(--tx3)">暂无消息</span>
+      </span>
+    </button>
+  </div>
+
+  <div class="card quiet" style="display:flex;gap:8px;align-items:baseline">
+    <span class="mono" style="font-size:11.5px;color:var(--tx2)">saleor-docs</span>
+    <span style="font-size:11px;color:var(--tx3)">2 房间 · 静默</span>
+    <span style="margin-left:auto;font-size:11px;color:var(--tx3)">▾</span>
+  </div>
+</section>
+
+<section class="view" id="v-room">
+  <div class="roomtop">
+    <button class="crumb" style="padding:0" onclick="go('detail')">‹</button>
+    <span class="rav" style="width:28px;height:28px;background:var(--line2);border-radius:2px;display:flex;align-items:center;justify-content:center;color:var(--kraft);font-size:10.5px;font-family:var(--mono)">TR</span>
+    <div style="flex:1">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:13px">saleor-core · teamRoom</span>
+        <span class="livetag"><i></i>LIVE</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--tx2)">leader · core，worker · 597869c4，worker · b6b2f051 · 实时刷新中（轮询 5s）</div>
+    </div>
+    <div style="display:flex;border:1px solid var(--line);border-radius:2px;overflow:hidden;flex:none">
+      <button id="rv-chat" style="padding:5px 13px;font-size:11.5px;background:var(--amber);color:#191308;font-weight:600" onclick="roomview('chat')">房间</button>
+      <button id="rv-plan" style="padding:5px 13px;font-size:11.5px;color:var(--tx2)" onclick="roomview('plan')">DAG · PLAN · SPEC</button>
+    </div>
+  </div>
+
+  <div id="room-plan" style="display:none">
+    <div style="background:#e9dec2;color:#2a2210;border-radius:2px;padding:18px 22px;max-width:560px">
+      <div style="display:flex;align-items:baseline;gap:10px;border-bottom:2px solid #2a2210;padding-bottom:8px">
+        <span style="font-family:var(--mono);font-size:11px;letter-spacing:.14em;background:#2a2210;color:#e9dec2;padding:1px 7px">REPO PLAN</span>
+        <span style="font-family:var(--mono);font-size:12.5px;font-weight:700">saleor-core</span>
+        <span style="margin-left:auto;font-family:var(--mono);font-size:10.5px">#42 · 契约 c3f1a29e</span>
+      </div>
+
+      <div style="font-family:var(--mono);font-size:11px;font-weight:700;padding:14px 0 6px">1.0 REPOSITORY SPEC</div>
+      <div style="font-size:12px;line-height:1.7">订单模型新增 price_override_reason 字段与审计记录；GraphQL 订单类型暴露该字段；迁移保持向后兼容。<span style="color:#8a7a52">（每仓工程规格 · 读模型投影待接入，暂展示契约切片）</span></div>
+
+      <div style="font-family:var(--mono);font-size:11px;font-weight:700;padding:14px 0 6px">2.0 TASK DAG</div>
+      <div style="border:1px solid #b7a87e;padding:10px 12px;font-family:var(--mono);font-size:11.5px;line-height:2">
+        <div>T1 models+migration <span style="color:#5c6b33">● succeeded</span></div>
+        <div style="padding-left:18px">└─ T2 graphql types <span style="color:#5c6b33">● succeeded</span></div>
+        <div style="padding-left:36px">└─ T3 tests+audit <span style="color:#a4442a">● repairing</span></div>
+        <div style="color:#8a7a52;font-size:10.5px;line-height:1.5;padding-top:6px">依赖边为 leader_task 链推导 · 显式 depends 字段待后端确认</div>
+      </div>
+
+      <div style="font-family:var(--mono);font-size:11px;font-weight:700;padding:14px 0 6px">3.0 TASK SPECS</div>
+      <div style="font-size:12px;line-height:1.7">
+        <div style="border-left:3px solid #a4442a;padding-left:10px;margin-bottom:8px"><b>T3 · 修复隐藏验收测试</b><br>验收：test_price_reason_audit 通过；不得触碰 forbidden_paths（payments/）。<span style="color:#8a7a52">worker · 597869c4 · 返工中 22m</span></div>
+        <div style="border-left:3px solid #5c6b33;padding-left:10px;color:#5c5138"><b>T1 · 模型与迁移</b> — 已验收 · 候选 8825f6bb</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="room-chat">
+
+  <div class="msg">
+    <span class="mav">LD</span>
+    <div style="flex:1">
+      <div class="mhead"><span class="who">leader · core</span><span class="kind">指派</span><span class="time">12:12</span></div>
+      <div class="bubble">任务指派：交付 core 价格原因字段 — 按已冻结的工程契约实现本仓库范围，验收标准见任务卡。<span style="color:var(--tx2)">（→ worker · 597869c4）</span></div>
+    </div>
+  </div>
+
+  <div class="msg">
+    <span class="mav">LD</span>
+    <div style="flex:1">
+      <div class="mhead"><span class="who">leader · core</span><span class="kind ochre">返工</span><span class="time">14:31</span></div>
+      <div class="bubble" style="border-left:2px solid var(--ochre)">返工指派：修复 core 的失败候选 — 隐藏验收测试 test_price_reason_audit 未过，按证据修正后重新提交。<span style="color:var(--tx2)">（→ worker · 597869c4）</span></div>
+    </div>
+  </div>
+
+  <div class="msg ghost">
+    <span class="mav">WK</span>
+    <div style="flex:1">
+      <div class="mhead"><span class="who" style="color:var(--tx2)">worker · 597869c4</span><span class="kind" style="border-style:dashed;border-color:var(--line);color:var(--tx3)">回报</span></div>
+      <div class="bubble">worker 回报将在审计线接入后出现在此处（kind: task_report / progress / question，schema 已就绪）</div>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:8px;padding:10px 0 0">
+    <span style="width:6px;height:6px;background:var(--ochre);border-radius:50%;display:inline-block;animation:pulse 1.6s infinite"></span>
+    <span style="font-size:11px;color:var(--tx2)">worker · 597869c4 正在执行返工任务 · runner 事件见环境窗时间线</span>
+  </div>
+  </div>
+
+  <div class="envfloat" id="envfloat">
+    <div class="ehead"><span class="t">环境 · saleor-core</span><button onclick="document.getElementById('envfloat').classList.toggle('min')">▾</button></div>
+    <div class="ebody">
+      <div class="esec">状态</div>
+      <div class="pr"><span style="color:var(--ochre)">修复中 · 门禁受阻</span><span class="st" style="color:var(--tx3)">gate: CI 未过</span></div>
+
+      <div class="esec" style="padding-top:10px">变更</div>
+      <div class="erow"><span class="nm">saleor-core</span><span class="add">+412</span><span class="del">-18</span></div>
+      <div class="efile"><span>saleor/order/models.py</span><span class="add">+38</span><span class="del">-2</span></div>
+      <div class="efile"><span>graphql/order/types.py</span><span class="add">+54</span></div>
+      <div class="efile"><span>migrations/0042_price…</span><span class="add">+61</span></div>
+      <div class="efile"><span>tests/（5 个文件）</span><span class="add">+259</span><span class="del">-16</span></div>
+      <div class="efile" style="color:var(--tx3)">± 8825f6bb · 3c91d02a</div>
+
+      <div class="esec" style="padding-top:12px">CHANGESET · 本仓位置</div>
+      <div class="pr" style="background:#241c10"><span style="color:var(--tx)">saleor#19466</span><span class="st" style="color:var(--ochre)">门禁受阻 ◂ 当前</span></div>
+      <div class="pr"><span style="color:var(--tx2)">dashboard#887</span><span class="st" style="color:var(--olive)">已合并</span></div>
+      <div class="pr"><span style="color:var(--tx2)">saleor-docs</span><span class="st" style="color:var(--tx3)">未创建</span></div>
+
+      <div class="esec" style="padding-top:12px">环境</div>
+      <div class="pr"><span style="color:var(--tx2)">基线快照</span><span class="st" style="color:var(--tx3)">34999bb0…</span></div>
+      <div class="pr" style="padding-bottom:12px"><span style="color:var(--tx2)">RUN · 返工中</span><span class="st" style="color:var(--ochre)">● 22m</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="view" id="v-newws">
+  <div class="newws-wrap">
+    <button class="crumb" style="align-self:flex-start" onclick="go('issues')">‹ 返回</button>
+    <div style="font-size:18px;font-weight:600;padding:18px 0 6px">创建新工作区</div>
+    <div style="font-size:12px;color:var(--tx2);padding-bottom:18px">工作区是团队协作处理仓库与 issue 的共享空间（= 一个组织）。</div>
+    <div class="newws-card">
+      <label>工作区名称</label>
+      <input placeholder="我的工作区">
+      <label>工作区标识</label>
+      <div style="display:flex;align-items:center;gap:0">
+        <span style="font-family:var(--mono);font-size:11.5px;color:var(--tx3);border:1px solid var(--line);border-right:none;border-radius:2px 0 0 2px;padding:9px 8px;background:#16130d">repomesh.local/</span>
+        <input placeholder="my-workspace" style="border-radius:0 2px 2px 0;font-family:var(--mono)">
+      </div>
+      <button style="width:100%;background:var(--amber);color:#191308;border-radius:2px;padding:9px 0;text-align:center;font-size:13px;font-weight:600;margin-top:18px" onclick="toast('创建组织 → 初始化 Org Leader（Manager）绑定 → 空 issue 列表（原型演示）')">创建工作区</button>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div id="modal" onclick="if(event.target===this)this.classList.remove('on')">
+  <div class="mbox">
+    <div class="mh">
+      <span style="font-size:12px;color:var(--tx2)">acme-org</span>
+      <span style="color:var(--tx3)">›</span>
+      <span style="font-size:12.5px">新建 issue</span>
+      <button style="margin-left:auto;color:var(--tx2);font-size:14px" onclick="document.getElementById('modal').classList.remove('on')">✕</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 16px 0">
+      <span style="font-size:11.5px;color:var(--tx2)">处理者</span>
+      <span style="font-size:11px;border:1px solid var(--line);border-radius:2px;padding:2px 8px;font-family:var(--mono);color:var(--kraft)"><span style="color:var(--olive)">●</span> manager · default</span>
+      <span style="font-size:10.5px;color:var(--tx3)">Org Leader 负责需求接收与范围提议</span>
+    </div>
+    <textarea placeholder="告诉组织要交付什么，例如：&quot;在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示&quot;"></textarea>
+    <div class="mf">
+      <button style="font-size:11.5px;border:1px solid var(--line);border-radius:2px;padding:3px 10px;color:var(--tx2)" onclick="toast('范围默认由 Org Leader 从仓库摘要提议 · 点击可切换为手动圈选仓库')">▣ 范围 · Org Leader 提议</button>
+      <button style="font-size:12px;color:var(--tx2)" onclick="toast('附件（PRD 文档等）为二期能力')">📎</button>
+      <button style="margin-left:auto;background:var(--amber);color:#191308;border-radius:2px;padding:7px 16px;font-size:12.5px;font-weight:600" onclick="document.getElementById('modal').classList.remove('on');toast('issue 已创建 → Intake 建项目 → Org Leader 提议范围 → 各仓 Leader 评审 → 契约冻结')">创建 (Ctrl+Enter)</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+document.addEventListener('click',e=>{
+  const d=document.getElementById('wsdrop');
+  if(d.classList.contains('on') && !d.contains(e.target)) d.classList.remove('on');
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&document.getElementById('modal').classList.contains('on')){
+    document.getElementById('modal').classList.remove('on');
+    toast('issue 已创建 → Intake 建项目 → Org Leader 提议范围 → 各仓 Leader 评审 → 契约冻结');
+  }
+  if(e.key==='Escape') document.getElementById('modal').classList.remove('on');
+});
+function go(v){
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+  document.getElementById('v-'+v).classList.add('on');
+  const navKey = (v==='detail'||v==='room'||v==='newws') ? 'issues' : v;
+  document.querySelectorAll('.nav').forEach(x=>x.classList.toggle('active',x.dataset.v===navKey));
+  document.querySelector('main').scrollTop=0;
+}
+function tab(t){
+  document.getElementById('tab-open').classList.toggle('on',t==='open');
+  document.getElementById('tab-closed').classList.toggle('on',t==='closed');
+  document.getElementById('list-open').style.display=t==='open'?'':'none';
+  document.getElementById('list-closed').style.display=t==='closed'?'':'none';
+}
+function roomview(v){
+  const chat=v==='chat';
+  document.getElementById('room-chat').style.display=chat?'':'none';
+  document.getElementById('room-plan').style.display=chat?'none':'';
+  const bc=document.getElementById('rv-chat').style, bp=document.getElementById('rv-plan').style;
+  bc.background=chat?'var(--amber)':'none'; bc.color=chat?'#191308':'var(--tx2)'; bc.fontWeight=chat?'600':'400';
+  bp.background=chat?'none':'var(--amber)'; bp.color=chat?'var(--tx2)':'#191308'; bp.fontWeight=chat?'400':'600';
+}
+let tt;
+function toast(m){
+  const el=document.getElementById('toast');
+  el.textContent=m;el.classList.add('show');
+  clearTimeout(tt);tt=setTimeout(()=>el.classList.remove('show'),2600);
+}
+</script>
+</body>
+</html>

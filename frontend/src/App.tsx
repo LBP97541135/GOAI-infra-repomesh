@@ -1,0 +1,336 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApprovalModal } from "./components/ApprovalModal";
+import { DecisionDeck } from "./components/DecisionDeck";
+import { EnvPanel } from "./components/EnvPanel";
+import { MessageStream } from "./components/MessageStream";
+import { PlanView } from "./components/PlanView";
+import { Sidebar } from "./components/Sidebar";
+import { ReplayBar } from "./components/ReplayBar";
+import { createDataSource, resolveDataSourceMode } from "./api/source";
+import type { DeliveryData } from "./api/source";
+import type { DeliveryEventKind } from "./api/contract";
+import type { EventsTimelineState } from "./components/EventTimeline";
+import { SCENES } from "./data/scenes";
+import { deriveChat, deriveView } from "./viewmodel";
+import type { ChatMessage, Decision } from "./types";
+
+type View = "room" | "plan";
+
+/** 场景自动推进间隔（回放模式） */
+const SCENE_INTERVAL_MS = 7000;
+
+export default function App() {
+  const mode = useMemo(resolveDataSourceMode, []);
+  const source = useMemo(() => createDataSource(mode), [mode]);
+
+  const [data, setData] = useState<DeliveryData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [view, setView] = useState<View>("room");
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [deck, setDeck] = useState<Decision[]>([]);
+  const [deckHidden, setDeckHidden] = useState(false);
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+  const [events, setEvents] = useState<EventsTimelineState>({ items: [], nextCursor: null, kind: null, loading: false });
+  // 过滤/续读请求竞态防护：只采纳最后一次请求的结果
+  const eventsReqSeq = useRef(0);
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimer = useRef<number | undefined>(undefined);
+
+  // 回放场景状态机：默认停在终态（审批合并），▶ 从头推进完整闭环
+  const sceneCount = source.sceneCount ?? 0;
+  const [sceneIdx, setSceneIdx] = useState(Math.max(0, sceneCount - 1));
+  const [playing, setPlaying] = useState(false);
+
+  const delivery = useMemo(() => (data ? deriveView(data) : null), [data]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadError(null);
+    source.setScene?.(sceneIdx);
+    source
+      .fetchAll(selectedDeliveryId ?? undefined)
+      .then((d) => {
+        if (cancelled) return;
+        setData(d);
+        setMessages(deriveChat(d));
+        const derived = deriveView(d);
+        // 决策夹数组末位为最前的文件夹（与原型语义一致）
+        setDeck(derived ? derived.decisions.slice().reverse() : []);
+        // 时间线重置为首页（无过滤）；后续过滤/续读走 fetchEvents
+        eventsReqSeq.current += 1;
+        setEvents({ items: d.events.items, nextCursor: d.events.next_cursor, kind: null, loading: false });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [source, sceneIdx, selectedDeliveryId, reloadTick]);
+
+  useEffect(() => {
+    if (!playing) return;
+    const timer = window.setInterval(() => {
+      setSceneIdx((i) => {
+        if (i + 1 >= sceneCount) {
+          setPlaying(false);
+          return i;
+        }
+        return i + 1;
+      });
+    }, SCENE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [playing, sceneCount]);
+
+  const handleTogglePlay = () => {
+    if (playing) {
+      setPlaying(false);
+      return;
+    }
+    if (sceneIdx >= sceneCount - 1) setSceneIdx(0);
+    setPlaying(true);
+  };
+
+  const showToast = useCallback((text: string) => {
+    setToast(text);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  const bringToFront = (id: string) =>
+    setDeck((prev) => {
+      const item = prev.find((x) => x.id === id);
+      if (!item) return prev;
+      return prev.filter((x) => x.id !== id).concat(item);
+    });
+
+  const handleDecisionAction = (decision: Decision, actionIdx: number) => {
+    const actionKind = decision.actionKinds?.[actionIdx];
+    if (decision.kind === "approve" && actionKind === "approve_merge") {
+      setApprovalOpen(true);
+      return;
+    }
+    const label = decision.actions[actionIdx];
+    if (decision.kind === "clarify" && actionIdx < 2) {
+      // clarify 仅回放模式存在（契约 §6.5），消化即移除
+      setDeck((prev) => prev.filter((x) => x.id !== decision.id));
+      showToast(`已记录：「${label}」，结论回写契约（回放演示）`);
+    } else {
+      showToast(`「${label}」将在决策夹写回路（CONS-12）接入`);
+    }
+  };
+
+  const handleApprovalCancel = () => {
+    setApprovalOpen(false);
+    setApprovalError(null);
+  };
+
+  /** 时间线过滤切换（替换式重拉）与游标续读（追加式）。契约 §4.1。 */
+  const requestEvents = (kind: DeliveryEventKind | null, cursor: string | null) => {
+    const deliveryId = data?.aggregate?.delivery_id;
+    if (!source.fetchEvents || !deliveryId) return;
+    const seq = ++eventsReqSeq.current;
+    setEvents((s) => ({ ...s, kind, loading: true }));
+    source
+      .fetchEvents(deliveryId, { kind: kind ?? undefined, cursor: cursor ?? undefined })
+      .then((page) => {
+        if (seq !== eventsReqSeq.current) return;
+        setEvents((s) => ({
+          items: cursor ? [...s.items, ...page.items] : page.items,
+          nextCursor: page.next_cursor,
+          kind,
+          loading: false,
+        }));
+      })
+      .catch((err: unknown) => {
+        if (seq !== eventsReqSeq.current) return;
+        setEvents((s) => ({ ...s, loading: false }));
+        showToast(`事件时间线加载失败：${err instanceof Error ? err.message : String(err)}`);
+      });
+  };
+
+  const handleApprovalSubmit = (comment: string) => {
+    const info = delivery?.approval;
+    const deliveryId = data?.aggregate?.delivery_id;
+    // live：POST governance-decisions（契约 §4.4，head-bound + 内容重放幂等）
+    if (source.submitGovernanceDecision && deliveryId && info?.changeSetId && info.repositoryId && info.headSha) {
+      const agentId = import.meta.env.VITE_GOVERNANCE_AGENT_ID ?? "";
+      if (!agentId) {
+        setApprovalError("未配置治理决策主体（VITE_GOVERNANCE_AGENT_ID），无法提交。");
+        return;
+      }
+      setApprovalSubmitting(true);
+      setApprovalError(null);
+      source
+        .submitGovernanceDecision(deliveryId, {
+          change_set_id: info.changeSetId,
+          repository_id: info.repositoryId,
+          head_sha: info.headSha,
+          decision: "ready",
+          reason: comment,
+          decided_by_agent_id: agentId,
+          // 按内容确定性生成：重试自然复用同一键（后端内容重放去重）
+          idempotency_key: `console-${info.repositoryId}-${info.headSha.slice(0, 12)}-ready`,
+        })
+        .then(() => {
+          setApprovalOpen(false);
+          showToast("治理决策已记录：READY（head-bound），merge gate 放行");
+          setReloadTick((t) => t + 1);
+        })
+        .catch((err: unknown) => {
+          setApprovalError(err instanceof Error ? err.message : String(err));
+        })
+        .finally(() => setApprovalSubmitting(false));
+      return;
+    }
+    // replay：前端演示，消化 approve 决策
+    setApprovalOpen(false);
+    setDeck((prev) => prev.filter((x) => x.kind !== "approve"));
+    showToast("已批准：授权 30 分钟内有效，合并按序推进（回放演示）");
+  };
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-ink text-tx">
+      <Sidebar
+        list={data?.list ?? { projects: [], next_cursor: null }}
+        activeDeliveryId={data?.aggregate?.delivery_id ?? null}
+        pendingCount={deck.length}
+        demo={mode === "replay"}
+        onSelect={(id) => {
+          if (source.mode === "replay") {
+            showToast("回放模式为单交付叙事，切换交付请用 live 数据源");
+            return;
+          }
+          setSelectedDeliveryId(id);
+        }}
+        onToast={showToast}
+      />
+
+      <main className="relative flex min-w-0 flex-1 flex-col bg-ink">
+        {mode === "replay" && sceneCount > 0 && (
+          <ReplayBar
+            scenes={SCENES}
+            current={sceneIdx}
+            playing={playing}
+            onSelect={(i) => {
+              setPlaying(false);
+              setSceneIdx(i);
+            }}
+            onTogglePlay={handleTogglePlay}
+            onReset={() => {
+              setPlaying(false);
+              setSceneIdx(0);
+            }}
+          />
+        )}
+        {loadError && (
+          <div className="flex-none border-b border-[#7a4530] bg-[#2b1712] px-[22px] py-2 text-[12.5px] text-[#e8a184]">
+            <b className="mr-2 font-mono tracking-[0.08em]">LIVE 数据源不可用</b>
+            {loadError} —— 后端读模型（CONS-03）未就绪时可在 URL 加{" "}
+            <code className="font-mono text-amber-hi">?source=replay</code> 查看回放。
+          </div>
+        )}
+
+        {delivery ? (
+          <>
+            <header className="ticks-amber flex-none border-b border-line px-[22px] pt-3 pb-2.5">
+              <div className="truncate font-mono text-[10.5px] tracking-[0.1em] text-tx2 uppercase">
+                {delivery.projectLabel} › {delivery.label}
+                {delivery.matrixRoom ? ` · MATRIX ${delivery.matrixRoom}` : ""}
+              </div>
+              <div className="mt-[7px] flex items-center gap-3">
+                <span className="inline-grid size-7 flex-none place-items-center rounded-hard bg-amber text-[12px] font-extrabold text-[#1c170c]">
+                  PM
+                </span>
+                <h1 className="text-[16px] font-semibold text-cream">{delivery.title}</h1>
+                {delivery.runLabel && (
+                  <span className="inline-flex flex-none items-center gap-1.5 rounded-hard bg-cream px-2.5 py-[3px] font-mono text-[11.5px] font-extrabold tracking-[0.08em] text-[#1c170c]">
+                    <i className="not-italic text-[#b3402a] blink-fast">●</i>
+                    {delivery.runLabel}
+                  </span>
+                )}
+                <div className="ml-auto flex flex-none overflow-hidden rounded-hard border border-line">
+                  {(
+                    [
+                      ["room", "房间"],
+                      ["plan", "DAG · 计划"],
+                    ] as Array<[View, string]>
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      className={
+                        view === key
+                          ? "bg-amber px-4 py-1.5 text-[12.5px] font-bold text-[#191308]"
+                          : "bg-transparent px-4 py-1.5 text-[12.5px] text-tx2 hover:text-amber-hi"
+                      }
+                      onClick={() => setView(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </header>
+
+            {view === "room" ? (
+              <MessageStream messages={messages} view={delivery} onApprove={() => setApprovalOpen(true)} />
+            ) : (
+              <PlanView view={delivery} />
+            )}
+
+            <DecisionDeck
+              deck={deck}
+              hidden={deckHidden}
+              onToggleHidden={() => setDeckHidden((v) => !v)}
+              onBringToFront={bringToFront}
+              onAction={handleDecisionAction}
+            />
+
+            {/* 柜沿薄条：输入框暂移除（无写链路，ChangeRequest 回路落地时恢复），
+                保留决策夹「文件夹插在柜后」的视觉锚（-mb-3 底缘藏于此条后方） */}
+            <div className="relative z-[6] h-3 flex-none border-t border-line bg-[#191510] shadow-[0_-10px_24px_rgba(0,0,0,0.45)]" />
+
+            <EnvPanel
+              view={delivery}
+              events={events}
+              demo={mode === "replay"}
+              onEventsFilter={(kind) => requestEvents(kind, null)}
+              onEventsMore={() => requestEvents(events.kind, events.nextCursor)}
+              onToast={showToast}
+            />
+          </>
+        ) : (
+          <div className="grid flex-1 place-items-center">
+            <div className="text-center">
+              <span className="mx-auto mb-3 grid size-[42px] place-items-center rounded-hard bg-amber font-mono text-[18px] font-extrabold text-[#16120a]">
+                R
+              </span>
+              <p className="font-mono text-[12px] tracking-[0.14em] text-tx2 uppercase">
+                {loadError ? "无交付数据 · 读模型不可达" : data ? "该项目暂无已物化交付" : "载入交付数据…"}
+              </p>
+            </div>
+          </div>
+        )}
+      </main>
+
+      <ApprovalModal
+        open={approvalOpen}
+        info={delivery?.approval ?? null}
+        submitting={approvalSubmitting}
+        errorText={approvalError}
+        onCancel={handleApprovalCancel}
+        onApprove={handleApprovalSubmit}
+      />
+
+      {toast && (
+        <div className="fixed bottom-[72px] left-1/2 z-[999] -translate-x-1/2 rounded-lg border border-white/15 bg-[#14161c] px-4 py-2 text-[12.5px] text-white">
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}

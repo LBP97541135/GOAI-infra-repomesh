@@ -5,13 +5,25 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from repomesh.modules.agent_directory.contracts import (
+    AgentPrincipalReader,
+    AgentPrincipalStatus,
+    AgentRole,
+)
+from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus
+from repomesh.shared.domain import new_id
+from repomesh.shared.events import ActorType, EventEnvelope
+
 from .contracts import (
+    MERGE_GATE_GOVERNANCE_MISSING_REASON,
     AppendCandidatesCommand,
     ChangeSetStatus,
     ChangeSetView,
     CIObservationCommand,
+    DeliveryArchiveView,
     EnqueueSCMCommand,
     GovernanceDecisionKind,
+    GovernanceDecisionView,
     MergeGateDecision,
     MergeObservationCommand,
     PlanRecoveryCommand,
@@ -37,6 +49,7 @@ from .domain import (
     CandidateRevision,
     ChangeSet,
     DeliveryConflict,
+    DeliveryDenied,
     DeliveryNotFound,
     GovernanceDecision,
     RecoveryAction,
@@ -49,11 +62,20 @@ from .domain import (
 from .ports import (
     ChangeSetStore,
     ContractCatalogPort,
+    DeliveryArchiveStore,
+    DeliveryAuditLog,
+    ExecutionPlanStatusReader,
     SCMCommandStore,
     SCMObservationStore,
     SCMPollCursorStore,
     ValidationSnapshotReader,
 )
+
+
+def delivery_change_set_key(delivery_id: UUID) -> str:
+    """The idempotency key that binds a delivery (execution plan) to its ChangeSet."""
+
+    return f"execution-plan:{delivery_id}:delivery"
 
 
 class SCMCommandService:
@@ -543,7 +565,7 @@ class DeliveryService:
                 None,
             )
             if decision is None:
-                reasons.append("head-bound governance decision is missing")
+                reasons.append(MERGE_GATE_GOVERNANCE_MISSING_REASON)
             elif decision.decision is GovernanceDecisionKind.BLOCKED:
                 reasons.append(f"governance blocked delivery: {decision.reason}")
             elif decision.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED:
@@ -780,3 +802,187 @@ class DeliveryService:
     def _fingerprint(command: PrepareChangeSetCommand) -> str:
         payload = json.dumps(asdict(command), default=str, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
+
+
+class DeliveryGovernanceService:
+    """API-facing governance recording bound to a delivery (execution plan)."""
+
+    def __init__(
+        self,
+        delivery: DeliveryService,
+        directory: AgentPrincipalReader,
+        audit: DeliveryAuditLog,
+    ) -> None:
+        self._delivery = delivery
+        self._directory = directory
+        self._audit = audit
+
+    async def record(
+        self,
+        delivery_id: UUID,
+        command: RecordGovernanceDecisionCommand,
+        *,
+        idempotency_key: str,
+    ) -> GovernanceDecisionView:
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
+        change_set = await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+        if change_set is None:
+            raise DeliveryNotFound(f"delivery has no ChangeSet: {delivery_id}")
+        if change_set.id != command.change_set_id:
+            raise DeliveryConflict("change set does not belong to this delivery")
+        actor = await self._authorized_actor(command, change_set)
+        head_sha = command.head_sha.strip().lower()
+        replayed = self._latest_decision(change_set, command.repository_id, head_sha)
+        if replayed is not None and self._same_decision(replayed, command):
+            return replayed
+        updated = await self._delivery.record_governance_decision(command)
+        recorded = self._latest_decision(updated, command.repository_id, head_sha)
+        if recorded is None:  # pragma: no cover - record_governance guarantees presence
+            raise DeliveryNotFound("governance decision was not recorded")
+        await self._audit.append(
+            EventEnvelope(
+                event_type="DeliveryGovernanceDecisionRecorded",
+                actor_type=ActorType.AGENT,
+                actor_id=str(actor.id),
+                aggregate_type="ChangeSet",
+                aggregate_id=updated.id,
+                aggregate_version=updated.version,
+                correlation_id=new_id(),
+                organization_id=updated.organization_id,
+                project_id=updated.project_id,
+                payload={
+                    "deliveryId": str(delivery_id),
+                    "repositoryId": str(command.repository_id),
+                    "headSha": head_sha,
+                    "decision": command.decision.value,
+                    "reason": command.reason.strip(),
+                    "idempotencyKey": idempotency_key.strip(),
+                },
+            )
+        )
+        return recorded
+
+    async def _authorized_actor(
+        self, command: RecordGovernanceDecisionCommand, change_set: ChangeSetView
+    ):
+        actor = await self._directory.get_view(command.decided_by_agent_id)
+        if actor is None or actor.status is not AgentPrincipalStatus.ACTIVE:
+            raise DeliveryDenied("governance decisions require an active agent principal")
+        if actor.organization_id != change_set.organization_id:
+            raise DeliveryDenied("governance agent belongs to another organization")
+        if actor.role is AgentRole.ORGANIZATION_LEADER:
+            return actor
+        if (
+            actor.role is AgentRole.REPOSITORY_LEADER
+            and actor.repository_id == command.repository_id
+        ):
+            return actor
+        raise DeliveryDenied("governance decisions require a leader for this repository")
+
+    @staticmethod
+    def _latest_decision(
+        change_set: ChangeSetView, repository_id: UUID, head_sha: str
+    ) -> GovernanceDecisionView | None:
+        return next(
+            (
+                item
+                for item in reversed(change_set.governance_decisions)
+                if item.repository_id == repository_id and item.head_sha == head_sha
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _same_decision(
+        existing: GovernanceDecisionView, command: RecordGovernanceDecisionCommand
+    ) -> bool:
+        return (
+            existing.decision is command.decision
+            and existing.decided_by_agent_id == command.decided_by_agent_id
+            and existing.reason == command.reason.strip()
+        )
+
+
+class DeliveryArchiveService:
+    """Archive an inactive delivery; archived deliveries keep all data."""
+
+    def __init__(
+        self,
+        archives: DeliveryArchiveStore,
+        delivery: DeliveryService,
+        plans: ExecutionPlanStatusReader,
+        audit: DeliveryAuditLog,
+    ) -> None:
+        self._archives = archives
+        self._delivery = delivery
+        self._plans = plans
+        self._audit = audit
+
+    async def archive(self, delivery_id: UUID) -> DeliveryArchiveView:
+        existing = await self._archives.get(delivery_id)
+        if existing is not None:
+            return existing
+        plan = await self._plans.get_view(delivery_id)
+        if plan is None:
+            raise DeliveryNotFound(f"delivery not found: {delivery_id}")
+        if plan.status is ExecutionPlanStatus.IN_PROGRESS:
+            raise DeliveryConflict("an in-progress delivery cannot be archived")
+        change_set = await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+        if change_set is not None:
+            plan_failed = plan.status is ExecutionPlanStatus.FAILED
+            self._require_terminal(change_set, plan_failed=plan_failed)
+        archive = DeliveryArchiveView(delivery_id=delivery_id, archived_at=datetime.now(UTC))
+        try:
+            await self._archives.add(archive)
+        except DeliveryConflict:
+            stored = await self._archives.get(delivery_id)
+            if stored is not None:
+                return stored
+            raise
+        await self._audit.append(
+            EventEnvelope(
+                event_type="DeliveryArchived",
+                actor_type=ActorType.SERVICE,
+                actor_id="repomesh-api",
+                aggregate_type="ExecutionPlan",
+                aggregate_id=delivery_id,
+                aggregate_version=plan.current_batch_index + 1,
+                correlation_id=new_id(),
+                organization_id=plan.organization_id,
+                project_id=plan.project_id,
+                payload={
+                    "planStatus": plan.status.value,
+                    "changeSetId": str(change_set.id) if change_set is not None else None,
+                    "changeSetStatus": (
+                        change_set.status.value if change_set is not None else None
+                    ),
+                },
+            )
+        )
+        return archive
+
+    @staticmethod
+    def _require_terminal(change_set: ChangeSetView, *, plan_failed: bool) -> None:
+        if change_set.status in {ChangeSetStatus.DELIVERED, ChangeSetStatus.COMPENSATED}:
+            return
+        failed = plan_failed or change_set.status is ChangeSetStatus.MANUAL_INTERVENTION
+        if failed and not DeliveryArchiveService._has_active_recovery(change_set):
+            return
+        raise DeliveryConflict(
+            f"an active delivery cannot be archived (ChangeSet is {change_set.status.value})"
+        )
+
+    @staticmethod
+    def _has_active_recovery(change_set: ChangeSetView) -> bool:
+        if not change_set.recovery_plans:
+            return False
+        active = change_set.recovery_plans[-1]
+        return any(
+            action.status not in {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+            for action in active.actions
+        )

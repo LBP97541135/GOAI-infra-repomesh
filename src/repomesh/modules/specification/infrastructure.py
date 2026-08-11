@@ -289,6 +289,7 @@ class PostgresSpecificationStore:
                 tests=tuple(content["tests"]),
                 dependencies=tuple(content["dependencies"]),
                 allowed_paths=tuple(content["allowed_paths"]),
+                forbidden_paths=tuple(content.get("forbidden_paths", ())),
                 interface_changes=tuple(content["interface_changes"]),
             ),
             created_by_agent_id=record.created_by_agent_id,

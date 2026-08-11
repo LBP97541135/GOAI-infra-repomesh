@@ -249,7 +249,9 @@ class SpecificationService:
             from_version=from_version,
             to_version=to_version,
             changed_fields=tuple(
-                key for key in before_payload if before_payload[key] != after_payload[key]
+                key
+                for key in sorted(before_payload.keys() | after_payload.keys())
+                if before_payload.get(key) != after_payload.get(key)
             ),
         )
 
@@ -322,5 +324,6 @@ class SpecificationService:
             tests=tuple(item.strip() for item in command.tests),
             dependencies=tuple(item.strip() for item in command.dependencies),
             allowed_paths=tuple(item.strip() for item in command.allowed_paths),
+            forbidden_paths=tuple(item.strip() for item in command.forbidden_paths),
             interface_changes=tuple(item.strip() for item in command.interface_changes),
         )

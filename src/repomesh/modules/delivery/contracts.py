@@ -91,6 +91,12 @@ class GovernanceDecisionView:
     decided_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class DeliveryArchiveView:
+    delivery_id: UUID
+    archived_at: datetime
+
+
 class SCMObservationSource(StrEnum):
     WEBHOOK = "webhook"
     POLLER = "poller"
@@ -388,6 +394,14 @@ class ChangeSetView:
     candidate_revisions: tuple[CandidateRevisionView, ...]
     created_at: datetime
     updated_at: datetime
+
+
+MERGE_GATE_GOVERNANCE_MISSING_REASON = "head-bound governance decision is missing"
+"""Merge-gate reason for a candidate lacking a head-bound READY decision.
+
+The gate evaluator and its consumers (e.g. the read model's approve
+derivation, contract §4.3) must share this constant — no magic strings.
+"""
 
 
 @dataclass(frozen=True, slots=True)

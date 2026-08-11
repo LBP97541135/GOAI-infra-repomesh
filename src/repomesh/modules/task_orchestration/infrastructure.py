@@ -160,6 +160,9 @@ class InMemoryExecutionPlanStore:
                     return plan
         return None
 
+    async def list_all(self) -> tuple[ExecutionPlan, ...]:
+        return tuple(self.plans.values())
+
 
 class PostgresTaskStore:
     def __init__(self, database: Database) -> None:
@@ -345,6 +348,15 @@ class PostgresExecutionPlanStore:
                 else None
             )
         return self._to_domain(record) if record is not None else None
+
+    async def list_all(self) -> tuple[ExecutionPlan, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(ExecutionPlanRecord).order_by(ExecutionPlanRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
 
     async def _sync_leader_tasks(self, session, plan: ExecutionPlan) -> None:
         assigned = {

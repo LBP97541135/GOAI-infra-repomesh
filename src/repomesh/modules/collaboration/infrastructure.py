@@ -1,6 +1,7 @@
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import String, Text, UniqueConstraint, select
+from sqlalchemy import DateTime, String, Text, UniqueConstraint, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -35,6 +36,7 @@ class CollaborationMessageRecord(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     event_id: Mapped[str | None] = mapped_column(Text)
     correlation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_fingerprint: Mapped[str] = mapped_column(String(71))
 
@@ -136,6 +138,17 @@ class PostgresCollaborationMessageStore:
         except IntegrityError as error:
             raise CollaborationConflict("collaboration message already exists") from error
 
+    async def list_by_project(self, project_id: UUID) -> tuple[CollaborationMessage, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(CollaborationMessageRecord)
+                    .where(CollaborationMessageRecord.project_id == project_id)
+                    .order_by(CollaborationMessageRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
     async def update(self, message: CollaborationMessage) -> None:
         async with self._database.transaction() as session:
             record = await session.get(CollaborationMessageRecord, message.id)
@@ -177,6 +190,7 @@ class PostgresCollaborationMessageStore:
             "status": message.status.value,
             "event_id": message.event_id,
             "correlation_id": message.correlation_id,
+            "created_at": message.created_at,
         }
 
     @staticmethod
@@ -196,6 +210,7 @@ class PostgresCollaborationMessageStore:
             status=CollaborationDeliveryStatus(record.status),
             event_id=record.event_id,
             correlation_id=record.correlation_id,
+            created_at=record.created_at,
         )
 
 
