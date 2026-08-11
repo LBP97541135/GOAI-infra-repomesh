@@ -1,0 +1,107 @@
+@import "tailwindcss";
+
+/* 设计令牌 —— 来源：frontend-prototype/styles.css「Variant D」段（复古未来主义 · 硬朗） */
+@theme {
+  --color-ink: #16130d; /* 暖黑背景 */
+  --color-ink-deep: #131009; /* 左栏更深一档 */
+  --color-panel: #201b12;
+  --color-panel-2: #262013;
+  --color-line: #3b3323;
+  --color-amber: #c99e52;
+  --color-amber-hi: #e3c078;
+  --color-cream: #e9dec2;
+  --color-kraft: #dcc99c;
+  --color-salmon: #c26d51;
+  --color-olive: #94a35a;
+  --color-bluegray: #8aa0b4;
+  --color-tx: #d8cdb2;
+  --color-tx2: #93876c;
+  --color-paper-ink: #221c10; /* 纸面正文 */
+  --color-paper-dim: #6d6349;
+  --color-paper-neg: #a34a2e;
+
+  --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+
+  --radius-hard: 2px; /* 全局硬朗圆角 */
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  background: var(--color-ink);
+  color: var(--color-tx);
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+@layer components {
+  /* 微标签：等宽大写加字距 */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--color-amber);
+    text-transform: uppercase;
+  }
+
+  .microlabel {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-tx2);
+  }
+
+  /* 坐标网格底纹（DAG 容器） */
+  .grid-amber {
+    background:
+      repeating-linear-gradient(0deg, transparent 0 21px, rgba(201, 158, 82, 0.04) 21px 22px),
+      repeating-linear-gradient(90deg, transparent 0 21px, rgba(201, 158, 82, 0.04) 21px 22px);
+  }
+  .grid-paper {
+    background:
+      repeating-linear-gradient(0deg, transparent 0 21px, rgba(23, 19, 10, 0.05) 21px 22px),
+      repeating-linear-gradient(90deg, transparent 0 21px, rgba(23, 19, 10, 0.05) 21px 22px);
+  }
+  /* 顶栏刻度纹 */
+  .ticks-amber {
+    background: repeating-linear-gradient(90deg, transparent 0 22px, rgba(201, 158, 82, 0.03) 22px 23px);
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+.blink {
+  animation: blink 1.6s infinite;
+}
+.blink-fast {
+  animation: blink 1.4s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .blink,
+  .blink-fast {
+    animation: none;
+  }
+}
+
+dialog::backdrop {
+  background: rgba(10, 8, 4, 0.6);
+  backdrop-filter: blur(2px);
+}
