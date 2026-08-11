@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type {
+  DeliveryEventKind,
   GateDisplay,
   RepositoryPlanView,
   RoomListItemView,
@@ -7,6 +8,7 @@ import type {
   RoomStreamPage,
 } from "../api/contract";
 import type { RepositoryEnv } from "../types";
+import { EventTimeline, type EventsTimelineState } from "../components/EventTimeline";
 import { eventTime } from "../viewmodel";
 
 /** 活体房间视图（CONS-43 骨架）。版式按原型 `#v-room`：
@@ -156,9 +158,44 @@ const GATE_LABEL: Record<GateDisplay, string> = {
 };
 
 /** 单仓悬浮环境窗：轮次粒度的交付聚合切到本仓。
- *  §6.3 diffstat 为 null，所以只列变更文件名、**不编 ± 行数**（原型里的 +412 是设计稿）。 */
-function EnvFloat({ repositoryName, env }: { repositoryName: string; env: RepositoryEnv | null }) {
+ *  §6.3 diffstat 为 null，所以只列变更文件名、**不编 ± 行数**（原型里的 +412 是设计稿）。
+ *
+ *  末段是事件时间线（CONS-14 从 v1 环境窗迁入）。**这里有个粒度落差要如实处理**：
+ *  `/deliveries/{id}/events` 是**轮次粒度**（跨全部仓库），而本窗是**单仓作用域**。
+ *  三种处理里选了第三种：
+ *   - 全显示 → 单仓窗口里混进别仓事件，破坏这个窗口的作用域约定；
+ *   - 只显示本仓 → 丢掉 `repository_id: null` 的轮次级事实（实测种子里「计划 v1 已生成」
+ *     就是这一类），而它对本仓同样成立；
+ *   - **显示「本仓 + 不分仓」，并把被折起的别仓条数说出来**，可一键展开看全部。
+ *
+ *  折叠是**当页语义**：`?kind=` 是服务端过滤（全量），仓库维度 §4.1 没有定义参数，
+ *  只能在已加载的这一页里分拣。所以文案写「本页另有 N 条」而不是「另有 N 条」——
+ *  分页之下把部分结果说成全量，是 issue 列表撤掉两个筛选按钮时定下的同一条红线。 */
+function EnvFloat({
+  repositoryName,
+  repositoryId,
+  env,
+  events,
+  eventsDemo,
+  hasRound,
+  onEventsFilter,
+  onEventsMore,
+}: {
+  repositoryName: string;
+  repositoryId: string;
+  env: RepositoryEnv | null;
+  events: EventsTimelineState;
+  eventsDemo: boolean;
+  hasRound: boolean;
+  onEventsFilter: (kind: DeliveryEventKind | null) => void;
+  onEventsMore: () => void;
+}) {
   const [min, setMin] = useState(false);
+  const [allRepos, setAllRepos] = useState(false);
+
+  const scoped = events.items.filter((e) => e.repository_id === repositoryId || e.repository_id === null);
+  const otherCount = events.items.length - scoped.length;
+  const shown = allRepos ? events : { ...events, items: scoped };
 
   return (
     <aside className="fixed top-[64px] right-4 z-[8] max-h-[calc(100vh-90px)] w-[252px] overflow-y-auto rounded-hard border border-line bg-[#1c1710] shadow-[0_12px_30px_rgba(0,0,0,0.5)]">
@@ -169,12 +206,13 @@ function EnvFloat({ repositoryName, env }: { repositoryName: string; env: Reposi
         </button>
       </div>
 
-      {!min &&
-        (env === null ? (
-          <p className="px-3 py-2.5 text-[11.5px] leading-[1.6] text-[#6b6046]">
-            本仓环境未接入：该 issue 尚无轮次，或本仓不在当前轮次的交付聚合内。
-          </p>
-        ) : (
+      {!min && (
+        <>
+          {env === null ? (
+            <p className="px-3 py-2.5 text-[11.5px] leading-[1.6] text-[#6b6046]">
+              本仓环境未接入：该 issue 尚无轮次，或本仓不在当前轮次的交付聚合内。
+            </p>
+          ) : (
           <div className="px-3 py-2.5">
             <div className="microlabel pb-1.5">状态</div>
             <div className="flex items-baseline gap-2 font-mono text-[11.5px]">
@@ -245,8 +283,43 @@ function EnvFloat({ repositoryName, env }: { repositoryName: string; env: Reposi
                 {env.validationSnapshotId ? env.validationSnapshotId.slice(0, 8) : "未接入"}
               </span>
             </div>
+            </div>
+          )}
+
+          {/* 事件时间线独立于 env：本仓不在聚合内（env 为 null）时本轮事件依然成立 */}
+          <div className="border-t border-line pt-1 pb-2">
+            <div className="microlabel px-3 pt-2 pb-1">
+              事件时间线 · 本轮
+              <span className="ml-1.5 tracking-normal text-[#6b6046] normal-case">
+                （轮次粒度，跨全部仓库）
+              </span>
+            </div>
+
+            {!hasRound ? (
+              <p className="px-3 py-1 text-[11px] text-[#6b6046]">该 issue 尚无轮次，没有事件可读。</p>
+            ) : (
+              <>
+                <EventTimeline
+                  state={shown}
+                  demo={eventsDemo}
+                  onFilter={onEventsFilter}
+                  onLoadMore={onEventsMore}
+                />
+                {otherCount > 0 && (
+                  <button
+                    className="mx-3 mt-1 text-left text-[10.5px] text-[#6b6046] underline hover:text-amber-hi"
+                    onClick={() => setAllRepos((v) => !v)}
+                  >
+                    {allRepos
+                      ? `收起其他仓事件（本页 ${otherCount} 条）`
+                      : `本页另有 ${otherCount} 条其他仓事件 · 展开`}
+                  </button>
+                )}
+              </>
+            )}
           </div>
-        ))}
+        </>
+      )}
     </aside>
   );
 }
@@ -256,9 +329,14 @@ export function RoomView({
   stream,
   plan,
   env,
+  events,
+  eventsDemo,
+  hasRound,
   sourceNote,
   onBack,
   onToast,
+  onEventsFilter,
+  onEventsMore,
 }: {
   room: RoomListItemView;
   stream: RoomStreamPage;
@@ -266,11 +344,19 @@ export function RoomView({
   plan: RepositoryPlanView | null;
   /** 单仓环境切片；未取到为 null，窗内显缺口不填假数 */
   env: RepositoryEnv | null;
+  /** 本轮事件时间线（CONS-14）。轮次粒度，落位与折叠规则见 EnvFloat 头注 */
+  events: EventsTimelineState;
+  /** 回放模式：deny 是治理拦截演示；live 收到 deny 即契约违约警示（§6.6） */
+  eventsDemo: boolean;
+  /** 该 issue 是否有轮次——无轮次时事件段显缺口，而不是空列表冒充「没有事件」 */
+  hasRound: boolean;
   /** 数据来源与刷新机制的实况标注。**必须与实际一致**：写着 replay 却在放 live
    *  数据，比不标注更糟——那是在说谎。由取数容器按数据源传入。 */
   sourceNote: string;
   onBack: () => void;
   onToast: (text: string) => void;
+  onEventsFilter: (kind: DeliveryEventKind | null) => void;
+  onEventsMore: () => void;
 }) {
   const [view, setView] = useState<"chat" | "plan">("chat");
 
@@ -352,7 +438,16 @@ export function RoomView({
         <p className="py-8 text-[12.5px] text-tx2">DAG · PLAN · SPEC 取用中…</p>
       )}
 
-      <EnvFloat repositoryName={room.repository_name} env={env} />
+      <EnvFloat
+        repositoryName={room.repository_name}
+        repositoryId={room.repository_id}
+        env={env}
+        events={events}
+        eventsDemo={eventsDemo}
+        hasRound={hasRound}
+        onEventsFilter={onEventsFilter}
+        onEventsMore={onEventsMore}
+      />
     </div>
   );
 }

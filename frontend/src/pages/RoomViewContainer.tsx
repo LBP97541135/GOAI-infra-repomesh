@@ -1,12 +1,20 @@
-import { useEffect, useRef, useState } from "react";
-import type { RepositoryPlanView, RoomListItemView, RoomStreamPage } from "../api/contract";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  DeliveryEventKind,
+  RepositoryPlanView,
+  RoomListItemView,
+  RoomStreamPage,
+} from "../api/contract";
 import type { RepositoryEnv } from "../types";
+import type { EventsTimelineState } from "../components/EventTimeline";
 import {
   ROOM_POLL_MS,
   fetchRepositoryEnv,
   fetchRepositoryPlan,
   fetchRoomStream,
   fetchRooms,
+  fetchRoundEvents,
+  fetchRoundId,
 } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { RoomView } from "./RoomView";
@@ -41,6 +49,14 @@ export function RoomViewContainer({
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
   const [staleNote, setStaleNote] = useState<string | null>(null);
   const inFlight = useRef(false);
+  /** 本轮事件时间线（CONS-14）。轮次粒度，与环境窗共用一次轮次解析。 */
+  const [roundId, setRoundId] = useState<string | null>(null);
+  const [events, setEvents] = useState<EventsTimelineState>({
+    items: [],
+    nextCursor: null,
+    kind: null,
+    loading: true,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +64,8 @@ export function RoomViewContainer({
     setError(null);
     setPlan(null);
     setEnv(null);
+    setRoundId(null);
+    setEvents({ items: [], nextCursor: null, kind: null, loading: true });
     setRefreshedAt(null);
     setStaleNote(null);
 
@@ -68,10 +86,36 @@ export function RoomViewContainer({
           .catch((err: unknown) => {
             if (!cancelled) onToast(`DAG·PLAN·SPEC 取用失败：${err instanceof Error ? err.message : String(err)}`);
           });
-        fetchRepositoryEnv(issueId, found.repository_id)
-          .then((e) => !cancelled && setEnv(e))
+
+        // 轮次解析一次，环境窗与事件时间线共用——两者都是轮次粒度的消费面
+        fetchRoundId(issueId)
+          .then(async (rid) => {
+            if (cancelled) return;
+            setRoundId(rid);
+            if (!rid) {
+              // 纯草稿 issue：没有轮次就没有聚合，也没有事件，各自显缺口
+              setEnv(null);
+              setEvents({ items: [], nextCursor: null, kind: null, loading: false });
+              return;
+            }
+            fetchRepositoryEnv(rid, found.repository_id)
+              .then((e) => !cancelled && setEnv(e))
+              .catch((err: unknown) => {
+                if (!cancelled) onToast(`环境窗取用失败：${err instanceof Error ? err.message : String(err)}`);
+              });
+            fetchRoundEvents(rid)
+              .then((page) => {
+                if (cancelled) return;
+                setEvents({ items: page.items, nextCursor: page.next_cursor, kind: null, loading: false });
+              })
+              .catch((err: unknown) => {
+                if (cancelled) return;
+                setEvents((prev) => ({ ...prev, loading: false }));
+                onToast(`事件时间线取用失败：${err instanceof Error ? err.message : String(err)}`);
+              });
+          })
           .catch((err: unknown) => {
-            if (!cancelled) onToast(`环境窗取用失败：${err instanceof Error ? err.message : String(err)}`);
+            if (!cancelled) onToast(`轮次解析失败：${err instanceof Error ? err.message : String(err)}`);
           });
       })
       .catch((err: unknown) => {
@@ -118,6 +162,43 @@ export function RoomViewContainer({
     };
   }, [polling, roomId]);
 
+  /** kind 是**服务端**过滤（?kind=），换一类就是换一个全量查询，故游标从头开始。 */
+  const onEventsFilter = useCallback(
+    (kind: DeliveryEventKind | null) => {
+      if (!roundId) return;
+      setEvents((prev) => ({ ...prev, kind, loading: true }));
+      fetchRoundEvents(roundId, { kind: kind ?? undefined })
+        .then((page) => setEvents({ items: page.items, nextCursor: page.next_cursor, kind, loading: false }))
+        .catch((err: unknown) => {
+          setEvents((prev) => ({ ...prev, loading: false }));
+          onToast(`事件过滤失败：${err instanceof Error ? err.message : String(err)}`);
+        });
+    },
+    [roundId, onToast],
+  );
+
+  /** 续读只追加，并保持当前 kind——换页不该悄悄改变过滤条件。 */
+  const onEventsMore = useCallback(() => {
+    if (!roundId) return;
+    setEvents((prev) => {
+      if (prev.nextCursor === null || prev.loading) return prev;
+      fetchRoundEvents(roundId, { cursor: prev.nextCursor, kind: prev.kind ?? undefined })
+        .then((page) =>
+          setEvents((cur) => ({
+            ...cur,
+            items: [...cur.items, ...page.items],
+            nextCursor: page.next_cursor,
+            loading: false,
+          })),
+        )
+        .catch((err: unknown) => {
+          setEvents((cur) => ({ ...cur, loading: false }));
+          onToast(`加载后续事件失败：${err instanceof Error ? err.message : String(err)}`);
+        });
+      return { ...prev, loading: true };
+    });
+  }, [roundId, onToast]);
+
   if (loading) return <p className="py-8 text-center text-[12.5px] text-tx2">加载房间…</p>;
 
   if (error || !room || !stream) {
@@ -155,9 +236,14 @@ export function RoomViewContainer({
       stream={stream}
       plan={plan}
       env={env}
+      events={events}
+      eventsDemo={resolveDataSourceMode() === "replay"}
+      hasRound={roundId !== null}
       sourceNote={sourceNote}
       onBack={onBack}
       onToast={onToast}
+      onEventsFilter={onEventsFilter}
+      onEventsMore={onEventsMore}
     />
   );
 }

@@ -5,6 +5,7 @@
  *
  *  红线：state / phase / phase_note / runtime_status / live 均由读模型派生，只渲染不映射。 */
 import type {
+  DeliveryEventsPage,
   IssueDetailView,
   RepositoryPlanView,
   RoomListItemView,
@@ -381,4 +382,27 @@ export const repositoryPlanFixture: RepositoryPlanView = {
     tests: ["pytest tests/order"],
   },
   engineering_contract: null,
+};
+
+/** 本轮事件时间线（v0.1 §4.1）。**轮次粒度**，故刻意混了三种归属：
+ *  本仓（REPO_API）、别的仓（REPO_WEB）、以及 `repository_id: null` 的轮次级事实
+ *  （计划生成）——环境窗是单仓作用域，这三类的取舍见 RoomView 的落位注释。
+ *
+ *  末条 `deny` 是**回放专属的治理拦截叙事**：契约 §6.6 规定 live 不应产出 deny，
+ *  live 收到即渲染为违约警示（EventTimeline 的 `demo` 开关分流两种语义）。
+ *
+ *  放这里而不是 data/replay.ts：后者随 v1 退役整体删除，不给待删文件加新引用。 */
+export const roundEventsFixture: DeliveryEventsPage = {
+  items: [
+    { at: "2026-08-11T09:12:04Z", kind: "plan", text: "计划 v1 已生成 · 3 仓 2 批次", task_id: null, repository_id: null, payload_ref: "plan-snapshot:1" },
+    { at: "2026-08-11T09:14:22Z", kind: "matrix", text: "task_assignment: 交付 core 价格原因字段", task_id: "t-api-1", repository_id: REPO_API, payload_ref: "message:1" },
+    { at: "2026-08-11T09:15:01Z", kind: "runner", text: "runner.started · saleor-core", task_id: "t-api-1", repository_id: REPO_API, payload_ref: "run:1" },
+    { at: "2026-08-11T09:31:47Z", kind: "runner", text: "runner.completed · saleor-core", task_id: "t-api-1", repository_id: REPO_API, payload_ref: "run:2" },
+    { at: "2026-08-11T09:33:10Z", kind: "gate", text: "check_run.completed · pytest 通过", task_id: "t-api-1", repository_id: REPO_API, payload_ref: "check:1" },
+    { at: "2026-08-11T09:41:52Z", kind: "matrix", text: "task_assignment: 后台订单详情页展示原因", task_id: "t-web-1", repository_id: REPO_WEB, payload_ref: "message:2" },
+    { at: "2026-08-11T09:58:33Z", kind: "gate", text: "check_run.failed · dashboard 单测未过", task_id: "t-web-1", repository_id: REPO_WEB, payload_ref: "check:2" },
+    { at: "2026-08-11T10:02:15Z", kind: "deny", text: "治理拦截：未经批准的直接合并请求已驳回", task_id: null, repository_id: REPO_API, payload_ref: "deny:1" },
+  ],
+  // 夹具即全量，没有第二页——不给一个点了没反应的「加载后续」
+  next_cursor: null,
 };

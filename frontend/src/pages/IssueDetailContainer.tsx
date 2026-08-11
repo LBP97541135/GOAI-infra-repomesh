@@ -128,7 +128,8 @@ export function IssueDetailContainer({
         setApprovalOpen(true);
         return;
       }
-      onToast("证据面（CI 报告 / 变更详情）待接入，可在 v1 交付控制台查看");
+      // 证据面本就是既有缺口；原文案把人指向 v1 控制台，v1 退役后如实说明缺口
+      onToast("证据面（CI 报告 / 变更详情）未接入。门禁与变更可在房间视图的环境窗查看");
     },
     [onToast],
   );
