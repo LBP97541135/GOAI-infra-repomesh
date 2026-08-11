@@ -4,7 +4,9 @@ import { LoginPage } from "./components/LoginPage";
 import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListResponse } from "./api/contract";
-import { fetchIssues, issuesSourceMode } from "./api/issues";
+import { createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
+import { createWorkspace, fetchWorkspaces } from "./api/workspaces";
+import type { OrganizationView } from "./api/contract";
 import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
@@ -35,6 +37,13 @@ export default function ConsoleShell() {
   const [issuesMore, setIssuesMore] = useState(false);
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [issuesReload, setIssuesReload] = useState(0);
+
+  // 工作区（B-2）：null = 不适用（replay）/取用失败；选中 id 传给 /issues
+  // （契约 §2.5：计数受 organization_id 影响，列表与计数必须同一隔离域）。
+  const [workspaces, setWorkspaces] = useState<OrganizationView[] | null>(null);
+  const [workspaceNote, setWorkspaceNote] = useState<string | null>(null);
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
+  const [workspacesReload, setWorkspacesReload] = useState(0);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -74,9 +83,28 @@ export default function ConsoleShell() {
   useEffect(() => {
     if (authState !== "authenticated") return;
     let cancelled = false;
+    fetchWorkspaces()
+      .then((list) => {
+        if (cancelled) return;
+        setWorkspaces(list);
+        setWorkspaceNote(list === null ? "回放模式 · 工作区不适用" : null);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setWorkspaces(null);
+        setWorkspaceNote(`工作区取用失败：${err instanceof Error ? err.message : String(err)}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState, workspacesReload]);
+
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    let cancelled = false;
     setIssuesLoading(true);
     setIssuesError(null);
-    fetchIssues({ state: issueTab })
+    fetchIssues({ state: issueTab, organizationId: workspaceId ?? undefined })
       .then((page) => {
         if (cancelled) return;
         setIssues(page);
@@ -90,13 +118,13 @@ export default function ConsoleShell() {
     return () => {
       cancelled = true;
     };
-  }, [authState, issueTab, issuesReload]);
+  }, [authState, issueTab, issuesReload, workspaceId]);
 
   const loadMoreIssues = () => {
     const cursor = issues?.next_cursor;
     if (!cursor || issuesMore) return;
     setIssuesMore(true);
-    fetchIssues({ state: issueTab, cursor })
+    fetchIssues({ state: issueTab, cursor, organizationId: workspaceId ?? undefined })
       .then((page) =>
         // 续读只追加条目；计数是全量值，以最新一页为准即可
         setIssues((prev) => (prev ? { ...page, issues: [...prev.issues, ...page.issues] } : page)),
@@ -118,6 +146,24 @@ export default function ConsoleShell() {
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
     setRoute({ nav: "issues", issueId, roomId });
+  };
+
+  /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
+   *  处理者按当前工作区派生（选「全部」时 null = 花名册唯一活跃 Org Leader）。 */
+  const handleCreateIssue = async (text: string) => {
+    const issue = await createIssue(text, workspaceId);
+    setNewIssueOpen(false);
+    showToast(`issue 已创建：#${issue.issue_id.slice(0, 8)}（虚拟草稿，等待规划）`);
+    setIssuesReload((n) => n + 1);
+    openIssue(issue.issue_id);
+  };
+
+  /** B-2 创建回路：建组织 + 登记 Org Leader → 刷新列表 → 选中新工作区。 */
+  const handleCreateWorkspace = async (name: string) => {
+    const created = await createWorkspace(name);
+    showToast(`工作区已创建：${created.name}（Org Leader 已登记，运行时未拉起）`);
+    setWorkspacesReload((n) => n + 1);
+    setWorkspaceId(created.organization_id);
   };
 
   const handleLogout = () => {
@@ -169,6 +215,11 @@ export default function ConsoleShell() {
         account={account}
         nav={route.nav}
         issueCount={issues?.open_count ?? null}
+        workspaces={workspaces}
+        workspaceNote={workspaceNote}
+        selectedWorkspaceId={workspaceId}
+        onSelectWorkspace={setWorkspaceId}
+        onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
         onNewIssue={() => setNewIssueOpen(true)}
         onLogout={handleLogout}
@@ -217,9 +268,13 @@ export default function ConsoleShell() {
 
       <NewIssueModal
         open={newIssueOpen}
-        workspaceLabel="工作区未接入"
+        workspaceLabel={
+          workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? "全部工作区"
+        }
+        mode={issuesSourceMode()}
         onClose={() => setNewIssueOpen(false)}
         onToast={showToast}
+        onCreate={handleCreateIssue}
       />
 
       {toast && (

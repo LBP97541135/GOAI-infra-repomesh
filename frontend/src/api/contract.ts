@@ -97,6 +97,46 @@ export interface IssueListResponse {
   next_cursor: string | null;
 }
 
+/** 契约 v0.3 §1.2：issue 写入（POST /issues）。organization_id / title 有意缺席——
+ *  前者由主体所属组织唯一决定，后者是读模型对需求文本的截断派生（防双源）。
+ *  幂等键由客户端生成：每次逻辑创建一个**新随机键**，重试沿用同键（§1.3——
+ *  key 派生 project_id，低熵键会跨用户碰撞归并）。响应即 §2 单条投影，
+ *  201=首建 / 200=幂等重放。 */
+export interface IssueIntakeRequest {
+  requirement_text: string;
+  created_by_agent_id: string;
+  idempotency_key: string;
+}
+
+/** 契约 v0.3 §2.2：工作区（Organization）注册表单条。 */
+export interface OrganizationView {
+  organization_id: string;
+  name: string;
+  created_at: string;
+  /** agent_directory 派生：该组织活跃 principal 数 */
+  agent_count: number;
+}
+
+export interface OrganizationsResponse {
+  organizations: OrganizationView[];
+}
+
+/** 契约 v0.3 §2.3：创建工作区 = 建组织 + 同请求登记 Org Leader。
+ *  幂等键语义同 §1.3（客户端随机新键、重试同键）。 */
+export interface OrganizationCreateRequest {
+  name: string;
+  leader_resource_name?: string | null;
+  idempotency_key: string;
+}
+
+/** §2.3 诚实边界：leader 是期望态登记行，响应不含任何运行时断言。 */
+export interface OrganizationCreateResponse {
+  organization_id: string;
+  name: string;
+  created_at: string;
+  leader_agent_id: string;
+}
+
 // ───────────────── 契约 v0.2 §3 / §5：issue 详情与房间读模型 ─────────────────
 
 export interface IssueRoundView {

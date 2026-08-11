@@ -3,8 +3,9 @@
  *
  *  live 打契约 v0.2 §2 的 `GET /issues`；replay 走本地夹具。两侧返回**同一个契约类型**，
  *  页面无分支。 */
-import type { IssueListResponse } from "./contract";
+import type { IssueListItemView, IssueListResponse } from "./contract";
 import { createApiClient } from "./client";
+import { resolveGovernanceAgent } from "./decisions";
 import { resolveDataSourceMode, type DataSourceMode } from "./source";
 import { issuesFixture } from "../data/issues";
 
@@ -31,6 +32,31 @@ function replayPage(q: IssuesQuery): IssueListResponse {
 
 export function issuesSourceMode(): DataSourceMode {
   return resolveDataSourceMode();
+}
+
+/** 创建 issue（契约 v0.3 §1，验收缺陷 B-1）。仅 live 模式——replay 是回放夹具，
+ *  「模拟创建」会篡改夹具世界，调用方在弹窗层挡掉。
+ *
+ *  处理者 = 花名册派生的 Org Leader（与治理决策同一个单点 resolveGovernanceAgent，
+ *  不新增第二条主体取数路径）。幂等键按 §1.3 由客户端生成：每次逻辑创建一个新的
+ *  随机 UUID，请求内重试（fetch 层如有）沿用同键；禁止用文本 hash 之类低熵键。 */
+export async function createIssue(
+  requirementText: string,
+  organizationId: string | null,
+): Promise<IssueListItemView> {
+  const principal = await resolveGovernanceAgent(organizationId);
+  if (!principal) {
+    throw new Error("处理者未接入：花名册里找不到该工作区的活跃 Org Leader");
+  }
+  const client = createApiClient({
+    baseUrl: import.meta.env.VITE_API_BASE ?? "",
+    token: import.meta.env.VITE_API_TOKEN ?? "",
+  });
+  return client.createIssue({
+    requirement_text: requirementText,
+    created_by_agent_id: principal.agentId,
+    idempotency_key: crypto.randomUUID(),
+  });
 }
 
 export async function fetchIssues(q: IssuesQuery): Promise<IssueListResponse> {

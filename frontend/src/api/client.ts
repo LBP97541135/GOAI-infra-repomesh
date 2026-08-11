@@ -12,7 +12,12 @@ import type {
   GovernanceDecisionRequest,
   GovernanceDecisionView,
   IssueDetailView,
+  IssueIntakeRequest,
+  IssueListItemView,
   IssueListResponse,
+  OrganizationCreateRequest,
+  OrganizationCreateResponse,
+  OrganizationsResponse,
   RepositoryPlanView,
   RoomListResponse,
   RoomStreamPage,
@@ -84,6 +89,20 @@ export function createApiClient(config: ApiClientConfig) {
       const q = params.toString();
       return request<IssueListResponse>(config, "GET", `/issues${q ? `?${q}` : ""}`);
     },
+
+    /** 契约 v0.3 §1：创建 issue（= 首份虚拟草稿快照）。201 首建 / 200 幂等重放，
+     *  响应都是 §2 单条投影；403 主体非活跃 Org Leader、404 主体不存在。 */
+    createIssue: (payload: IssueIntakeRequest) =>
+      request<IssueListItemView>(config, "POST", `/issues`, payload),
+
+    /** 契约 v0.3 §2.2：工作区注册表（console 命名空间，§4.5 裁决同款前缀）。 */
+    listOrganizations: () =>
+      request<OrganizationsResponse>(config, "GET", `/console/organizations`),
+
+    /** 契约 v0.3 §2.3：创建工作区（建组织 + 登记 Org Leader）。
+     *  201 首建 / 200 幂等重放 / 409 同名不同键。 */
+    createOrganization: (payload: OrganizationCreateRequest) =>
+      request<OrganizationCreateResponse>(config, "POST", `/console/organizations`, payload),
 
     /** §4.1 + §4.5：三条网格端点收在 `console` 命名空间下——裸 `/repositories`
      *  已被 repository_intelligence 的 catalog 视图先注册占用，挂裸路径会得到一个

@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account } from "../api/auth";
+import type { OrganizationView } from "../api/contract";
 
-/** v2 侧栏（CONS-40）：工作区切换器 → 新建 issue → 四导航 → 设置底锚 → 用户块。
+/** v2 侧栏（CONS-40 → B-2 接线）：工作区切换器 → 新建 issue → 四导航 → 设置底锚 → 用户块。
  *  信息架构见 frontend-prototype/DESIGN-DECISION-V2.md §2、原型 redesign-issue-centric.html。
- *  诚实数据：工作区 = Organization，但组织读模型属 CONS-32（未接入）——
- *  当前只呈现登录账户，工作区列表与计数显「未接入」，不编造条目。 */
+ *
+ *  工作区 = Organization（契约 v0.3 §2 注册表）。`workspaces === null` 表示
+ *  「数据源不适用或取用失败」（文案由 workspaceNote 说明），与空列表 []（注册表
+ *  真的没有条目）是两个态，不合并。创建工作区 = 建组织 + 登记 Org Leader——
+ *  leader 是期望态登记行，不是已拉起的运行时（§2.3 诚实边界）。 */
 
 export type NavKey = "issues" | "repositories" | "teams" | "agents" | "settings";
 
@@ -62,6 +66,11 @@ export function SidebarV2({
   account,
   nav,
   issueCount,
+  workspaces,
+  workspaceNote,
+  selectedWorkspaceId,
+  onSelectWorkspace,
+  onCreateWorkspace,
   onNavigate,
   onNewIssue,
   onLogout,
@@ -71,13 +80,47 @@ export function SidebarV2({
   nav: NavKey;
   /** issue 导航计数；null = 数据源未提供（不显示计数，不编造） */
   issueCount: number | null;
+  /** null = 不适用/取用失败（见 workspaceNote）；[] = 注册表为空 */
+  workspaces: OrganizationView[] | null;
+  workspaceNote: string | null;
+  /** null = 全部工作区 */
+  selectedWorkspaceId: string | null;
+  onSelectWorkspace: (organizationId: string | null) => void;
+  /** 创建回路（成功后由外层刷新列表并选中新工作区）；失败原因原样抛回 */
+  onCreateWorkspace: (name: string) => Promise<void>;
   onNavigate: (nav: NavKey) => void;
   onNewIssue: () => void;
   onLogout: () => void;
   onToast: (text: string) => void;
 }) {
   const [dropOpen, setDropOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createSubmitting, setCreateSubmitting] = useState(false);
   const dropRef = useRef<HTMLDivElement>(null);
+
+  const selected = workspaces?.find((w) => w.organization_id === selectedWorkspaceId) ?? null;
+  const switcherLabel =
+    workspaces === null ? (workspaceNote ?? "工作区未接入") : (selected?.name ?? "全部工作区");
+
+  const submitCreate = () => {
+    const name = createName.trim();
+    if (!name) {
+      onToast("请先输入工作区名称");
+      return;
+    }
+    setCreateSubmitting(true);
+    onCreateWorkspace(name)
+      .then(() => {
+        setCreateName("");
+        setCreating(false);
+        setDropOpen(false);
+      })
+      .catch((err: unknown) => {
+        onToast(`创建失败：${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => setCreateSubmitting(false));
+  };
 
   useEffect(() => {
     if (!dropOpen) return;
@@ -105,7 +148,7 @@ export function SidebarV2({
           </span>
           <div className="min-w-0">
             <strong className="block font-mono text-[12.5px] tracking-[0.14em] text-cream">REPOMESH</strong>
-            <small className="block truncate text-[11px] text-tx2">工作区未接入 ▾</small>
+            <small className="block truncate text-[11px] text-tx2">{switcherLabel} ▾</small>
           </div>
         </button>
 
@@ -125,18 +168,81 @@ export function SidebarV2({
             </div>
 
             <div className="microlabel border-t border-line px-2.5 pt-2 pb-1">工作区</div>
-            <div className="px-2.5 pb-1.5 text-[11.5px] text-[#6b6046]">
-              组织读模型未接入（CONS-32），暂无工作区列表
-            </div>
-            <button
-              className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-tx2 hover:bg-amber/5 hover:text-tx"
-              onClick={() => {
-                setDropOpen(false);
-                onToast("创建工作区 = 建组织并绑定 Org Leader，写路径未接入");
-              }}
-            >
-              ＋ 创建工作区
-            </button>
+            {workspaces === null && (
+              <div className="px-2.5 pb-1.5 text-[11.5px] text-[#6b6046]">
+                {workspaceNote ?? "工作区数据源不可用"}
+              </div>
+            )}
+            {workspaces !== null && (
+              <>
+                <button
+                  className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] ${
+                    selectedWorkspaceId === null ? "text-amber-hi" : "text-tx2 hover:bg-amber/5 hover:text-tx"
+                  }`}
+                  onClick={() => {
+                    setDropOpen(false);
+                    onSelectWorkspace(null);
+                  }}
+                >
+                  ◎ 全部工作区
+                </button>
+                {workspaces.length === 0 && (
+                  <div className="px-2.5 pb-1.5 text-[11.5px] text-[#6b6046]">注册表暂无工作区</div>
+                )}
+                {workspaces.map((workspace) => (
+                  <button
+                    key={workspace.organization_id}
+                    className={`flex w-full items-baseline gap-2 px-2.5 py-1.5 text-left text-[12.5px] ${
+                      workspace.organization_id === selectedWorkspaceId
+                        ? "text-amber-hi"
+                        : "text-tx hover:bg-amber/5"
+                    }`}
+                    onClick={() => {
+                      setDropOpen(false);
+                      onSelectWorkspace(workspace.organization_id);
+                    }}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{workspace.name}</span>
+                    <span className="flex-none font-mono text-[10.5px] text-tx2">
+                      {workspace.agent_count} agent
+                    </span>
+                  </button>
+                ))}
+                {!creating ? (
+                  <button
+                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-tx2 hover:bg-amber/5 hover:text-tx"
+                    onClick={() => setCreating(true)}
+                  >
+                    ＋ 创建工作区
+                  </button>
+                ) : (
+                  <div className="px-2.5 py-1.5">
+                    <input
+                      autoFocus
+                      className="w-full rounded-hard border border-line bg-transparent px-2 py-1 text-[12px] text-tx placeholder:text-[#6b6046] focus:border-amber focus:outline-none"
+                      placeholder="工作区名称"
+                      value={createName}
+                      disabled={createSubmitting}
+                      onChange={(e) => setCreateName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitCreate();
+                        if (e.key === "Escape") setCreating(false);
+                      }}
+                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        className="rounded-hard bg-amber px-2 py-[3px] text-[11px] font-bold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+                        disabled={createSubmitting}
+                        onClick={submitCreate}
+                      >
+                        {createSubmitting ? "创建中…" : "创建"}
+                      </button>
+                      <span className="text-[10px] text-[#6b6046]">建组织并登记 Org Leader（非运行时）</span>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
             <button
               className="flex w-full items-center gap-2 border-t border-line px-2.5 pt-2 pb-1 text-left text-[12.5px] text-salmon hover:bg-salmon/10"
               onClick={() => {

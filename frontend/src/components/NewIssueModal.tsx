@@ -1,40 +1,73 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { resolveGovernanceAgent, type GovernanceAgent } from "../api/decisions";
 
-/** 新建 issue 弹窗（CONS-41）：处理者芯片 / 需求文本 / 范围提议 / Ctrl+Enter。
+/** 新建 issue 弹窗（CONS-41 → B-1 接线）：处理者芯片 / 需求文本 / Ctrl+Enter 提交。
  *  按原型 redesign-issue-centric.html。
  *
- *  ⚠ 写路径缺口：创建 issue = 建 Project + Intake 立项，当前 8100 无对应端点
- *  （/auth/* 与读模型端点之外无 project 写 API）。本弹窗因此**不提交假请求**，
- *  确认时说明缺口并保留输入，等后端写端点（CONS-31 之后）落地再接。 */
+ *  写路径 = 契约 v0.3 §1（POST /issues，建首份虚拟草稿快照）。replay 模式不写
+ *  后端（回放夹具世界不可篡改），提交时如实说明并保留草稿。
+ *
+ *  处理者芯片显示花名册派生的 Org Leader（resolveGovernanceAgent 单点）；解析
+ *  不到时提交按钮不禁用——服务端 403/404 的原因比前端预判更准，错误原样呈现。 */
 
 export function NewIssueModal({
   open,
   workspaceLabel,
+  mode,
   onClose,
   onToast,
+  onCreate,
 }: {
   open: boolean;
   workspaceLabel: string;
+  mode: "live" | "replay";
   onClose: () => void;
   onToast: (text: string) => void;
+  /** live 创建回路（成功后由外层负责刷新列表与跳转）；失败原因原样抛回 */
+  onCreate: (text: string) => Promise<void>;
 }) {
-  // 草稿**有意跨开关保留**：写端点未落地时提交只报缺口，误按 Esc 不该让用户重写一遍
-  // 需求。写端点接入后改为提交成功即清空。（主脑 2026-08-11 裁决）
+  // 草稿**有意跨开关保留**：误按 Esc 不该让用户重写一遍需求；
+  // 提交**成功**才清空（主脑 2026-08-11 裁决，写端点接入后的约定行为）。
   const [text, setText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
+  const [principalResolving, setPrincipalResolving] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (open) areaRef.current?.focus();
+    if (!open) return;
+    areaRef.current?.focus();
+    // 处理者芯片：与治理决策同一个派生单点（缓存命中时无额外请求）
+    let cancelled = false;
+    setPrincipalResolving(true);
+    resolveGovernanceAgent(null)
+      .then((agent) => !cancelled && setPrincipal(agent))
+      .catch(() => !cancelled && setPrincipal(null))
+      .finally(() => !cancelled && setPrincipalResolving(false));
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   const submit = useCallback(() => {
+    if (submitting) return;
     if (!text.trim()) {
       onToast("请先描述要交付什么");
       return;
     }
-    // 诚实数据：无写端点，不伪造「已创建」
-    onToast("issue 写端点尚未接入（建 Project + Intake 立项），需求文本已保留");
-  }, [text, onToast]);
+    if (mode === "replay") {
+      // 诚实数据：回放模式不写后端，也不伪造「已创建」
+      onToast("回放模式不写后端；加 ?source=live 后可真实创建，需求文本已保留");
+      return;
+    }
+    setSubmitting(true);
+    onCreate(text.trim())
+      .then(() => setText(""))
+      .catch((err: unknown) => {
+        onToast(`创建失败：${err instanceof Error ? err.message : String(err)}`);
+      })
+      .finally(() => setSubmitting(false));
+  }, [text, mode, submitting, onToast, onCreate]);
 
   useEffect(() => {
     if (!open) return;
@@ -54,6 +87,15 @@ export function NewIssueModal({
   }, [open, onClose, submit]);
 
   if (!open) return null;
+
+  const principalChip =
+    mode === "replay"
+      ? "组织 Leader（回放演示）"
+      : principalResolving
+        ? "解析中…"
+        : principal
+          ? `AGENT ${principal.label}`
+          : "组织 Leader（未接入）";
 
   return (
     <div
@@ -75,7 +117,7 @@ export function NewIssueModal({
         <div className="flex flex-wrap items-center gap-2 px-4 pt-2.5">
           <span className="text-[11.5px] text-tx2">处理者</span>
           <span className="rounded-hard border border-line px-2 py-px font-mono text-[11px] text-kraft">
-            <i className="not-italic text-tx2">●</i> 组织 Leader（未接入）
+            <i className="not-italic text-tx2">●</i> {principalChip}
           </span>
           <span className="text-[10.5px] text-[#6b6046]">Org Leader 负责需求接收与范围提议</span>
         </div>
@@ -102,10 +144,11 @@ export function NewIssueModal({
             📎
           </button>
           <button
-            className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi"
+            className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+            disabled={submitting}
             onClick={submit}
           >
-            创建 (Ctrl+Enter)
+            {submitting ? "创建中…" : "创建 (Ctrl+Enter)"}
           </button>
         </div>
       </div>
