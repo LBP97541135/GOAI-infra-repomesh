@@ -1,6 +1,6 @@
 # 交付读模型契约 v0.2 增量（issue / 网格 / 房间）
 
-- 状态：**草案，待主脑裁决**（起草者：后端_施工1，2026-08-11）
+- 状态：**已裁决 · 生效**（起草：后端_施工1；八项开放问题于 2026-08-11 全部裁决，见 §7）
 - 版本：0.2（**增量**：v0.1 全文继续有效，本文件只定义新增端点与新增派生规则）
 - 基线：`docs/contracts/delivery-read-model-v0.1.md`（截至追认注记 1df9ebf）
 - 生产方：`api`（聚合视图，无独立事实源）
@@ -44,9 +44,10 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
 | `GET /api/v1/rooms/{room_id}/stream` | 单房间合并流（消息 + 投影事实） | 活体房间视图 | CONS-33 |
 | `GET /api/v1/issues/{issue_id}/repositories/{repository_id}/plan` | 单仓 DAG·PLAN·SPEC 纸面 | 房间视图右侧双视图 | CONS-33 |
 
-鉴权沿用 v0.1（`Authorization: Bearer` 动作 token）。**开放问题 Q1**：main 带来了本地
-账户/会话体系（`/api/v1/auth/*`，401 `{"detail":"local authentication is required"}`），
-读端点是否改走会话票据、两套鉴权如何并存，需主脑裁决（见 §7）。
+鉴权沿用 v0.1（`Authorization: Bearer` 动作 token）——**Q1 裁决：维持动作 token**，
+会话票据接入另立 backlog 项。main 的本地账户/会话体系（`/api/v1/auth/*`，未认证返回
+401 `{"detail":"local authentication is required"}`）是 main 自有端点的鉴权，前端在其上
+构建登录 UI 与本表八个读端点的鉴权互不影响，两者不混改。
 
 ## 2. `GET /issues`
 
@@ -132,6 +133,9 @@ issue 级归档实体**。
 
 `role_in_issue` nullable：拓扑不记录仓库在 issue 中的角色语义（生产者/消费者只存在于
 CONTRACT spec 的 scope），取不到时为 `null`。
+
+`required_checkpoints` **保留投影**（Q6 裁决）：v0.2 的决策夹不含 ReviewRequest，但本
+字段让前端能提示「本 issue 设有人工检查点」并链接到 main 既有的审核台，不必自己推断。
 
 ## 4. 网格 / 团队 / 花名册（CONS-32）
 
@@ -220,14 +224,18 @@ CONTRACT spec 的 scope），取不到时为 `null`。
    **下发的期望态**，不是观测态，且 `get_worker` 不回读它。以期望态冒充观测态即为编造。
    前端只能显 `phase` 字面值 + 「醒睡未接入」。补齐路径同上。
 
-**不可达降级**：`AgentTeamsUnavailable`（网络错误）或非 404 的 `AgentTeamsResponseError`
-→ 该条 `runtime = {"reachable": false}` 其余字段省略，**HTTP 状态仍为 200**（花名册的
-持久化部分可用，不因运行时不可达整体失败）。404（资源不存在）→ `runtime = null`。
-读模型对 Controller 调用**必须设超时并逐条隔离**，禁止一条超时拖垮整页。
+**不可达降级（硬性要求）**：`AgentTeamsUnavailable`（网络错误）或非 404 的
+`AgentTeamsResponseError` → 该条 `runtime = {"reachable": false}` 其余字段省略，
+**HTTP 状态仍为 200**（花名册的持久化部分可用，不因运行时不可达整体失败）。
+404（资源不存在）→ `runtime = null`。
 
-**开放问题 Q3**：花名册规模上限。当前实现按 `directory.list()` 全量列出后逐个代理
-Controller，N 个 agent = N 次 HTTP。需主脑裁决是否加 `?with_runtime=false` 默认关闭
-实时代理、或加分页。
+**逐条超时隔离（硬性要求，Q3 裁决）**：读模型对 Controller 的每次调用**必须设独立超时
+且失败逐条隔离**——一条超时或报错只降级该条 `runtime`，禁止拖垮整页。这不是实现建议
+而是契约约束：违反它会让「智能体页整页 500」成为可能，而持久化花名册本来是可用的。
+
+**`?with_runtime=`（Q3 裁决）**：默认 `true`（Demo 需要看到运行时）。置 `false` 时整块
+`runtime` 省略、不发任何 Controller 请求。当前实现按 `directory.list()` 全量列出后逐个
+代理，N 个 agent = N 次 HTTP；规模变大时改默认值或加分页，届时修订本节。
 
 ## 5. 房间读模型（CONS-33）
 
@@ -267,22 +275,31 @@ Controller，N 个 agent = N 次 HTTP。需主脑裁决是否加 `?with_runtime=
 } ], "next_cursor": "string|null" }
 ```
 
-**治理决策投影进 leaderDM 流**（设计稿要求）：治理决策是 leader 层事实，投影规则为
-——该 issue 各轮次的 `GovernanceDecisionView` 投进**对应仓库的 `leader_room_id` 流**，
-`source: "governance"`，`text` 形如 `治理决策 ready: {reason}`，`payload_ref:
-governance-decision:{id}`。teamRoom 流不含治理决策。
+#### `source` 语义（**契约明文，Q4 裁决落地**）
 
-**诚实说明**：这是**投影**而非真实 Matrix 事件——治理决策由控制台写入 DB，从未发进
-Matrix 房间。前端必须以视觉区分「投影事实」与「真实房间消息」（如系统条目样式），
-不得让用户以为 leader 在房间里说过这句话。**开放问题 Q4**：是否接受这种混流，或改为
-详情页独立时间线。
+| `source` | 含义 | 是否房间内真实发生 | 前端渲染约束 |
+| --- | --- | --- | --- |
+| `message` | 真实房间消息（`collaboration.messages` 已投递到 Matrix 的记录） | **是** | 常规聊天气泡（头像 + 发送者） |
+| `governance` | 控制台写入的治理决策**投影** | **否** | **必须系统条目样式，无头像气泡** |
+| `gate` | SCM 门禁观测（CI / PR / merge）**投影** | **否** | 同上 |
+| `runner` | Runner 执行事件**投影** | **否** | 同上 |
+
+**`source != "message"` 的条目一律是控制台投影事实，并非房间内真实发生**；前端必须以
+系统条目样式渲染（无头像气泡），不得让用户以为某个 agent 在房间里说过这句话。此约束
+为契约文本明文要求，不是渲染建议。
+
+**治理决策投影规则**（Q4 采纳方案 A：投影进 leaderDM 流）：治理决策是 leader 层事实，
+该 issue 各轮次的 `GovernanceDecisionView` 投进**对应仓库的 `leader_room_id` 流**，
+`source: "governance"`，`text` 形如 `治理决策 ready: {reason}`，
+`payload_ref: governance-decision:{id}`。teamRoom 流不含治理决策。
 
 ### 5.3 `live` 派生（禁止假 presence）
 
 `live = 该房间所属仓库存在 status == in_progress 的 Task`。沿用 v2 设计原则：LIVE 由
 **在途任务派生**，不是 Matrix presence（我们没有 presence 数据源，编造即违约）。
-刷新机制：v0.2 仍为**前端轮询**；main 带来的 SSE 模式（`/review-requests/events`）是
-升级位，**不在 v0.2 范围**（Q5）。
+刷新机制：v0.2 仍为**前端轮询**（Q5 裁决）；main 带来的 SSE 模式
+（`/review-requests/events`）是升级位，另立项——SSE 需先定「哪些事实值得推」，否则只是
+一个与轮询同构但更脆的通道。
 
 ### 5.4 `GET /issues/{issue_id}/repositories/{repository_id}/plan`
 
@@ -348,26 +365,48 @@ specification，优先 `FROZEN`，其次 `APPROVED`，同级取最新 `revision`
 Worker→Leader 回报摄取、统一 trace_id、clarify 决策实体、cost 采集、diffstat、
 issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决策夹。
 
-**ReviewRequest 边界**：main 引入的 `HumanReviewRequestView` /
+**ReviewRequest 边界（Q6 裁决：不统一）**：main 引入的 `HumanReviewRequestView` /
 `ProjectCheckpointDecisionView`（`checkpoint_decisions` 表）与 v0.1 的治理决策
-（`delivery` 模块，head-bound）是**两套并行审批机制，不同表不同语义**。v0.2 的决策夹
-只含治理决策；ReviewRequest 走 main 既有的 `/review-requests`。统一呈现是产品级整合
-待议项（Q6）。
+（`delivery` 模块，head-bound）是**两套并行审批机制，不同表不同语义**（项目检查点 vs
+仓库候选 head）。v0.2 的决策夹只含治理决策；ReviewRequest 走 main 既有的
+`/review-requests`。强行统一会丢失 head-bound 语义，故不做；issue 概览保留
+`required_checkpoints` 供前端提示与跳转（§3）。
 
-## 7. 开放问题与争议项（**待主脑裁决**）
+### 6.1 已备案 backlog（本契约不实现，记录补齐路径）
 
-| # | 问题 | 我的建议 |
+| 项 | 缺口 | 补齐路径 |
 | --- | --- | --- |
-| Q1 | 读端点鉴权：继续用共享动作 token，还是改走 main 的本地会话票据？两套并存期如何过渡 | v0.2 先维持动作 token（不阻塞前端），会话票据接入单立一项；理由：混改鉴权会同时动 8 个端点，风险与 v2 页面开发并行不可控 |
-| Q2 | 工作区（organization）过滤：`/issues` 是否必须带 `organization_id`？当前无「当前工作区」概念的服务端来源 | 参数**可选**，缺省返回全部并在响应回显每条的 `organization_id`；工作区切换器由前端持有选择，服务端不猜 |
-| Q3 | 花名册实时代理规模：N agent = N 次 Controller HTTP | 加 `?with_runtime=` 开关（默认 `true` 便于 Demo，规模变大再默认关），逐条超时隔离 + 不可达降级 |
-| Q4 | 治理决策投影进 leaderDM 混流是否可接受（它不是真实 Matrix 事件） | 接受但**必须视觉区分**；若主脑认为混流有误导风险，改为详情页独立「治理时间线」，我实现成本相同 |
-| Q5 | 房间刷新：v0.2 保持轮询，SSE 另立项 | 保持轮询；SSE 需先定「哪些事实值得推」，否则会推出一个和轮询同构但更脆的通道 |
-| Q6 | ReviewRequest 与治理决策统一决策夹 | v0.2 不做。两者审批对象不同（项目检查点 vs 仓库候选 head），强行统一会丢失 head-bound 语义 |
-| Q7 | `/issues` 分页：`next_cursor` 形状 | 沿用 v0.1 events 的 offset 游标语义（不透明字符串），列表端点当前 `next_cursor` 恒 `null` 的现状一并收敛 |
-| Q8 | issue 无轮次无草稿时 `state=open` 的裁决（§2.1 规则 6） | 维持 open；空 issue 是「待规划」不是「已完成」，显示为 Closed 会让人以为工作做完了 |
+| project 注册表 | `issue_key` 恒 null——**v0.2 最大的诚实缺口**（无 Project 实体） | project 模块落地注册表，届时 `issue_key` 与 v0.1 `project_key` 同时生效 |
+| DAG 真实边 | `graph_edges` 列已持久化但恒空（§5.5） | `change_orchestration` 建快照时写入真实边，届时 `dag.granularity` 可升级 |
+| 会话票据鉴权 | 读端点仍用共享动作 token（Q1） | 与 main 的 `/auth` 会话体系对齐，单独立项 |
+| SSE 推送 | 房间刷新仍为轮询（Q5） | 先定「哪些事实值得推」，再复用 main 的 SSE 模式 |
+| 统一决策夹 | 治理决策与 ReviewRequest 并存两面（Q6） | 产品级整合，需先统一审批对象语义 |
+| 运行时时长与醒睡 | `uptime_seconds` / `awake` 恒 null（§4.4） | AgentTeams Controller 在 status 暴露启动时间与观测态 |
 
-## 8. 字段来源速查（新增部分）
+## 7. 裁决记录（2026-08-11，八项全部裁决 · 生效）
+
+八项原为起草期开放问题，均已裁决，全部采纳起草建议，Q3/Q4 附加了硬约束。
+
+| # | 问题 | 裁决 | 落点 |
+| --- | --- | --- | --- |
+| Q1 | 读端点鉴权：共享动作 token 还是 main 的本地会话票据 | **维持动作 token**；会话票据接入另立 backlog。main 的 `/auth/*` 是其自有端点鉴权，前端登录 UI 与本契约八端点互不影响，两者不混改 | §1、§6.1 |
+| Q2 | `/issues` 是否必须带 `organization_id` | **可选参数 + 响应逐条回显 `organization_id`**；工作区选择由前端持有，服务端不猜 | §2、§2.4 |
+| Q3 | 花名册实时代理规模（N agent = N 次 HTTP） | **加 `?with_runtime=`，默认 `true`**；**逐条超时隔离升格为契约硬性要求**（非实现建议） | §4.4 |
+| Q4 | 治理决策投影进 leaderDM 混流是否可接受 | **接受方案 A（投影进 leaderDM）**，附加硬约束：`source != "message"` 必须以系统条目样式渲染（无头像气泡）；`source` 语义表升为契约明文 | §5.2 |
+| Q5 | 房间刷新机制 | **v0.2 轮询**；SSE 另立项 | §5.3、§6.1 |
+| Q6 | ReviewRequest 与治理决策统一决策夹 | **不统一**，v0.2 只含治理决策；ReviewRequest 走 main 既有面；issue 概览**保留 `required_checkpoints`** 供提示与跳转 | §3、§6 |
+| Q7 | `/issues` 游标形状 | **沿用 offset 不透明游标**；v0.1 列表端点 `next_cursor` 恒 `null` 的现状一并收敛 | §2、§2.4 |
+| Q8 | 空 issue（无轮次无草稿）的 `state` | **open**（理由采纳原文：空 issue 是「待规划」不是「已完成」，显 Closed 会让人以为工作做完了） | §2.1 规则 6 |
+
+## 8. 实现顺序
+
+裁决同时定下实现次序（每项独立任务分支，完成即报，验收锚点对 5533 四形态种子）：
+
+1. **CONS-31** `/issues` 两端点（S）——前端 CONS-41 的 live 接线在等；
+2. **CONS-33** 房间三端点 + `room_id` 补投影（M）；
+3. **CONS-32** 网格 / 团队 / 花名册（M）。
+
+## 9. 字段来源速查（新增部分）
 
 | 响应字段 | 来源模块 / 表 | 备注 |
 | --- | --- | --- |
