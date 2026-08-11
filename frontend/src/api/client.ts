@@ -8,7 +8,11 @@ import type {
   DeliveryMessagesPage,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
+  IssueDetailView,
   IssueListResponse,
+  RepositoryPlanView,
+  RoomListResponse,
+  RoomStreamPage,
 } from "./contract";
 
 export class ApiError extends Error {
@@ -94,12 +98,28 @@ export function createApiClient(config: ApiClientConfig) {
       return request<DeliveryEventsPage>(config, "GET", `/deliveries/${deliveryId}/events${q ? `?${q}` : ""}`);
     },
 
-    getMessages: (deliveryId: string, cursor?: string) =>
-      request<DeliveryMessagesPage>(
-        config,
-        "GET",
-        `/deliveries/${deliveryId}/messages${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
-      ),
+    // §4.2 不分页（契约 5152f48）——此处曾有一个猜来的 cursor 参数，已清除
+    getMessages: (deliveryId: string) =>
+      request<DeliveryMessagesPage>(config, "GET", `/deliveries/${deliveryId}/messages`),
+
+    /** §5.1：未建团的 issue 返回 `{"rooms": []}` 且 HTTP 200，空态不是错误 */
+    listRooms: (issueId: string) => request<RoomListResponse>(config, "GET", `/issues/${issueId}/rooms`),
+
+    /** §5.2：room_id 形如 `!rm-team-c-billing:matrix.local`，含 `!` 与 `:` 必须编码；
+     *  cursor 语义同 §4.1 events；未知 room_id → 404 */
+    getRoomStream: (roomId: string, opts?: { cursor?: string; limit?: number }) => {
+      const params = new URLSearchParams();
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      const q = params.toString();
+      return request<RoomStreamPage>(config, "GET", `/rooms/${encodeURIComponent(roomId)}/stream${q ? `?${q}` : ""}`);
+    },
+
+    /** §5.4：单仓 DAG·PLAN·SPEC 纸面 */
+    getRepositoryPlan: (issueId: string, repositoryId: string) =>
+      request<RepositoryPlanView>(config, "GET", `/issues/${issueId}/repositories/${repositoryId}/plan`),
+
+    getIssueDetail: (issueId: string) => request<IssueDetailView>(config, "GET", `/issues/${issueId}`),
 
     getDecisions: (deliveryId: string) =>
       request<DecisionsResponse>(config, "GET", `/deliveries/${deliveryId}/decisions`),

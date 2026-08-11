@@ -5,10 +5,9 @@ import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListResponse } from "./api/contract";
 import { fetchIssues, issuesSourceMode } from "./api/issues";
-import { issueDetailFixture, repositoryPlanFixture, roomStreamFixtures, roomsFixture } from "./data/issueDetail";
-import { IssueDetailPage } from "./pages/IssueDetailPage";
+import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
-import { RoomView } from "./pages/RoomView";
+import { RoomViewContainer } from "./pages/RoomViewContainer";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 import DeliveryConsole from "./App";
@@ -214,69 +213,20 @@ export default function ConsoleShell() {
               onRetry={() => setIssuesReload((n) => n + 1)}
               onOpenIssue={(item) => openIssue(item.issue_id)}
             />
-          ) : route.issueId === issueDetailFixture.issue_id ? (
-            route.roomId !== null ? (
-              (() => {
-                const room = roomsFixture.find((r) => r.room_id === route.roomId);
-                if (!room) {
-                  return (
-                    <div className="max-w-[860px]">
-                      <button
-                        className="pb-3 text-[11.5px] text-tx2 hover:text-tx"
-                        onClick={() => openIssue(issueDetailFixture.issue_id)}
-                      >
-                        ‹ issue
-                      </button>
-                      <div className="rounded-hard border border-line bg-panel px-4 py-3.5 text-[12.5px] text-tx2">
-                        房间 <span className="font-mono text-tx">{route.roomId}</span> 不在 replay 夹具内。
-                        真实 room_id 来自 <span className="font-mono">project.agent_topologies</span>，
-                        该表在联调种子上为空，待后端 CONS-33 扩种子补拓扑后接 live。
-                      </div>
-                    </div>
-                  );
-                }
-                return (
-                  <RoomView
-                    room={room}
-                    stream={roomStreamFixtures[room.room_id] ?? { items: [], next_cursor: null }}
-                    plan={repositoryPlanFixture}
-                    onBack={() => openIssue(issueDetailFixture.issue_id)}
-                    onToast={showToast}
-                  />
-                );
-              })()
-            ) : (
-              <IssueDetailPage
-                detail={issueDetailFixture}
-                rooms={roomsFixture}
-                onBack={() => navigate("issues")}
-                onOpenRoom={(room) => openRoom(issueDetailFixture.issue_id, room.room_id)}
-                onToast={showToast}
-              />
-            )
+          ) : route.roomId !== null ? (
+            <RoomViewContainer
+              issueId={route.issueId}
+              roomId={route.roomId}
+              onBack={() => openIssue(route.issueId!)}
+              onToast={showToast}
+            />
           ) : (
-            /* 诚实数据：详情 replay 夹具只覆盖一条 issue，其余不伪造详情 */
-            <div className="max-w-[860px]">
-              <button className="pb-3 text-[11.5px] text-tx2 hover:text-tx" onClick={() => navigate("issues")}>
-                ‹ issue
-              </button>
-              <div className="rounded-hard border border-line bg-panel px-4 py-3.5">
-                <div className="microlabel pb-1.5">详情夹具未覆盖</div>
-                <p className="text-[12.5px] text-tx2">
-                  issue <span className="font-mono text-tx">{route.issueId.slice(0, 8)}</span>{" "}
-                  的详情当前无 replay 夹具，接 live 需后端 CONS-31 的{" "}
-                  <span className="font-mono">GET /issues/{"{issue_id}"}</span> 与 CONS-33 房间三端点。
-                  已覆盖的样例见 issue{" "}
-                  <button
-                    className="font-mono underline hover:text-amber-hi"
-                    onClick={() => openIssue(issueDetailFixture.issue_id)}
-                  >
-                    {issueDetailFixture.issue_id.slice(0, 8)}
-                  </button>
-                  。
-                </p>
-              </div>
-            </div>
+            <IssueDetailContainer
+              issueId={route.issueId}
+              onBack={() => navigate("issues")}
+              onOpenRoom={(room) => openRoom(route.issueId!, room.room_id)}
+              onToast={showToast}
+            />
           ))}
         {route.nav === "repositories" && (
           <PlaceholderPage

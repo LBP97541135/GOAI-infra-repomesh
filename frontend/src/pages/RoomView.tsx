@@ -1,5 +1,10 @@
 import { useState } from "react";
-import type { RepositoryPlan, RoomListItem, RoomStreamItem, RoomStreamPage } from "../data/issueDetail";
+import type {
+  RepositoryPlanView,
+  RoomListItemView,
+  RoomStreamItemView,
+  RoomStreamPage,
+} from "../api/contract";
 import { eventTime } from "../viewmodel";
 
 /** 活体房间视图（CONS-43 骨架）。版式按原型 `#v-room`：
@@ -7,21 +12,21 @@ import { eventTime } from "../viewmodel";
  *  → 单仓悬浮环境窗。
  *
  *  ⚠ 本文件承载契约 v0.2 §5.2 + Q4 的**硬约束**：
- *     source === "message" 才是房间内真实发生的消息，渲染为聊天气泡（头像 + 发送者）；
+ *     只有房间内**真实发生**的消息才渲染为聊天气泡（头像 + 发送者）；
  *     governance / gate / runner 是控制台**投影事实**，必须渲染为系统条目，
  *     **无头像、无发送者名**——不得让用户以为某个 agent 在房间里说过这句话。
- *  这是契约文本要求，不是渲染建议。分流点只有一处（见 StreamEntry），
- *  新增 source 值时也必须落在系统条目一侧，除非契约明写它是真实消息。 */
+ *  这是契约文本要求，不是渲染建议。分流点只有一处（见 StreamEntry），判据是
+ *  `message !== null`；新增 source 值时漏判只会退化成系统条目，不会退化成假气泡。 */
 
 /** 非 message 源的展示皮肤。配色沿用 CONS-14 事件时间线的既有令牌，零新色值。
  *  bluegray 保留给「执行中」语义，此处不用。 */
-const SOURCE_SKIN: Record<Exclude<RoomStreamItem["source"], "message">, { label: string; skin: string }> = {
+const SOURCE_SKIN: Record<Exclude<RoomStreamItemView["source"], "message">, { label: string; skin: string }> = {
   governance: { label: "治理决策", skin: "border-kraft text-kraft" },
   gate: { label: "门禁", skin: "border-olive text-olive" },
   runner: { label: "RUNNER", skin: "border-amber text-amber" },
 };
 
-function MessageBubble({ item }: { item: RoomStreamItem }) {
+function MessageBubble({ item }: { item: RoomStreamItemView }) {
   const m = item.message;
   if (!m) return null;
   // sender_name 可能为 null（§4.2 诚实降级）：退到 agent id 短版，不编造名字
@@ -49,8 +54,11 @@ function MessageBubble({ item }: { item: RoomStreamItem }) {
 }
 
 /** 系统条目：无头像、无发送者，视觉上与气泡明确区分（左侧标尺 + 等宽摘要）。 */
-function SystemEntry({ item }: { item: RoomStreamItem }) {
-  const skin = SOURCE_SKIN[item.source as Exclude<RoomStreamItem["source"], "message">];
+function SystemEntry({ item }: { item: RoomStreamItemView }) {
+  // 未知 source 也要能渲染成系统条目（不能崩，更不能掉回气泡）
+  const skin =
+    SOURCE_SKIN[item.source as Exclude<RoomStreamItemView["source"], "message">] ??
+    ({ label: item.source.toUpperCase(), skin: "border-line text-tx2" } as const);
   return (
     <div className="flex items-baseline gap-2.5 border-l-2 border-line py-1.5 pl-2.5">
       <span className={`flex-none rounded-hard border px-1.5 font-mono text-[10px] tracking-[0.08em] ${skin.skin}`}>
@@ -62,12 +70,15 @@ function SystemEntry({ item }: { item: RoomStreamItem }) {
   );
 }
 
-/** 唯一分流点：契约 §5.2 —— 只有 message 是房间内真实发生的消息。 */
-function StreamEntry({ item }: { item: RoomStreamItem }) {
-  return item.source === "message" ? <MessageBubble item={item} /> : <SystemEntry item={item} />;
+/** 唯一分流点（契约 §5.2）。判据是 **`message !== null`** 而非比对 source 字符串：
+ *  后端保证投影条目由一个无法附加 message 载荷的构造函数生成，故非 message 源恒 null
+ *  （契约 §7.2）。这样将来新增 source 值时，漏判只会退化成系统条目——不会退化成
+ *  一个假装某 agent 说过话的气泡。 */
+function StreamEntry({ item }: { item: RoomStreamItemView }) {
+  return item.message !== null ? <MessageBubble item={item} /> : <SystemEntry item={item} />;
 }
 
-function PlanPaper({ plan }: { plan: RepositoryPlan }) {
+function PlanPaper({ plan }: { plan: RepositoryPlanView }) {
   const focus = plan.dag.nodes.find((n) => n.is_focus);
 
   return (
@@ -162,12 +173,17 @@ export function RoomView({
   room,
   stream,
   plan,
+  sourceNote,
   onBack,
   onToast,
 }: {
-  room: RoomListItem;
+  room: RoomListItemView;
   stream: RoomStreamPage;
-  plan: RepositoryPlan;
+  /** 第二视图的数据独立取用，未到或失败时为 null——不挡住聊天流 */
+  plan: RepositoryPlanView | null;
+  /** 数据来源与刷新机制的实况标注。**必须与实际一致**：写着 replay 却在放 live
+   *  数据，比不标注更糟——那是在说谎。由取数容器按数据源传入。 */
+  sourceNote: string;
   onBack: () => void;
   onToast: (text: string) => void;
 }) {
@@ -201,9 +217,9 @@ export function RoomView({
               </span>
             )}
           </div>
-          {/* 刷新机制必须显式标注：当前是 replay 夹具，不是轮询，更不是推送 */}
+          {/* 数据源与刷新机制显式标注，由容器按实况传入 */}
           <div className="truncate text-[10.5px] text-tx2">
-            {members} · replay 夹具（轮询待 CONS-33 上线后接入；SSE 另立项）
+            {members} · {sourceNote}
           </div>
         </div>
 
@@ -245,8 +261,10 @@ export function RoomView({
             </p>
           )}
         </div>
-      ) : (
+      ) : plan ? (
         <PlanPaper plan={plan} />
+      ) : (
+        <p className="py-8 text-[12.5px] text-tx2">DAG · PLAN · SPEC 取用中…</p>
       )}
 
       <EnvFloat repositoryName={room.repository_name} />

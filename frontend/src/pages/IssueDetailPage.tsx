@@ -1,4 +1,4 @@
-import type { IssueDetail, IssueTeamRef, RoomListItem } from "../data/issueDetail";
+import type { IssueDetailView, IssueTeamRef, RoomListItemView } from "../api/contract";
 import { dayLabel, openedBy, shortId } from "../display";
 import { eventTime } from "../viewmodel";
 
@@ -36,7 +36,7 @@ const RUNTIME_SKIN: Record<IssueTeamRef["runtime_status"], string> = {
   failed: "border-salmon text-salmon",
 };
 
-function RoomRow({ room, onOpen }: { room: RoomListItem; onOpen: (room: RoomListItem) => void }) {
+function RoomRow({ room, onOpen }: { room: RoomListItemView; onOpen: (room: RoomListItemView) => void }) {
   const empty = room.last_message === null;
   const tag = room.kind === "team_room" ? "TR" : "DM";
 
@@ -96,10 +96,10 @@ export function IssueDetailPage({
   onOpenRoom,
   onToast,
 }: {
-  detail: IssueDetail;
-  rooms: RoomListItem[];
+  detail: IssueDetailView;
+  rooms: RoomListItemView[];
   onBack: () => void;
-  onOpenRoom: (room: RoomListItem) => void;
+  onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
 }) {
   const teamOf = (repositoryId: string) => detail.teams.find((t) => t.repository_id === repositoryId) ?? null;
@@ -165,6 +165,10 @@ export function IssueDetailPage({
       )}
 
       <div className="microlabel pt-4 pb-2">关联仓库 · 团队</div>
+      {/* 空要说出来，不能让区块凭空消失——草稿 issue 尚未确定范围就是这个形态 */}
+      {detail.repositories.length === 0 && (
+        <p className="text-[12px] text-[#6b6046]">尚未确定交付范围（范围由 Org Leader 提议、各仓 Leader 评审后冻结）。</p>
+      )}
       <div className="flex flex-wrap gap-2">
         {detail.repositories.map((repo) => {
           const team = teamOf(repo.repository_id);
@@ -180,6 +184,13 @@ export function IssueDetailPage({
       </div>
 
       <div className="microlabel pt-5 pb-2">房间</div>
+      {rooms.length === 0 && (
+        <p className="text-[12px] text-[#6b6046]">
+          {detail.repositories.length === 0
+            ? "尚未建团，暂无房间。团队在范围确认时按「issue × 仓库」自动组建（每团队 teamRoom + leaderDM 双房间）。"
+            : "本 issue 的仓库均尚未建团，暂无房间。"}
+        </p>
+      )}
       {detail.repositories.map((repo) => {
         const team = teamOf(repo.repository_id);
         const group = rooms.filter((r) => r.repository_id === repo.repository_id);
@@ -212,7 +223,7 @@ export function IssueDetailPage({
       })}
 
       <div className="pt-4 text-[11.5px] text-[#6b6046]">
-        决策夹（治理决策 + 审批弹窗）在房间读模型 CONS-33 落地后自 v1 迁入；当前 issue 有{" "}
+        决策夹（治理决策 + 审批弹窗）尚未迁入本页；当前 issue 有{" "}
         {detail.pending_decision_count} 项待决策，可在{" "}
         <a className="text-tx2 underline hover:text-amber-hi" href="#/delivery-v1">
           v1 交付控制台

@@ -410,7 +410,6 @@ export const messagesPage: DeliveryMessagesPage = {
       direction: "leader_to_worker",
     },
   ],
-  next_cursor: null,
 };
 
 export const decisionsResponse: DecisionsResponse = {

@@ -1,147 +1,16 @@
-/** issue 详情页 replay 夹具（CONS-42 骨架）。
+/** issue 详情 / 房间 replay 夹具。
  *
- *  形状**逐字段对齐契约 v0.2**（与 CONS-41 的 issues.ts 不同，后者是先于契约的提案）：
- *    §3   GET /issues/{issue_id}                             → IssueDetail
- *    §5.1 GET /issues/{issue_id}/rooms                       → RoomListItem
- *    §5.2 GET /rooms/{room_id}/stream                        → RoomStreamItem
- *    §5.4 GET /issues/{id}/repositories/{rid}/plan           → RepositoryPlan
+ *  **类型已全部迁到契约层** `api/contract.ts`（§3 / §5.1 / §5.2 / §5.4）——形状于
+ *  2026-08-11 随 CONS-33 冻结，本文件只保留夹具数据，不再另抄一份字段表。
  *
- *  红线：state / phase / phase_note / live / runtime_status 全部由读模型派生，
- *  前端只渲染不映射（v0.1 §5 + v0.2 §2.1/§2.2/§5.3）。
- *  复用：contract 整块与 message 投影直接用 v0.1 既有类型，契约 §6 禁止另写第二套。 */
-import type { CollaborationMessageView, DeliveryContractView, IssueListItemView, Phase } from "../api/contract";
+ *  红线：state / phase / phase_note / runtime_status / live 均由读模型派生，只渲染不映射。 */
+import type {
+  IssueDetailView,
+  RepositoryPlanView,
+  RoomListItemView,
+  RoomStreamPage,
+} from "../api/contract";
 
-// ─────────────────────────── §3 issue 概览 ───────────────────────────
-
-export interface IssueRound {
-  /** = execution_plan_id = v0.1 的 delivery_id（§0 语义等式） */
-  round_id: string;
-  phase: Phase;
-  status: string;
-  plan_version: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface IssueRepositoryRef {
-  repository_id: string;
-  name: string;
-  team_id: string | null;
-  /** §3：拓扑不记录仓库在 issue 中的角色语义，取不到为 null → 显「未接入」 */
-  role_in_issue: string | null;
-}
-
-export interface IssueTeamRef {
-  team_id: string;
-  agentteams_team_name: string;
-  repository_id: string;
-  /** 拓扑记录的**建团结果**（历史事实）；与 §4.2 的 runtime.phase（当前观测态）
-   *  是两个不同事实，契约明文不得合并 */
-  runtime_status: "pending" | "ready" | "failed";
-}
-
-export interface HumanGrant {
-  human_principal_id: string;
-  role: string;
-  code_access: "none" | "read" | "write";
-}
-
-/** §3：在 §2 单条的**全部字段**之上追加，故直接继承契约层的 IssueListItemView，
- *  不另抄一份字段表（抄一份就会漂移）。 */
-export interface IssueDetail extends IssueListItemView {
-  rounds: IssueRound[];
-  repositories: IssueRepositoryRef[];
-  teams: IssueTeamRef[];
-  contract: DeliveryContractView | null;
-  human_grants: HumanGrant[];
-  /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest。本字段只用于提示「本 issue 设有
-   *  人工检查点」并链接 main 既有审核台，前端不得据此自造决策项 */
-  required_checkpoints: string[];
-}
-
-// ─────────────────────────── §5.1 房间清单 ───────────────────────────
-
-export interface RoomMember {
-  agent_id: string;
-  name: string | null;
-  role: string;
-}
-
-export interface RoomListItem {
-  room_id: string;
-  /** 由字段位置决定（room_id=teamRoom / leader_room_id=leaderDM），不猜 */
-  kind: "team_room" | "leader_dm";
-  issue_id: string;
-  team_id: string;
-  repository_id: string;
-  repository_name: string;
-  members: RoomMember[];
-  /** §5.1：空房间为 null 且 message_count:0 —— **不装填占位消息** */
-  last_message: { at: string; kind: string; subject: string; sender_agent_id: string } | null;
-  message_count: number;
-  /** §5.3：由在途 Task 派生，**不是 Matrix presence**（无 presence 数据源，
-   *  编造即违约）。徽标文案不得写「在线」，按契约语义写「在途任务」 */
-  live: boolean;
-}
-
-// ────────────────── §5.2 单房间合并流（本页最硬的渲染约束） ──────────────────
-
-/** ⚠ 契约 §5.2 + Q4 裁决明文：
- *    source === "message" → 房间内**真实发生**的消息 → 常规聊天气泡（头像 + 发送者）
- *    source !== "message" → 控制台**投影事实**，并非房间内真实发生
- *                         → **必须系统条目样式，无头像气泡**
- *  理由：不得让用户以为某个 agent 在房间里说过这句话。
- *  这是契约文本要求，不是渲染建议——渲染分支只允许以 source === "message" 分流。 */
-export type RoomStreamSource = "message" | "governance" | "gate" | "runner";
-
-export interface RoomStreamItem {
-  at: string;
-  source: RoomStreamSource;
-  room_id: string;
-  /** source=message 时为 v0.1 §4.2 投影 + v0.2 补的 room_id；其余源恒 null */
-  message: (CollaborationMessageView & { room_id: string }) | null;
-  /** 非 message 源的人类可读摘要；source=message 时为 null */
-  text: string | null;
-  repository_id: string | null;
-  task_id: string | null;
-  /** 稳定源引用，兼作排序决胜键（沿用 v0.1 §4.1） */
-  payload_ref: string | null;
-}
-
-export interface RoomStreamPage {
-  items: RoomStreamItem[];
-  next_cursor: string | null;
-}
-
-// ─────────────────── §5.4 单仓 DAG · PLAN · SPEC 纸面 ───────────────────
-
-export interface RepositoryPlan {
-  issue_id: string;
-  repository_id: string;
-  plan_version: number;
-  dag: {
-    nodes: Array<{ repository_id: string; name: string; batch_index: number; is_focus: boolean }>;
-    edges: Array<{ from_repository_id: string; to_repository_id: string }>;
-    /** §5.5：恒为 repository（graph_edges 列存在但恒空，不投影） */
-    granularity: "repository";
-    edge_source: "task_dag.depends_on";
-  };
-  execution_batches: string[][];
-  /** 无匹配为 null → 显「本仓无独立 spec，适用项目工程契约」（§5.4） */
-  spec: {
-    specification_id: string;
-    kind: "repository" | "task";
-    status: "draft" | "submitted" | "approved" | "frozen";
-    revision: number;
-    goal: string;
-    acceptance: string[];
-    allowed_paths: string[];
-    forbidden_paths: string[];
-    tests: string[];
-  } | null;
-  /** ENGINEERING kind 是项目级，不混入 spec（§5.4） */
-  engineering_contract: DeliveryContractView | null;
-}
 
 // ══════════════ 夹具：沿用 #7f3d2a10（结账价格修改原因）三仓两轮场景 ══════════════
 
@@ -151,7 +20,7 @@ const REPO_API = "b1c2d3e4-0001-4a2b-9c3d-4e5f6a7b8c01";
 const REPO_WEB = "b1c2d3e4-0002-4a2b-9c3d-4e5f6a7b8c02";
 const REPO_DOCS = "b1c2d3e4-0003-4a2b-9c3d-4e5f6a7b8c03";
 
-export const issueDetailFixture: IssueDetail = {
+export const issueDetailFixture: IssueDetailView = {
   issue_id: ISSUE_ID,
   issue_key: null,
   organization_id: ORG_ID,
@@ -209,7 +78,7 @@ export const issueDetailFixture: IssueDetail = {
 
 /** §5.1：每仓两条（teamRoom + leaderDM）。docs 团队尚未 ready，其 leaderDM 是空房间
  *  → last_message: null / message_count: 0（「空房间不装满」）。 */
-export const roomsFixture: RoomListItem[] = [
+export const roomsFixture: RoomListItemView[] = [
   {
     room_id: "!room-core-team:local",
     kind: "team_room",
@@ -478,7 +347,7 @@ export const roomStreamFixtures: Record<string, RoomStreamPage> = {
   "!room-dashboard-dm:local": { items: [], next_cursor: null },
 };
 
-export const repositoryPlanFixture: RepositoryPlan = {
+export const repositoryPlanFixture: RepositoryPlanView = {
   issue_id: ISSUE_ID,
   repository_id: REPO_API,
   plan_version: 2,

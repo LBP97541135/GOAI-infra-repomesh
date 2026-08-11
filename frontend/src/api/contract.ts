@@ -97,6 +97,143 @@ export interface IssueListResponse {
   next_cursor: string | null;
 }
 
+// ───────────────── 契约 v0.2 §3 / §5：issue 详情与房间读模型 ─────────────────
+
+export interface IssueRoundView {
+  /** = execution_plan_id = v0.1 的 delivery_id（§0 语义等式） */
+  round_id: string;
+  phase: Phase;
+  status: string;
+  plan_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IssueRepositoryRef {
+  repository_id: string;
+  name: string;
+  team_id: string | null;
+  /** 恒 null：拓扑不记录仓库在 issue 中的角色语义（§3） */
+  role_in_issue: string | null;
+}
+
+export interface IssueTeamRef {
+  team_id: string;
+  agentteams_team_name: string;
+  repository_id: string;
+  /** 拓扑记录的**建团结果**（历史事实）；与 §4.2 的 runtime.phase（当前观测态）
+   *  是两个不同事实，契约明文不得合并 */
+  runtime_status: "pending" | "ready" | "failed";
+}
+
+export interface HumanGrantView {
+  human_principal_id: string;
+  role: string;
+  code_access: "none" | "read" | "write";
+}
+
+/** §3：在 §2 单条的**全部字段**之上追加，故继承 IssueListItemView 而不重抄字段表。 */
+export interface IssueDetailView extends IssueListItemView {
+  rounds: IssueRoundView[];
+  repositories: IssueRepositoryRef[];
+  teams: IssueTeamRef[];
+  contract: DeliveryContractView | null;
+  human_grants: HumanGrantView[];
+  /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest。本字段只用于提示「本 issue 设有
+   *  人工检查点」并链接 main 既有审核台，前端不得据此自造决策项 */
+  required_checkpoints: string[];
+}
+
+export interface RoomMemberView {
+  agent_id: string;
+  /** AgentTeams 资源名（rm-leader-a-api 这类），**不是人名** */
+  name: string | null;
+  role: string;
+}
+
+/** §5.1。`members` **按房间类型不同**：teamRoom = [repository_leader, worker…]，
+ *  leaderDM = [repository_leader, organization_leader]——它描述「谁能读这个房间」，
+ *  照搬团队成员会误述房间语义（后端 2026-08-11 实调修正）。 */
+export interface RoomListItemView {
+  room_id: string;
+  /** 由字段位置决定（room_id=teamRoom / leader_room_id=leaderDM），不猜 */
+  kind: "team_room" | "leader_dm";
+  issue_id: string;
+  team_id: string;
+  repository_id: string;
+  repository_name: string;
+  members: RoomMemberView[];
+  /** 空房间为 null 且 message_count:0——**不装填占位消息** */
+  last_message: { at: string; kind: string; subject: string; sender_agent_id: string } | null;
+  message_count: number;
+  /** §5.3：`该仓有 in_progress 任务` 派生，**不是 Matrix presence**。
+   *  文案不得写「在线」。 */
+  live: boolean;
+}
+
+/** 未建团的 issue 返回 `{"rooms": []}` 且 **HTTP 200**（不是 404）——空态不是错误。 */
+export interface RoomListResponse {
+  rooms: RoomListItemView[];
+}
+
+export type RoomStreamSource = "message" | "governance" | "gate" | "runner";
+
+/** §5.2 + Q4 **硬约束**：只有真实房间消息才可渲染成聊天气泡（头像 + 发送者）；
+ *  governance / gate / runner 是控制台**投影事实**，必须系统条目样式、无头像气泡，
+ *  不得让读者以为某个 agent 在房间里说过这句话。
+ *
+ *  判据用 **`message !== null`**，不要比对 `source` 字符串：后端保证投影条目由
+ *  一个无法附加 message 载荷的构造函数生成，故 message 恒 null（契约 §7.2）。
+ *  这样即便将来新增 source 值，漏判也只会退化成系统条目，不会退化成假气泡。 */
+export interface RoomStreamItemView {
+  at: string;
+  source: RoomStreamSource;
+  room_id: string;
+  /** 非 message 源恒 null（结构性保证，非约定） */
+  message: (CollaborationMessageView & { room_id: string }) | null;
+  /** 人类可读摘要。message 源也会带（取 subject），渲染气泡时用 body 而非本字段 */
+  text: string | null;
+  repository_id: string | null;
+  task_id: string | null;
+  /** 稳定源引用，兼作排序决胜键（沿用 v0.1 §4.1），可做跳转锚点 */
+  payload_ref: string | null;
+}
+
+export interface RoomStreamPage {
+  items: RoomStreamItemView[];
+  next_cursor: string | null;
+}
+
+/** §5.4 单仓 DAG·PLAN·SPEC 纸面。 */
+export interface RepositoryPlanView {
+  issue_id: string;
+  repository_id: string;
+  plan_version: number;
+  dag: {
+    nodes: Array<{ repository_id: string; name: string; batch_index: number; is_focus: boolean }>;
+    edges: Array<{ from_repository_id: string; to_repository_id: string }>;
+    /** §5.5：恒为 repository（graph_edges 列已持久化但恒空，不投影） */
+    granularity: "repository";
+    edge_source: "task_dag.depends_on";
+  };
+  execution_batches: string[][];
+  /** 无匹配为 null → 显「本仓无独立 spec，适用项目工程契约」（§5.4）。
+   *  status 真实枚举以实现为准：契约原文的 `submitted` 不存在（已勘误）。 */
+  spec: {
+    specification_id: string;
+    kind: "repository" | "task";
+    status: "draft" | "in_review" | "approved" | "frozen" | "superseded";
+    revision: number;
+    goal: string;
+    acceptance: string[];
+    allowed_paths: string[];
+    forbidden_paths: string[];
+    tests: string[];
+  } | null;
+  /** ENGINEERING kind 是项目级，不混入 spec */
+  engineering_contract: DeliveryContractView | null;
+}
+
 export interface DeliveryListItem {
   /** null = §0 虚拟草稿交付（尚未 materialize） */
   delivery_id: string | null;
@@ -319,9 +456,11 @@ export interface CollaborationMessageView {
   direction: string;
 }
 
+/** §4.2 **不分页**（契约 5152f48 明文澄清）：一次交付的消息量以「一屏读完」为设计
+ *  前提，需要翻页的是房间流（§5.2 `/rooms/{room_id}/stream`），不在此重复一套游标。
+ *  此处曾按 §4.1 events 类推多写过一个 `next_cursor`，是消费方猜字段，已清除。 */
 export interface DeliveryMessagesPage {
   items: CollaborationMessageView[];
-  next_cursor: string | null;
 }
 
 /** §4.3：v0.1 仅 approve|watch；clarify 无后端实体（§6.5），只存在于前端回放模式 */

@@ -85,7 +85,7 @@ function createLiveSource(): DeliveryDataSource {
           list,
           aggregate: null,
           events: { items: [], next_cursor: null },
-          messages: { items: [], next_cursor: null },
+          messages: { items: [] },
           decisions: { items: [] },
           overlay: null,
         };
@@ -93,7 +93,7 @@ function createLiveSource(): DeliveryDataSource {
       const [aggregate, events, messages, decisions] = await Promise.all([
         client.getDelivery(target),
         optional(client.getEvents(target, { limit: EVENTS_PAGE_LIMIT }), { items: [], next_cursor: null }),
-        optional(client.getMessages(target), { items: [], next_cursor: null }),
+        optional(client.getMessages(target), { items: [] }),
         optional(client.getDecisions(target), { items: [] }),
       ]);
       return { list, aggregate, events, messages, decisions, overlay: null };
