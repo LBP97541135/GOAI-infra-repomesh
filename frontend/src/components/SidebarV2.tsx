@@ -174,7 +174,7 @@ export function SidebarV2({
 
             <div className="microlabel border-t border-line px-2.5 pt-2 pb-1">工作区</div>
             {workspaces === null && (
-              <div className="px-2.5 pb-1.5 text-[11.5px] text-[#6b6046]">
+              <div className="px-2.5 pb-1.5 text-[11.5px] text-tx3">
                 {workspaceNote ?? "工作区数据源不可用"}
               </div>
             )}
@@ -192,7 +192,7 @@ export function SidebarV2({
                   ◎ 全部工作区
                 </button>
                 {workspaces.length === 0 && (
-                  <div className="px-2.5 pb-1.5 text-[11.5px] text-[#6b6046]">注册表暂无工作区</div>
+                  <div className="px-2.5 pb-1.5 text-[11.5px] text-tx3">注册表暂无工作区</div>
                 )}
                 {workspaces.map((workspace) => (
                   <button
@@ -224,7 +224,7 @@ export function SidebarV2({
                   <div className="px-2.5 py-1.5">
                     <input
                       autoFocus
-                      className="w-full rounded-hard border border-line bg-transparent px-2 py-1 text-[12px] text-tx placeholder:text-[#6b6046] focus:border-amber focus:outline-none"
+                      className="w-full rounded-hard border border-line bg-transparent px-2 py-1 text-[12px] text-tx placeholder:text-tx3 focus:border-amber focus:outline-none"
                       placeholder="工作区名称"
                       value={createName}
                       disabled={createSubmitting}
@@ -245,7 +245,7 @@ export function SidebarV2({
                       >
                         {createSubmitting ? "创建中…" : "创建"}
                       </button>
-                      <span className="text-[10px] text-[#6b6046]">建组织并登记 Org Leader（非运行时）</span>
+                      <span className="text-[10px] text-tx3">建组织并登记 Org Leader（非运行时）</span>
                     </div>
                   </div>
                 )}

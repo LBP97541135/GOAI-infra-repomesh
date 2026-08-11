@@ -64,7 +64,7 @@ export function RoundsPanel({
     <>
       <div className="microlabel pt-5 pb-2">
         轮次
-        <span className="pl-2 text-[10px] tracking-normal text-[#6b6046]">
+        <span className="pl-2 text-[10px] tracking-normal text-tx3">
           决策是轮次粒度（round_id = 交付 id），展开查看该轮全部决策
         </span>
       </div>
@@ -87,7 +87,7 @@ export function RoundsPanel({
                   >
                     {round.phase}
                   </span>
-                  <span className="text-[10.5px] text-[#6b6046]">
+                  <span className="text-[10.5px] text-tx3">
                     计划 v{round.plan_version} · 更新于 {dayLabel(round.updated_at)}
                     {isCurrent ? " · 决策夹当前轮" : ""}
                   </span>
@@ -126,19 +126,19 @@ export function RoundsPanel({
                   {state && !state.loading && !state.error && (
                     <>
                       {state.pending.length === 0 && state.recorded.length === 0 && (
-                        <p className="text-[11.5px] text-[#6b6046]">该轮无待决策事项，也无已记录的治理决策。</p>
+                        <p className="text-[11.5px] text-tx3">该轮无待决策事项，也无已记录的治理决策。</p>
                       )}
 
                       {state.pending.length > 0 && (
                         <div className="pb-1.5">
-                          <div className="pb-1 font-mono text-[10px] tracking-[0.1em] text-[#6b6046]">待决策</div>
+                          <div className="pb-1 font-mono text-[10px] tracking-[0.1em] text-tx3">待决策</div>
                           {state.pending.map((d) => (
                             <div key={d.id} className="flex items-baseline gap-2 py-0.5">
                               <span className="rounded-hard border border-amber px-1.5 font-mono text-[10px] text-amber">
                                 {d.kind === "approve" ? "放行" : "关注"}
                               </span>
                               <span className="min-w-0 flex-1 truncate text-[11.5px] text-kraft">{d.title}</span>
-                              {isCurrent && <span className="flex-none text-[10.5px] text-[#6b6046]">在上方决策夹处理</span>}
+                              {isCurrent && <span className="flex-none text-[10.5px] text-tx3">在上方决策夹处理</span>}
                             </div>
                           ))}
                         </div>
@@ -146,7 +146,7 @@ export function RoundsPanel({
 
                       {state.recorded.length > 0 && (
                         <div>
-                          <div className="pb-1 font-mono text-[10px] tracking-[0.1em] text-[#6b6046]">已记录治理决策</div>
+                          <div className="pb-1 font-mono text-[10px] tracking-[0.1em] text-tx3">已记录治理决策</div>
                           {state.recorded.map((g) => (
                             <div key={g.id} className="flex flex-wrap items-baseline gap-x-2 py-0.5">
                               <span
@@ -159,7 +159,7 @@ export function RoundsPanel({
                               <span className="font-mono text-[11px] text-tx">{repoName(g.repository_id)}</span>
                               <span className="font-mono text-[10.5px] text-tx2">head {g.head_sha.slice(0, 12)}</span>
                               {/* decided_by 只有 agent id，花名册解析不进这里——短版如实，不冒充人名 */}
-                              <span className="text-[10.5px] text-[#6b6046]">
+                              <span className="text-[10.5px] text-tx3">
                                 AGENT {shortId(g.decided_by_agent_id)} · {eventTime(g.decided_at)}
                               </span>
                               <span className="w-full pl-0 text-[11px] text-tx2">{g.reason}</span>

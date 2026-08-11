@@ -47,7 +47,7 @@ function MessageBubble({ item }: { item: RoomStreamItemView }) {
         <div className="flex items-baseline gap-2">
           <span className="text-[11.5px] text-amber">{who}</span>
           <span className="rounded-hard border border-kraft px-1.5 font-mono text-[10px] text-kraft">{m.kind}</span>
-          <span className="ml-auto font-mono text-[10.5px] text-[#6b6046]">{eventTime(item.at).slice(0, 5)}</span>
+          <span className="ml-auto font-mono text-[10.5px] text-tx3">{eventTime(item.at).slice(0, 5)}</span>
         </div>
         <div className="mt-1 rounded-hard border border-line bg-panel px-2.5 py-2 text-[12px] leading-[1.6] text-tx">
           {m.body}
@@ -70,7 +70,7 @@ function SystemEntry({ item }: { item: RoomStreamItemView }) {
         {skin.label}
       </span>
       <span className="min-w-0 flex-1 text-[11.5px] leading-[1.6] text-tx2">{item.text}</span>
-      <span className="flex-none font-mono text-[10.5px] text-[#6b6046]">{eventTime(item.at).slice(0, 5)}</span>
+      <span className="flex-none font-mono text-[10.5px] text-tx3">{eventTime(item.at).slice(0, 5)}</span>
     </div>
   );
 }
@@ -210,7 +210,7 @@ function EnvFloat({
       {!min && (
         <>
           {env === null ? (
-            <p className="px-3 py-2.5 text-[11.5px] leading-[1.6] text-[#6b6046]">
+            <p className="px-3 py-2.5 text-[11.5px] leading-[1.6] text-tx3">
               本仓环境未接入：该 issue 尚无轮次，或本仓不在当前轮次的交付聚合内。
             </p>
           ) : (
@@ -222,13 +222,13 @@ function EnvFloat({
                 {env.gateDisplay ? GATE_LABEL[env.gateDisplay] : "未进入变更集"}
               </span>
               {env.mergeAllowed === null && env.gateDisplay && (
-                <span className="text-[10px] text-[#6b6046]">合并请求已发出</span>
+                <span className="text-[10px] text-tx3">合并请求已发出</span>
               )}
             </div>
 
             <div className="microlabel pt-3 pb-1">变更</div>
             {env.changedFiles.length === 0 ? (
-              <p className="text-[11px] text-[#6b6046]">尚无变更</p>
+              <p className="text-[11px] text-tx3">尚无变更</p>
             ) : (
               <>
                 {env.changedFiles.slice(0, 8).map((f) => (
@@ -237,23 +237,23 @@ function EnvFloat({
                   </div>
                 ))}
                 {env.changedFiles.length > 8 && (
-                  <div className="pl-1 text-[10.5px] text-[#6b6046]">+{env.changedFiles.length - 8} 个文件</div>
+                  <div className="pl-1 text-[10.5px] text-tx3">+{env.changedFiles.length - 8} 个文件</div>
                 )}
                 {/* §6.3：diffstat 无源，不编 ± 行数 */}
-                <div className="pt-1 pl-1 text-[10px] text-[#6b6046]">± 行数未接入（diffstat 无源）</div>
+                <div className="pt-1 pl-1 text-[10px] text-tx3">± 行数未接入（diffstat 无源）</div>
               </>
             )}
             {/* 这行是候选 commit 列表，不是 diffstat：`±` 属于增删行数的语汇，
                 用在 sha 前会读成「改了 8825f6bb 行」。前缀改为自述的 commit。 */}
             {env.commitShas.length > 0 && (
-              <div className="pt-1 pl-1 font-mono text-[10.5px] text-[#6b6046]">
+              <div className="pt-1 pl-1 font-mono text-[10.5px] text-tx3">
                 commit {env.commitShas.join(" · ")}
               </div>
             )}
 
             <div className="microlabel pt-3 pb-1">CHANGESET · 本仓位置</div>
             {env.siblings.length === 0 ? (
-              <p className="text-[11px] text-[#6b6046]">本轮无变更集</p>
+              <p className="text-[11px] text-tx3">本轮无变更集</p>
             ) : (
               env.siblings.map((s) => (
                 <div
@@ -284,7 +284,7 @@ function EnvFloat({
             </div>
             <div className="flex items-baseline gap-2 px-1 pb-1 font-mono text-[11px]">
               <span className="text-tx2">基线快照</span>
-              <span className="ml-auto truncate text-[10.5px] text-[#6b6046]">
+              <span className="ml-auto truncate text-[10.5px] text-tx3">
                 {env.validationSnapshotId ? env.validationSnapshotId.slice(0, 8) : "未接入"}
               </span>
             </div>
@@ -295,13 +295,13 @@ function EnvFloat({
           <div className="border-t border-line pt-1 pb-2">
             <div className="microlabel px-3 pt-2 pb-1">
               事件时间线 · 本轮
-              <span className="ml-1.5 tracking-normal text-[#6b6046] normal-case">
+              <span className="ml-1.5 tracking-normal text-tx3 normal-case">
                 （轮次粒度，跨全部仓库）
               </span>
             </div>
 
             {!hasRound ? (
-              <p className="px-3 py-1 text-[11px] text-[#6b6046]">该 issue 尚无轮次，没有事件可读。</p>
+              <p className="px-3 py-1 text-[11px] text-tx3">该 issue 尚无轮次，没有事件可读。</p>
             ) : (
               <>
                 <EventTimeline
@@ -312,7 +312,7 @@ function EnvFloat({
                 />
                 {otherCount > 0 && (
                   <button
-                    className="mx-3 mt-1 text-left text-[10.5px] text-[#6b6046] underline hover:text-amber-hi"
+                    className="mx-3 mt-1 text-left text-[10.5px] text-tx3 underline hover:text-amber-hi"
                     onClick={() => setAllRepos((v) => !v)}
                   >
                     {allRepos
@@ -420,7 +420,7 @@ export function RoomView({
         <div className="max-w-[640px]">
           {stream.items.length === 0 ? (
             /* 空房间不装满（§5.1） */
-            <p className="py-8 text-center text-[12.5px] text-[#6b6046]">暂无消息</p>
+            <p className="py-8 text-center text-[12.5px] text-tx3">暂无消息</p>
           ) : (
             // A11：payload_ref 可空（契约 §5.2），退化键必须带 source+下标——
             // 同一秒的两条投影条目若共用 at 作键，轮询整表替换时会错误复用
@@ -437,7 +437,7 @@ export function RoomView({
               ↓ 加载后续
             </button>
           ) : (
-            <p className="pt-3 text-[11px] text-[#6b6046]">
+            <p className="pt-3 text-[11px] text-tx3">
               系统条目（治理决策 / 门禁 / RUNNER）是控制台投影，非房间内真实发生。
             </p>
           )}

@@ -127,7 +127,7 @@ export function IssueListPage({
       ) : loading ? (
         <p className="px-1.5 py-8 text-center text-[12.5px] text-tx2">加载中…</p>
       ) : rows.length === 0 ? (
-        <div className="px-1.5 py-8 text-center text-[12.5px] text-[#6b6046]">
+        <div className="px-1.5 py-8 text-center text-[12.5px] text-tx3">
           {pendingOnly ? "本页没有待决策的 issue" : tab === "open" ? "没有进行中的 issue" : "没有已完结的 issue"}
         </div>
       ) : (
@@ -144,7 +144,7 @@ export function IssueListPage({
         </button>
       )}
 
-      <p className="pt-3 text-[11px] text-[#6b6046]">{sourceNote}</p>
+      <p className="pt-3 text-[11px] text-tx3">{sourceNote}</p>
     </div>
   );
 }

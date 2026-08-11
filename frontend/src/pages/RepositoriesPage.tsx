@@ -42,14 +42,14 @@ function RepositoryCard({
         {repo.languages.length > 0 && (
           <span className="text-[11px] text-tx2">{repo.languages.join(" / ")}</span>
         )}
-        <span className={`ml-auto text-[11.5px] ${idle ? "text-[#6b6046]" : "text-tx2"}`}>
+        <span className={`ml-auto text-[11.5px] ${idle ? "text-tx3" : "text-tx2"}`}>
           {repo.resident_team_count} 团队
         </span>
       </div>
 
       {repo.description && <p className="mt-1 text-[11.5px] text-tx2">{repo.description}</p>}
 
-      <div className="mt-1.5 text-[11px] text-[#6b6046]">{facts}</div>
+      <div className="mt-1.5 text-[11px] text-tx3">{facts}</div>
 
       {repo.teams.length > 0 ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -65,7 +65,7 @@ function RepositoryCard({
           ))}
         </div>
       ) : (
-        <div className="mt-2 text-[11px] text-[#6b6046]">
+        <div className="mt-2 text-[11px] text-tx3">
           无驻扎团队 · 团队随 issue 范围确认自动组建
         </div>
       )}
@@ -117,7 +117,7 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
       ) : repos === null ? (
         <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
       ) : repos.length === 0 ? (
-        <div className="py-8 text-center text-[12.5px] text-[#6b6046]">
+        <div className="py-8 text-center text-[12.5px] text-tx3">
           catalog 里还没有仓库画像（repository_intelligence 未采集）
         </div>
       ) : (
@@ -128,7 +128,7 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
         </div>
       )}
 
-      <p className="pt-4 text-[11px] text-[#6b6046]">
+      <p className="pt-4 text-[11px] text-tx3">
         团队按「issue × 仓库」自动组建（rm-team-*，teamRoom + leaderDM 双房间）。
         仓库的「发现证据」（auto_card）未按 project 存储，本页不投影 ——
         数据源：{gridSourceMode() === "live" ? "live · GET /console/repositories（契约 v0.2 §4.1）" : "replay 夹具"}

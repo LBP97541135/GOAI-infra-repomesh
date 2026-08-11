@@ -61,7 +61,7 @@ export function EventTimeline({
       </div>
 
       {state.items.length === 0 && !state.loading && (
-        <div className="px-2.5 py-[3px] text-[11px] text-[#6b6046]">
+        <div className="px-2.5 py-[3px] text-[11px] text-tx3">
           {state.kind ? "该类别暂无事件" : "暂无事件"}
         </div>
       )}

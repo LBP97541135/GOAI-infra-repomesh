@@ -72,7 +72,7 @@ function TeamCard({
             WK {w.name ?? shortId(w.agent_id)}
           </span>
         ))}
-        {team.workers.length === 0 && <span className="text-[11px] text-[#6b6046]">尚无 worker</span>}
+        {team.workers.length === 0 && <span className="text-[11px] text-tx3">尚无 worker</span>}
       </div>
 
       <div className="mt-2 flex flex-wrap gap-2">
@@ -84,7 +84,7 @@ function TeamCard({
             ▤ teamRoom
           </button>
         ) : (
-          <span className="text-[11px] text-[#6b6046]">teamRoom 未建</span>
+          <span className="text-[11px] text-tx3">teamRoom 未建</span>
         )}
         {team.leader_room_id ? (
           <button
@@ -94,7 +94,7 @@ function TeamCard({
             ▤ leaderDM
           </button>
         ) : (
-          <span className="text-[11px] text-[#6b6046]">leaderDM 未建</span>
+          <span className="text-[11px] text-tx3">leaderDM 未建</span>
         )}
       </div>
     </div>
@@ -132,7 +132,7 @@ export function TeamsPage({
       ) : rows === null ? (
         <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
       ) : rows.length === 0 ? (
-        <div className="py-8 text-center text-[12.5px] text-[#6b6046]">
+        <div className="py-8 text-center text-[12.5px] text-tx3">
           还没有任何团队 · 团队在 issue 范围确认时按「issue × 仓库」组建
         </div>
       ) : (
@@ -149,7 +149,7 @@ export function TeamsPage({
         </div>
       )}
 
-      <p className="pt-4 text-[11px] text-[#6b6046]">
+      <p className="pt-4 text-[11px] text-tx3">
         「建团结果」来自拓扑持久化，「运行时」是 AgentTeams Controller 的当前观测 ——
         两者是不同事实，故分列两个徽标。
         {phase === "loading" && rows !== null && " 运行时探测进行中（首屏不等它）。"}

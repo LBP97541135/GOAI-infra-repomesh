@@ -70,7 +70,7 @@ export function EvidenceModal({
 
           <section>
             <div className="microlabel pb-1.5">CI 检查</div>
-            {evidence.ciChecks.length === 0 && <p className="text-[11.5px] text-[#6b6046]">暂无检查记录。</p>}
+            {evidence.ciChecks.length === 0 && <p className="text-[11.5px] text-tx3">暂无检查记录。</p>}
             {evidence.ciChecks.map((c) => (
               <div key={c.name} className="flex items-baseline gap-2 py-0.5 text-[11.5px]">
                 <span className={`font-mono ${c.passed ? "text-olive" : "text-salmon"}`}>
@@ -80,13 +80,13 @@ export function EvidenceModal({
                 <span className="min-w-0 flex-1 truncate text-tx2">{c.summary}</span>
               </div>
             ))}
-            <p className="pt-0.5 text-[10.5px] text-[#6b6046]">CI 原始报告未接入（证据端点待立项），此处为门禁观测摘要。</p>
+            <p className="pt-0.5 text-[10.5px] text-tx3">CI 原始报告未接入（证据端点待立项），此处为门禁观测摘要。</p>
           </section>
 
           <section>
             <div className="microlabel pb-1.5">评审 · 治理</div>
             {evidence.reviews.length === 0 && (
-              <p className="text-[11.5px] text-[#6b6046]">
+              <p className="text-[11.5px] text-tx3">
                 暂无 SCM 评审记录（要求 {evidence.requiredApprovals} 个批准）。
               </p>
             )}
@@ -105,7 +105,7 @@ export function EvidenceModal({
                   {g.decision.toUpperCase()}
                 </span>
                 <span className="font-mono text-[10.5px] text-tx2">head {g.headSha.slice(0, 12)}</span>
-                <span className="text-[10.5px] text-[#6b6046]">{eventTime(g.decidedAt)}</span>
+                <span className="text-[10.5px] text-tx3">{eventTime(g.decidedAt)}</span>
                 <span className="w-full text-tx2">{g.reason}</span>
               </div>
             ))}
@@ -114,13 +114,13 @@ export function EvidenceModal({
                 merge gate：{evidence.mergeGate.allowed ? "放行" : `受阻 · ${evidence.mergeGate.reasons.join("；")}`}
               </p>
             ) : (
-              <p className="pt-0.5 text-[10.5px] text-[#6b6046]">merge gate 已过评估窗口（合并请求已发出或已完成，§6.4）。</p>
+              <p className="pt-0.5 text-[10.5px] text-tx3">merge gate 已过评估窗口（合并请求已发出或已完成，§6.4）。</p>
             )}
           </section>
 
           <section>
             <div className="microlabel pb-1.5">变更</div>
-            {evidence.commits.length === 0 && <p className="text-[11.5px] text-[#6b6046]">尚无变更提交。</p>}
+            {evidence.commits.length === 0 && <p className="text-[11.5px] text-tx3">尚无变更提交。</p>}
             {evidence.commits.map((c) => (
               <div key={c.sha} className="py-0.5">
                 <span className="font-mono text-[11.5px] text-tx">commit {c.sha}</span>
@@ -144,7 +144,7 @@ export function EvidenceModal({
                 {evidence.snapshot.environmentHash.slice(0, 12)} · 有效至 {eventTime(evidence.snapshot.expiresAt)}
               </div>
             ) : (
-              <p className="text-[11.5px] text-[#6b6046]">本轮无验证快照（未接入或未生成）。</p>
+              <p className="text-[11.5px] text-tx3">本轮无验证快照（未接入或未生成）。</p>
             )}
           </section>
         </div>

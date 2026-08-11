@@ -8,7 +8,7 @@ import { runtimeDisplay, type RuntimeDisplay, type RuntimePhase } from "../displ
  *  是契约规定的降级（HTTP 仍 200，持久化事实照常为真），涂成红色等于在说系统坏了。 */
 
 const RUNTIME_SKIN: Record<RuntimeDisplay["kind"], string> = {
-  probing: "border-line text-[#6b6046]",
+  probing: "border-line text-tx3",
   probe_failed: "border-line text-tx2",
   unreachable: "border-line text-tx2",
   absent: "border-line text-tx2",

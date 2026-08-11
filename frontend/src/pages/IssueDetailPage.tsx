@@ -31,7 +31,7 @@ function RoomRow({ room, onOpen }: { room: RoomListItemView; onOpen: (room: Room
     >
       <span
         className={`grid size-8 flex-none place-items-center rounded-hard font-mono text-[11px] ${
-          empty ? "bg-[#1d1810] text-[#6b6046]" : "bg-line text-kraft"
+          empty ? "bg-[#1d1810] text-tx3" : "bg-line text-kraft"
         }`}
       >
         {tag}
@@ -57,13 +57,13 @@ function RoomRow({ room, onOpen }: { room: RoomListItemView; onOpen: (room: Room
           )}
         </span>
         {/* 空房间不装填占位消息（§5.1） */}
-        <span className={`mt-0.5 block truncate text-[11.5px] ${empty ? "text-[#6b6046]" : "text-tx2"}`}>
+        <span className={`mt-0.5 block truncate text-[11.5px] ${empty ? "text-tx3" : "text-tx2"}`}>
           {empty ? "暂无消息" : room.last_message?.subject}
         </span>
       </span>
 
       {room.last_message && (
-        <span className="flex-none font-mono text-[10.5px] text-[#6b6046]">
+        <span className="flex-none font-mono text-[10.5px] text-tx3">
           {eventTime(room.last_message.at).slice(0, 5)}
         </span>
       )}
@@ -176,7 +176,7 @@ export function IssueDetailPage({
       <div className="microlabel pt-4 pb-2">关联仓库 · 团队</div>
       {/* 空要说出来，不能让区块凭空消失——草稿 issue 尚未确定范围就是这个形态 */}
       {detail.repositories.length === 0 && (
-        <p className="text-[12px] text-[#6b6046]">尚未确定交付范围（范围由 Org Leader 提议、各仓 Leader 评审后冻结）。</p>
+        <p className="text-[12px] text-tx3">尚未确定交付范围（范围由 Org Leader 提议、各仓 Leader 评审后冻结）。</p>
       )}
       <div className="flex flex-wrap gap-2">
         {detail.repositories.map((repo) => {
@@ -199,7 +199,7 @@ export function IssueDetailPage({
         <>
           <div className="microlabel flex items-baseline gap-2 pt-5 pb-2">
             决策夹
-            {deckNote && <span className="text-[10px] tracking-normal text-[#6b6046]">{deckNote}</span>}
+            {deckNote && <span className="text-[10px] tracking-normal text-tx3">{deckNote}</span>}
           </div>
           {deck.length > 0 ? (
             <DecisionDeck
@@ -210,7 +210,7 @@ export function IssueDetailPage({
               onAction={onDecisionAction}
             />
           ) : (
-            <p className="text-[12px] text-[#6b6046]">本轮无待决策事项。</p>
+            <p className="text-[12px] text-tx3">本轮无待决策事项。</p>
           )}
         </>
       )}
@@ -229,7 +229,7 @@ export function IssueDetailPage({
 
       <div className="microlabel pt-5 pb-2">房间</div>
       {rooms.length === 0 && (
-        <p className="text-[12px] text-[#6b6046]">
+        <p className="text-[12px] text-tx3">
           {detail.repositories.length === 0
             ? "尚未建团，暂无房间。团队在范围确认时按「issue × 仓库」自动组建（每团队 teamRoom + leaderDM 双房间）。"
             : "本 issue 的仓库均尚未建团，暂无房间。"}
@@ -246,7 +246,7 @@ export function IssueDetailPage({
               className="mb-2 flex items-baseline gap-2 rounded-hard border border-line px-3 py-2"
             >
               <span className="font-mono text-[11.5px] text-tx2">{repo.name}</span>
-              <span className="text-[11px] text-[#6b6046]">
+              <span className="text-[11px] text-tx3">
                 无房间 · {team ? TEAM_STATUS_LABEL[team.runtime_status] : "无团队"}
               </span>
             </div>
@@ -257,7 +257,7 @@ export function IssueDetailPage({
           <div key={repo.repository_id} className="mb-2.5 rounded-hard border border-line">
             <div className="flex items-baseline gap-2 border-b border-line bg-panel px-3 py-2 font-mono text-[11.5px] text-tx">
               {repo.name}
-              <span className="text-[10.5px] text-[#6b6046]">{team?.agentteams_team_name ?? "团队未接入"}</span>
+              <span className="text-[10.5px] text-tx3">{team?.agentteams_team_name ?? "团队未接入"}</span>
             </div>
             {group.map((room) => (
               <RoomRow key={room.room_id} room={room} onOpen={onOpenRoom} />
@@ -269,7 +269,7 @@ export function IssueDetailPage({
       {/* pending_decision_count 是跨轮求和（§2），决策夹只呈现当前一轮：两个数不等时
           说清楚差在哪，别让人以为决策夹漏了事项。查看入口 = 上方轮次区逐轮展开（B-6）。 */}
       {detail.pending_decision_count > deck.length && (
-        <div className="pt-4 text-[11.5px] text-[#6b6046]">
+        <div className="pt-4 text-[11.5px] text-tx3">
           该 issue 跨全部 {detail.round_count} 轮共 {detail.pending_decision_count} 项待决策，决策夹只显示当前一轮的{" "}
           {deck.length} 项——其余轮次在上方「轮次」区逐轮展开查看（批准动作仍只在当前轮的决策夹）。
         </div>

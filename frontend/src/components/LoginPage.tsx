@@ -8,7 +8,7 @@ import { AuthError, authApi, type Account } from "../api/auth";
  *  同为 409），故不猜状态——由使用者显式选择模式。 */
 
 const inputClass =
-  "w-full rounded-hard border border-line bg-ink px-3 py-2 font-sans text-[13px] text-tx placeholder:text-[#6b6046] focus:border-amber focus:outline-none";
+  "w-full rounded-hard border border-line bg-ink px-3 py-2 font-sans text-[13px] text-tx placeholder:text-tx3 focus:border-amber focus:outline-none";
 
 export function LoginPage({ onAuthenticated }: { onAuthenticated: (account: Account) => void }) {
   const [setupMode, setSetupMode] = useState(false);

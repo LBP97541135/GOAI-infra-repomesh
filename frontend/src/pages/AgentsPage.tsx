@@ -66,7 +66,7 @@ function AgentRow({
             #{shortId(agent.issue_id)}
           </button>
         ) : (
-          <div className="mt-px text-[10.5px] text-[#6b6046]">未驻扎团队</div>
+          <div className="mt-px text-[10.5px] text-tx3">未驻扎团队</div>
         )}
       </td>
 
@@ -78,7 +78,7 @@ function AgentRow({
       </td>
 
       {/* §4.4：uptime_seconds 恒 null，整列如实为「未接入」 */}
-      <td className="py-2 text-right align-top text-[11.5px] text-[#6b6046]">未接入</td>
+      <td className="py-2 text-right align-top text-[11.5px] text-tx3">未接入</td>
     </tr>
   );
 }
@@ -115,7 +115,7 @@ export function AgentsPage({ onOpenIssue }: { onOpenIssue: (issueId: string) => 
       ) : rows === null ? (
         <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
       ) : rows.length === 0 ? (
-        <div className="py-8 text-center text-[12.5px] text-[#6b6046]">agent_directory 里还没有注册的智能体</div>
+        <div className="py-8 text-center text-[12.5px] text-tx3">agent_directory 里还没有注册的智能体</div>
       ) : (
         <table className="mt-3 w-full">
           <thead>
@@ -140,7 +140,7 @@ export function AgentsPage({ onOpenIssue }: { onOpenIssue: (issueId: string) => 
         </table>
       )}
 
-      <p className="pt-4 text-[11px] text-[#6b6046]">
+      <p className="pt-4 text-[11px] text-tx3">
         名称是 AgentTeams <b className="text-tx2">资源名</b>不是人名；「状态」是
         agent_directory 的启用态，<b className="text-tx2">不是醒睡观测态</b>
         ——醒睡与时长在 Controller 的响应里没有字段，补齐路径是 AgentTeams 在

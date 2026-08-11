@@ -126,12 +126,12 @@ export function NewIssueModal({
         <span className="rounded-hard border border-line px-2 py-px font-mono text-[11px] text-kraft">
           <i className="not-italic text-tx2">●</i> {principalChip}
         </span>
-        <span className="text-[10.5px] text-[#6b6046]">Org Leader 负责需求接收与范围提议</span>
+        <span className="text-[10.5px] text-tx3">Org Leader 负责需求接收与范围提议</span>
       </div>
 
       <textarea
         ref={areaRef}
-        className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-[#6b6046] focus:outline-none"
+        className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-tx3 focus:outline-none"
         placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
         value={text}
         onChange={(e) => {

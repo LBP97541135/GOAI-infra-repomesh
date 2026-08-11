@@ -24,7 +24,7 @@ function Row({ label, value, note }: { label: string; value: string; note?: stri
       <span className="w-[132px] flex-none text-[11.5px] text-tx2">{label}</span>
       <span className="min-w-0 flex-1">
         <span className="block font-mono text-[11.5px] text-tx">{value}</span>
-        {note && <span className="mt-px block text-[10.5px] text-[#6b6046]">{note}</span>}
+        {note && <span className="mt-px block text-[10.5px] text-tx3">{note}</span>}
       </span>
     </div>
   );
@@ -109,7 +109,7 @@ export function SettingsPage({ account }: { account: Account }) {
             ))}
           </div>
         ) : (
-          <p className="text-[11.5px] text-[#6b6046]">
+          <p className="text-[11.5px] text-tx3">
             {phase === "loading"
               ? "探测中…"
               : "Controller 未回报任何 runtime_kind（探测不可达或未配置）。适配器的配置与接入是写路径，属二期能力——适配器注册表 API 尚未立项，本页不提供「配置」入口。"}
