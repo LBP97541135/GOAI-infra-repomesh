@@ -7,6 +7,7 @@ composition-root adapters; unimplemented contract fields return ``null``.
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -55,6 +56,8 @@ from .sources import (
     TopologySource,
     ValidationSource,
 )
+
+_logger = logging.getLogger(__name__)
 
 REWORK_TASK_TITLE = "Repair failed delivery candidate"
 """The canonical title CIReworkTaskCreator assigns; identifies rework chains."""
@@ -1031,15 +1034,30 @@ class DeliveryReadModelService:
                     }
                 )
         edges = []
+        dropped: list[str] = []
         for node in snapshot.task_dag:
-            target = id_by_name.get(str(node.get("repository", "")))
+            target_name = str(node.get("repository", ""))
+            target = id_by_name.get(target_name)
             for dependency in node.get("depends_on") or ():
                 source = id_by_name.get(str(dependency))
                 if source is None or target is None:
-                    continue  # a name the catalog cannot resolve is not an edge
+                    # A name the catalog cannot resolve is not an edge; an edge
+                    # with a null endpoint would draw a line to nowhere.
+                    dropped.append(f"{dependency} -> {target_name}")
+                    continue
                 edges.append(
                     {"from_repository_id": source, "to_repository_id": target}
                 )
+        if dropped:
+            # Never truncate silently: a DAG that is quietly missing edges reads
+            # as a complete one.
+            _logger.warning(
+                "issue %s repository %s: dropped %d unresolvable DAG edge(s): %s",
+                issue_id,
+                repository_id,
+                len(dropped),
+                ", ".join(dropped),
+            )
 
         spec = await self._specifications.repository_spec(issue_id, repository_id)
         return {

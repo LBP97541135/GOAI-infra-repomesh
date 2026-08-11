@@ -461,7 +461,8 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | spec 状态枚举校正 | §5.4 原文写 `draft\|submitted\|approved\|frozen`，**实际枚举无 `submitted`**：`draft\|in_review\|approved\|frozen\|superseded`（`specification/contracts.py`）。读模型透传真实值 | §5.4 |
 | 种子扩展 | 拓扑 + 双房间 + 4 仓库 leader/worker 注册 + A 两仓单仓 spec（frozen rev3 / approved rev2）；消息由占位房间迁入所属 teamRoom。**幂等，只动 5533** | 见 `scripts/seed-console-demo.py` |
 | 名称解析恢复 | 补注册 principals 后 `members[].name`、v0.1 `messages[].sender_name`、`tasks[].agent` 不再恒 null（值仍是 agent 资源名） | §5.1、v0.1 §4.2 |
-| live 现状 | 派生自 in_progress 任务；**当前种子任务全终态，故实测 `live` 全 false**，需要 LIVE 演示时再造在途任务 | §5.3 |
+| live 锚点 | 派生自 in_progress 任务。**场景 C 的返工任务处于 in_progress，故 `!rm-team-c-billing` 与 `!rm-leader-c-billing` 实测 `live: true`**；A/B 任务全终态故 false。两个房间同属一仓，所以一仓在途时该仓两个房间都 live——这是 §5.3 原文「该房间所属仓库存在 in_progress 任务」的直接结果，不是 bug | §5.3 |
+| 丢弃边留痕 | §5.4 丢弃无法解析的依赖名时**记 warning 日志**（含丢弃条数与 issue/仓库），不静默截断。选日志而非响应字段是因为 plan 端点形状已对前端冻结；如需自述字段再加 | §5.4 |
 
 ## 8. 实现顺序
 

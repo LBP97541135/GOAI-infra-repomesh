@@ -363,7 +363,7 @@ async def test_stream_pages_with_a_stable_offset_cursor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repository_plan_projects_a_repository_grained_dag() -> None:
+async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None:
     project_id = uuid4()
     api, client = uuid4(), uuid4()
     plan = _plan(project_id, api, uuid4(), ExecutionPlanStatus.COMPLETED)
@@ -403,7 +403,8 @@ async def test_repository_plan_projects_a_repository_grained_dag() -> None:
         specifications=StubSpecifications(spec),
     )
 
-    payload = await service.repository_plan(project_id, client)
+    with caplog.at_level("WARNING"):
+        payload = await service.repository_plan(project_id, client)
 
     assert payload["plan_version"] == 2
     assert payload["dag"]["granularity"] == "repository"
@@ -426,6 +427,10 @@ async def test_repository_plan_projects_a_repository_grained_dag() -> None:
     assert payload["dag"]["edges"] == [
         {"from_repository_id": api, "to_repository_id": client}
     ]
+    # ...and the drop is reported, because a DAG quietly missing an edge reads
+    # as a complete one.
+    assert "dropped 1 unresolvable DAG edge" in caplog.text
+    assert "unknown-repo" in caplog.text
     assert payload["execution_batches"] == [["repomesh-e2e-api"], ["repomesh-e2e-client"]]
     assert payload["spec"]["status"] == "frozen"
     assert payload["spec"]["revision"] == 3
