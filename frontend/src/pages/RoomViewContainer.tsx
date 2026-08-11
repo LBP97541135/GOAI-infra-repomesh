@@ -177,27 +177,27 @@ export function RoomViewContainer({
     [roundId, onToast],
   );
 
-  /** 续读只追加，并保持当前 kind——换页不该悄悄改变过滤条件。 */
+  /** 续读只追加，并保持当前 kind——换页不该悄悄改变过滤条件。
+   *  S2 修复：请求不进 setState updater（updater 必须纯——StrictMode 双调会把同一
+   *  cursor 发两次、事件追加两遍），改为读当前 state 判定后在外发起。 */
   const onEventsMore = useCallback(() => {
-    if (!roundId) return;
-    setEvents((prev) => {
-      if (prev.nextCursor === null || prev.loading) return prev;
-      fetchRoundEvents(roundId, { cursor: prev.nextCursor, kind: prev.kind ?? undefined })
-        .then((page) =>
-          setEvents((cur) => ({
-            ...cur,
-            items: [...cur.items, ...page.items],
-            nextCursor: page.next_cursor,
-            loading: false,
-          })),
-        )
-        .catch((err: unknown) => {
-          setEvents((cur) => ({ ...cur, loading: false }));
-          onToast(`加载后续事件失败：${err instanceof Error ? err.message : String(err)}`);
-        });
-      return { ...prev, loading: true };
-    });
-  }, [roundId, onToast]);
+    if (!roundId || events.nextCursor === null || events.loading) return;
+    const cursor = events.nextCursor;
+    setEvents((prev) => ({ ...prev, loading: true }));
+    fetchRoundEvents(roundId, { cursor, kind: events.kind ?? undefined })
+      .then((page) =>
+        setEvents((cur) => ({
+          ...cur,
+          items: [...cur.items, ...page.items],
+          nextCursor: page.next_cursor,
+          loading: false,
+        })),
+      )
+      .catch((err: unknown) => {
+        setEvents((cur) => ({ ...cur, loading: false }));
+        onToast(`加载后续事件失败：${err instanceof Error ? err.message : String(err)}`);
+      });
+  }, [roundId, events.nextCursor, events.loading, events.kind, onToast]);
 
   if (loading) return <p className="py-8 text-center text-[12.5px] text-tx2">加载房间…</p>;
 
