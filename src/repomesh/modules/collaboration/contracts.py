@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
@@ -49,6 +50,7 @@ class CollaborationMessageView:
     status: CollaborationDeliveryStatus
     event_id: str | None
     correlation_id: UUID
+    created_at: datetime
 
 
 class CollaborationGateway(Protocol):

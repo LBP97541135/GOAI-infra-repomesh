@@ -15,6 +15,7 @@ from repomesh.shared.domain import new_id
 from repomesh.shared.events import ActorType, EventEnvelope
 
 from .contracts import (
+    MERGE_GATE_GOVERNANCE_MISSING_REASON,
     ChangeSetStatus,
     ChangeSetView,
     CIObservationCommand,
@@ -503,7 +504,7 @@ class DeliveryService:
                 None,
             )
             if decision is None:
-                reasons.append("head-bound governance decision is missing")
+                reasons.append(MERGE_GATE_GOVERNANCE_MISSING_REASON)
             elif decision.decision is GovernanceDecisionKind.BLOCKED:
                 reasons.append(f"governance blocked delivery: {decision.reason}")
             elif decision.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED:

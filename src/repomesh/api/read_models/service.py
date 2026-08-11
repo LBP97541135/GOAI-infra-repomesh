@@ -8,9 +8,11 @@ composition-root adapters; unimplemented contract fields return ``null``.
 
 import json
 from dataclasses import asdict
+from datetime import datetime
 from uuid import UUID
 
 from repomesh.modules.delivery.contracts import (
+    MERGE_GATE_GOVERNANCE_MISSING_REASON,
     ChangeSetView,
     RecoveryActionKind,
     RecoveryActionStatus,
@@ -23,7 +25,6 @@ from .mappings import (
     GateDisplay,
     derive_phase,
     gate_display,
-    has_active_recovery,
     task_display_status,
 )
 from .sources import (
@@ -31,9 +32,12 @@ from .sources import (
     ArchiveSource,
     ChangeSetSource,
     ExecutionPlanSource,
+    MessageSource,
+    ObservationSource,
     PlanSnapshotData,
     PlanSnapshotSource,
     RepositorySource,
+    RunnerEventSource,
     SpecificationSource,
     TaskSource,
     TopologySource,
@@ -58,6 +62,10 @@ _TERMINAL_ACTION_STATUSES = frozenset(
     {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
 )
 
+_ACTIVE_TASK_STATUSES = frozenset(
+    {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
+)
+
 
 class DeliveryReadModelService:
     def __init__(
@@ -73,6 +81,9 @@ class DeliveryReadModelService:
         repositories: RepositorySource,
         agents: AgentNameSource,
         topology: TopologySource,
+        runner_events: RunnerEventSource,
+        messages: MessageSource,
+        observations: ObservationSource,
     ) -> None:
         self._plans = plans
         self._snapshots = snapshots
@@ -84,6 +95,9 @@ class DeliveryReadModelService:
         self._repositories = repositories
         self._agents = agents
         self._topology = topology
+        self._runner_events = runner_events
+        self._messages = messages
+        self._observations = observations
 
     # ------------------------------------------------------------------ list
 
@@ -140,7 +154,7 @@ class DeliveryReadModelService:
         )
         pending = 0
         if change_set is not None:
-            pending = len(await self._pending_decisions(change_set))
+            pending = len(await self._decision_items(plan, change_set))
         title_source = snapshot.requirement_text if snapshot is not None else None
         updated_at = None
         if change_set is not None:
@@ -196,37 +210,245 @@ class DeliveryReadModelService:
             return "已归档"
         return ""
 
-    async def _pending_decisions(self, change_set: ChangeSetView) -> list[dict]:
-        """§4.3 derivations reused for the list's pending_decision_count."""
+    async def _decision_items(self, plan, change_set: ChangeSetView) -> list[dict]:
+        """Contract §4.3: purely derived approve/watch items, one per repository.
+
+        approve (5a60148 wording): the merge gate reports no blocking reason
+        other than the missing head-bound READY governance decision — matched
+        against the delivery contracts constant, never a magic string.
+        watch: the repository has a non-terminal recovery plan or rework task.
+        """
+
+        catalog = {item.id: item for item in await self._repositories.list()}
+        leader_task_ids = {
+            planned.leader_task_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        tasks = await self._tasks.list_by_project(plan.project_id)
+        active_rework_repos = {
+            task.repository_id
+            for task in tasks
+            if task.parent_task_id in leader_task_ids
+            and task.title == REWORK_TASK_TITLE
+            and task.status in _ACTIVE_TASK_STATUSES
+        }
+        revision_at: dict[UUID, datetime] = {}
+        for revision in change_set.candidate_revisions:
+            seen = revision_at.get(revision.repository_id)
+            if seen is None or revision.created_at > seen:
+                revision_at[revision.repository_id] = revision.created_at
 
         items: list[dict] = []
-        ready_heads = {
-            (decision.repository_id, decision.head_sha)
-            for decision in change_set.governance_decisions
-            if decision.decision.value == "ready"
-        }
-        active_recovery = has_active_recovery(change_set)
         for repository in change_set.repositories:
-            awaits_approval = False
+            name = (
+                catalog[repository.repository_id].name
+                if repository.repository_id in catalog
+                else str(repository.repository_id)
+            )
+            awaiting_governance = False
             if repository.status not in MERGE_GATE_MOOT_STATUSES:
                 gate = await self._change_sets.merge_gate(
                     change_set.id, repository.repository_id
                 )
-                awaits_approval = (
-                    gate.allowed
-                    or repository.status is RepositoryDeliveryStatus.READY_TO_MERGE
+                awaiting_governance = bool(gate.reasons) and all(
+                    reason == MERGE_GATE_GOVERNANCE_MISSING_REASON
+                    for reason in gate.reasons
                 )
-            missing_ready = (repository.repository_id, repository.commit_sha) not in ready_heads
-            under_recovery = active_recovery and any(
+            recovery_open = any(
                 action.repository_id == repository.repository_id
                 and action.status not in _TERMINAL_ACTION_STATUSES
-                for action in change_set.recovery_plans[-1].actions
+                for recovery in change_set.recovery_plans
+                for action in recovery.actions
             )
-            if awaits_approval and missing_ready:
-                items.append({"kind": "approve", "repository_id": repository.repository_id})
-            elif under_recovery:
-                items.append({"kind": "watch", "repository_id": repository.repository_id})
+            if awaiting_governance:
+                items.append(
+                    {
+                        "id": f"approve:{repository.repository_id}:{repository.commit_sha}",
+                        "kind": "approve",
+                        "title": f"待治理放行：{name}",
+                        "body": (
+                            f"候选 {repository.commit_sha[:12]} 已通过其余全部门禁，"
+                            "仅差 head-bound READY 治理决策。"
+                        ),
+                        "repository_id": repository.repository_id,
+                        "head_sha": repository.commit_sha,
+                        "created_at": revision_at.get(
+                            repository.repository_id, change_set.updated_at
+                        ),
+                        "actions": ["approve_merge", "view_evidence"],
+                    }
+                )
+            elif recovery_open or repository.repository_id in active_rework_repos:
+                items.append(
+                    {
+                        "id": f"watch:{repository.repository_id}",
+                        "kind": "watch",
+                        "title": f"修复观察：{name}",
+                        "body": "该仓库存在未终态的恢复计划或返工任务。",
+                        "repository_id": repository.repository_id,
+                        "head_sha": repository.commit_sha,
+                        "created_at": change_set.updated_at,
+                        "actions": ["view_evidence"],
+                    }
+                )
         return items
+
+    # ------------------------------------------------------------- decisions
+
+    async def list_decisions(self, delivery_id: UUID) -> dict | None:
+        """§4.3 decision-folder items; None when the delivery does not exist."""
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        change_set = await self._change_sets.for_delivery(delivery_id)
+        if change_set is None:
+            return {"items": []}
+        return {"items": await self._decision_items(plan, change_set)}
+
+    # ------------------------------------------------------ events & messages
+
+    async def list_events(
+        self,
+        delivery_id: UUID,
+        *,
+        kind: str | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict | None:
+        """Contract §4.1: one timeline over runner / matrix / gate / plan facts.
+
+        `deny` has no audit store in v0.1 and is never produced. payload_ref is
+        the stable source reference and doubles as the deterministic tiebreak,
+        so ordering (and therefore the offset cursor) is stable across reads.
+        """
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        project_id = plan.project_id
+        leader_task_ids = {
+            planned.leader_task_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        tasks = await self._tasks.list_by_project(project_id)
+        worker_task_ids = {
+            task.id for task in tasks if task.parent_task_id in leader_task_ids
+        }
+        change_set = await self._change_sets.for_delivery(delivery_id)
+
+        items: list[dict] = []
+        for event in await self._runner_events.for_project(project_id):
+            if event.task_id not in worker_task_ids:
+                continue
+            items.append(
+                {
+                    "at": event.occurred_at,
+                    "kind": "runner",
+                    "text": event.event_type,
+                    "task_id": event.task_id,
+                    "repository_id": event.repository_id,
+                    "payload_ref": f"runner-event:{event.event_id}",
+                }
+            )
+        for message in await self._messages.for_project(project_id):
+            # Task-bound messages belong to one delivery; unbound ones are
+            # project-wide broadcasts and show up on every delivery's timeline.
+            if message.task_id is not None and message.task_id not in worker_task_ids:
+                continue
+            items.append(
+                {
+                    "at": message.created_at,
+                    "kind": "matrix",
+                    "text": f"{message.kind.value}: {message.subject}",
+                    "task_id": message.task_id,
+                    "repository_id": message.repository_id,
+                    "payload_ref": f"collaboration-message:{message.id}",
+                }
+            )
+        if change_set is not None:
+            for observation in await self._observations.for_change_set(change_set.id):
+                items.append(
+                    {
+                        "at": observation.observed_at,
+                        "kind": "gate",
+                        "text": observation.event_type,
+                        "task_id": None,
+                        "repository_id": observation.repository_id,
+                        "payload_ref": f"scm-observation:{observation.id}",
+                    }
+                )
+        for snapshot in await self._snapshots.for_project(project_id):
+            if snapshot.execution_plan_id != delivery_id:
+                continue
+            items.append(
+                {
+                    "at": snapshot.created_at,
+                    "kind": "plan",
+                    "text": f"计划 v{snapshot.plan_version} 已生成",
+                    "task_id": None,
+                    "repository_id": None,
+                    "payload_ref": f"plan-snapshot:{snapshot.id}",
+                }
+            )
+
+        if kind is not None:
+            items = [item for item in items if item["kind"] == kind]
+        items.sort(key=lambda item: (item["at"], item["payload_ref"]))
+        page = items[offset : offset + limit]
+        next_cursor = str(offset + limit) if offset + limit < len(items) else None
+        return {"items": page, "next_cursor": next_cursor}
+
+    async def list_messages(self, delivery_id: UUID) -> dict | None:
+        """Contract §4.2: CollaborationMessageView projection for one delivery.
+
+        v0.1 only ingests Leader→Worker traffic, so every item carries
+        direction=leader_to_worker until Worker→Leader reports are audited.
+        """
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        leader_task_ids = {
+            planned.leader_task_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        tasks = await self._tasks.list_by_project(plan.project_id)
+        worker_task_ids = {
+            task.id for task in tasks if task.parent_task_id in leader_task_ids
+        }
+        items = []
+        for message in await self._messages.for_project(plan.project_id):
+            if message.task_id is not None and message.task_id not in worker_task_ids:
+                continue
+            items.append(
+                {
+                    "id": message.id,
+                    "kind": message.kind.value,
+                    "subject": message.subject,
+                    "body": message.body,
+                    "sender_agent_id": message.sender_agent_id,
+                    "sender_name": await self._agents.name(message.sender_agent_id),
+                    "recipient_agent_id": message.recipient_agent_id,
+                    "recipient_name": await self._agents.name(
+                        message.recipient_agent_id
+                    ),
+                    "repository_id": message.repository_id,
+                    "task_id": message.task_id,
+                    "status": message.status.value,
+                    "event_id": message.event_id,
+                    "correlation_id": message.correlation_id,
+                    "created_at": message.created_at,
+                    "direction": "leader_to_worker",
+                }
+            )
+        return {"items": items}
 
     # ----------------------------------------------------------------- detail
 
@@ -374,14 +596,26 @@ class DeliveryReadModelService:
                 repository = str(node.get("repository", ""))
                 dag_dependencies[repository] = tuple(node.get("depends_on") or ())
 
+        # Contract §3: repair_timeline[].at is a string, but task rows persist no
+        # timestamps. A rework task's own persisted moment is the candidate
+        # revision it produced; otherwise the owning aggregate's timestamp.
+        revision_at: dict[UUID, datetime] = {}
+        fallback_at: datetime | None = None
+        if change_set is not None:
+            fallback_at = change_set.updated_at
+            for revision in change_set.candidate_revisions:
+                seen = revision_at.get(revision.task_id)
+                if seen is None or revision.created_at > seen:
+                    revision_at[revision.task_id] = revision.created_at
+        elif snapshot is not None:
+            fallback_at = snapshot.created_at
+
         views: list[dict] = []
         for task in worker_tasks:
             chain = rework_by_key.get((task.repository_id, task.parent_task_id), [])
             is_rework = task.title == REWORK_TASK_TITLE
             active_rework = any(
-                item.status
-                in {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
-                for item in chain
+                item.status in _ACTIVE_TASK_STATUSES for item in chain
             )
             repairing = is_rework or (
                 active_rework and task.status is TaskStatus.IN_PROGRESS
@@ -397,11 +631,17 @@ class DeliveryReadModelService:
                 for name in dag_dependencies.get(repository_name or "", ())
                 if name in name_to_task
             ]
-            repair_timeline = [
-                {"at": None, "what": f"返工任务 {item.status.value}"}
-                for item in chain
-                if item.id != task.id
-            ]
+            repair_timeline = []
+            for item in chain:
+                if item.id == task.id:
+                    continue
+                at = revision_at.get(item.id, fallback_at)
+                if at is None:
+                    # No persisted fact anywhere to date this entry with.
+                    continue
+                repair_timeline.append(
+                    {"at": at, "what": f"返工任务 {item.status.value}"}
+                )
             escalated = False
             if change_set is not None:
                 for recovery in change_set.recovery_plans:
