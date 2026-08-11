@@ -17,6 +17,7 @@ from repomesh.modules.delivery.contracts import (
     MergeGateDecision,
     SCMObservationView,
 )
+from repomesh.modules.project.contracts import ProjectAgentTopologyView
 from repomesh.modules.review_validation.contracts import ValidationSnapshotView
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanView, TaskView
 
@@ -32,6 +33,7 @@ class PlanSnapshotData:
     execution_batches: tuple[tuple[str, ...], ...]
     task_dag: tuple[dict, ...]
     execution_plan_id: UUID | None
+    created_by_agent_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +130,14 @@ class ObservationSource(Protocol):
 class AgentNameSource(Protocol):
     async def name(self, agent_id: UUID) -> str | None: ...
 
+    async def organization_id(self, agent_id: UUID) -> UUID | None:
+        """Owning organization of one agent; None when the agent is unknown."""
+        ...
+
 
 class TopologySource(Protocol):
     async def matrix_room_id(self, project_id: UUID) -> str | None: ...
+
+    async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
+        """Agent topology of one issue; None when no team was ever formed."""
+        ...

@@ -3,22 +3,29 @@
 from .mappings import (
     DeliveryPhase,
     GateDisplay,
+    IssueState,
     TaskDisplayStatus,
+    derive_issue_state,
     derive_phase,
     gate_display,
+    select_issue_phase,
     task_display_status,
 )
-from .router import router
+from .router import issues_router, router
 from .service import REWORK_TASK_TITLE, DeliveryReadModelService
 
 __all__ = [
     "DeliveryPhase",
     "DeliveryReadModelService",
     "GateDisplay",
+    "IssueState",
     "REWORK_TASK_TITLE",
     "TaskDisplayStatus",
+    "derive_issue_state",
     "derive_phase",
     "gate_display",
+    "issues_router",
     "router",
+    "select_issue_phase",
     "task_display_status",
 ]

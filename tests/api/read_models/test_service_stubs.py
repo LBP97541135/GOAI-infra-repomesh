@@ -118,7 +118,13 @@ class _Empty:
     async def name(self, agent_id: UUID):
         return "worker-01"
 
+    async def organization_id(self, agent_id: UUID):
+        return None
+
     async def matrix_room_id(self, project_id: UUID):
+        return None
+
+    async def get_view(self, project_id: UUID):
         return None
 
     async def for_change_set(self, change_set_id: UUID):
@@ -135,6 +141,8 @@ def _service(
     runner_events=None,
     messages=None,
     observations=None,
+    topology=None,
+    agents=None,
 ):
     empty = _Empty()
     return DeliveryReadModelService(
@@ -146,8 +154,8 @@ def _service(
         validations=empty,
         specifications=empty,
         repositories=repositories if repositories is not None else empty,
-        agents=empty,
-        topology=empty,
+        agents=agents if agents is not None else empty,
+        topology=topology if topology is not None else empty,
         runner_events=runner_events if runner_events is not None else empty,
         messages=messages if messages is not None else empty,
         observations=observations if observations is not None else empty,
