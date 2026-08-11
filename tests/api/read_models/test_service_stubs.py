@@ -14,6 +14,7 @@ import pytest
 from repomesh.api.read_models import REWORK_TASK_TITLE, DeliveryReadModelService
 from repomesh.api.read_models.sources import PlanSnapshotData
 from repomesh.modules.delivery.contracts import (
+    MERGE_GATE_GOVERNANCE_MISSING_REASON,
     CandidateRevisionView,
     ChangeSetStatus,
     ChangeSetView,
@@ -69,14 +70,21 @@ class StubTasks:
 
 
 class StubChangeSets:
-    def __init__(self, mapping: dict[UUID, ChangeSetView]) -> None:
+    def __init__(
+        self,
+        mapping: dict[UUID, ChangeSetView],
+        gate_reasons: tuple[str, ...] = ("blocked",),
+    ) -> None:
         self.mapping = mapping
+        self.gate_reasons = gate_reasons
 
     async def for_delivery(self, delivery_id: UUID):
         return self.mapping.get(delivery_id)
 
     async def merge_gate(self, change_set_id: UUID, repository_id: UUID):
-        return MergeGateDecision(change_set_id, repository_id, False, ("blocked",))
+        return MergeGateDecision(
+            change_set_id, repository_id, not self.gate_reasons, tuple(self.gate_reasons)
+        )
 
 
 class StubArchives:
@@ -408,3 +416,82 @@ async def test_repair_timeline_at_is_always_a_timestamp() -> None:
         for timeline in timelines.values()
         for entry in timeline
     )
+
+
+@pytest.mark.asyncio
+async def test_decisions_approve_only_when_governance_is_the_sole_blocker() -> None:
+    """Contract §4.3 (5a60148): approve derives from 'no blocking reason other
+    than the missing head-bound READY decision', via the contracts constant."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = _worker(project_id, repository_id, leader_task_id)
+    change_set = replace(
+        _manual_intervention_change_set(plan, repository_id, worker.id),
+        status=ChangeSetStatus.DELIVERING,
+        recovery_plans=(),
+        repositories=(
+            _repository_view(
+                RepositoryDeliveryStatus.READY_TO_MERGE, repository_id, worker.id
+            ),
+        ),
+    )
+
+    async def decisions(gate_reasons: tuple[str, ...]):
+        service = _service(
+            StubPlans(plan),
+            StubSnapshots(),
+            StubTasks(worker),
+            StubChangeSets({plan.id: change_set}, gate_reasons=gate_reasons),
+            StubArchives(),
+        )
+        return await service.list_decisions(plan.id)
+
+    sole = await decisions((MERGE_GATE_GOVERNANCE_MISSING_REASON,))
+    assert [item["kind"] for item in sole["items"]] == ["approve"]
+    item = sole["items"][0]
+    assert item["repository_id"] == repository_id
+    assert item["head_sha"] == "a" * 40
+    assert item["created_at"] == change_set.updated_at
+    assert item["actions"] == ["approve_merge", "view_evidence"]
+
+    mixed = await decisions(
+        ("required CI checks have not passed", MERGE_GATE_GOVERNANCE_MISSING_REASON)
+    )
+    assert mixed["items"] == []
+
+
+@pytest.mark.asyncio
+async def test_decisions_watch_covers_active_rework_and_missing_delivery() -> None:
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
+    worker = _worker(project_id, repository_id, leader_task_id)
+    rework = replace(
+        worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.IN_PROGRESS
+    )
+    change_set = replace(
+        _manual_intervention_change_set(plan, repository_id, worker.id),
+        recovery_plans=(),
+        repositories=(
+            _repository_view(RepositoryDeliveryStatus.CI_FAILED, repository_id, worker.id),
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker, rework),
+        StubChangeSets({plan.id: change_set}),
+        StubArchives(),
+    )
+
+    payload = await service.list_decisions(plan.id)
+
+    assert [item["kind"] for item in payload["items"]] == ["watch"]
+    assert payload["items"][0]["repository_id"] == repository_id
+    assert payload["items"][0]["actions"] == ["view_evidence"]
+
+    assert await service.list_decisions(uuid4()) is None

@@ -28,3 +28,11 @@ async def get_delivery(delivery_id: UUID, request: Request) -> dict:
     if payload is None:
         raise HTTPException(status_code=404, detail=f"delivery not found: {delivery_id}")
     return await service.attach_merge_gates(payload)
+
+
+@router.get("/{delivery_id}/decisions")
+async def list_delivery_decisions(delivery_id: UUID, request: Request) -> dict:
+    payload = await _service(request).list_decisions(delivery_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"delivery not found: {delivery_id}")
+    return payload

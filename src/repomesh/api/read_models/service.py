@@ -12,6 +12,7 @@ from datetime import datetime
 from uuid import UUID
 
 from repomesh.modules.delivery.contracts import (
+    MERGE_GATE_GOVERNANCE_MISSING_REASON,
     ChangeSetView,
     RecoveryActionKind,
     RecoveryActionStatus,
@@ -24,7 +25,6 @@ from .mappings import (
     GateDisplay,
     derive_phase,
     gate_display,
-    has_active_recovery,
     task_display_status,
 )
 from .sources import (
@@ -57,6 +57,10 @@ null instead of a factually wrong 'blocked' answer."""
 
 _TERMINAL_ACTION_STATUSES = frozenset(
     {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+)
+
+_ACTIVE_TASK_STATUSES = frozenset(
+    {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
 )
 
 
@@ -141,7 +145,7 @@ class DeliveryReadModelService:
         )
         pending = 0
         if change_set is not None:
-            pending = len(await self._pending_decisions(change_set))
+            pending = len(await self._decision_items(plan, change_set))
         title_source = snapshot.requirement_text if snapshot is not None else None
         updated_at = None
         if change_set is not None:
@@ -197,37 +201,103 @@ class DeliveryReadModelService:
             return "已归档"
         return ""
 
-    async def _pending_decisions(self, change_set: ChangeSetView) -> list[dict]:
-        """§4.3 derivations reused for the list's pending_decision_count."""
+    async def _decision_items(self, plan, change_set: ChangeSetView) -> list[dict]:
+        """Contract §4.3: purely derived approve/watch items, one per repository.
+
+        approve (5a60148 wording): the merge gate reports no blocking reason
+        other than the missing head-bound READY governance decision — matched
+        against the delivery contracts constant, never a magic string.
+        watch: the repository has a non-terminal recovery plan or rework task.
+        """
+
+        catalog = {item.id: item for item in await self._repositories.list()}
+        leader_task_ids = {
+            planned.leader_task_id
+            for batch in plan.batches
+            for planned in batch
+            if planned.leader_task_id is not None
+        }
+        tasks = await self._tasks.list_by_project(plan.project_id)
+        active_rework_repos = {
+            task.repository_id
+            for task in tasks
+            if task.parent_task_id in leader_task_ids
+            and task.title == REWORK_TASK_TITLE
+            and task.status in _ACTIVE_TASK_STATUSES
+        }
+        revision_at: dict[UUID, datetime] = {}
+        for revision in change_set.candidate_revisions:
+            seen = revision_at.get(revision.repository_id)
+            if seen is None or revision.created_at > seen:
+                revision_at[revision.repository_id] = revision.created_at
 
         items: list[dict] = []
-        ready_heads = {
-            (decision.repository_id, decision.head_sha)
-            for decision in change_set.governance_decisions
-            if decision.decision.value == "ready"
-        }
-        active_recovery = has_active_recovery(change_set)
         for repository in change_set.repositories:
-            awaits_approval = False
+            name = (
+                catalog[repository.repository_id].name
+                if repository.repository_id in catalog
+                else str(repository.repository_id)
+            )
+            awaiting_governance = False
             if repository.status not in MERGE_GATE_MOOT_STATUSES:
                 gate = await self._change_sets.merge_gate(
                     change_set.id, repository.repository_id
                 )
-                awaits_approval = (
-                    gate.allowed
-                    or repository.status is RepositoryDeliveryStatus.READY_TO_MERGE
+                awaiting_governance = bool(gate.reasons) and all(
+                    reason == MERGE_GATE_GOVERNANCE_MISSING_REASON
+                    for reason in gate.reasons
                 )
-            missing_ready = (repository.repository_id, repository.commit_sha) not in ready_heads
-            under_recovery = active_recovery and any(
+            recovery_open = any(
                 action.repository_id == repository.repository_id
                 and action.status not in _TERMINAL_ACTION_STATUSES
-                for action in change_set.recovery_plans[-1].actions
+                for recovery in change_set.recovery_plans
+                for action in recovery.actions
             )
-            if awaits_approval and missing_ready:
-                items.append({"kind": "approve", "repository_id": repository.repository_id})
-            elif under_recovery:
-                items.append({"kind": "watch", "repository_id": repository.repository_id})
+            if awaiting_governance:
+                items.append(
+                    {
+                        "id": f"approve:{repository.repository_id}:{repository.commit_sha}",
+                        "kind": "approve",
+                        "title": f"待治理放行：{name}",
+                        "body": (
+                            f"候选 {repository.commit_sha[:12]} 已通过其余全部门禁，"
+                            "仅差 head-bound READY 治理决策。"
+                        ),
+                        "repository_id": repository.repository_id,
+                        "head_sha": repository.commit_sha,
+                        "created_at": revision_at.get(
+                            repository.repository_id, change_set.updated_at
+                        ),
+                        "actions": ["approve_merge", "view_evidence"],
+                    }
+                )
+            elif recovery_open or repository.repository_id in active_rework_repos:
+                items.append(
+                    {
+                        "id": f"watch:{repository.repository_id}",
+                        "kind": "watch",
+                        "title": f"修复观察：{name}",
+                        "body": "该仓库存在未终态的恢复计划或返工任务。",
+                        "repository_id": repository.repository_id,
+                        "head_sha": repository.commit_sha,
+                        "created_at": change_set.updated_at,
+                        "actions": ["view_evidence"],
+                    }
+                )
         return items
+
+    # ------------------------------------------------------------- decisions
+
+    async def list_decisions(self, delivery_id: UUID) -> dict | None:
+        """§4.3 decision-folder items; None when the delivery does not exist."""
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        change_set = await self._change_sets.for_delivery(delivery_id)
+        if change_set is None:
+            return {"items": []}
+        return {"items": await self._decision_items(plan, change_set)}
 
     # ----------------------------------------------------------------- detail
 
@@ -394,9 +464,7 @@ class DeliveryReadModelService:
             chain = rework_by_key.get((task.repository_id, task.parent_task_id), [])
             is_rework = task.title == REWORK_TASK_TITLE
             active_rework = any(
-                item.status
-                in {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
-                for item in chain
+                item.status in _ACTIVE_TASK_STATUSES for item in chain
             )
             repairing = is_rework or (
                 active_rework and task.status is TaskStatus.IN_PROGRESS
