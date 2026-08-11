@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveGovernanceAgent, type GovernanceAgent } from "../api/decisions";
+import { Modal } from "./Modal";
 
 /** 新建 issue 弹窗（CONS-41 → B-1 接线）：处理者芯片 / 需求文本 / Ctrl+Enter 提交。
  *  按原型 redesign-issue-centric.html。
@@ -82,12 +83,9 @@ export function NewIssueModal({
 
   useEffect(() => {
     if (!open) return;
-    // 快捷键按原型挂在 document 上：焦点不在文本框时（如点过「范围」按钮）Ctrl+Enter 仍生效
+    // Ctrl+Enter 按原型挂在 document 上：焦点不在文本框时（如点过「范围」按钮）仍生效。
+    // Esc 关闭不再自己处理——共享外壳 Modal 的原生 <dialog> cancel→close 语义接管。
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         submit();
@@ -95,7 +93,7 @@ export function NewIssueModal({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose, submit]);
+  }, [open, submit]);
 
   if (!open) return null;
 
@@ -109,64 +107,61 @@ export function NewIssueModal({
           : "组织 Leader（未接入）";
 
   return (
-    <div
-      className="fixed inset-0 z-30 grid place-items-center bg-[rgba(10,8,4,0.72)]"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      className="m-auto w-[560px] max-w-[92vw] rounded-hard border border-line bg-[#1c1710] p-0 text-tx shadow-[0_24px_60px_rgba(0,0,0,0.6)]"
     >
-      <div className="w-[560px] max-w-[92vw] rounded-hard border border-line bg-[#1c1710] shadow-[0_24px_60px_rgba(0,0,0,0.6)]">
-        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <span className="text-[12px] text-tx2">{workspaceLabel}</span>
-          <span className="text-tx2">›</span>
-          <span className="text-[12.5px] text-tx">新建 issue</span>
-          <button className="ml-auto text-[14px] text-tx2 hover:text-amber-hi" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2 px-4 pt-2.5">
-          <span className="text-[11.5px] text-tx2">处理者</span>
-          <span className="rounded-hard border border-line px-2 py-px font-mono text-[11px] text-kraft">
-            <i className="not-italic text-tx2">●</i> {principalChip}
-          </span>
-          <span className="text-[10.5px] text-[#6b6046]">Org Leader 负责需求接收与范围提议</span>
-        </div>
-
-        <textarea
-          ref={areaRef}
-          className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-[#6b6046] focus:outline-none"
-          placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            // A2：文本已变 = 新的逻辑创建，换新键（改完再重试不会被旧键归并）
-            keyRef.current = crypto.randomUUID();
-          }}
-        />
-
-        <div className="flex items-center gap-2.5 border-t border-line px-3.5 py-2.5">
-          <button
-            className="rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-tx2"
-            onClick={() => onToast("范围默认由 Org Leader 从仓库摘要提议；手动圈选待仓库读模型（CONS-32）")}
-          >
-            ▣ 范围 · Org Leader 提议
-          </button>
-          <button
-            className="text-[12px] text-tx2 hover:text-amber-hi"
-            onClick={() => onToast("附件（PRD 文档等）为二期能力")}
-          >
-            📎
-          </button>
-          <button
-            className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
-            disabled={submitting}
-            onClick={submit}
-          >
-            {submitting ? "创建中…" : "创建 (Ctrl+Enter)"}
-          </button>
-        </div>
+      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <span className="text-[12px] text-tx2">{workspaceLabel}</span>
+        <span className="text-tx2">›</span>
+        <span className="text-[12.5px] text-tx">新建 issue</span>
+        <button className="ml-auto text-[14px] text-tx2 hover:text-amber-hi" onClick={onClose}>
+          ✕
+        </button>
       </div>
-    </div>
+
+      <div className="flex flex-wrap items-center gap-2 px-4 pt-2.5">
+        <span className="text-[11.5px] text-tx2">处理者</span>
+        <span className="rounded-hard border border-line px-2 py-px font-mono text-[11px] text-kraft">
+          <i className="not-italic text-tx2">●</i> {principalChip}
+        </span>
+        <span className="text-[10.5px] text-[#6b6046]">Org Leader 负责需求接收与范围提议</span>
+      </div>
+
+      <textarea
+        ref={areaRef}
+        className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-[#6b6046] focus:outline-none"
+        placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          // A2：文本已变 = 新的逻辑创建，换新键（改完再重试不会被旧键归并）
+          keyRef.current = crypto.randomUUID();
+        }}
+      />
+
+      <div className="flex items-center gap-2.5 border-t border-line px-3.5 py-2.5">
+        <button
+          className="rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-tx2"
+          onClick={() => onToast("范围默认由 Org Leader 从仓库摘要提议；手动圈选待仓库读模型（CONS-32）")}
+        >
+          ▣ 范围 · Org Leader 提议
+        </button>
+        <button
+          className="text-[12px] text-tx2 hover:text-amber-hi"
+          onClick={() => onToast("附件（PRD 文档等）为二期能力")}
+        >
+          📎
+        </button>
+        <button
+          className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          disabled={submitting}
+          onClick={submit}
+        >
+          {submitting ? "创建中…" : "创建 (Ctrl+Enter)"}
+        </button>
+      </div>
+    </Modal>
   );
 }

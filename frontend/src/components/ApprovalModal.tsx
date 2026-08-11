@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ApprovalInfo } from "../types";
+import { Modal } from "./Modal";
 
 /** 快照绑定授权单：授权主体 / 不可变快照 / 30 分钟有效期 / 写入范围 /
  *  「任一 SHA、契约或门禁变化即失效」确认框。治理故事的核心展示。
@@ -31,19 +32,12 @@ export function ApprovalModal({
   onCancel: () => void;
   onApprove: (comment: string) => void;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [comment, setComment] = useState("门禁全绿且独立 Review 通过，允许按冻结 SHA 合并。");
 
+  // 每次打开都重置确认框——既有语义：授权确认必须每次重新勾选
   useEffect(() => {
-    const dlg = ref.current;
-    if (!dlg) return;
-    if (open && !dlg.open) {
-      setConfirmed(false);
-      dlg.showModal();
-    } else if (!open && dlg.open) {
-      dlg.close();
-    }
+    if (open) setConfirmed(false);
   }, [open]);
 
   // 授权主体不再取 viewmodel 的占位串「治理审批人」——它现在有真实来源了
@@ -57,18 +51,13 @@ export function ApprovalModal({
 
   const blocked = principal.state === "missing" || principal.state === "resolving";
 
-  // C-1（验收缺陷升格修复）：关闭时不渲染。此前 <dialog> 常驻 DOM 靠 showModal()
-  // 显隐，隐藏的表单仍出现在可访问性树里，且 querySelector('textarea') 会先选中它
-  // （验收实走中实证咬人）。条件渲染的固有后果是每次打开表单状态重置为初始值——
-  // 对确认框正是既有语义（原本就每次 open 复位），对意见框是可接受的默认行为。
-  if (!open) return null;
-
+  // C-1（验收缺陷升格修复）语义由共享外壳 Modal 承担：关闭时条件渲染为 null，
+  // 不留隐藏 DOM；Esc/backdrop 统一回调 onCancel。
   return (
-    <dialog
-      ref={ref}
+    <Modal
+      open={open}
+      onClose={onCancel}
       className="m-auto w-[min(480px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
-      onClose={() => open && onCancel()}
-      onCancel={() => open && onCancel()}
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div>
@@ -150,6 +139,6 @@ export function ApprovalModal({
           {submitting ? "提交中…" : principal.state === "resolving" ? "解析主体…" : "批准并授权"}
         </button>
       </div>
-    </dialog>
+    </Modal>
   );
 }
