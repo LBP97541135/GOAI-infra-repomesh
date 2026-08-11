@@ -137,6 +137,14 @@ class AgentTeamControlPlane(Protocol):
 
     async def get_worker(self, name: str) -> WorkerRuntimeRef | None: ...
 
+    async def get_team(self, name: str) -> TeamRuntimeRef | None:
+        """Read a team's runtime without creating it.
+
+        `ensure_team` also returns a TeamRuntimeRef, but it provisions when the
+        team is absent — unusable from a read-only endpoint.
+        """
+        ...
+
     async def ensure_worker_ready(
         self, name: str, *, idempotency_key: str
     ) -> WorkerRuntimeRef: ...

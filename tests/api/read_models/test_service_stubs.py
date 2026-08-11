@@ -76,6 +76,9 @@ class StubTasks:
     async def list_by_project(self, project_id: UUID):
         return tuple(t for t in self.tasks if t.project_id == project_id)
 
+    async def list_all(self):
+        return self.tasks
+
 
 class StubChangeSets:
     def __init__(
@@ -136,6 +139,15 @@ class _Empty:
     async def repository_spec(self, project_id: UUID, repository_id: UUID):
         return None
 
+    async def profiles(self):
+        return ()
+
+    async def list_all(self):
+        return ()
+
+    async def list_views(self):
+        return ()
+
     async def for_change_set(self, change_set_id: UUID):
         return ()
 
@@ -153,6 +165,7 @@ def _service(
     topology=None,
     agents=None,
     specifications=None,
+    runtime=None,
 ):
     empty = _Empty()
     return DeliveryReadModelService(
@@ -169,6 +182,7 @@ def _service(
         runner_events=runner_events if runner_events is not None else empty,
         messages=messages if messages is not None else empty,
         observations=observations if observations is not None else empty,
+        runtime=runtime,
     )
 
 

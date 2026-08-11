@@ -275,6 +275,22 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 `runtime` 省略、不发任何 Controller 请求。当前实现按 `directory.list()` 全量列出后逐个
 代理，N 个 agent = N 次 HTTP；规模变大时改默认值或加分页，届时修订本节。
 
+### 4.5 路径冲突与命名空间（**实现期发现，待主脑裁决**）
+
+§1 与 §4 原文把三个端点定在 `GET /api/v1/repositories|teams|agents`。**实测 `/api/v1/repositories`
+已被 `repository_intelligence/api/router.py:102` 占用**（它的 catalog 视图，返回裸数组带
+`auto_card`），且该路由**注册在前、运行时胜出**——把网格挂在裸路径上会得到一个永远不可达的
+端点，而 OpenAPI 反而显示网格的定义（字典按方法覆盖），即「看起来在工作、实际返回别人的形状」。
+
+**当前实现（待裁决，改动量一行）**：三条统一收进 `console` 命名空间——
+`GET /api/v1/console/repositories`、`/console/teams`、`/console/agents`。
+理由：（一）不遮蔽也不改动他人已有端点（main 的审核台可能在消费它）；（二）三条同批同前缀，
+消费方不必记「哪条有前缀哪条没有」；（三）main 的 API 面还在扩张，`teams` / `agents`
+这类通名日后同样可能撞车，前缀是一次性的隔离。
+
+备选：只给 `repositories` 加前缀而 `teams` / `agents` 保持裸路径（当前无冲突）——不推荐，
+路径风格不一致的代价会长期由消费方承担。裁决后本节转为正式条文并同步 §1 表格。
+
 ## 5. 房间读模型（CONS-33）
 
 ### 5.1 `GET /issues/{issue_id}/rooms`

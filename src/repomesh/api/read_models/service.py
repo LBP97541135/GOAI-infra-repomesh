@@ -6,12 +6,14 @@ with ``delivery_id: null``. The service only reads through module contracts and
 composition-root adapters; unimplemented contract fields return ``null``.
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.collaboration.contracts import CollaborationMessageView
 from repomesh.modules.delivery.contracts import (
     MERGE_GATE_GOVERNANCE_MISSING_REASON,
@@ -50,6 +52,8 @@ from .sources import (
     PlanSnapshotSource,
     RepositorySource,
     RunnerEventSource,
+    RuntimeProbe,
+    RuntimeSnapshot,
     SpecificationContractData,
     SpecificationSource,
     TaskSource,
@@ -58,6 +62,9 @@ from .sources import (
 )
 
 _logger = logging.getLogger(__name__)
+
+_RUNTIME_PROBE_TIMEOUT = 2.0
+"""§4.4: each controller call is bounded on its own so one hang cannot stall a page."""
 
 REWORK_TASK_TITLE = "Repair failed delivery candidate"
 """The canonical title CIReworkTaskCreator assigns; identifies rework chains."""
@@ -133,6 +140,7 @@ class DeliveryReadModelService:
         runner_events: RunnerEventSource,
         messages: MessageSource,
         observations: ObservationSource,
+        runtime: RuntimeProbe | None = None,
     ) -> None:
         self._plans = plans
         self._snapshots = snapshots
@@ -147,6 +155,9 @@ class DeliveryReadModelService:
         self._runner_events = runner_events
         self._messages = messages
         self._observations = observations
+        # None when AgentTeams is not configured: the roster still answers, with
+        # runtime null rather than a fabricated "unreachable".
+        self._runtime = runtime
 
     # ------------------------------------------------------------------ list
 
@@ -1091,6 +1102,202 @@ class DeliveryReadModelService:
             ),
         }
 
+    # ------------------------------------------- grid / teams / agent roster
+
+    async def list_repositories(self) -> dict:
+        """Contract v0.2 §4.1: the catalog plus what is happening in each repo.
+
+        Business activity is derived from the same issue aggregation /issues
+        uses, so a repository's open_issue_count can never disagree with the
+        issue list's own state.
+        """
+
+        profiles = await self._repositories.profiles()
+        topologies = await self._topology.list_views()
+        teams_by_repository: dict[UUID, list[dict]] = {}
+        for topology in topologies:
+            for team in topology.repository_teams:
+                teams_by_repository.setdefault(team.repository_id, []).append(
+                    {
+                        "team_id": team.id,
+                        "issue_id": topology.project_id,
+                        "runtime_status": team.runtime_status.value,
+                    }
+                )
+
+        open_issues: dict[UUID, int] = {}
+        last_delivery: dict[UUID, datetime] = {}
+        for bundle in await self._issue_bundles():
+            for repository_id in bundle.repository_ids:
+                if bundle.summary["state"] == IssueState.OPEN.value:
+                    open_issues[repository_id] = open_issues.get(repository_id, 0) + 1
+            for facts in bundle.rounds:
+                if facts.change_set is None:
+                    continue
+                for item in facts.change_set.repositories:
+                    seen = last_delivery.get(item.repository_id)
+                    if seen is None or facts.change_set.updated_at > seen:
+                        last_delivery[item.repository_id] = facts.change_set.updated_at
+
+        active_tasks: dict[UUID, int] = {}
+        for task in await self._tasks.list_all():
+            if task.status in _ACTIVE_TASK_STATUSES:
+                active_tasks[task.repository_id] = (
+                    active_tasks.get(task.repository_id, 0) + 1
+                )
+
+        return {
+            "repositories": [
+                {
+                    "repository_id": profile.id,
+                    "name": profile.name,
+                    "url": profile.url,
+                    "description": profile.description,
+                    "topics": list(profile.topics),
+                    "languages": list(profile.languages),
+                    "profiled_at": profile.profiled_at,
+                    "resident_team_count": len(teams_by_repository.get(profile.id, ())),
+                    "open_issue_count": open_issues.get(profile.id, 0),
+                    "active_task_count": active_tasks.get(profile.id, 0),
+                    "last_delivery_at": last_delivery.get(profile.id),
+                    "teams": teams_by_repository.get(profile.id, []),
+                }
+                for profile in sorted(profiles, key=lambda item: item.name)
+            ]
+        }
+
+    async def list_teams(self, *, with_runtime: bool = True) -> dict:
+        """Contract v0.2 §4.2.
+
+        `runtime_status` (what team formation recorded) and `runtime.phase`
+        (what the controller reports now) are two different facts and are never
+        merged: the first is history, the second may be unreachable.
+        """
+
+        catalog = {item.id: item for item in await self._repositories.list()}
+        teams: list[dict] = []
+        for topology in await self._topology.list_views():
+            for team in topology.repository_teams:
+                teams.append(
+                    {
+                        "team_id": team.id,
+                        "agentteams_team_name": team.agentteams_team_name,
+                        "issue_id": topology.project_id,
+                        "repository_id": team.repository_id,
+                        "repository_name": (
+                            catalog[team.repository_id].name
+                            if team.repository_id in catalog
+                            else None
+                        ),
+                        "runtime_status": team.runtime_status.value,
+                        "team_room_id": team.room_id,
+                        "leader_room_id": team.leader_room_id,
+                        "leader": await self._member(
+                            team.leader_agent_id, "repository_leader"
+                        ),
+                        "workers": [
+                            await self._member(worker_id, "worker")
+                            for worker_id in team.worker_agent_ids
+                        ],
+                        "runtime": (
+                            await self._runtime_block(
+                                "team",
+                                team.agentteams_team_name,
+                                _team_runtime_fields,
+                            )
+                            if with_runtime
+                            else None
+                        ),
+                    }
+                )
+        return {"teams": teams}
+
+    async def list_agents(self, *, with_runtime: bool = True) -> dict:
+        """Contract v0.2 §4.3: the persisted roster plus a live runtime proxy."""
+
+        topologies = await self._topology.list_views()
+        team_by_agent: dict[UUID, tuple[UUID, UUID]] = {}
+        for topology in topologies:
+            for team in topology.repository_teams:
+                for agent_id in (team.leader_agent_id, *team.worker_agent_ids):
+                    team_by_agent[agent_id] = (team.id, topology.project_id)
+
+        catalog = {item.id: item for item in await self._repositories.list()}
+        active_tasks: dict[UUID, int] = {}
+        for task in await self._tasks.list_all():
+            if task.status in _ACTIVE_TASK_STATUSES and task.assignee_agent_id:
+                active_tasks[task.assignee_agent_id] = (
+                    active_tasks.get(task.assignee_agent_id, 0) + 1
+                )
+
+        agents: list[dict] = []
+        for principal in await self._agents.list_all():
+            team_id, issue_id = team_by_agent.get(principal.id, (None, None))
+            is_manager = principal.role is AgentRole.ORGANIZATION_LEADER
+            agents.append(
+                {
+                    "agent_id": principal.id,
+                    "organization_id": principal.organization_id,
+                    "role": principal.role.value,
+                    "status": principal.status.value,
+                    "agentteams_resource_name": principal.agentteams_resource_name,
+                    "leader_agent_id": principal.leader_agent_id,
+                    "repository_id": principal.repository_id,
+                    "repository_name": (
+                        catalog[principal.repository_id].name
+                        if principal.repository_id in catalog
+                        else None
+                    ),
+                    "responsibility_paths": list(principal.responsibility_paths),
+                    "team_id": team_id,
+                    "issue_id": issue_id,
+                    "active_task_count": active_tasks.get(principal.id, 0),
+                    "runtime": (
+                        await self._runtime_block(
+                            "manager" if is_manager else "worker",
+                            principal.agentteams_resource_name,
+                            _agent_runtime_fields,
+                        )
+                        if with_runtime
+                        else None
+                    ),
+                }
+            )
+        return {"agents": agents}
+
+    async def _runtime_block(self, kind: str, name: str, shape) -> dict | None:
+        """§4.4 live proxy with the per-item isolation the contract mandates.
+
+        The isolation is enforced here rather than trusted to the adapter: one
+        slow or broken resource degrades its own row to `reachable: false` and
+        the page still answers 200, because a roster whose persisted half is
+        perfectly readable must not fail wholesale over a runtime probe.
+        """
+
+        if self._runtime is None:
+            return None  # AgentTeams is not configured: no fact to report
+        probe = getattr(self._runtime, kind)
+        try:
+            snapshot = await asyncio.wait_for(
+                probe(name), timeout=_RUNTIME_PROBE_TIMEOUT
+            )
+        except Exception:
+            _logger.warning(
+                "runtime probe failed for %s %s; degrading this row only", kind, name
+            )
+            return {"reachable": False}
+        if snapshot is None:
+            return None  # 404: the controller has no such resource
+        return {"reachable": True, **shape(snapshot)}
+
+    async def _issue_bundles(self) -> list[_IssueBundle]:
+        plans_by_project = await self._plans_by_project()
+        project_ids = set(plans_by_project) | set(await self._snapshots.project_ids())
+        return [
+            await self._issue_bundle(project_id, plans_by_project.get(project_id, ()))
+            for project_id in sorted(project_ids, key=str)
+        ]
+
     async def _issue_exists(self, issue_id: UUID) -> bool:
         if (await self._plans_by_project()).get(issue_id):
             return True
@@ -1399,6 +1606,33 @@ class DeliveryReadModelService:
             if item.environment.get("execution_plan") == str(delivery_id):
                 return item
         return None
+
+
+def _team_runtime_fields(snapshot: RuntimeSnapshot) -> dict:
+    return {
+        "phase": snapshot.phase,
+        "ready_workers": snapshot.ready_workers,
+        "total_workers": snapshot.total_workers,
+    }
+
+
+def _agent_runtime_fields(snapshot: RuntimeSnapshot) -> dict:
+    """§4.4: awake and uptime_seconds have no source and stay null.
+
+    The controller exposes no start timestamp, and DesiredRuntimeState is what
+    we asked for rather than what is observed — passing it off as an observation
+    would be fabrication.
+    """
+
+    return {
+        "phase": snapshot.phase,
+        "runtime_kind": snapshot.runtime_kind,
+        "matrix_user_id": snapshot.matrix_user_id,
+        "room_id": snapshot.room_id,
+        "message": snapshot.message,
+        "awake": None,
+        "uptime_seconds": None,
+    }
 
 
 def _projected_item(

@@ -161,6 +161,9 @@ class StubTopology:
     async def matrix_room_id(self, project_id: UUID):
         return None
 
+    async def list_views(self):
+        return tuple(self.mapping.values())
+
     async def find_by_room(self, room_id: str):
         for topology in self.mapping.values():
             if any(
@@ -220,6 +223,9 @@ class StubAgents:
 
     async def organization_id(self, agent_id: UUID):
         return self._organization_id
+
+    async def list_all(self):
+        return ()
 
 
 def _issue_service(
