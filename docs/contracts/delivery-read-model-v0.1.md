@@ -124,7 +124,7 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
       "attempt": 1,                            // 1 + 同仓 rework 链长度（§5.2）
       "depends_on": ["task_id"],               // plan snapshot task_dag
       "result_summary": "string|null",
-      "evidence": {                            // 【提案 · 待主脑裁决】A-18，见 §5.4；无结构化证据时整块为 null
+      "evidence": {                            // 【已裁决 · 2026-08-12】A-18，见 §5.4；无结构化证据时整块为 null
         "verified": false,                     // 派生自下面两个结构化字段，不读散文（§5.4）
         "blockers": ["string"],                // agent 结构化声明的 blocker，逐字；未声明即 []
         "summary_text": "string|null",         // Runner summary 原文，逐字，不摘要不截断
@@ -413,7 +413,7 @@ recovery planner 里，读模型只是把同一个 planner 跑在预览模式上
 | pr_open / ci_pending / review_pending / compensation_pending / compensated | running |
 | pending | waiting |
 
-### 5.4 `tasks[].evidence`：agent 自述的验证状态（【提案 · 待主脑裁决】，A-18）
+### 5.4 `tasks[].evidence`：agent 自述的验证状态（【已裁决 · 2026-08-12】，A-18）
 
 缺陷事实：live 任务 `6ba476ab`（run `d261dbb4`）以 `runner.completed` 收尾、`succeeded`、
 GUI 画绿「已交付」；而同一份载荷里 `testResults: []`、`testCommand: null`、`artifacts: []`，
