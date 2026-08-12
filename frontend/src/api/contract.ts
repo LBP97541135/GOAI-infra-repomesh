@@ -135,15 +135,34 @@ export interface OrganizationCreateResponse {
 
 // ───────────────── 契约 v0.2 §3 / §5：issue 详情与房间读模型 ─────────────────
 
+/** §3 轮次条目。
+ *
+ *  **A-4 勘正（2026-08-12，8100 只读实调）**：`plan_version` 与 `updated_at` 契约
+ *  原文写作非空，live 上却双双为 null。三个时间/版本字段同一来源（该轮
+ *  PlanSnapshot），`created_at` 早已按 A8 标成可空，另外两个是同一处漏标——
+ *  **该轮快照落库之前，三个一起是 null**，这是常态不是异常态。
+ *
+ *  两个活标本实测**逐字段完全一致**（除 round_id）：
+ *   - `5c1b3567-42be-588d-b475-ab9cb0e03689` / 轮次 `8d8a3370…`：物化半途中断；
+ *   - `35e66beb-cd03-5aa5-83c8-00a3db31d9c7` / 轮次 `53ff1fd8…`：物化成功、尚未开工。
+ *  两者的 `rounds[0]`、聚合的 `plan` / `tasks` / `change_set` / `matrix_room_id`、
+ *  `rooms` 全部同形。**读模型没有给出区分这两条来路的字段**——消费方不得据此
+ *  判断「是不是坏了」，那是把一个信号读成一个原因。
+ *
+ *  类型按**实测**标可空，不按契约原文标——把已知会是 null 的字段声明成非空，
+ *  编译器就不许消费方检查它，`dayLabel(round.updated_at)` 的 `.match` 白屏就是
+ *  这么来的。契约原文的修订另行提给后端，前端不等它。 */
 export interface IssueRoundView {
   /** = execution_plan_id = v0.1 的 delivery_id（§0 语义等式） */
   round_id: string;
   phase: Phase;
   status: string;
-  plan_version: number;
+  /** 无 PlanSnapshot 为 null（A-4 勘正；契约原文写作 `number`） */
+  plan_version: number | null;
   /** §3：取该轮次 PlanSnapshot 的时间，**无快照为 null**（A8 勘正漏标） */
   created_at: string | null;
-  updated_at: string;
+  /** 同上，无快照为 null（A-4 勘正；契约原文写作 `string`） */
+  updated_at: string | null;
 }
 
 export interface IssueRepositoryRef {

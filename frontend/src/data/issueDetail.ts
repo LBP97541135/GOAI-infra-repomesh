@@ -117,10 +117,105 @@ export const issueDetailDraftFixture: IssueDetailView = {
   discovery_state: "done",
 };
 
+/** 「本轮尚无快照」形态的共用底稿（A-4）。
+ *
+ *  形状逐字取自 8100 只读 GET（2026-08-12）：轮次行与两条仓库关联已落库，但该轮的
+ *  `plan_version` / `created_at` / `updated_at` 三个字段都还是 null，任务 0、
+ *  房间 0、聚合的 `change_set` / `matrix_room_id` 也全空。
+ *
+ *  契约 §3 把 `plan_version` 写成 `number`、`updated_at` 写成 `string`（均非空），
+ *  **live 与契约在此处不符**：这正是 A-4 的病灶——`dayLabel(round.updated_at)` 对
+ *  null 调 `.match` 抛 TypeError，一条数据把整个 issue 详情页打成白屏，连「重试
+ *  物化」都够不着。下面两个形态都是那口反证井：修复前打开任一个必白屏。 */
+const noSnapshotRoundBase = {
+  ...issueDetailFixture,
+  phase: "execute" as const,
+  // 读模型派生，照抄 live 原文
+  phase_note: "第 1/1 批执行中",
+  operational_status: "active" as const,
+  execution_mode: "auto" as const,
+  round_count: 1,
+  pending_decision_count: 0,
+  repository_count: 2,
+  team_count: 2,
+  human_grants: [],
+  required_checkpoints: [],
+  discovery_step: 4 as const,
+  discovery_state: "done" as const,
+};
+
+/** 自检形态①：**物化成功、尚未开工**的干净轮次（`?issue=freshround`）。
+ *  活标本 `35e66beb-cd03-5aa5-83c8-00a3db31d9c7` / 轮次 `53ff1fd8…`。
+ *  这是**常态**——首个 PlanSnapshot 落库之前每一轮都会经过这个形状。 */
+export const issueDetailFreshRoundFixture: IssueDetailView = {
+  ...noSnapshotRoundBase,
+  title: "结算页支持订单备注：下单时允许买家填写备注，账单明细透出便于对账",
+  requirement_text:
+    "结算页支持订单备注：checkout 下单时允许买家填写备注并随订单提交，billing 在账单明细中透出该订单备注便于对账客服核查。",
+  active_round_id: "53ff1fd8-21ea-44ea-a43a-13dde87f6e25",
+  latest_round_id: "53ff1fd8-21ea-44ea-a43a-13dde87f6e25",
+  rounds: [
+    {
+      round_id: "53ff1fd8-21ea-44ea-a43a-13dde87f6e25",
+      phase: "execute",
+      status: "in_progress",
+      plan_version: null,
+      created_at: null,
+      updated_at: null,
+    },
+  ],
+  repositories: [
+    { repository_id: REPO_API, name: "saleor-core", team_id: "t-0001", role_in_issue: null },
+    { repository_id: REPO_WEB, name: "saleor-dashboard", team_id: "t-0002", role_in_issue: null },
+  ],
+  teams: [
+    { team_id: "t-0001", agentteams_team_name: "rm-team-a1b2c3", repository_id: REPO_API, runtime_status: "pending" },
+    { team_id: "t-0002", agentteams_team_name: "rm-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "pending" },
+  ],
+};
+
+/** 自检形态②：**物化半途中断**留下的轮次（`?issue=halfround`）。
+ *  活标本 `5c1b3567-42be-588d-b475-ab9cb0e03689` / 轮次 `8d8a3370…`。
+ *
+ *  **本形态与 `freshround` 的读模型投影逐字段一致**（除 round_id 与需求文本）——
+ *  `rounds[0]`、聚合的 `plan`/`tasks`/`change_set`/`matrix_room_id`、`rooms` 全部同形，
+ *  8100 上两个活标本对拉过。这不是夹具偷懒，**这就是结论**：界面拿不到区分
+ *  「刚物化」与「中断」的任何字段，所以两个形态必须渲染出**同一句**诚实措辞
+ *  （「本轮尚无快照」）。哪天服务端补出区分字段，先改这两个夹具让它们分叉，
+ *  再谈分两句话说。 */
+export const issueDetailHalfRoundFixture: IssueDetailView = {
+  ...noSnapshotRoundBase,
+  title: "结算页支持货到付款：新增支付方式选项，账单标注待收款并纳入对账单",
+  requirement_text:
+    "结算页支持货到付款：checkout 结算页增加货到付款支付方式选项并在下单时标记支付方式，billing 账单生成时对货到付款订单标注待收款状态并纳入对账单。",
+  active_round_id: "8d8a3370-a24d-42fa-b2e3-6fb011189dcd",
+  latest_round_id: "8d8a3370-a24d-42fa-b2e3-6fb011189dcd",
+  rounds: [
+    {
+      round_id: "8d8a3370-a24d-42fa-b2e3-6fb011189dcd",
+      phase: "execute",
+      status: "in_progress",
+      plan_version: null,
+      created_at: null,
+      updated_at: null,
+    },
+  ],
+  repositories: [
+    { repository_id: REPO_API, name: "saleor-core", team_id: "t-0001", role_in_issue: null },
+    { repository_id: REPO_WEB, name: "saleor-dashboard", team_id: "t-0002", role_in_issue: null },
+  ],
+  teams: [
+    { team_id: "t-0001", agentteams_team_name: "rm-team-a1b2c3", repository_id: REPO_API, runtime_status: "pending" },
+    { team_id: "t-0002", agentteams_team_name: "rm-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "pending" },
+  ],
+};
+
 /** `?issue=<name>` 的取值表（自检开关，与 `?discovery=<name>` 同款；live 下不参与取数）。 */
 export const issueDetailFixtures: Record<string, IssueDetailView> = {
   default: issueDetailFixture,
   draft: issueDetailDraftFixture,
+  freshround: issueDetailFreshRoundFixture,
+  halfround: issueDetailHalfRoundFixture,
 };
 
 export const ISSUE_DETAIL_FIXTURE_DEFAULT = "default";
@@ -205,6 +300,17 @@ export const roomsFixture: RoomListItemView[] = [
     live: false,
   },
 ];
+
+/** 每个 `?issue=<name>` 形态各自的房间清单，与 `issueDetailFixtures` 同名对齐。
+ *  `draft`（未物化：没有拓扑就没有团队）与 `freshround` / `halfround`（拓扑建了、
+ *  房间还没跟上，8100 两个活标本实测 `{"rooms": []}`）都是 0 房间，但**不是同一件事**——
+ *  所以逐条写死，不用一条规则从拓扑倒推。 */
+export const issueRoomsFixtures: Record<string, RoomListItemView[]> = {
+  default: roomsFixture,
+  draft: [],
+  freshround: [],
+  halfround: [],
+};
 
 /** §5.2 四值全覆盖：message（真实气泡）+ governance / gate / runner（系统条目，无头像）。
  *  治理决策按 Q4 方案 A **只投进 leaderDM 流**，teamRoom 流不含 governance。 */

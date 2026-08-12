@@ -146,8 +146,12 @@ export const ROLLBACK_UNAVAILABLE_LABEL: Record<"no_change_set" | "nothing_deliv
   nothing_delivered: "本轮的候选一个都还没发布（既没 merge，也没开过 PR）——没有可撤销的东西。",
 };
 
-/** ISO 时间戳 → MM-DD。取不到格式时原样回显，不猜。 */
-export function dayLabel(at: string): string {
+/** ISO 时间戳 → MM-DD。取不到格式时原样回显，不猜。
+ *  防御同 `eventTime`（A-4）：半执行轮次的 `updated_at` 实测为 null，此前直接
+ *  `.match` 抛 TypeError 把整页打成白屏。空值渲染 "—"——**这是纯格式化层的兜底，
+ *  不是降级文案**：调用方若知道这个 null 有含义，该在调用处如实说出来。 */
+export function dayLabel(at: string | null | undefined): string {
+  if (!at) return "—";
   const m = at.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[2]}-${m[3]}` : at;
 }

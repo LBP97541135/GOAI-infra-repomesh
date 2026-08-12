@@ -18,22 +18,25 @@ import {
   deliveryAggregateFixture,
   issueDetailFixture,
   issueDetailFixtures,
+  issueRoomsFixtures,
   repositoryPlanFixture,
   roomStreamFixtures,
-  roomsFixture,
   roundEventsFixture,
 } from "../data/issueDetail";
 
 /** 回放形态选择：`?issue=<name>`，取值见 data/issueDetail.ts 的夹具表。
  *  **自检开关**（同 discovery.ts 的 `?discovery=`），live 模式下完全不参与取数。
  *  名字打错时不静默回落到默认形态——那会让人以为自己在看 A 其实在看 B。 */
-function replayIssueDetail(): IssueDetailView {
+function replayIssueName(): string {
   const name = new URLSearchParams(window.location.search).get("issue");
-  const picked = name ? issueDetailFixtures[name] : undefined;
-  if (name && !picked) {
+  if (name && !issueDetailFixtures[name]) {
     throw new Error(`回放夹具没有 issue 形态「${name}」。可选：${Object.keys(issueDetailFixtures).join(" / ")}`);
   }
-  return picked ?? issueDetailFixtures[ISSUE_DETAIL_FIXTURE_DEFAULT];
+  return name ?? ISSUE_DETAIL_FIXTURE_DEFAULT;
+}
+
+function replayIssueDetail(): IssueDetailView {
+  return issueDetailFixtures[replayIssueName()];
 }
 
 /** 房间流单页条数：种子每房间 0-5 条，取 50 足够；真实规模由 next_cursor 续读。 */
@@ -61,9 +64,10 @@ export async function fetchIssueDetail(issueId: string): Promise<IssueDetailView
 export async function fetchRooms(issueId: string): Promise<RoomListItemView[]> {
   if (resolveDataSourceMode() === "replay") {
     if (issueId !== issueDetailFixture.issue_id) return [];
-    // 未物化形态没有拓扑就没有团队，也就没有房间——夹具世界要自洽，
-    // 不能让一个 repositories 为空的 issue 摆出三仓六房间
-    return replayIssueDetail().repositories.length === 0 ? [] : roomsFixture;
+    // 每个形态各带自己的房间清单（夹具世界要自洽）：未物化形态没有拓扑就没有团队，
+    // 半执行形态建了拓扑但房间没跟上——两者都是 0 房间，却是两回事，不由
+    // `repositories.length` 一条规则倒推（那会让半执行形态摆出三仓六房间）。
+    return issueRoomsFixtures[replayIssueName()] ?? [];
   }
   const res = await defaultClient().listRooms(issueId);
   return res.rooms;
