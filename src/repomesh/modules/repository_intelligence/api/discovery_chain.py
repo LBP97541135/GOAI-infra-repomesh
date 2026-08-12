@@ -59,7 +59,10 @@ from repomesh.modules.repository_intelligence.contracts import (
     DiscoveryApprovalCommand,
     DiscoveryStepCommand,
 )
-from repomesh.modules.repository_intelligence.ports import RuntimeProjectionUnavailable
+from repomesh.modules.repository_intelligence.ports import (
+    RuntimeProjectionConflict,
+    RuntimeProjectionUnavailable,
+)
 from repomesh.shared.workflow import WorkflowBlocked
 
 from .models import (
@@ -477,10 +480,13 @@ async def materialize_discovery_plan(
     the loop and no task worth polling. The panel's next move is a re-read of
     the issue, exactly as after an approval.
 
-    Both 409s below are passed through with the server's own words. The
+    All three 409s below are passed through with the server's own words. The
     checkpoint one in particular is not ours to reword — it names the gate and
     the evidence version, which is the entire actionable content, and a panel
-    that renders "blocked" instead has thrown that away.
+    that renders "blocked" instead has thrown that away. The runtime one is the
+    same argument one layer out: the AgentTeams controller's sentence names the
+    resource and the field, and nothing we could write in its place is more
+    useful to the person who has to go fix it.
     """
 
     service = request.app.state.container.discovery_materialization_service()
@@ -498,6 +504,22 @@ async def materialize_discovery_plan(
         # caller may simply retry once the plane is configured — same reading
         # as `POST /bridge/materialize` gives it.
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except RuntimeProjectionConflict as error:
+        # §8.7.1's second ruling, implemented (A-8). The controller answered
+        # and the answer was no — a resource whose spec differs from the one
+        # this round needs. Nothing was started, and nothing will change if the
+        # operator presses materialize again, so this must not wear the 503
+        # below: that 503 says "wait", and waiting is precisely what does not
+        # work here. The remedy is to reconcile the spec, and the controller's
+        # own sentence is what says which one.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"the execution plane refused this project's teams ({error}); "
+                "nothing was started — retrying will not help until the "
+                "AgentTeams spec is reconciled"
+            ),
+        ) from error
     except RuntimeProjectionUnavailable as error:
         # The runtime projection could not give the teams their rooms, so the
         # plan was never started. Read it exactly as the 503 above: the round

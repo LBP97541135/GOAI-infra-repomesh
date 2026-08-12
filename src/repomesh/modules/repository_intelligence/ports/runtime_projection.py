@@ -36,6 +36,25 @@ class RuntimeProjectionUnavailable(RuntimeError):
     """
 
 
+class RuntimeProjectionConflict(RuntimeError):
+    """The runtime refused the topology on its merits → 409.
+
+    §8.7.1's second ruling, which A-8 finally gave a live instance of. The
+    controller answered, and the answer was "no" for a reason no amount of
+    waiting changes: an existing resource whose spec differs from the one being
+    asked for, or a Team membership already spoken for. Dressed as
+    :class:`RuntimeProjectionUnavailable` this became a 503 reading
+    "materialize again once AgentTeams answers" — a button the operator could
+    press forever, because AgentTeams had already answered.
+
+    Sibling of ``WorkflowBlocked`` rather than of ``ExecutionPlaneUnavailable``:
+    the request is well formed but the world says no, and the controller's own
+    sentence is the only actionable content, so it is passed through verbatim.
+
+    Nothing was started when this is raised, exactly as for its sibling.
+    """
+
+
 class TopologyRuntimeProjector(Protocol):
     """Make the rooms a project's teams will be dispatched over exist.
 
@@ -46,10 +65,17 @@ class TopologyRuntimeProjector(Protocol):
     conflict.
 
     Raises :class:`RuntimeProjectionUnavailable` when the controller cannot be
-    reached, refuses, or answers without the rooms the round needs.
+    reached or answers without the rooms the round needs, and
+    :class:`RuntimeProjectionConflict` when it refuses on the merits. The split
+    is the whole difference between "press the button again" and "stop pressing
+    the button".
     """
 
     async def project(self, project_id: UUID) -> None: ...
 
 
-__all__ = ["RuntimeProjectionUnavailable", "TopologyRuntimeProjector"]
+__all__ = [
+    "RuntimeProjectionConflict",
+    "RuntimeProjectionUnavailable",
+    "TopologyRuntimeProjector",
+]

@@ -235,10 +235,13 @@ class ApplicationContainer:
 
         The adapter's whole body is a translation. The integration raises its
         own taxonomy — unreachable controller, refused request, teams whose
-        rooms have not appeared — and the port publishes one refusal, because
-        the caller's next move is the same for all three: answer 503 and leave
-        the round materialisable. Same shape as the ``_Runtime`` proxy the
-        read model gets.
+        rooms have not appeared — and the port publishes two refusals, split on
+        the only question the caller can act on: *is pressing the button again
+        a plan?* Unreachable and rooms-not-yet are yes (503). A controller that
+        answered and said no — ``AgentTeamsConflict``, or any 4xx it spelled
+        out — is not (409, §8.7.1's second ruling, A-8). Folding the second
+        into the first is what made a permanent deadlock wear "materialize
+        again once AgentTeams answers".
 
         A container with no control plane gets a projector that refuses rather
         than one that quietly does nothing: "the rooms were never made" is the
@@ -249,6 +252,7 @@ class ApplicationContainer:
         """
 
         from repomesh.modules.repository_intelligence.ports import (
+            RuntimeProjectionConflict,
             RuntimeProjectionUnavailable,
         )
 
@@ -260,7 +264,10 @@ class ApplicationContainer:
         class _RuntimeProjection:
             async def project(self, project_id: UUID) -> None:
                 from repomesh.integrations.agentteams import (  # noqa: PLC0415
+                    AgentTeamsConflict,
                     AgentTeamsError,
+                    AgentTeamsResponseError,
+                    AgentTeamsRoomsPending,
                     ProjectRuntimeProjection,
                 )
 
@@ -279,6 +286,22 @@ class ApplicationContainer:
                         worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
                     ).project(project_id)
+                except AgentTeamsRoomsPending as error:
+                    # A subclass of AgentTeamsError and *not* a conflict: the
+                    # controller took the Teams and simply has not published
+                    # their rooms yet. Caught first because the clauses below
+                    # would not otherwise see past it.
+                    raise RuntimeProjectionUnavailable(str(error)) from error
+                except AgentTeamsConflict as error:
+                    raise RuntimeProjectionConflict(str(error)) from error
+                except AgentTeamsResponseError as error:
+                    # The controller answered with a status. 4xx is a verdict
+                    # on what we asked for — the already-a-member 400 A-8 lived
+                    # under is exactly this — and 5xx is the plane having a bad
+                    # day, which a retry may well outlast.
+                    if 400 <= error.status_code < 500:
+                        raise RuntimeProjectionConflict(str(error)) from error
+                    raise RuntimeProjectionUnavailable(str(error)) from error
                 except AgentTeamsError as error:
                     raise RuntimeProjectionUnavailable(str(error)) from error
 

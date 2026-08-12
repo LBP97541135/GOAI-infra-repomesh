@@ -853,6 +853,114 @@ def test_a_retry_after_a_runtime_failure_finishes_the_round(
     assert {p.id for p in _principals(container)} == principals_after_failure
 
 
+def test_a_runtime_that_refuses_on_the_merits_answers_409_not_503(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """§8.7.1's second ruling, implemented (A-8).
+
+    The distinction is the only thing the operator can act on. A 503 saying
+    "materialize again once AgentTeams answers" is a lie when AgentTeams has
+    already answered and said no: the button works, the round stays open, and
+    pressing it changes nothing forever — which is exactly what the three
+    stuck issues did. The 409 says stop pressing and carries the controller's
+    own sentence, which names the resource to go fix.
+
+    What has not changed: nothing was started, so the round is still
+    materialisable once the spec is reconciled.
+    """
+
+    from repomesh.modules.repository_intelligence.ports import (
+        RuntimeProjectionConflict,
+    )
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+
+    class Refuses:
+        async def project(self, project_id: UUID) -> None:
+            raise RuntimeProjectionConflict(
+                "AgentTeams HTTP 400: Worker rm-leader-b-checkout is already "
+                "a member of Team rm-team-6c503f0227a44e9280b3ab29775c0b76"
+            )
+
+    _with_execution_plane(monkeypatch, starter, Refuses())
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain)
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        # The controller's words, verbatim — the actionable half.
+        assert "is already a member of Team" in detail
+        assert "rm-team-6c503f0227a44e9280b3ab29775c0b76" in detail
+        # And explicitly *not* the retry advice the 503 gives.
+        assert "materialize again once AgentTeams answers" not in detail
+        assert "retrying will not help" in detail
+        assert starter.calls == []
+        assert chain.read()["step"] == 4
+
+
+def test_the_composition_root_splits_a_conflict_out_of_the_retryable_family(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Where the split is actually made, tested at the seam that makes it.
+
+    ``topology_runtime_projector`` is the only place the AgentTeams taxonomy
+    and the port's refusals are allowed to meet, so the mapping is not
+    observable from either side alone. Four inputs, because folding any one of
+    them the wrong way is a defect someone has already paid for: the rooms-not-
+    yet case must stay retryable even though it is an ``AgentTeamsError``, and
+    a 5xx from the controller is a bad day rather than a verdict.
+    """
+
+    from repomesh.integrations.agentteams import (
+        AgentTeamsConflict,
+        AgentTeamsResponseError,
+        AgentTeamsRoomsPending,
+        AgentTeamsUnavailable,
+    )
+    from repomesh.modules.repository_intelligence.ports import (
+        RuntimeProjectionConflict,
+        RuntimeProjectionUnavailable,
+    )
+
+    conflict = RuntimeProjectionConflict
+    unavailable = RuntimeProjectionUnavailable
+    cases = [
+        (AgentTeamsResponseError(400, "is already a member of Team x"), conflict),
+        (AgentTeamsConflict("existing AgentTeams worker differs in: runtime"), conflict),
+        (AgentTeamsRoomsPending("rooms are not there yet"), unavailable),
+        (AgentTeamsUnavailable("controller unreachable"), unavailable),
+        (AgentTeamsResponseError(503, "controller is not ready"), unavailable),
+    ]
+    # Any non-None control plane will do: the projection itself is stubbed, and
+    # the only thing under test is which port refusal the adapter picks.
+    container = replace(application_container, agent_team_control_plane=object())
+
+    for raised, expected in cases:
+
+        class _Projection:
+            def __init__(self, error=raised) -> None:
+                self._error = error
+
+            async def project(self, project_id: UUID) -> None:
+                raise self._error
+
+        monkeypatch.setattr(
+            "repomesh.integrations.agentteams.ProjectRuntimeProjection",
+            lambda *a, **k: _Projection(),
+        )
+        with pytest.raises(expected) as caught:
+            asyncio.run(container.topology_runtime_projector().project(uuid4()))
+        # The controller's sentence survives the translation either way.
+        assert str(raised) in str(caught.value)
+
+
 def test_an_unconfigured_control_plane_refuses_rather_than_skipping(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:
