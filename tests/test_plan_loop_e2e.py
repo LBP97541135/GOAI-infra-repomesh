@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -169,6 +169,11 @@ class FakeSpecificationService:
 class FakeCollaboration:
     """Accept the chat delivery the TaskOrchestrator performs after assigning."""
 
+    #: Fixed base so replayed runs produce identical timestamps; each message
+    #: is one second after the previous one, matching how ``event_id`` numbers
+    #: them, so nothing downstream has to break a tie between two messages.
+    FIRST_SENT_AT = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
+
     def __init__(self) -> None:
         self.messages: list[SendCollaborationMessageCommand] = []
 
@@ -191,6 +196,7 @@ class FakeCollaboration:
             status=CollaborationDeliveryStatus.DELIVERED,
             event_id=f"$event-{len(self.messages)}",
             correlation_id=command.correlation_id or command.sender_agent_id,
+            created_at=self.FIRST_SENT_AT + timedelta(seconds=len(self.messages)),
         )
 
 
