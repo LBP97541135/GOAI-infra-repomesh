@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     delivery_contract_gate: bool = False
     delivery_pr_label: bool = False
     delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
+    delivery_recovery_interval_seconds: int = Field(default=30, ge=5)
     scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)

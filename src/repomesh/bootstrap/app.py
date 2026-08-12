@@ -4,7 +4,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from repomesh.api.router import api_router
-from repomesh.bootstrap.container import ApplicationContainer, AsyncCloseable
+from repomesh.bootstrap.container import (
+    ApplicationContainer,
+    AsyncCloseable,
+    project_topology_reader,
+)
 from repomesh.integrations.agentteams import (
     AgentTeamsControlPlaneClient,
     AgentTeamsMatrixClient,
@@ -26,6 +30,11 @@ from repomesh.integrations.scm import (
     GitHubAdapter,
     GitHubObservationPoller,
     GitHubObservationProcessor,
+    GitHubRevertDeliveryGateway,
+    GovernedRecoveryActionHandler,
+    MirrorGitReverter,
+    RecoveryConflictTaskCreator,
+    RecoverySagaExecutor,
     SCMCommandDispatcher,
     SCMObservationReplayWorker,
 )
@@ -231,6 +240,15 @@ def build_default_container() -> ApplicationContainer:
             validation_reader=validation,
         )
         commands = SCMCommandService(PostgresSCMCommandStore(database))
+        # Revert conflicts need a Worker to repair them; without AgentTeams the
+        # Saga records the failure instead of parking the action.
+        conflict_tasks = (
+            RecoveryConflictTaskCreator(
+                task_report_gateway, project_topology_reader(topology_store)
+            )
+            if task_report_gateway is not None
+            else None
+        )
         background_services = (
             *background_services,
             DeliveryReconciler(
@@ -242,6 +260,22 @@ def build_default_container() -> ApplicationContainer:
                     command_service=commands,
                 ),
                 interval_seconds=settings.delivery_reconcile_interval_seconds,
+            ),
+            RecoverySagaExecutor(
+                delivery,
+                GovernedRecoveryActionHandler(
+                    GitHubRevertDeliveryGateway(
+                        repository_catalog,
+                        scm_adapter,
+                        MirrorGitReverter(
+                            settings.runner_workspace_root / "revert-mirrors",
+                            token_provider=scm_token_provider,
+                        ),
+                        base_branch=settings.delivery_base_branch,
+                    )
+                ),
+                conflict_tasks,
+                interval_seconds=settings.delivery_recovery_interval_seconds,
             ),
         )
     return ApplicationContainer(

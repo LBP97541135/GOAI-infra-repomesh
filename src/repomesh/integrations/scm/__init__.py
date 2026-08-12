@@ -32,12 +32,19 @@ from .recovery import (
     RecoverySagaExecutor,
     RevertConflict,
 )
-from .rework import CIReworkTaskCreator
+from .revert import (
+    GitHubRevertDeliveryGateway,
+    MirrorGitReverter,
+    RevertBranch,
+    RevertBranchRequest,
+)
+from .rework import CIReworkTaskCreator, RecoveryConflictTaskCreator
 
 __all__ = [
     "BranchPublisher",
     "ChangeSetSCMCoordinator",
     "CIReworkTaskCreator",
+    "RecoveryConflictTaskCreator",
     "RecoveryExecutionContext",
     "GovernedRecoveryActionHandler",
     "RecoverySagaExecutor",
@@ -49,7 +56,11 @@ __all__ = [
     "GitHubObservationProcessor",
     "GitHubObservationPoller",
     "GitHubReviewObservation",
+    "GitHubRevertDeliveryGateway",
     "GitBranchPublisher",
+    "MirrorGitReverter",
+    "RevertBranch",
+    "RevertBranchRequest",
     "OpenChangeSetPullRequestCommand",
     "PlanDeliveryFinalizer",
     "PlanDeliveryPolicy",

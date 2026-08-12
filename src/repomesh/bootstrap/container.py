@@ -78,6 +78,17 @@ class BackgroundService(Protocol):
     async def close(self) -> None: ...
 
 
+def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReader:
+    """Adapt the topology store to the read port modules depend on."""
+
+    class _Adapter:
+        async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
+            topology = await store.get(project_id)
+            return topology.to_view() if topology else None
+
+    return _Adapter()
+
+
 def cached_service(factory):
     """Cache a zero-argument container factory for the process lifetime."""
 
@@ -185,14 +196,7 @@ class ApplicationContainer:
     def topology_reader(self) -> ProjectTopologyReader:
         """Adapt ProjectTopologyStore to ProjectTopologyReader."""
 
-        store = self.project_topology_store
-
-        class _Adapter:
-            async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
-                topology = await store.get(project_id)
-                return topology.to_view() if topology else None
-
-        return _Adapter()
+        return project_topology_reader(self.project_topology_store)
 
     def requirement_analyzer(self) -> RequirementAnalyzer | None:
         """Build a RequirementAnalyzer when an LLM client is configured.
@@ -814,6 +818,55 @@ class ApplicationContainer:
                 token_provider=self.scm_token_provider,
             ),
             command_service=self.scm_command_service(),
+        )
+
+    def recovery_conflict_task_gateway(self):
+        """Route revert conflicts to the repository Worker, when there is one.
+
+        Task assignment travels over AgentTeams, so without a messenger the
+        Saga has nobody to hand a conflict to and records the failed action
+        instead of parking it in ``waiting_worker``.
+        """
+
+        from repomesh.integrations.scm.rework import RecoveryConflictTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return RecoveryConflictTaskCreator(tasks, self.topology_reader())
+
+    def revert_delivery_gateway(self):
+        """Choose the GitHub rollback provider for the recovery Saga."""
+
+        from repomesh.integrations.scm import GitHubRevertDeliveryGateway, MirrorGitReverter
+        from repomesh.integrations.scm.github import GitHubAdapter
+
+        if self.scm_adapter is None:
+            raise RuntimeError("SCM adapter is not configured")
+        settings = get_settings()
+        return GitHubRevertDeliveryGateway(
+            self.repository_catalog,
+            cast(GitHubAdapter, self.scm_adapter),
+            MirrorGitReverter(
+                settings.runner_workspace_root / "revert-mirrors",
+                token_provider=self.scm_token_provider,
+            ),
+            base_branch=settings.delivery_base_branch,
+        )
+
+    def recovery_saga_executor(self):
+        """Assemble the durable rollback Saga over the GitHub revert gateway."""
+
+        from repomesh.integrations.scm import (
+            GovernedRecoveryActionHandler,
+            RecoverySagaExecutor,
+        )
+
+        return RecoverySagaExecutor(
+            self.delivery_service(),
+            GovernedRecoveryActionHandler(self.revert_delivery_gateway()),
+            self.recovery_conflict_task_gateway(),
+            interval_seconds=get_settings().delivery_recovery_interval_seconds,
         )
 
     def plan_delivery_finalizer(self):

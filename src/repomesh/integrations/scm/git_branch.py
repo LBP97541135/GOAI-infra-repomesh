@@ -12,6 +12,32 @@ _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _BRANCH = re.compile(r"^(?![-/.])(?!.*(?:\.\.|//|@\{|\\))[A-Za-z0-9._/-]+(?<![/.])$")
 
 
+def is_safe_branch_name(value: str) -> bool:
+    """Reject branch names Git would reinterpret (refspecs, lock files, traversal)."""
+
+    return bool(_BRANCH.fullmatch(value)) and not value.endswith(".lock")
+
+
+def github_credential_environment(token: str) -> dict[str, str]:
+    """Build a Git environment that carries an installation token as an HTTP header.
+
+    The token never reaches a working tree, a remote URL or a coding agent: it
+    only lives in the per-process ``GIT_CONFIG_*`` variables of the Git command
+    RepoMesh itself runs.
+    """
+
+    basic_credential = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic_credential}",
+        }
+    )
+    return environment
+
+
 class GitBranchPublisher:
     """Publishes one frozen commit without granting the coding agent Git credentials."""
 
@@ -97,7 +123,7 @@ class GitBranchPublisher:
             command.expected_remote_sha.lower()
         ):
             raise ValueError("expected_remote_sha must be a full Git object id")
-        if not _BRANCH.fullmatch(command.branch_name) or command.branch_name.endswith(".lock"):
+        if not is_safe_branch_name(command.branch_name):
             raise ValueError("branch_name is not a safe Git branch name")
 
     async def _git_environment(self, repository: RepositoryRef | None) -> dict[str, str] | None:
@@ -107,16 +133,7 @@ class GitBranchPublisher:
         token = (await supplied if inspect.isawaitable(supplied) else supplied).strip()
         if not token:
             raise SCMConflict("GitHub installation token is unavailable for branch publication")
-        environment = dict(os.environ)
-        basic_credential = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        environment.update(
-            {
-                "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-                "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic_credential}",
-            }
-        )
-        return environment
+        return github_credential_environment(token)
 
     async def _run(
         self,
