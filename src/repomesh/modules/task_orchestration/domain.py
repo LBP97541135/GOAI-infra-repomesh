@@ -35,6 +35,19 @@ class TaskNotFound(TaskOrchestrationError):
     pass
 
 
+class RoundNotDispatchable(TaskConflict):
+    """This round has nothing an explicit re-dispatch could do → 409.
+
+    A subclass so the existing conflict translation covers it without a new
+    branch, and a named type so the API and the tests can say which refusal
+    they mean rather than matching a sentence. Two shapes wear it: a round
+    whose materialization never got as far as writing tasks, and a round whose
+    tasks have all reached a terminal status. Neither is an error the operator
+    made, and neither is fixed by pressing again — which is exactly what
+    separates it from the 503 next door.
+    """
+
+
 FINAL_TASK_STATUSES = frozenset(
     {
         TaskStatus.SUCCEEDED,

@@ -256,6 +256,30 @@ class TaskAssignmentGateway(Protocol):
     ) -> TaskView: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RoundRedispatch:
+    """What one explicit re-dispatch of a round did (contract v0.4 §8.7.4)."""
+
+    round_id: UUID
+    attempt: str
+    task_ids: tuple[UUID, ...]
+    """The non-terminal tasks that were dispatched again, leaders included."""
+    settled_task_ids: tuple[UUID, ...]
+    """Tasks of the round left alone because they had already finished."""
+
+
+class TaskRedispatchGateway(Protocol):
+    """Dispatch an already-assigned task again under a new attempt.
+
+    Separate from ``TaskAssignmentGateway`` because it is a different act: no
+    task is created, no command is fingerprinted, and the only thing that
+    varies between two calls is ``attempt`` — the token that makes the room
+    message a new Matrix event instead of a deduplicated repeat.
+    """
+
+    async def redispatch(self, task_id: UUID, *, attempt: str) -> TaskView: ...
+
+
 class TaskSpecificationAuthor(Protocol):
     """Ensure the approved, frozen Task Specification a Worker task needs before execution."""
 

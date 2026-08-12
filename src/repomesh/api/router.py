@@ -4,6 +4,7 @@ from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
 from repomesh.api.read_models import grid_router, issues_router, rooms_router
 from repomesh.api.read_models import router as delivery_read_model_router
+from repomesh.api.round_dispatch import router as round_dispatch_router
 from repomesh.api.scm_reconciliation import router as scm_reconciliation_router
 from repomesh.api.scm_webhook import router as scm_webhook_router
 from repomesh.api.worker_mcp import router as worker_mcp_router
@@ -38,6 +39,11 @@ api_router.include_router(agent_runtime_router, prefix="/api/v1")
 api_router.include_router(delivery_router, prefix="/api/v1")
 api_router.include_router(human_control_router, prefix="/api/v1")
 api_router.include_router(deliveries_router, prefix="/api/v1")
+# Contract v0.4 §8.7.4: the round-scoped re-dispatch. Shares the /deliveries
+# prefix with the delivery module's own writes and with the read model's GETs
+# — the paths are disjoint, and a capability that drives task_orchestration
+# does not belong to the delivery module just because it hangs off its id.
+api_router.include_router(round_dispatch_router, prefix="/api/v1")
 api_router.include_router(delivery_read_model_router, prefix="/api/v1")
 api_router.include_router(issues_router, prefix="/api/v1")
 api_router.include_router(rooms_router, prefix="/api/v1")

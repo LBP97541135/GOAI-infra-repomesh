@@ -17,6 +17,16 @@ class TaskStore(Protocol):
 
     async def get_by_idempotency_key(self, idempotency_key: str) -> tuple[Task, str] | None: ...
 
+    async def assignment_key(self, task_id: UUID) -> str | None: ...
+    """The idempotency key this task was assigned under, read back by id.
+
+    The reverse of ``get_by_idempotency_key``, and it exists for one caller:
+    re-dispatch (§8.7.4) must republish the task package under the *original*
+    key, because the publisher hashes that key into the package's content and a
+    different one is refused as a conflict. Without this the key is knowable
+    only by whoever built it, which by then is several rounds in the past.
+    """
+
     async def update(self, task: Task, *, expected_version: int) -> None: ...
 
     async def list_by_project(self, project_id: UUID) -> tuple[Task, ...]: ...
