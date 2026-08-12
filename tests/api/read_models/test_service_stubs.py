@@ -40,6 +40,7 @@ from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskEvidenceView,
     TaskOrigin,
     TaskStatus,
     TaskView,
@@ -721,3 +722,75 @@ async def test_messages_projects_direction_and_scopes_to_delivery() -> None:
     assert item["status"] == "delivered"
     assert item["created_at"] is not None
     assert await service.list_messages(uuid4()) is None
+
+
+@pytest.mark.asyncio
+async def test_diffs_read_the_declared_evidence_not_the_free_text_summary() -> None:
+    """§3 diffs[] comes from TaskView.evidence, which the producer declares.
+
+    This projection used to json.loads(result_summary) — a column contracted as
+    free text. The task below carries human prose there and its evidence in the
+    declared view, which is exactly the case the old parse got wrong: it would
+    hit JSONDecodeError and silently report no Runner evidence at all.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    run_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = replace(
+        _worker(project_id, repository_id, leader_task_id),
+        status=TaskStatus.SUCCEEDED,
+        result_summary="Implemented pricing; 2 files changed, all tests pass.",
+        evidence=TaskEvidenceView(
+            commit_sha="a" * 40,
+            run_id=run_id,
+            changed_files=("src/pricing.py", "tests/test_pricing.py"),
+            base_sha="9" * 40,
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: _manual_intervention_change_set(plan, repository_id, worker.id)}),
+        StubArchives(),
+    )
+
+    detail = await service.get_delivery(plan.id)
+
+    assert detail["diffs"] == [
+        {
+            "repository_id": repository_id,
+            "run_id": run_id,
+            "commit_sha": "a" * 40,
+            "changed_files": ["src/pricing.py", "tests/test_pricing.py"],
+            "diffstat": None,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_task_without_declared_evidence_contributes_no_diff() -> None:
+    """No evidence is reported as no evidence, not rescued by an exception."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = replace(
+        _worker(project_id, repository_id, leader_task_id),
+        status=TaskStatus.SUCCEEDED,
+        result_summary="SUPERSEDED: replaced by plan v2",
+        evidence=None,
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: _manual_intervention_change_set(plan, repository_id, worker.id)}),
+        StubArchives(),
+    )
+
+    assert (await service.get_delivery(plan.id))["diffs"] == []

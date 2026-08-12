@@ -7,7 +7,6 @@ composition-root adapters; unimplemented contract fields return ``null``.
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -1885,28 +1884,25 @@ def _title(requirement_text: str | None, project_id: UUID) -> str:
 
 
 def _diffs(worker_tasks: tuple[TaskView, ...]) -> list[dict]:
-    """runner.completed evidence written back into task result summaries."""
+    """§3 diffs[]: the Runner evidence task orchestration declares per task.
 
-    diffs: list[dict] = []
-    for task in worker_tasks:
-        if task.status is not TaskStatus.SUCCEEDED or not task.result_summary:
-            continue
-        try:
-            evidence = json.loads(task.result_summary)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(evidence, dict) or not evidence.get("commitSha"):
-            continue
-        diffs.append(
-            {
-                "repository_id": task.repository_id,
-                "run_id": evidence.get("runId"),
-                "commit_sha": evidence.get("commitSha"),
-                "changed_files": list(evidence.get("changedFiles") or ()),
-                "diffstat": None,
-            }
-        )
-    return diffs
+    This used to json.loads(result_summary) here — parsing structure out of a
+    field the producer only ever declared as free text. The producer now owns
+    that parse and publishes TaskEvidenceView, so a task with no structured
+    evidence says so instead of being rescued by a JSONDecodeError handler.
+    """
+
+    return [
+        {
+            "repository_id": task.repository_id,
+            "run_id": task.evidence.run_id,
+            "commit_sha": task.evidence.commit_sha,
+            "changed_files": list(task.evidence.changed_files),
+            "diffstat": None,
+        }
+        for task in worker_tasks
+        if task.status is TaskStatus.SUCCEEDED and task.evidence is not None
+    ]
 
 
 __all__ = [

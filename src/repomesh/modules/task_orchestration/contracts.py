@@ -29,6 +29,23 @@ class TaskOrigin(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class TaskEvidenceView:
+    """Structured Runner evidence for a task, when the task has any.
+
+    ``result_summary`` is free text by contract and carries three unrelated
+    shapes (a Runner JSON document, ``SUPERSEDED: ...``, and plain prose), so
+    a consumer parsing it was reading a field the producer never promised.
+    This view is the declared, parsed form; it is ``None`` whenever the task
+    carries no structured evidence.
+    """
+
+    commit_sha: str  # non-empty; without it there is no evidence to report
+    run_id: UUID | None  # null when the Runner reported no run id
+    changed_files: tuple[str, ...]
+    base_sha: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class TaskView:
     id: UUID
     organization_id: UUID
@@ -44,6 +61,7 @@ class TaskView:
     result_summary: str | None
     version: int
     origin: TaskOrigin = TaskOrigin.PLANNED
+    evidence: TaskEvidenceView | None = None
 
 
 class ExecutionPlanStatus(StrEnum):
