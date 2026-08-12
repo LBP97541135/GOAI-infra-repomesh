@@ -26,6 +26,7 @@ from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenar
 from repomesh.integrations.llm import make_llm_client
 from repomesh.integrations.scm import (
     ChangeSetSCMCoordinator,
+    CIReworkTaskCreator,
     DeliveryReconciler,
     GitHubAdapter,
     GitHubObservationPoller,
@@ -192,12 +193,20 @@ def build_default_container() -> ApplicationContainer:
             scm_adapter,
             command_service=commands,
         )
+        # A failed candidate needs a Worker to repair it; without AgentTeams the
+        # CI failure only changes delivery state and waits to be noticed.
+        rework_tasks = (
+            CIReworkTaskCreator(task_report_gateway, project_topology_reader(topology_store))
+            if task_report_gateway is not None
+            else None
+        )
         processor = GitHubObservationProcessor(
             observations,
             delivery,
             repository_catalog,
             coordinator,
             auto_merge=settings.delivery_auto_enabled,
+            rework_tasks=rework_tasks,
         )
         if settings.github_webhook_secret:
             background_services = (
