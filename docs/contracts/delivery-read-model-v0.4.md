@@ -360,7 +360,7 @@ GUI 步进器（1..4）与管线步（Step 0..4）的映射，本契约以**管�
 | 2 候选评分 | Step 1 | `POST …/discovery/candidates` |
 | 3 分档审批 | Step 2（生成三档）**+** 人工审批 | `POST …/discovery/classification` 与 `POST …/discovery/approval` |
 | 4 生成计划 | Step 3 | `POST …/discovery/plan` |
-| （步进器外）物化开工 | Step 4 | 批次 C-3，不在本文 |
+| （步进器外）物化开工 | Step 4 | `POST …/discovery/materialize` —— 见 **§8**（批次 C-3 已实施） |
 
 `step` 派生，**按序判定、首个命中即返回**：
 
@@ -724,6 +724,168 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 `tests/test_discovery_contracts.py`（§3.2 七条判定逐条 + 派生纯函数）、
 `tests/test_plan_execution_bridge.py::TestMaterializeSnapshot`（Q3 案 (b) 与快照回归）。
 全程零真实网络/LLM 调用。
+
+---
+
+## 8. 物化开工端点（C-3，2026-08-11 实施 · 分支 `feat/c3-materialize`）
+
+§3.2 的表格给它留的位置是「（步进器外）物化开工 / Step 4 / 批次 C-3，不在本文」。
+本节补齐，与实现一致。
+
+### 8.1 落位、鉴权与形状
+
+`POST /api/v1/issues/{issue_id}/discovery/materialize`，挂 §4.1 的同一个 RI router，
+同一个 `ACTION_TOKEN`，主体规则与 §4.1 **同一份实现**（活跃 `ORGANIZATION_LEADER` 且属
+该 issue 的工作区；`require_organization_leader()` 被四个写触发与本端点共用——鉴权规则
+存两份，就是迟早被放宽一份）。
+
+请求：
+
+```json
+{ "created_by_agent_id": "uuid", "idempotency_key": "string(>=8)" }
+```
+
+**不收计划的任何字段**——没有 `task_dag`、没有 `contracts`、没有 `engineering_spec`、
+没有 `repositories`。这是与既有 `POST /bridge/materialize` 最大的差别，理由与 §4.3
+Step 2「不收 `candidate_repos`」同一条，但后果更重：那里浏览器回传的是待审的证据，
+这里回传的会直接变成派给 Worker 的任务。`/bridge/materialize` 保持收整份计划不动，
+它的调用方是 `scripts/run_pipeline.py`——脚本手里那份是**唯一**的一份，浏览器手里那份
+是服务端已经存好的一份的**副本**，两者不是同一种东西。
+
+响应 **200（同步）**：
+
+```json
+{ "plan_id": "uuid|null",
+  "task_ids": ["uuid"],
+  "team_count": 2,
+  "repositories": ["ts-notify", "ts-order"],
+  "status": "materialized|replayed" }
+```
+
+同步而非 202：全程不调模型，只写行然后返回，没有可轮询的东西；给 202 等于让面板多养
+一条等待路径和一条错误路径去等一件已经做完的事（与 §4.2 对 A-2 的论证同一把尺子，
+结论相反是因为前提相反）。
+
+`plan_id` 可为 `null`：计划里每个仓库都被跳过（都不在编目里、或都没有队）时，规范说明
+已建、但没有任何东西被排期。此时草稿**不被消费**（`link_execution_plan` 只在真的起了
+执行计划时才回填），这一轮仍可再物化。
+
+### 8.2 三类 409（原因如实，逐条可区分）
+
+| 情形 | detail（原文透传） |
+| --- | --- |
+| 链未走完（§3.2 判定 `step < 4`） | `the discovery chain is still on step N of 4; there is no plan to materialise yet` |
+| 分档生成了但**未审批** | `the classification has not been approved; work cannot start on a repository set nobody released` |
+| 审批被**打回**（`changes_requested`） | `the classification was returned for changes; …` |
+| Step 3 失败留了 `plan.error` | `the last plan generation failed; re-run it before starting work` |
+| 已批但 `task_dag` 为空 | `the classification is approved but no plan has been generated; …` |
+| 草稿已被消费（本轮已物化过，且**不是**同键重放） | `this issue's plan has already been materialised; its discovery chain is closed` |
+| 计划里的仓库全部不在编目 | `none of the plan's repositories are in the catalog (…); nothing can be assigned` |
+| **REPOSITORY_SCOPE 检查点未过** | **bridge 的 `WorkflowBlocked` 原文**，如 `human_checkpoint_pending` |
+
+「未审批」与「已批但没计划」**必须分开说**：它们是两个不同的下一步动作（去审批页 / 去按
+生成计划），一句「计划未就绪」会把人送到错的按钮。判定用的是读模型自己的
+`discovery_step()` 纯函数，不另立一套——面板上那个按钮是按这个数字亮起来的，服务端换
+一把尺子拒绝，就是同一屏幕上两个答案。
+
+另有 **503**：执行面未配置（无 Matrix → 无任务编排）。bridge 在**任何副作用之前**
+`raise ExecutionPlaneUnavailable`，所以这是可重试的，草稿仍开着；与
+`POST /bridge/materialize` 和 `run_pipeline.py` 对 503 的既有读法完全一致，**降级语义不变**。
+
+### 8.3 幂等与重放
+
+收据落在 `discovery.materialization`（与四个步块并列，同一张草稿）：
+
+```json
+{ "idempotency_key": "…", "status": "materialized|failed", "by_agent_id": "uuid",
+  "at": "iso8601", "error": null,
+  "plan_id": "uuid|null", "task_ids": ["uuid"], "team_count": 2,
+  "repositories": ["…"], "skipped_repos": ["…"] }
+```
+
+- **同键重放 → 200 + `status: "replayed"`，形状完全相同**，且不再建队、不再起任务
+  （bridge 的 `idempotency_prefix` = `disc-{idempotency_key}`，但重放在调 bridge **之前**
+  就短路了——bridge 自身幂等只保护规范与任务，挡不住「草稿已被消费 → 另写一版新快照」
+  那条分支，那会让一轮长出第二版）。
+- **只有 `status == "materialized"` 的收据才重放**。失败的收据是「出了什么事」的记录，
+  不是可以交回去的结果；同一个键在故障排除后仍可重试。
+- 收据要跨快照找：物化成功即消费草稿，重试到达时持有收据的那一行已经不是当前草稿了。
+- **不同键落在已消费的一轮上 → 409**（上表最后第三行），既不重放也不重建：那不是这次
+  请求起的计划，也不该给这一轮第二份。
+
+### 8.4 ensure topology：这一步为什么在这里
+
+核实事实：**控制台路径从不创建拓扑**。建工作区只落一个 `ORGANIZATION_LEADER`
+（`OrganizationRegistryService` → 一次 `CreateAgent`），扫仓库只落编目行
+（`ScanRegistration`），二者都不建 `RepositoryTeam`、不建 `ProjectAgentTopology`。而
+`PlanExecutionBridge.materialize` 第一件事就是
+`raise ValueError("Project topology not found")`。所以每个项目的第一轮都会撞上它。
+
+裁决：**无拓扑时按草稿 `task_dag` 的仓库集合建一个**（语义照
+`scripts/run_pipeline.py::_ensure_topology`：org leader + 每仓一队，一队 = 一个
+`REPOSITORY_LEADER` + 一个 `WORKER`），**已有拓扑一律不动**。
+
+走的是既有应用层能力，没有第四条写库路径：
+
+| 层 | 用的东西 | 新增 |
+| --- | --- | --- |
+| 建 principal | `agent_directory.application.CreateRepositoryAgentTeam`（既有，此前**零生产调用方**，只有脚本用） | 外面包 `ProvisionRepositoryAgentTeam`（*ensure* 语义，见下） |
+| 建拓扑 | `project.application.CreateProjectAgentTopology`（既有，此前只有 `POST /projects/topologies` 一个调用方） | 外面包 `EnsureProjectAgentTopology` |
+| 跨模块 | `agent_directory.contracts.RepositoryAgentTeamProvisioner`、`project.contracts.ProjectTopologyProvisioner` | 两个 Protocol（**本节即「补最小契约」的记录**） |
+
+三点必须写进契约的差异：
+
+1. **`ensure` 不是 `create`。** 仓库 leader 是目录里的 singleton
+   （`singleton_key = "repository:{id}:leader"`，全局唯一而非按项目），所以第二个项目
+   碰同一个仓库时 `create` 会 `AgentAlreadyExists` 把这一轮卡死。两个项目共用一个仓库
+   是常态不是错误，因此已存在的队**收敛复用**；若那个 leader 属于别的组织、或挂在别的
+   org leader 下，则如实报错而不是「修好」它。
+2. **组织取的是操作者自己的**，不像 `run_pipeline` 每次 `new_id()` 现造一个——脚本从零
+   引导，控制台这一轮发生在一个已经存在的工作区里面。
+3. **`execution_mode` / `required_checkpoints` 留缺省（AUTO / 空）。** 顺路建出来的拓扑
+   不是决定一个项目监管策略的地方；那仍归 `POST /projects/topologies` 这张管理员面。
+   反过来说，**已有拓扑连同它的监管策略一起原样保留**——所以 §8.2 最后一行那个
+   REPOSITORY_SCOPE 409 是真会发生的，不会被「顺手重建成 AUTO」绕过。
+
+建队发生在检查点闸门**之前**（bridge 内部才评估闸门），这是本端点唯一一处「先写后拒」。
+可以接受的理由很具体：一个没有执行计划的拓扑不给任何人派任何活，而闸门放行后紧接着
+就要用它。
+
+### 8.5 与 §2.4 版本语义的衔接
+
+不新增版本。物化走的是 §2.4 已裁决的**案 (b)**：复用当前草稿快照，
+`link_execution_plan()` 回填 `execution_plan_id` 即消费该行。于是一轮 = 一版：
+v1 同时承载本轮的发现档案（§2.2 的 `discovery` 块）、集成产物（§4.3 写回的四列）与
+本节的物化收据，`rounds[].plan_version` 从 1 起跳。下一轮发现在
+`next_version()` 上开新草稿（§2.3），`discovery` 从空开始。
+
+`discovery.materialization` 是**收据**，不是计划内容：它写在刚被消费的那一行上，是
+§2.5「已消费快照不可变」的唯一例外，明写在此而不是默默做掉。这条例外买到的是「成功
+物化之后，同键必然重放、异键必然 409，绝不会静默重建」——因为草稿一旦被消费，任何
+后续请求都进不到 bridge。
+
+### 8.6 落点与验证
+
+| 内容 | 落点 |
+| --- | --- |
+| 端点 + 请求/响应模型 | `repository_intelligence/api/{discovery_chain,models}.py` |
+| 服务（读快照、判定、收据、ensure topology 编排） | `repository_intelligence/application/discovery_materialization.py` |
+| 物化能力的端口（**避免与 change_orchestration 成环**） | `repository_intelligence/ports/materialization.py` |
+| 鉴权规则单一实现 | `repository_intelligence/application/discovery_chain.py::require_organization_leader` |
+| 两个跨模块契约 | `agent_directory/contracts.py`、`project/contracts.py` |
+| 两个 ensure 实现 | `agent_directory/application/repository_team.py`、`project/application.py` |
+| 组装 | `bootstrap/container.py::{project_topology_provisioner,discovery_materialization_service}` |
+
+`ExecutionPlaneUnavailable` 从 `change_orchestration/application.py` 移到该模块的
+`contracts.py`（`__init__` 与既有调用方无感）：它是**对外的拒绝**，两个 API 层都要按它
+翻 503，放在 contracts 才能被指名而不必 import 别人的 application。
+
+验证：`tests/api/test_issue_materialize.py`（15 例，全程零真实网络/LLM/Matrix；唯一替身
+是 `start_plan` 这个 Matrix 相关接缝，其余快照存储、拓扑建队、规范服务、检查点闸门、
+bridge 全是生产代码）。反证已做：拆掉就绪判定 → 三条 409 用例按**具体原因**红；
+拆掉重放查找 → 重放用例红；再叠加「草稿不被消费」 → 重放用例与异键 409 用例同时红，
+证明「不重建」那组断言（`start_plan` 调用计数、拓扑行 id 与队数、principal 集合）
+真的咬得住，而不是只在数数。
 
 ---
 
