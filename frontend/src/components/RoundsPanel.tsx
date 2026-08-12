@@ -1,4 +1,5 @@
 import type {
+  DeliveryTaskView,
   GovernanceDecisionView,
   IssueDetailView,
   IssueRoundView,
@@ -13,6 +14,9 @@ import {
   eventTime,
   governanceLabel,
   governanceSkin,
+  isRedispatchable,
+  isRerunnable,
+  lastDispatchLabel,
   shortId,
 } from "../display";
 
@@ -36,6 +40,8 @@ export interface RoundHistoryState {
   /** E-1 交付卡的数据（§4.6）。null + rollbackError 说明为什么没有 */
   rollback: RollbackScopeView | null;
   rollbackError: string | null;
+  /** §8.7.4 重新派工入口的呈现依据；与 recorded 同一次取数，零额外请求 */
+  tasks: DeliveryTaskView[];
 }
 
 /** 归档按钮（B-4）的呈现规则：只对 `delivered` / `failed` 终态轮次给出动作；
@@ -53,6 +59,7 @@ export function RoundsPanel({
   onToggleRound,
   onArchiveRound,
   onRollbackRound,
+  onRedispatchRound,
 }: {
   detail: IssueDetailView;
   /** 决策夹正在呈现的那一轮（active ?? latest）；展开该轮时提示去上方处理待决策 */
@@ -67,6 +74,8 @@ export function RoundsPanel({
   onArchiveRound: (round: IssueRoundView) => void;
   /** E-1：打开该轮的回滚对话框；范围表已随本轮展开取到，弹窗零额外取数 */
   onRollbackRound: (round: IssueRoundView, scope: RollbackScopeView) => void;
+  /** §8.7.4：打开该轮的重新派工对话框；任务原文同样已随展开取到 */
+  onRedispatchRound: (round: IssueRoundView, tasks: DeliveryTaskView[]) => void;
 }) {
   if (detail.rounds.length === 0) return null;
 
@@ -194,6 +203,46 @@ export function RoundsPanel({
                           </span>
                         )}
                       </div>
+
+                      {/* 派工卡（§8.7.4 挂载点，缺陷 A-13）。入口的出现条件是
+                          「本轮有任何还能再派的任务」——未完成的（重发点名），或
+                          已完成但结果可能不对的（送回去重做）。两者都只是转述服务端
+                          状态，界面不据此推「卡住了」。全是 cancelled / superseded 时
+                          不显示按钮，因为服务端会 409，给一个注定失败的按钮不如不给
+                          （同归档按钮的 fail-closed）。
+                          「上次派工」是事实，不是判据：界面不拿它减当前时间下结论。 */}
+                      {(() => {
+                        const roundTasks = state.tasks;
+                        const unfinished = roundTasks.filter(isRedispatchable);
+                        const rerunnable = roundTasks.filter(isRerunnable);
+                        if (roundTasks.length === 0) return null;
+                        return (
+                          <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 rounded-hard border border-line bg-panel-2 px-2.5 py-2">
+                            <span className="font-mono text-[10px] tracking-[0.1em] text-tx3">派工</span>
+                            {unfinished.length + rerunnable.length === 0 ? (
+                              <span className="text-[11px] text-tx3">
+                                本轮 {roundTasks.length} 个任务均已取消或被新版计划替换，无可重发的派工。
+                              </span>
+                            ) : (
+                              <>
+                                <span className="text-[11px] text-tx2">
+                                  {unfinished.length > 0
+                                    ? `${unfinished.length} 个任务未完成`
+                                    : `${rerunnable.length} 个任务已完成、可重做`}{" "}
+                                  ·{" "}
+                                  {lastDispatchLabel(unfinished.length > 0 ? unfinished : rerunnable)}
+                                </span>
+                                <button
+                                  className="ml-auto flex-none rounded-hard border border-line px-1.5 font-mono text-[10px] text-tx2 hover:border-amber hover:text-amber-hi"
+                                  onClick={() => onRedispatchRound(round, roundTasks)}
+                                >
+                                  重新派工…
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {state.pending.length === 0 && state.recorded.length === 0 && (
                         <p className="text-[11.5px] text-tx3">该轮无待决策事项，也无已记录的治理决策。</p>

@@ -7,9 +7,12 @@
 import type { ApprovalInfo, Decision } from "../types";
 import type {
   DeliveryAggregate,
+  DeliveryTaskView,
+  RedispatchScope,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
   RollbackScopeView,
+  RoundRedispatchReceipt,
 } from "./contract";
 import { defaultClient } from "./client";
 import { fetchConsoleAgents } from "./grid";
@@ -67,6 +70,12 @@ export interface RoundDecisionHistory {
    *  **不用空对象冒充「无可回滚项」**——那是一句关于真实世界的断言。 */
   rollback: RollbackScopeView | null;
   rollbackError: string | null;
+  /** §8.7.4：该轮任务原文，重新派工入口的**唯一**呈现依据。
+   *
+   *  零额外取数——本函数为了 `recorded` 已经取了同一个聚合（`getDelivery`），
+   *  任务就在里面。入口该不该出现只看这里有没有非终态任务，
+   *  「卡没卡住」不在这里算，也不在别处算。 */
+  tasks: DeliveryTaskView[];
 }
 
 export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundDecisionHistory> {
@@ -80,6 +89,9 @@ export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundD
       recorded: deliveryAggregateFixture.change_set?.governance_decisions ?? [],
       rollback: null,
       rollbackError: "回放夹具未覆盖回滚范围（§4.6 投影）。加 ?source=live 后可查看真实范围。",
+      // `?tasks=` 同款自检开关：重新派工入口的三种形态（有非终态 / 全部终态 /
+      // 从未派工）都从这里选，见 data/issueDetail.ts 的聚合夹具表。
+      tasks: replayAggregate().tasks,
     };
   }
   const api = defaultClient();
@@ -98,7 +110,36 @@ export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundD
     recorded: agg.change_set?.governance_decisions ?? [],
     rollback: rollback.view,
     rollbackError: rollback.error,
+    tasks: agg.tasks,
   };
+}
+
+/** §8.7.4 写：重新派工（缺陷 A-13）。
+ *
+ *  幂等键**每次按下现取**，与治理批准 / 回滚的确定性键相反，而且理由是硬的：
+ *  这个键被服务端逐字推导成 Matrix transaction id，沿用旧键会被 homeserver
+ *  静默去重——房间里不会多出任何事件，而这次点击的全部意义就是让房间里多出
+ *  一条事件。同一次请求内重发用同一个键（调用方不重取），于是双击是重放。
+ *
+ *  **回放模式一律拒绝写**：重新派工在真实世界里往房间发消息、往对象存储写包，
+ *  夹具里没有可写的对象；就地演一遍「已重发」比不给按钮更误导。 */
+export function redispatchIdempotencyKey(roundId: string): string {
+  return `console-redispatch-${roundId}-${crypto.randomUUID()}`;
+}
+
+export async function redispatchRound(
+  roundId: string,
+  scope: RedispatchScope = "unfinished",
+): Promise<RoundRedispatchReceipt> {
+  if (resolveDataSourceMode() === "replay") {
+    throw new Error(
+      "回放模式不写后端：重新派工会往 Matrix 房间发点名、往共享存储写任务包，夹具里没有可写的对象。加 ?source=live 后可真实重发。",
+    );
+  }
+  return defaultClient().postRoundRedispatch(roundId, {
+    idempotency_key: redispatchIdempotencyKey(roundId),
+    scope,
+  });
 }
 
 /** 轮次归档（验收缺陷 B-4）：挂既有 `POST /deliveries/{id}/archive`（v0.1 §4.5）。

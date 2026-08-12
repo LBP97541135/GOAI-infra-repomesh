@@ -593,6 +593,44 @@ export interface DeliveryTaskView {
   repair_timeline: Array<{ at: string | null; what: string }>;
   /** §5.2：**读模型不做升级判断**，仅转述 recovery plan 里未终态的 MANUAL_INTERVENTION */
   escalated_to_human: boolean;
+  /** §8.7.4：最近一条该任务的 TASK_ASSIGNMENT 消息的 created_at（ISO，UTC）。
+   *
+   *  **是「发出时间」不是「读到时间」**——消息行没有 delivered_at，服务端也没有
+   *  编一个。`null` = 从来没有过派工消息，这不是缺数据而是这个字段最响的一句话：
+   *  这条任务压根没被派出去过。
+   *
+   *  重新派工成功后这个时间会前移，那是控制台唯一能给的**事实**级反馈；
+   *  「agent 醒没醒」不在读模型的射程内，界面也不猜。 */
+  last_dispatched_at: string | null;
+}
+
+/** §8.7.4 的两种范围。默认那个**不写任何任务行**——按错的代价是房间里多一条
+ *  重复通知；`rerun` 会把已完成的任务送回去重做（真写行、批次重新变成未完成），
+ *  所以必须显式要，不能是默认。 */
+export type RedispatchScope = "unfinished" | "rerun";
+
+/** §8.7.4 写：重新派工。整轮粒度，与回滚同一条理由（GUI 裁决 #4）——
+ *  「哪条卡住了」是判断，判断不住在前端。 */
+export interface RoundRedispatchRequest {
+  /** 每次按下现取一个新键：它**逐字用作 Matrix transaction id 的推导源**，
+   *  沿用旧键会被 homeserver 静默去重，房间里什么都不会多出来。
+   *  同一次请求重发（双击、fetch 重试）用同一个键，于是重放而不重发。 */
+  idempotency_key: string;
+  /** 省略即 `unfinished` */
+  scope?: RedispatchScope;
+}
+
+export interface RoundRedispatchReceipt {
+  round_id: string;
+  /** 服务端回显的这次尝试令牌（= 请求里的幂等键） */
+  attempt: string;
+  scope: RedispatchScope;
+  /** 本次重新派工的任务，含仓库 leader 任务 */
+  task_ids: string[];
+  /** 被送回去重做的已完成任务；`unfinished` 范围下恒为空 */
+  reopened_task_ids: string[];
+  /** 已终态、被有意跳过的任务——如实说明「没动它们」，不是失败 */
+  settled_task_ids: string[];
 }
 
 export interface GovernanceDecisionView {

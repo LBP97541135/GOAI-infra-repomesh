@@ -1,4 +1,5 @@
 import type {
+  DeliveryTaskView,
   DiscoveryTier,
   DiscoveryTierStatus,
   GovernanceDecisionView,
@@ -219,4 +220,37 @@ export function runtimeDisplay(phase: RuntimePhase, runtime: RuntimeBlock<{ phas
     label: runtime.phase ?? "阶段未回报",
     hint: runtime.phase ? "Controller 当前观测阶段" : "Controller 可达但未回报 phase",
   };
+}
+
+
+/** §8.7.4 重新派工：入口条件与「上次派工」标签。
+ *
+ *  非终态 = 读模型 §5.1 六态里还没走完的那些，与服务端 `FINAL_TASK_STATUSES`
+ *  对齐——服务端重发的正是这些任务。这里**只是转述 `display_status`**，不是
+ *  「卡住了」的判据：界面永远不从时间戳推结论，什么时候该重发由人决定。 */
+const LIVE_TASK_STATUSES = new Set(["pending", "running", "repairing", "blocked"]);
+
+export function isRedispatchable(task: DeliveryTaskView): boolean {
+  return LIVE_TASK_STATUSES.has(task.display_status);
+}
+
+/** §8.7.4 `rerun` 范围够得着的：**结果出错了**的那些，不含「决定不做」的那些。
+ *  与服务端 `_REDOABLE_TASK_STATUSES` 对齐——cancelled / superseded 属于被取消
+ *  或被新版计划替换的工作，重做它等于把退役任务塞回活着的 Worker。
+ *
+ *  注意 `display_status` 六态里没有 cancelled/superseded 的位置（§5.1 把它们
+ *  折进了 failed 一侧），所以这里读 `backend_status` 原值——这是全前端唯一一处
+ *  必须读它的地方，理由就是上面这条区分在展示态里被抹掉了。 */
+const RERUNNABLE_BACKEND_STATUSES = new Set(["succeeded", "failed"]);
+
+export function isRerunnable(task: DeliveryTaskView): boolean {
+  return !isRedispatchable(task) && RERUNNABLE_BACKEND_STATUSES.has(task.backend_status);
+}
+
+/** 「上次派工 HH:MM」。全部为 null 时说「无派工记录」——那不是缺数据，
+ *  而是这个字段最响的一句话：这些任务压根没被派出去过。 */
+export function lastDispatchLabel(tasks: DeliveryTaskView[]): string {
+  const stamps = tasks.map((t) => t.last_dispatched_at).filter((at): at is string => at !== null);
+  if (stamps.length === 0) return "无派工记录";
+  return `上次派工 ${eventTime(stamps.sort().at(-1)!)}`;
 }

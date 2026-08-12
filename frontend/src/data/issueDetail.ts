@@ -590,6 +590,7 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       result_summary: "PR 19466：迁移 + 必填校验 + 审计字段，隐藏验收 9/9",
       repair_timeline: [],
       escalated_to_human: false,
+      last_dispatched_at: "2026-08-11T09:12:00Z",
     },
     {
       // §5.2：in_progress 且存在未终态 rework 链 → 展示 repairing（attempt 2）。
@@ -606,6 +607,7 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       result_summary: null,
       repair_timeline: [{ at: "2026-08-11T11:40:00Z", what: "隐藏验收测试 3/9 失败，开返工任务" }],
       escalated_to_human: false,
+      last_dispatched_at: "2026-08-11T11:41:00Z",
     },
     {
       task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a005",
@@ -620,6 +622,7 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       result_summary: null,
       repair_timeline: [],
       escalated_to_human: false,
+      last_dispatched_at: "2026-08-11T09:12:00Z",
     },
   ],
   change_set: {
@@ -765,9 +768,67 @@ export const deliveryAggregateTaskConflictFixture: DeliveryAggregate = {
   ],
 };
 
+/** §8.7.4 重新派工入口的三种形态。**彼此只差派工相关的字段**，与
+ *  `materialize_failed` / `materialized` 的兄弟夹具同一纪律：形态之间差得越少，
+ *  界面上任何别的差异就越是真被这一个字段驱动的。
+ *
+ *  ① `stalled`——A-13 的活标本形状：两条任务停在 running/pending，派工时间是
+ *     好几个小时前。入口出现，「上次派工」如实显示那个时间。
+ *     **界面不因为这个时间久远就说「卡住了」**，那句话由人来说。 */
+export const deliveryAggregateStalledFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: deliveryAggregateFixture.tasks.map((task, i) =>
+    i === 0
+      ? { ...task, backend_status: "in_progress", display_status: "running", result_summary: null }
+      : task,
+  ),
+};
+
+/** ② `never_dispatched`——第一个活标本的形状：任务行写下来了，派工消息从来没有。
+ *     入口出现，并且弹窗明说「从未派工」——这不是缺数据，是这一轮压根没派出去。 */
+export const deliveryAggregateNeverDispatchedFixture: DeliveryAggregate = {
+  ...deliveryAggregateStalledFixture,
+  tasks: deliveryAggregateStalledFixture.tasks.map((task) => ({
+    ...task,
+    last_dispatched_at: null,
+  })),
+};
+
+/** ③ `rerun_needed`——2026-08-12 的第四个活标本：任务全部 succeeded，但结果里
+ *     没有测试证据，交付因此一直被拒（`_candidates_for_batch` 在
+ *     `_advance_if_ready` 里抛 ValueError，后台静默重试成环）。
+ *     入口**出现**，但默认范围（只重发未完成的）在这里是空集——弹窗里那一档写
+ *     着 0，人得显式选「连同已完成的一起重做」才动得了。这正是要的：写任务行的
+ *     那一档不能是默认。 */
+export const deliveryAggregateRerunNeededFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: deliveryAggregateFixture.tasks.map((task) => ({
+    ...task,
+    backend_status: "succeeded",
+    display_status: "succeeded" as const,
+    result_summary: "runner 完成，但没有测试结果",
+  })),
+};
+
+/** ④ `all_settled`——真正无事可做的形状：全部 superseded（被新版计划替换）。
+ *     入口**不出现**，卡上如实说明原因。用 superseded 而不是 succeeded 是有意的：
+ *     succeeded 现在是可重做的（见 ③），而「决定不做」不是「做错了」。 */
+export const deliveryAggregateSettledFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: deliveryAggregateFixture.tasks.map((task) => ({
+    ...task,
+    backend_status: "superseded",
+    display_status: "failed" as const,
+  })),
+};
+
 export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
   default: deliveryAggregateFixture,
   conflict: deliveryAggregateTaskConflictFixture,
+  stalled: deliveryAggregateStalledFixture,
+  never_dispatched: deliveryAggregateNeverDispatchedFixture,
+  rerun_needed: deliveryAggregateRerunNeededFixture,
+  all_settled: deliveryAggregateSettledFixture,
 };
 
 export const decisionsFixture: DecisionsResponse = {

@@ -1,4 +1,5 @@
 import type {
+  DeliveryTaskView,
   IssueDetailView,
   IssueRoundView,
   RollbackScopeView,
@@ -297,6 +298,7 @@ export function IssueDetailPage({
   archivingId,
   onArchiveRound,
   onRollbackRound,
+  onRedispatchRound,
 }: {
   detail: IssueDetailView;
   rooms: RoomListItemView[];
@@ -334,6 +336,8 @@ export function IssueDetailPage({
   onArchiveRound: (round: IssueRoundView) => void;
   /** 回滚（E-1）：交付卡上的动作，弹窗与提交态由容器持有 */
   onRollbackRound: (round: IssueRoundView, scope: RollbackScopeView) => void;
+  /** 重新派工（§8.7.4）：派工卡上的动作，弹窗与提交态由容器持有 */
+  onRedispatchRound: (round: IssueRoundView, tasks: DeliveryTaskView[]) => void;
 }) {
   // 边界的复位键：容器不随 issue 切换重挂载，不复位的话 A 单的区块错误会挂在 B 单头上
   const key = detail.issue_id;
@@ -404,6 +408,7 @@ export function IssueDetailPage({
           onToggleRound={onToggleRound}
           onArchiveRound={onArchiveRound}
           onRollbackRound={onRollbackRound}
+          onRedispatchRound={onRedispatchRound}
         />
       </ErrorBoundary>
 
