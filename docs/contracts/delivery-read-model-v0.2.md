@@ -194,6 +194,10 @@ CONTRACT spec 的 scope），取不到时为 `null`。
   "repository_id": "uuid", "name": "string", "url": "string",
   "description": "string", "topics": ["string"], "languages": ["string"],
   "profiled_at": "...",
+  "test_commands": ["string"],          // 【已裁决 · 2026-08-12，A-19】该仓的验证命令；物化时注入
+                                        // TaskNode.tests（节点自带者优先）；空数组=诚实无命令,
+                                        // 交付将拒收该仓候选直至补齐
+
   "resident_team_count": 2,             // 拓扑派生：该仓库被多少 team 驻扎
   "open_issue_count": 1,                // 业务活动派生：state=open 且含本仓的 issue 数
   "active_task_count": 1,               // 非终态 Task 数（task_orchestration）

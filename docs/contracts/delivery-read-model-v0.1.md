@@ -53,7 +53,11 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
           "delivery_id": "uuid|null",          // null = §0 虚拟草稿交付
           "title": "string",                    // plan 需求摘要或 project 标题
           "phase": "contract|plan|execute|validate|release|delivered|failed|archived",
-          "phase_note": "string",               // 人类可读补充，如 "2 完成 · 1 修复中"
+          "phase_note": "string",               // 人类可读补充，如 "2 完成 · 1 修复中"。
+                                                // 【已裁决 · 2026-08-12，A-19】新增最先求值的派生：轮次带
+                                                // 未消解的 delivery_refusal 且不在 delivered/archived 时，
+                                                // 报「交付被拒:<reason 原文>」（服务端原话英文不翻译，改语言
+                                                // 须改 plan_delivery.py 源头非投影）
           "pending_decision_count": 0,
           "updated_at": "UTC ISO 8601|null"    // nullable：该轮既无 ChangeSet 也无快照时无时间源
         }
@@ -153,6 +157,12 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
         "required_checks": ["string"], "required_approvals": 1,
         "reviews": [{ "reviewer": "string", "state": "approved", "summary": "string" }],
         "merge_gate": { "allowed": false, "reasons": ["string"] },
+        "delivery_refusal": {                  // 【已裁决 · 2026-08-12，A-19】交付端拒收的落账；无拒收为 null。
+          "reason": "string",                  // 服务端原文逐字（如 Runner evidence has no test results）
+          "batch_index": 0, "repository_id": "uuid", "repository_name": "string|null",
+          "task_id": "uuid", "at": "UTC ISO 8601"
+        },                                     // 挂在状态旁而非状态里：批次真的 succeeded，FAILED 是谎；
+                                               // 新证据到达且不再被拒时由 advancer 清空并继续推进
                                            // 仅 pre-merge 状态有意义；status ∈ merge_requested/merged/
                                            // compensation_pending/compensated 时为 null（合并已发起或已过阶段）
         "merge_sha": "string|null"
