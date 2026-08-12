@@ -97,6 +97,52 @@ class ConsoleRepoScanRequest(BaseModel):
     repo_url: HttpUrl
 
 
+class ScanTaskView(BaseModel):
+    """A console scan in flight, or the record of one that finished.
+
+    Honest about what it is: an in-process record. It does not survive a
+    restart of the API, and polling one that vanished is answered with a 404
+    that says so rather than one that implies a bad id.
+    """
+
+    task_id: UUID
+    kind: Literal["organization", "repository"]
+    url: str
+    status: Literal["running", "succeeded", "failed"] = Field(
+        description="While 'running' the counts below are partial, not a result",
+    )
+    total: int = Field(
+        default=0,
+        description="Repositories the scan found to work through; 0 until the listing returns",
+    )
+    scanned: int = Field(default=0, description="How many of them have been scanned so far")
+    last_scanned_repository: str | None = Field(
+        default=None,
+        description="Most recently *finished* repository, not the one in progress",
+    )
+    registered: int = Field(
+        default=0, description="Newly added to the catalog; only final once status is 'succeeded'"
+    )
+    skipped: int = Field(
+        default=0,
+        description="Already in the catalog under this name — what makes a re-scan idempotent",
+    )
+    failed: int = Field(
+        default=0,
+        description=(
+            "Could not be registered. A count, not a list: which ones failed and why is in the "
+            "server log, because echoing outbound failures back to a caller is the bug this "
+            "codebase already fixed once. Retry granularity is the whole scan, not these rows."
+        ),
+    )
+    error: str | None = Field(
+        default=None,
+        description="Why the scan as a whole failed, in the same generic terms a 502 would use",
+    )
+    started_at: datetime
+    finished_at: datetime | None = None
+
+
 class UrlIdentification(BaseModel):
     """The backend's verdict on what a pasted URL points at.
 

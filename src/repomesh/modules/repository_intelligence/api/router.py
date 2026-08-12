@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from dataclasses import asdict
 from secrets import compare_digest
 from typing import Annotated
@@ -214,15 +215,21 @@ async def perform_org_scan(
     catalog: RepositoryCatalog,
     *,
     max_workers: int,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> ScanRegistration:
-    """Scan an organization and register what came back."""
+    """Scan an organization and register what came back.
+
+    ``on_progress`` receives ``(completed, total, repository_name)`` after each
+    repository finishes — it is how the console's background tasks turn a long
+    silence into an "n of m" line.
+    """
 
     from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
         scan_org,
     )
 
     try:
-        profiles = await scan_org(url, fetcher, max_workers=max_workers)
+        profiles = await scan_org(url, fetcher, max_workers=max_workers, on_progress=on_progress)
     except Exception as exc:
         # The message used to be echoed back, which handed the caller whatever
         # the outbound request saw. Operators read it in the log instead.
