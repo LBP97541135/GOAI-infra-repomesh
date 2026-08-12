@@ -204,7 +204,9 @@ async def test_redispatch_puts_a_new_event_in_the_room() -> None:
     )
     first_txn, second_txn = messenger.deliveries[0][2], messenger.deliveries[1][2]
     assert first_txn != second_txn
-    assert second_txn.startswith(f"{ASSIGN_KEY}:message:redispatch:")
+    # The attempt rides as a digest, not verbatim — see
+    # test_redispatch_key_length.py for why the column made that necessary.
+    assert second_txn.startswith(f"{ASSIGN_KEY}:message:rd:")
     # Same room, same task: a repeat of the telling, not a different message.
     assert messenger.deliveries[0][0] == messenger.deliveries[1][0]
     assert messenger.deliveries[0][1]["task_id"] == messenger.deliveries[1][1]["task_id"]

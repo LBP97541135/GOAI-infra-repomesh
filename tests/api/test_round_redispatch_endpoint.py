@@ -218,3 +218,39 @@ def test_an_empty_key_is_refused_before_the_service(monkeypatch) -> None:
 
     assert response.status_code == 422
     assert service.calls == []
+
+
+class DriverError(Exception):
+    """Stands in for whatever the database layer throws next."""
+
+
+def test_an_unexpected_failure_is_a_named_json_500(monkeypatch) -> None:
+    """The first live press escaped as ``text/plain "Internal Server Error"``.
+
+    It was an ``asyncpg.StringDataRightTruncationError`` — a one-line fix once
+    seen, and invisible from the console. The class name and the driver's
+    sentence are the whole of what is actionable, so the fallback says both,
+    the same way the materialize path names ``RoundNotRecorded`` rather than
+    letting it fall through.
+    """
+
+    service = StubRedispatch(
+        raises=DriverError("value too long for type character varying(200)")
+    )
+    response = _post(_client(service, monkeypatch))
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/json")
+    detail = response.json()["detail"]
+    assert "DriverError" in detail, "the class name is how you find it in the logs"
+    assert "character varying(200)" in detail
+    # An insert the database refused wrote nothing, and the sentence must not
+    # leave the operator guessing whether half a round went out.
+    assert "nothing was re-sent" in detail
+
+
+def test_the_named_500_does_not_swallow_the_translated_refusals(monkeypatch) -> None:
+    """The catch-all sits after its siblings, not around them."""
+
+    service = StubRedispatch(raises=TaskNotFound("round does not exist: x"))
+    assert _post(_client(service, monkeypatch)).status_code == 404

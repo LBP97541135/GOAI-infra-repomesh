@@ -152,4 +152,22 @@ async def redispatch_round(
         raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    except Exception as error:
+        # A server fault, so a 500 — but a *named* one, the way the materialize
+        # path names ``RoundNotRecorded``. The first live press of re-dispatch
+        # failed on an ``asyncpg.StringDataRightTruncationError`` and reached
+        # the operator as ``text/plain "Internal Server Error"``: no class, no
+        # sentence, nothing to search for, and no way to tell a bug from an
+        # outage. The class name and the driver's own words are the whole of
+        # what is actionable, so they are what gets said.
+        #
+        # Deliberately local to this endpoint rather than a global envelope —
+        # that is a separate adjudication. This is parity with its siblings.
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"re-dispatching round {round_id} failed unexpectedly "
+                f"({type(error).__name__}: {error}); nothing was re-sent"
+            ),
+        ) from error
     return asdict(receipt)
