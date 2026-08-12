@@ -1278,3 +1278,123 @@ def test_a_retry_after_the_plan_changed_gets_its_own_keys(
     assert len(starter.calls) == 2
     assert starter.calls[1][1] != starter.calls[0][1]
     assert "after-replan-key" in starter.calls[1][1]
+
+
+# ---------------------------------------------------------------------------
+# The recipient's Matrix identity (defect A-6)
+# ---------------------------------------------------------------------------
+
+
+def test_a_recipient_without_a_matrix_identity_is_a_503_not_a_bare_500(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A-6: the dispatch found the room but not the worker behind it.
+
+    Found live by the acceptance walk (2026-08-12). The rooms existed — the
+    runtime projection had just made them — so B-11's 503 did not fire; the
+    round started, and then the *first dispatch* asked the controller for the
+    recipient's Matrix user id and got nothing, because every worker container
+    had died on boot. ``AgentTeamsUnavailable`` escaped untranslated and
+    FastAPI answered ``text/plain`` "Internal Server Error" with no body at
+    all: no detail, nothing to read, nothing to press.
+
+    This is the same reading as the room refusal above, and it must arrive by
+    the same route, so it asserts the same three things: the status, the
+    server's own words inside it, and a round still repairable afterwards.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    class NoIdentity:
+        async def start_plan(self, **_kwargs):
+            # What the wrapped messenger now raises out of a dispatch the
+            # gateway refused at ``matrix.py``; before the fix this arrived
+            # here as ``AgentTeamsUnavailable`` and was translated by nobody.
+            raise CollaborationRouteUnavailable(
+                "AgentTeams recipient Matrix identity is unavailable"
+            )
+
+    _with_execution_plane(monkeypatch, NoIdentity())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain, key="no-identity-key")
+
+        assert response.status_code == 503, response.text
+        # A JSON body with a detail, not a bare text/plain 500.
+        assert response.headers["content-type"].startswith("application/json")
+        detail = response.json()["detail"]
+        assert "Matrix identity is unavailable" in detail
+        assert "materialize again" in detail
+        # The round is not closed: the draft was never consumed.
+        assert chain.read()["step"] == 4
+
+
+def test_a_round_broken_mid_dispatch_is_finished_by_the_next_press(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The A-6 failure lands *after* ``start_plan`` began, and still replays.
+
+    This is the part the room refusal (B-11) does not cover. There the plane
+    was refused before it wrote anything; here the plan row exists and its
+    first batch is half-assigned, which is exactly the state 7659c89 taught
+    ``AdvanceExecutionPlan.start`` to re-enter.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+    starter = StubPlanStarter()
+
+    class LosesTheWorkerOnce:
+        """Starts the plan, then fails the dispatch — the live A-6 shape."""
+
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def start_plan(self, **kwargs):
+            self.attempts += 1
+            if self.attempts > 1:
+                return await starter.start_plan(**kwargs)
+            # The plan row and its batch are written before the dispatch that
+            # fails, so the attempt is recorded the way the real one is.
+            starter.calls.append(
+                (kwargs["project_id"], kwargs["idempotency_key"], kwargs["batches"])
+            )
+            raise CollaborationRouteUnavailable(
+                "AgentTeams recipient Matrix identity is unavailable"
+            )
+
+    plane = LosesTheWorkerOnce()
+    _with_execution_plane(monkeypatch, plane)
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        first = _materialize(chain, key="broken-mid-dispatch-key")
+        assert first.status_code == 503, first.text
+        # The receipt is written failed, and the draft is left unconsumed.
+        receipt = _draft_row(container, issue_id).discovery["materialization"]
+        assert receipt["status"] == "failed"
+        # A failed receipt is a record of what went wrong, not a result: it
+        # carries the refusal's words and no plan, so nothing replays it.
+        assert "Matrix identity is unavailable" in receipt["error"]
+        assert "plan_id" not in receipt
+        assert chain.read()["step"] == 4
+
+        # The same key finishes the round the refusal half-started.
+        second = _materialize(chain, key="broken-mid-dispatch-key")
+        assert second.status_code == 200, second.text
+
+    assert plane.attempts == 2
+    # Same plan key both times: the retry re-enters the stranded batch rather
+    # than starting a second execution plan beside it.
+    assert len(starter.calls) == 2
+    assert starter.calls[1][1] == starter.calls[0][1]

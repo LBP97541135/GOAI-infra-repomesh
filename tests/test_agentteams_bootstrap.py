@@ -73,7 +73,14 @@ def test_default_container_wires_agentteams_adapters(
     container = bootstrap_app.build_default_container()
 
     assert isinstance(container.agent_team_control_plane, AgentTeamsControlPlaneClient)
-    assert isinstance(container.agent_team_messenger, AgentTeamsMatrixClient)
+    # The messenger the container hands out is the delivery wrapper that retells
+    # AgentTeamsUnavailable as the collaboration port's retryable refusal
+    # (defect A-6). The Matrix client itself is still what gets closed.
+    assert container.agent_team_messenger is not None
+    assert not isinstance(container.agent_team_messenger, AgentTeamsMatrixClient)
+    assert any(
+        isinstance(resource, AgentTeamsMatrixClient) for resource in container.external_resources
+    )
     assert container.agentteams_probe is container.agent_team_control_plane
     assert container.agentteams_required is True
     assert len(container.external_resources) == 2

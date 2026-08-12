@@ -7,6 +7,7 @@ from repomesh.api.router import api_router
 from repomesh.bootstrap.container import (
     ApplicationContainer,
     AsyncCloseable,
+    collaboration_routed_messenger,
     project_topology_reader,
 )
 from repomesh.integrations.agentteams import (
@@ -111,7 +112,7 @@ def build_default_container() -> ApplicationContainer:
         settings.agentteams_controller_url,
         token=settings.agentteams_controller_token,
     )
-    messenger = (
+    matrix_client = (
         AgentTeamsMatrixClient(
             settings.agentteams_matrix_url,
             settings.agentteams_matrix_access_token,
@@ -120,8 +121,14 @@ def build_default_container() -> ApplicationContainer:
         if settings.agentteams_matrix_access_token
         else None
     )
+    # Wrapped once, here, so that every consumer below — the collaboration
+    # sender, the checkpoint notifier, the container's messenger field — reads
+    # the same retryable refusal instead of the integration's own taxonomy.
+    messenger = (
+        collaboration_routed_messenger(matrix_client) if matrix_client is not None else None
+    )
     resources: tuple[AsyncCloseable, ...] = (
-        (control_plane, messenger) if messenger is not None else (control_plane,)
+        (control_plane, matrix_client) if matrix_client is not None else (control_plane,)
     )
     scm_adapter = None
     scm_token_provider = None
@@ -182,7 +189,9 @@ def build_default_container() -> ApplicationContainer:
             tasks,
         )
         background_services = (
-            AgentTeamsMatrixInboundPoller(messenger, inbound),
+            # Inbound polling is not delivery, so it reads the Matrix gateway
+            # directly rather than through the delivery-only wrapper.
+            AgentTeamsMatrixInboundPoller(matrix_client, inbound),
             CollaborationDeliveryRetryWorker(collaboration_store, collaboration),
         )
     if settings.github_webhook_secret or scm_adapter is not None:
