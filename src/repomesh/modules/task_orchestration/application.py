@@ -567,9 +567,43 @@ class AdvanceExecutionPlan:
         if not key:
             raise ValueError("idempotency_key is required")
         if existing := await self._plans.get_by_idempotency_key(key):
-            return existing.to_view()
+            return await self._resume(existing, key)
         await self._plans.add(plan, idempotency_key=key)
         assigned = await self._assign_batch(plan, plan.current_batch_index, key_prefix=key)
+        return assigned.to_view()
+
+    async def _resume(self, plan: ExecutionPlan, key: str) -> ExecutionPlanView:
+        """Finish a ``start`` that only got as far as writing the plan row.
+
+        ``start`` is two writes — the plan, then its first batch's assignments
+        — and the second one talks to the execution plane, so it is the one
+        that fails: a repository team with no Matrix room raises on the first
+        assignment and leaves a plan row with an empty batch behind. Returning
+        that row unchanged on the retry, which is what recognising the key used
+        to do, reported success for a round that had started nothing; the
+        operator's only remaining move was a new key, which would have written
+        a *second* plan for the same project.
+
+        So a replay re-runs the batch instead of skipping it. Every write it
+        makes is keyed off the same prefix as the first attempt — the tasks,
+        their decomposition, the assignment messages — so the repositories that
+        did get through are found rather than duplicated, and only the ones
+        that did not are created. Replaying a plan whose batch is fully
+        assigned, or one that has since failed or completed, still costs
+        nothing.
+        """
+
+        index = plan.current_batch_index
+        if plan.status is not ExecutionPlanStatus.IN_PROGRESS:
+            return plan.to_view()
+        if len(plan.leader_task_ids(index)) == len(plan.batches[index]):
+            return plan.to_view()
+        # The first batch was assigned under the caller's key; every later one
+        # under the plan's id (see `_advance_if_ready`). Resuming has to reuse
+        # whichever prefix that batch already wrote under, or the idempotent
+        # lookups miss and the work is done twice.
+        prefix = key if index == 0 else str(plan.id)
+        assigned = await self._assign_batch(plan, index, key_prefix=prefix)
         return assigned.to_view()
 
     async def on_task_terminal(self, task_id: UUID) -> None:

@@ -31,6 +31,8 @@ thrown away the only part the operator can act on.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -97,6 +99,28 @@ class IssueMaterialization:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _plan_fingerprint(record: Any) -> str:
+    """Identify the plan a materialization attempt was made against.
+
+    Taken from the snapshot's own columns rather than the rebuilt
+    :class:`IntegratedPlan`, because those columns are what a re-run of step 3
+    rewrites — this is the number that has to change when the work changes.
+    """
+
+    payload = json.dumps(
+        {
+            "engineering_spec": record.engineering_spec or "",
+            "contracts": record.contracts or [],
+            "task_dag": record.task_dag or [],
+            "execution_batches": record.execution_batches or [],
+        },
+        sort_keys=True,
+        default=str,
+        separators=(",", ":"),
+    ).encode()
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
 def _plan_from_snapshot(record: Any) -> IntegratedPlan:
@@ -177,12 +201,14 @@ class DiscoveryMaterializationService:
         self._assert_ready(block, plan)
 
         repositories = tuple(sorted({node.repository for node in plan.task_dag}))
+        fingerprint = _plan_fingerprint(draft)
+        prefix = self._prefix(block, command.idempotency_key, fingerprint)
         topology = await self._ensure_topology(
             project_id=draft.project_id,
             organization_id=actor.organization_id,
             organization_leader_id=actor.id,
             repositories=repositories,
-            idempotency_key=command.idempotency_key,
+            prefix=prefix,
         )
 
         try:
@@ -191,14 +217,18 @@ class DiscoveryMaterializationService:
                 requirement=self._requirement(block, draft),
                 project_id=draft.project_id,
                 leader_agent_id=actor.id,
-                idempotency_prefix=f"disc-{command.idempotency_key}",
+                idempotency_prefix=prefix,
             )
         except Exception as error:
             # Recorded, then surfaced — the same bargain the four steps make.
             # The receipt is deliberately left incomplete so the same key can
             # be retried once the operator has cleared whatever blocked it.
+            # `prefix` and `plan_fingerprint` are what let a retry under a
+            # *different* key land on the same rows; see `_prefix`.
             block["materialization"] = {
                 "idempotency_key": command.idempotency_key,
+                "prefix": prefix,
+                "plan_fingerprint": fingerprint,
                 "status": "failed",
                 "by_agent_id": str(command.created_by_agent_id),
                 "at": _now(),
@@ -216,6 +246,8 @@ class DiscoveryMaterializationService:
         )
         block["materialization"] = {
             "idempotency_key": command.idempotency_key,
+            "prefix": prefix,
+            "plan_fingerprint": fingerprint,
             "status": "materialized",
             "by_agent_id": str(command.created_by_agent_id),
             "at": _now(),
@@ -263,6 +295,42 @@ class DiscoveryMaterializationService:
                 replayed=True,
             )
         return None
+
+    # ------------------------------------------------------------- prefix
+
+    @staticmethod
+    def _prefix(block: dict[str, Any], key: str, fingerprint: str) -> str:
+        """The idempotency prefix every write of this materialization shares.
+
+        Normally the caller's key, and normally that is the whole story: the
+        console keeps one key per round and re-sends it, so a retry after a
+        failure lands on the same prefix and the writes that already succeeded
+        are found instead of repeated.
+
+        The exception is a retry that arrives under a *new* key — a reloaded
+        panel, a second operator, a script. Left alone it would materialise the
+        same plan a second time under a fresh prefix: a duplicate engineering
+        spec, and a second execution plan racing the orphan the failure left
+        behind. So a failed receipt lends its prefix to whoever comes next,
+        which turns "press it again" into a repair of the first attempt rather
+        than a rival of it.
+
+        Only while the plan is unchanged. Re-running step 3 makes different
+        work, and different work under the first attempt's keys would collide
+        with rows describing the plan that was replaced — a conflict the
+        operator cannot act on. The fingerprint is the guard, and a plan that
+        has moved on simply gets its own prefix.
+        """
+
+        receipt = block.get("materialization") or {}
+        if receipt.get("status") != "failed":
+            return f"disc-{key}"
+        if receipt.get("plan_fingerprint") != fingerprint:
+            return f"disc-{key}"
+        previous = receipt.get("prefix") or (
+            f"disc-{receipt['idempotency_key']}" if receipt.get("idempotency_key") else None
+        )
+        return str(previous) if previous else f"disc-{key}"
 
     # ---------------------------------------------------------- readiness
 
@@ -317,7 +385,7 @@ class DiscoveryMaterializationService:
         organization_id: UUID,
         organization_leader_id: UUID,
         repositories: tuple[str, ...],
-        idempotency_key: str,
+        prefix: str,
     ):  # noqa: ANN202 - ProjectAgentTopologyView, named by the contract
         existing = await self._topologies.get_view(project_id)
         if existing is not None:
@@ -341,7 +409,7 @@ class DiscoveryMaterializationService:
             project_id=project_id,
             organization_leader_id=organization_leader_id,
             repository_ids=repository_ids,
-            idempotency_key=f"disc-{idempotency_key}",
+            idempotency_key=prefix,
         )
 
 
