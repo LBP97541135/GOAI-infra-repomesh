@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
     #: else is refused before a request leaves this process.
     repository_scan_allowed_hosts: str = "github.com"
+    #: AgentTeams probe budget per row, and how many may be in flight at once.
+    runtime_probe_timeout_seconds: float = 2.0
+    runtime_probe_concurrency: int = 16
     worker_task_control_url: str | None = None
     agentteams_storage_root: Path = Path(".agentteams-storage")
     agentteams_storage_endpoint: str | None = None

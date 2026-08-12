@@ -166,6 +166,7 @@ def _service(
     agents=None,
     specifications=None,
     runtime=None,
+    probe_concurrency=None,
 ):
     empty = _Empty()
     return DeliveryReadModelService(
@@ -183,6 +184,7 @@ def _service(
         messages=messages if messages is not None else empty,
         observations=observations if observations is not None else empty,
         runtime=runtime,
+        probe_concurrency=probe_concurrency,
     )
 
 
@@ -318,9 +320,7 @@ async def test_unfinished_manual_intervention_escalates_to_human() -> None:
 async def test_list_filters_archived_and_reports_failed_phase() -> None:
     project_id = uuid4()
     repository_id = uuid4()
-    archived_plan = _plan(
-        project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED
-    )
+    archived_plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
     failed_plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.FAILED)
     service = _service(
         StubPlans(archived_plan, failed_plan),
@@ -332,15 +332,13 @@ async def test_list_filters_archived_and_reports_failed_phase() -> None:
 
     default_listing = await service.list_deliveries()
     phases = {
-        item["delivery_id"]: item["phase"]
-        for item in default_listing["projects"][0]["deliveries"]
+        item["delivery_id"]: item["phase"] for item in default_listing["projects"][0]["deliveries"]
     }
     assert phases == {failed_plan.id: "failed"}
 
     full_listing = await service.list_deliveries(include_archived=True)
     phases = {
-        item["delivery_id"]: item["phase"]
-        for item in full_listing["projects"][0]["deliveries"]
+        item["delivery_id"]: item["phase"] for item in full_listing["projects"][0]["deliveries"]
     }
     assert phases == {failed_plan.id: "failed", archived_plan.id: "archived"}
 
@@ -467,11 +465,7 @@ async def test_repair_timeline_at_is_always_a_timestamp() -> None:
         "返工任务 succeeded": revision_at,
         "返工任务 in_progress": change_set.updated_at,
     }
-    assert all(
-        entry["at"] is not None
-        for timeline in timelines.values()
-        for entry in timeline
-    )
+    assert all(entry["at"] is not None for timeline in timelines.values() for entry in timeline)
 
 
 @pytest.mark.asyncio
@@ -489,9 +483,7 @@ async def test_decisions_approve_only_when_governance_is_the_sole_blocker() -> N
         status=ChangeSetStatus.DELIVERING,
         recovery_plans=(),
         repositories=(
-            _repository_view(
-                RepositoryDeliveryStatus.READY_TO_MERGE, repository_id, worker.id
-            ),
+            _repository_view(RepositoryDeliveryStatus.READY_TO_MERGE, repository_id, worker.id),
         ),
     )
 
@@ -526,9 +518,7 @@ async def test_decisions_watch_covers_active_rework_and_missing_delivery() -> No
     leader_task_id = uuid4()
     plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
     worker = _worker(project_id, repository_id, leader_task_id)
-    rework = replace(
-        worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.IN_PROGRESS
-    )
+    rework = replace(worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.IN_PROGRESS)
     change_set = replace(
         _manual_intervention_change_set(plan, repository_id, worker.id),
         recovery_plans=(),

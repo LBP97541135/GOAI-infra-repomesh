@@ -66,6 +66,16 @@ _logger = logging.getLogger(__name__)
 _RUNTIME_PROBE_TIMEOUT = 2.0
 """§4.4: each controller call is bounded on its own so one hang cannot stall a page."""
 
+_RUNTIME_PROBE_CONCURRENCY = 16
+"""How many controller probes may be in flight at once.
+
+The fan-out had no ceiling, and httpx caps a client at 100 connections by
+default. Past that the requests queue inside the pool — and queueing time
+counts against each probe's own timeout, so rows start reporting
+`reachable: false` while the controller is perfectly healthy. A false outage
+is worse than the serial wait §4.4 set out to remove, because it looks like
+a real one."""
+
 REWORK_TASK_TITLE = "Repair failed delivery candidate"
 """The canonical title CIReworkTaskCreator assigns; identifies rework chains."""
 
@@ -153,6 +163,8 @@ class DeliveryReadModelService:
         messages: MessageSource,
         observations: ObservationSource,
         runtime: RuntimeProbe | None = None,
+        probe_timeout: float | None = None,
+        probe_concurrency: int | None = None,
     ) -> None:
         self._plans = plans
         self._snapshots = snapshots
@@ -180,6 +192,12 @@ class DeliveryReadModelService:
         self._tasks_memo: dict[UUID, tuple] = {}
         self._validation_memo: dict[UUID, tuple] = {}
         self._name_memo: dict[UUID | None, str | None] = {}
+        # Both default to the module constants so a test can monkeypatch them;
+        # the composition root passes the configured values.
+        self._probe_timeout = probe_timeout if probe_timeout is not None else _RUNTIME_PROBE_TIMEOUT
+        self._probe_concurrency = (
+            probe_concurrency if probe_concurrency is not None else _RUNTIME_PROBE_CONCURRENCY
+        )
 
     async def _all_repositories(self) -> list:
         """The catalog, read once per request rather than once per round."""
@@ -1393,8 +1411,16 @@ class DeliveryReadModelService:
         a way nobody anticipated still costs one row.
         """
 
+        # The ceiling sits outside the probe, not inside it: waiting for a slot
+        # must not spend the timeout budget the probe needs to answer.
+        slots = asyncio.Semaphore(self._probe_concurrency)
+
+        async def bounded(kind: str, name: str):
+            async with slots:
+                return await self._runtime_block(kind, name, shape)
+
         blocks = await asyncio.gather(
-            *(self._runtime_block(kind, name, shape) for kind, name in probes),
+            *(bounded(kind, name) for kind, name in probes),
             return_exceptions=True,
         )
         for row, block in zip(rows, blocks, strict=True):
@@ -1416,7 +1442,7 @@ class DeliveryReadModelService:
             return None  # AgentTeams is not configured: no fact to report
         try:
             probe = getattr(self._runtime, kind)
-            snapshot = await asyncio.wait_for(probe(name), timeout=_RUNTIME_PROBE_TIMEOUT)
+            snapshot = await asyncio.wait_for(probe(name), timeout=self._probe_timeout)
             if snapshot is None:
                 return None  # 404: the controller has no such resource
             return {"reachable": True, **shape(snapshot)}
