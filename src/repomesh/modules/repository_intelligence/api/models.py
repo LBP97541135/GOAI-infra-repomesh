@@ -29,6 +29,8 @@ class RepositoryCreate(BaseModel):
     description: str = Field(default="", max_length=4000)
     topics: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=list)
+    test_commands: list[str] = Field(default_factory=list)
+    """Defect A-19: how this repository is verified. Empty means nobody said."""
     auto_card: AutoCardCreate | None = None
 
 
@@ -173,6 +175,7 @@ class RepositoryView(BaseModel):
     description: str
     topics: tuple[str, ...]
     languages: tuple[str, ...]
+    test_commands: tuple[str, ...] = ()
     auto_card: AutoCardView | None = None
 
 

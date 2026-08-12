@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
 
@@ -21,6 +22,7 @@ from repomesh.modules.project.contracts import (
 )
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
+    BatchDeliveryRefused,
     DeliveryStatePort,
     ExecutionPlanStatus,
     ExecutionPlanStatusSnapshot,
@@ -54,6 +56,8 @@ from repomesh.modules.task_orchestration.domain import (
 )
 from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
 from repomesh.shared.idempotency import command_fingerprint
+
+_logger = logging.getLogger(__name__)
 
 _FAILED_TASK_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.CANCELLED})
 
@@ -833,7 +837,10 @@ class AdvanceExecutionPlan:
         if not await self._batch_succeeded(plan):
             return
         if self._on_batch_deliver is not None:
-            await self._on_batch_deliver(plan.to_view())
+            delivered = await self._deliver_batch(plan)
+            if delivered is None:
+                return
+            plan = delivered
         if not await self._delivery_gate(plan):
             return
         if plan.is_last_batch:
@@ -845,6 +852,64 @@ class AdvanceExecutionPlan:
         if not await self._settle(plan, advanced):
             return
         await self._assign_batch(advanced, advanced.current_batch_index, key_prefix=str(plan.id))
+
+    async def _deliver_batch(self, plan: ExecutionPlan) -> ExecutionPlan | None:
+        """Hand the batch to delivery; None when delivery refused it.
+
+        Defect A-19's silent twin. ``_candidates_for_batch`` refuses to publish
+        a candidate whose Runner evidence carries no test results — the one
+        honest step in that whole chain, and it stays refused here. But the
+        refusal was a bare exception thrown out of this method into the Runner
+        ingest's best-effort handler, which logs and returns so that a
+        scheduling failure never fails ingestion. The consequence was a round
+        that refused itself several times a minute in silence: no state
+        written, nothing projected, every task green in the console and a
+        change set that stayed empty forever.
+
+        So the refusal is caught and *recorded on the round*, and only then
+        does this return without advancing. Nothing is weakened: no candidate
+        is published, no batch is advanced, no plan is completed. The refusal
+        merely stops being invisible.
+
+        Convergence is the other half and needs no new trigger. Every terminal
+        Runner event re-enters ``on_task_terminal`` and every delivery
+        observation re-enters ``reconsider_task``; both land here. When a
+        re-dispatched Worker finally reports evidence that carries test
+        results, this call succeeds, the recorded refusal is cleared, and the
+        ordinary advance continues from the returned plan. A repeated refusal
+        writes nothing (see ``ExecutionPlan.refuse_delivery``), so a stuck
+        round costs one row, not one row per event.
+
+        An error that is *not* a stated refusal is re-raised unchanged: an
+        adapter that cannot reach GitHub is a fault, not a judgement, and
+        recording it as delivery's verdict on the evidence would be inventing
+        a reason.
+        """
+
+        assert self._on_batch_deliver is not None  # noqa: S101 - guarded by the caller
+        try:
+            await self._on_batch_deliver(plan.to_view())
+        except BatchDeliveryRefused as refusal:
+            outcome = plan.refuse_delivery(
+                refusal.reason,
+                repository_id=refusal.repository_id,
+                task_id=refusal.task_id,
+            )
+            if outcome.plan is not None:
+                await self._settle(plan, outcome.plan)
+            _logger.warning(
+                "Delivery refused batch %d of execution plan %s: %s",
+                plan.current_batch_index,
+                plan.id,
+                refusal.reason,
+            )
+            return None
+        cleared = plan.clear_delivery_refusal()
+        if cleared is None:
+            return plan
+        if not await self._settle(plan, cleared):
+            return None
+        return cleared
 
     async def _delivery_gate(self, plan: ExecutionPlan) -> bool:
         """True when every repository of the current batch is already merged."""

@@ -319,6 +319,7 @@ async def register_repository(
         description=body.description,
         topics=tuple(body.topics),
         languages=tuple(body.languages),
+        test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
         auto_card=_build_auto_card(body.auto_card),
     )
     await RegisterRepository(catalog).execute(profile)

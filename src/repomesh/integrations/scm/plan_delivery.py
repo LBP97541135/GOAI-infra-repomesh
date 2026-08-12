@@ -23,7 +23,11 @@ from repomesh.modules.review_validation import (
     ValidationSnapshotService,
     ValidationTestInput,
 )
-from repomesh.modules.task_orchestration.contracts import ExecutionPlanView, TaskStatus
+from repomesh.modules.task_orchestration.contracts import (
+    BatchDeliveryRefused,
+    ExecutionPlanView,
+    TaskStatus,
+)
 from repomesh.modules.task_orchestration.ports import TaskStore
 
 from .delivery import ChangeSetSCMCoordinator, PublishChangeSetPullRequestCommand
@@ -246,8 +250,9 @@ class PlanDeliveryFinalizer:
             workers = await self._tasks.list_by_parent(planned.leader_task_id)
             succeeded = [task for task in workers if task.status is TaskStatus.SUCCEEDED]
             if len(succeeded) != 1:
-                raise ValueError(
-                    f"repository {planned.repository_id} has no unique successful candidate"
+                raise BatchDeliveryRefused(
+                    f"repository {planned.repository_id} has no unique successful candidate",
+                    repository_id=planned.repository_id,
                 )
             worker = succeeded[0]
             # Declared evidence, resolved by the producing module at projection
@@ -256,16 +261,26 @@ class PlanDeliveryFinalizer:
             # it -- and parsing it differently from the producer besides.
             evidence = worker.to_view().evidence
             if evidence is None:
-                raise ValueError(
-                    f"repository {planned.repository_id} candidate carries no Runner evidence"
+                raise BatchDeliveryRefused(
+                    f"repository {planned.repository_id} candidate carries no Runner evidence",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
                 )
             commit_sha = evidence.commit_sha.lower()
             base_sha = (evidence.base_sha or "").lower()
             workspace = Path(evidence.workspace_path or "")
             if not self._full_sha(commit_sha) or not self._full_sha(base_sha):
-                raise ValueError("Runner evidence has no frozen commit/base SHA")
+                raise BatchDeliveryRefused(
+                    "Runner evidence has no frozen commit/base SHA",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
             if not evidence.workspace_path or not workspace.is_dir():
-                raise ValueError("Runner evidence workspace no longer exists")
+                raise BatchDeliveryRefused(
+                    "Runner evidence workspace no longer exists",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
             branch = f"repomesh/{str(plan.id)[:8]}/{str(planned.repository_id)[:8]}"
             candidates.append(
                 RepositoryCandidateInput(
@@ -284,17 +299,26 @@ class PlanDeliveryFinalizer:
             # of TaskEvidenceView, so this reads the producer's parse like every
             # other field above instead of re-opening the free-text summary.
             #
-            # The refusal stays exactly as strict. ``_parse_evidence`` drops an
-            # entry it cannot read, which is right for a *display* projection
-            # and wrong here: delivery must not publish a candidate whose test
-            # evidence was partly unreadable. A dropped entry therefore surfaces
-            # as a count mismatch against the raw list and refuses, same as the
-            # old ``isinstance`` check did.
+            # The refusal stays exactly as strict, and since A-19 it is a
+            # *named* refusal the advancer records on the round instead of a
+            # ValueError that died in a log. ``_parse_evidence`` drops an entry
+            # it cannot read, which is right for a display projection and wrong
+            # here: delivery must not publish a candidate whose test evidence
+            # was partly unreadable, so a dropped entry surfaces as a count
+            # mismatch against the raw list and refuses.
             raw_test_count = len(self._evidence(worker.result_summary).get("testResults") or ())
             if not evidence.test_results:
-                raise ValueError("Runner evidence has no test results")
+                raise BatchDeliveryRefused(
+                    "Runner evidence has no test results",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
             if len(evidence.test_results) != raw_test_count:
-                raise ValueError("Runner test evidence is malformed")
+                raise BatchDeliveryRefused(
+                    "Runner test evidence is malformed",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
             for result in evidence.test_results:
                 tests.append(
                     ValidationTestInput(

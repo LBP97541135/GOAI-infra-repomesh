@@ -1,8 +1,10 @@
 import json
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.task_orchestration.contracts import (
+    DeliveryRefusalView,
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
@@ -328,6 +330,61 @@ class PlannedRepositoryTask:
 
 
 @dataclass(frozen=True, slots=True)
+class DeliveryRefusal:
+    """A stated refusal to deliver the batch the plan is standing on.
+
+    Not a status. The plan is still IN_PROGRESS and its batch still succeeded;
+    what is recorded is that the delivering side looked at the evidence and
+    said no, in its own words. Keeping it beside the status rather than inside
+    it is what makes convergence possible: nothing has to be un-failed when the
+    evidence improves, the refusal is simply cleared.
+    """
+
+    reason: str
+    batch_index: int
+    at: datetime
+    repository_id: UUID | None = None
+    task_id: UUID | None = None
+
+    def same_as(self, other: "DeliveryRefusal") -> bool:
+        """Whether this is the refusal already recorded, ignoring the clock.
+
+        The advance path is re-entered on every terminal Runner event and every
+        delivery observation, so an unresolved refusal is restated constantly.
+        Comparing without ``at`` is what stops a stuck round from writing a new
+        row — and bumping the aggregate's version — several times a minute.
+        """
+
+        return (
+            self.reason == other.reason
+            and self.batch_index == other.batch_index
+            and self.repository_id == other.repository_id
+            and self.task_id == other.task_id
+        )
+
+    def to_view(self) -> DeliveryRefusalView:
+        return DeliveryRefusalView(
+            reason=self.reason,
+            batch_index=self.batch_index,
+            repository_id=self.repository_id,
+            task_id=self.task_id,
+            at=self.at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryRefusalOutcome:
+    """What ``refuse_delivery`` decided: a plan to write, or nothing new to say.
+
+    ``plan`` is None when the refusal is a repeat, so the caller can tell "we
+    already know" from "we just learned" without comparing versions.
+    """
+
+    plan: "ExecutionPlan | None"
+    refusal: DeliveryRefusal
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionPlan:
     """Ordered batches of repository tasks owned by one Organization Leader."""
 
@@ -339,6 +396,8 @@ class ExecutionPlan:
     current_batch_index: int = 0
     status: ExecutionPlanStatus = ExecutionPlanStatus.IN_PROGRESS
     version: int = 1
+    delivery_refusal: DeliveryRefusal | None = None
+    """The delivering side's last stated refusal, or None once it is resolved."""
 
     def __post_init__(self) -> None:
         if not self.batches or any(not batch for batch in self.batches):
@@ -413,6 +472,54 @@ class ExecutionPlan:
             raise TaskConflict("only a failed execution plan can be reopened")
         return replace(self, status=ExecutionPlanStatus.IN_PROGRESS, version=self.version + 1)
 
+    def refuse_delivery(
+        self,
+        reason: str,
+        *,
+        repository_id: UUID | None = None,
+        task_id: UUID | None = None,
+        at: datetime | None = None,
+    ) -> "DeliveryRefusalOutcome":
+        """Record why this plan's current batch was not delivered.
+
+        Deliberately not guarded by ``_require_in_progress``: recording a
+        refusal is not progress, it is the reason there is none, and a plan
+        that failed for another cause may still be carrying an unresolved one.
+
+        Returns ``None`` for the plan when the same refusal is already
+        recorded. That is the difference between a state and a log — a batch
+        stuck on missing test results restates its refusal on every Runner
+        event, and each restatement writing a new version would bury the round
+        the projection is trying to explain.
+        """
+
+        refusal = DeliveryRefusal(
+            reason=reason,
+            batch_index=self.current_batch_index,
+            at=at or datetime.now(UTC),
+            repository_id=repository_id,
+            task_id=task_id,
+        )
+        if self.delivery_refusal is not None and self.delivery_refusal.same_as(refusal):
+            return DeliveryRefusalOutcome(plan=None, refusal=self.delivery_refusal)
+        return DeliveryRefusalOutcome(
+            plan=replace(self, delivery_refusal=refusal, version=self.version + 1),
+            refusal=refusal,
+        )
+
+    def clear_delivery_refusal(self) -> "ExecutionPlan | None":
+        """Drop a refusal the delivering side no longer makes; None if there was none.
+
+        Convergence lives here. Once a re-dispatched Worker reports evidence
+        that does carry test results, delivery accepts the batch and the round
+        must stop saying it was refused — without any operator action, and
+        without a second code path that has to remember to.
+        """
+
+        if self.delivery_refusal is None:
+            return None
+        return replace(self, delivery_refusal=None, version=self.version + 1)
+
     def to_view(self) -> ExecutionPlanView:
         return ExecutionPlanView(
             id=self.id,
@@ -422,6 +529,9 @@ class ExecutionPlan:
             status=self.status,
             current_batch_index=self.current_batch_index,
             batches=tuple(tuple(planned.to_view() for planned in batch) for batch in self.batches),
+            delivery_refusal=(
+                self.delivery_refusal.to_view() if self.delivery_refusal is not None else None
+            ),
         )
 
     def _require_in_progress(self) -> None:

@@ -23,6 +23,7 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskStatus,
 )
 from repomesh.modules.task_orchestration.domain import (
+    DeliveryRefusal,
     ExecutionPlan,
     PlannedRepositoryTask,
     Task,
@@ -32,6 +33,17 @@ from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
+
+def _as_utc(value: datetime) -> datetime:
+    """A stored timestamp read back as an aware one.
+
+    SQLite (the test variant) hands back naive datetimes and an ISO string
+    written without an offset parses naive, so the tz is restored rather than
+    assumed downstream.
+    """
+
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 class TaskRecord(Base):
@@ -77,6 +89,15 @@ class ExecutionPlanRecord(Base):
     version: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    delivery_refusal: Mapped[dict[str, object] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True, default=None
+    )
+    """Defect A-19: the delivering side's last stated refusal for this batch.
+
+    NULL means delivery has made no complaint about the current batch — which
+    is not the same as an empty object, and is the value a resolved refusal
+    returns to.
+    """
 
 
 class ExecutionPlanTaskRecord(Base):
@@ -333,6 +354,7 @@ class PostgresExecutionPlanStore:
                         version=plan.version,
                         created_at=now,
                         updated_at=now,
+                        delivery_refusal=self._encode_refusal(plan),
                     )
                 )
                 await self._sync_leader_tasks(session, plan)
@@ -367,6 +389,7 @@ class PostgresExecutionPlanStore:
                     batches=self._encode(plan),
                     version=plan.version,
                     updated_at=datetime.now(UTC),
+                    delivery_refusal=self._encode_refusal(plan),
                 )
             )
             if result.rowcount != 1:
@@ -447,6 +470,35 @@ class PostgresExecutionPlanStore:
         ]
 
     @staticmethod
+    def _encode_refusal(plan: ExecutionPlan) -> dict[str, object] | None:
+        refusal = plan.delivery_refusal
+        if refusal is None:
+            return None
+        return {
+            "reason": refusal.reason,
+            "batch_index": refusal.batch_index,
+            "at": refusal.at.isoformat(),
+            "repository_id": (
+                str(refusal.repository_id) if refusal.repository_id is not None else None
+            ),
+            "task_id": str(refusal.task_id) if refusal.task_id is not None else None,
+        }
+
+    @staticmethod
+    def _decode_refusal(payload: dict[str, object] | None) -> DeliveryRefusal | None:
+        if not payload:
+            return None
+        repository_id = payload.get("repository_id")
+        task_id = payload.get("task_id")
+        return DeliveryRefusal(
+            reason=str(payload.get("reason") or ""),
+            batch_index=int(payload.get("batch_index") or 0),
+            at=_as_utc(datetime.fromisoformat(str(payload["at"]))),
+            repository_id=UUID(str(repository_id)) if repository_id else None,
+            task_id=UUID(str(task_id)) if task_id else None,
+        )
+
+    @staticmethod
     def _to_domain(record: ExecutionPlanRecord) -> ExecutionPlan:
         return ExecutionPlan(
             id=record.id,
@@ -456,6 +508,10 @@ class PostgresExecutionPlanStore:
             status=ExecutionPlanStatus(record.status),
             current_batch_index=record.current_batch_index,
             version=record.version,
+            # Rows written before defect A-19 have no column value at all.
+            delivery_refusal=PostgresExecutionPlanStore._decode_refusal(
+                record.delivery_refusal
+            ),
             batches=tuple(
                 tuple(
                     PlannedRepositoryTask(

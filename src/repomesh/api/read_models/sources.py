@@ -170,6 +170,8 @@ class RepositoryProfileData:
     topics: tuple[str, ...]
     languages: tuple[str, ...]
     profiled_at: datetime
+    test_commands: tuple[str, ...] = ()
+    """Defect A-19: the verification commands every round over this repo inherits."""
 
 
 @dataclass(frozen=True, slots=True)

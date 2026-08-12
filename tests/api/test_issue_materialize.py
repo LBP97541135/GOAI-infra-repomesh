@@ -334,6 +334,130 @@ def test_materialize_builds_the_teams_and_starts_the_round(
 
 
 # ---------------------------------------------------------------------------
+# The verification commands the console never supplied (A-19)
+# ---------------------------------------------------------------------------
+
+
+def test_the_console_round_carries_its_repositories_verification_commands(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Defect A-19: the plan handed to the execution plane must not be untested.
+
+    ``TaskNode.tests`` says the integration LLM does not emit verification
+    commands and the caller supplies them when materialising. The script era's
+    caller did; this one — the console's only path to work — supplied nothing,
+    so every round travelled the whole chain with an empty list and the Runner
+    dispatch went out with ``testCommands: []``. The Worker then verified
+    nothing and the console showed a green tick over unchecked work.
+
+    Asserted where the plan leaves the module rather than on the service's
+    return value: the injection is only worth anything if it survives the
+    bridge, and "the caller supplies them" is exactly the kind of claim that
+    was true of one caller and false of the other.
+
+    ``ts-order`` declares no commands and gets none. That half is the honest
+    fallback and is asserted too, because a fix that invented a default would
+    put a command that does not exist into a real dispatch.
+
+    The last assertion guards a trap the first attempt at this fix fell into.
+    ``materialize`` writes the plan it was handed into the draft's ``task_dag``,
+    and §8 fingerprints that column to decide whether a retry under a *new* key
+    may inherit the failed attempt's idempotency prefix. Injecting before that
+    write changed the fingerprint between attempts, so the retry forked the
+    round instead of repairing it — A-5's failure, reintroduced by A-5's fix.
+    The snapshot stays the LLM's; only the execution plan is verified.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        # The plan on the draft is what the integration LLM emitted, and it
+        # emitted no verification commands at all. This is the defect's start.
+        row = _draft_row(container, issue_id)
+        assert all(not node.get("tests") for node in row.task_dag)
+
+        assert _materialize(chain).status_code == 200
+
+        # ...and it still is: the round's fingerprint did not move.
+        assert all(not node.get("tests") for node in _draft_row(container, issue_id).task_dag)
+
+    assert len(starter.calls) == 1
+    batches = starter.calls[0][2]
+    by_repository = {
+        planned.title: planned.tests for batch in batches for planned in batch
+    }
+    assert by_repository == {
+        "Implement changes for ts-notify": ("python scripts/run_tests.py",),
+        "Implement changes for ts-order": (),
+    }
+
+
+def test_a_plan_that_states_its_own_tests_is_not_overwritten_by_the_catalog(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The catalog is a default, not an override.
+
+    Nothing writes verification commands into a snapshot today, but ``tests``
+    is part of the plan's persisted shape and a plan that states its own must
+    outrank a catalog row — otherwise the catalog silently rewrites work
+    somebody chose deliberately, which is the same class of bug as supplying
+    nothing.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+        _state_own_tests(container, issue_id, "ts-notify", ("make verify",))
+        assert _materialize(chain).status_code == 200
+
+    batches = starter.calls[0][2]
+    stated = {
+        planned.title: planned.tests for batch in batches for planned in batch
+    }["Implement changes for ts-notify"]
+    assert stated == ("make verify",)
+
+
+def _state_own_tests(
+    container: ApplicationContainer, issue_id: str, repository: str, tests: tuple[str, ...]
+) -> None:
+    """Write verification commands onto the draft's own task DAG."""
+
+    store = container.plan_snapshot_store()
+
+    async def write() -> None:
+        rows = await store.list_all(UUID(issue_id))
+        draft = rows[0]
+        task_dag = [
+            {**node, "tests": list(tests)} if node.get("repository") == repository else node
+            for node in draft.task_dag
+        ]
+        async with container.database.transaction() as session:
+            from repomesh.modules.repository_intelligence.infrastructure.models import (
+                PlanSnapshotRecord,
+            )
+
+            record = await session.get(PlanSnapshotRecord, draft.id)
+            record.task_dag = task_dag
+
+    asyncio.run(write())
+
+
+# ---------------------------------------------------------------------------
 # The write that consumes the draft is not optional (A-5)
 # ---------------------------------------------------------------------------
 

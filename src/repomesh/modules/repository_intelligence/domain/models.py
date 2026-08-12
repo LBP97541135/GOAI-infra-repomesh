@@ -29,6 +29,22 @@ class RepositoryProfile:
     topics: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
     auto_card: AutoCard | None = None
+    test_commands: tuple[str, ...] = ()
+    """How this repository verifies itself, in its own words (defect A-19).
+
+    The integration LLM does not emit verification commands, so a plan's
+    ``TaskNode.tests`` arrives empty and the console materialize path had
+    nothing to put there — every console round dispatched ``testCommands: []``
+    and the Runner dutifully ran nothing. The commands are a property of the
+    repository, not of a requirement, so this is where they belong: one
+    catalog row states once how its repository is checked, and every round
+    over that repository inherits it.
+
+    Empty is honest and stays legal: a repository nobody has told us how to
+    test yields tasks with no verification, and delivery refuses the
+    unverified candidate downstream rather than this field inventing a
+    plausible ``pytest``.
+    """
     id: UUID = field(default_factory=new_id)
     profiled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 

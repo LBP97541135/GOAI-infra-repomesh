@@ -34,6 +34,7 @@ from repomesh.modules.review_validation import (
     ValidationSnapshotService,
 )
 from repomesh.modules.task_orchestration.contracts import (
+    BatchDeliveryRefused,
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
@@ -179,6 +180,7 @@ async def _store_candidate(
     workspace: Path,
     base_sha: str,
     commit_sha: str,
+    test_results: list | None = None,
 ) -> tuple[Task, Task]:
     actor = uuid4()
     leader = Task(
@@ -209,7 +211,11 @@ async def _store_candidate(
                 "commitSha": commit_sha,
                 "baseSha": base_sha,
                 "workspacePath": str(workspace),
-                "testResults": [{"command": "pytest", "exitCode": 0}],
+                "testResults": (
+                    [{"command": "pytest", "exitCode": 0}]
+                    if test_results is None
+                    else test_results
+                ),
             }
         ),
     )
@@ -479,3 +485,73 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
         if item.repository_id == second_repository_id
     )
     assert second.depends_on == (first_repository_id,)
+
+
+@pytest.mark.asyncio
+async def test_a_candidate_with_no_test_results_is_refused_by_name(tmp_path: Path) -> None:
+    """Defect A-19: the refusal delivery actually makes, typed and attributable.
+
+    This is the live failure of run d261dbb4, reproduced from the same shape of
+    evidence: the dispatch carried ``testCommands: []`` because the console
+    supplied none, the Runner therefore ran nothing, and the completion event
+    came back with ``testResults: []``.
+
+    Delivery refuses — and must keep refusing; nothing here relaxes that. What
+    is asserted is that the refusal now arrives as a ``BatchDeliveryRefused``
+    naming its repository and its task, because the advancer cannot record on
+    the round what the refusal does not say, and because a bare ``ValueError``
+    is indistinguishable from a bug in the delivering side.
+
+    Also asserted: nothing was published. A refusal that had already opened a
+    pull request would not be a refusal.
+    """
+
+    _remote, workspace, base_sha, head_sha = _repository(tmp_path, "checkout")
+    organization_id = uuid4()
+    project_id = uuid4()
+    repository_id = uuid4()
+    tasks = InMemoryTaskStore()
+    leader, worker = await _store_candidate(
+        tasks,
+        organization_id=organization_id,
+        project_id=project_id,
+        repository_id=repository_id,
+        leader_id=uuid4(),
+        workspace=workspace,
+        base_sha=base_sha,
+        commit_sha=head_sha,
+        test_results=[],
+    )
+    plan = ExecutionPlanView(
+        id=uuid4(),
+        organization_id=organization_id,
+        project_id=project_id,
+        created_by_agent_id=uuid4(),
+        status=ExecutionPlanStatus.IN_PROGRESS,
+        current_batch_index=0,
+        batches=(
+            (PlannedRepositoryTaskView(repository_id, "checkout", "implement", (), leader.id),),
+        ),
+    )
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(
+            id=repository_id, name="checkout", url="https://github.com/acme/checkout"
+        )
+    )
+    delivery = DeliveryService(InMemoryChangeSetStore())
+    adapter = RecordingGitHubAdapter()
+    finalizer = PlanDeliveryFinalizer(
+        delivery,
+        ChangeSetSCMCoordinator(delivery, catalog, adapter, GitBranchPublisher(tmp_path)),
+        tasks,
+        PlanDeliveryPolicy(),
+    )
+
+    with pytest.raises(BatchDeliveryRefused) as refused:
+        await finalizer.handle_batch(plan)
+
+    assert refused.value.reason == "Runner evidence has no test results"
+    assert refused.value.repository_id == repository_id
+    assert refused.value.task_id == worker.id
+    assert adapter.pull_requests == []
