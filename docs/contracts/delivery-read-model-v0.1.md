@@ -55,7 +55,7 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
           "phase": "contract|plan|execute|validate|release|delivered|failed|archived",
           "phase_note": "string",               // 人类可读补充，如 "2 完成 · 1 修复中"
           "pending_decision_count": 0,
-          "updated_at": "UTC ISO 8601"
+          "updated_at": "UTC ISO 8601|null"    // nullable：该轮既无 ChangeSet 也无快照时无时间源
         }
       ]
     }
@@ -90,7 +90,7 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
     "project_key": "string|null",             // Project 实体/注册表未落地前为 null（§6.9）
     "title": "string",                        // 暂以 plan snapshot requirement_text 截断，Project 落地后切换
     "requirement_text": "string|null",        // plan snapshot.requirement_text
-    "created_at": "..."
+    "created_at": "...|null"                  // nullable：该 project 从无 PlanSnapshot（只有 ExecutionPlan）时
   },
   "contract": {                                // specification (kind=ENGINEERING, FROZEN 优先)；整体可为 null（该交付未建 ENGINEERING spec）
     "specification_id": "uuid", "version": 3, "status": "frozen",
@@ -107,7 +107,8 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
     { "repository_id": "uuid", "name": "string", "evidence": "string|null" }
   ],
   "plan": {                                    // plan snapshot + execution plan status
-    "plan_version": 2, "status": "in_progress",
+    "plan_version": 2,                         // nullable：该轮无 PlanSnapshot 时为 null
+    "status": "in_progress",
     "current_batch_index": 1,
     "execution_batches": [["repo-name"]],
     "merge_order": ["repository_id"]           // 由 ChangeSet depends_on 拓扑排序导出
@@ -154,7 +155,11 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
         "decision": "ready|blocked|rollback_required",
         "decided_by_agent_id": "uuid", "reason": "string", "decided_at": "..." }
     ],
-    "recovery_plans": [ { "trigger": "string", "reason": "string", "actions": [] } ]
+    "recovery_plans": [ { "trigger": "string", "reason": "string",
+        "actions": [ { "kind": "string", "status": "string",
+                       "repository_id": "uuid|null",     // 非仓库相关的动作为 null
+                       "detail": "string" } ] } ]
+                                               // RecoveryPlanView 的 id / created_at 有意不投影（非漏投影）
   },
   "validation_snapshot": {                     // review_validation，可为 null
     "id": "uuid", "status": "passed", "candidate_heads": { "repository_id": "sha" },
@@ -162,7 +167,9 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
   },
   "diffs": [                                   // runner.completed 证据
     {
-      "repository_id": "uuid", "run_id": "uuid", "commit_sha": "string",
+      "repository_id": "uuid",
+      "run_id": "uuid|null",                   // nullable：Runner 证据未带 runId 时（准入只校验 commitSha）
+      "commit_sha": "string",
       "changed_files": ["path"],
       "diffstat": null                         // nullable：Runner 暂未采集 ±行数（§6.3）
     }
@@ -233,7 +240,9 @@ code-review 问询后补写，与 `direction` 先例同类）**：投影函数�
 { "items": [ {
   "id": "string", "kind": "approve|watch",
   "title": "string", "body": "string",
-  "repository_id": "uuid|null", "head_sha": "string|null",
+  "repository_id": "uuid|null",
+  "head_sha": "string",                           // 恒非空：两类决策项都取 RepositoryDeliveryView.commit_sha
+
   "created_at": "...",
   "actions": ["approve_merge", "view_evidence"]   // 枚举，前端按 kind 渲染
 } ] }
@@ -264,6 +273,15 @@ code-review 问询后补写，与 `direction` 先例同类）**：投影函数�
   "idempotency_key": "string" }
 ```
 
+响应体（**2026-08-11 补记**：起草时只定义了请求体与错误码，实现一直返回
+`GovernanceDecisionView` 直投影）：
+
+```json
+{ "id": "uuid", "repository_id": "uuid", "head_sha": "string",
+  "decision": "ready|blocked|rollback_required",
+  "decided_by_agent_id": "uuid", "reason": "string", "decided_at": "..." }
+```
+
 `decided_by_agent_id` 必须是同组织活跃的 ORGANIZATION_LEADER 或该仓库的
 REPOSITORY_LEADER，否则 403；每次落盘写 platform 审计事件。幂等语义为
 **内容重放去重**（相同决策重放 no-op、版本不涨）；head-bound 下幂等键复用无害，
@@ -274,6 +292,16 @@ REPOSITORY_LEADER，否则 403；每次落盘写 platform 审计事件。幂等�
 
 归档非活跃交付（幂等）。仅允许终态（delivered / failed / 无活跃 ChangeSet 且 plan 非
 IN_PROGRESS）；活跃交付返回 409。归档不删数据，列表默认过滤 `archived`。
+
+响应体（**2026-08-11 补记**，同 §4.4）：
+
+```json
+{ "delivery_id": "uuid", "archived_at": "..." }
+```
+
+**查询参数 `GET /deliveries?include_archived=`（2026-08-11 补记）**：默认 `false`，
+即上面那句「列表默认过滤 archived」；置 `true` 时归档交付一并返回。起草时只写了默认
+行为、没写这个开关，于是契约里读不到「如何看已归档交付」的路径，而实现一直有。
 
 ## 5. 状态映射（读模型内唯一实现，禁止前端另行映射）
 
