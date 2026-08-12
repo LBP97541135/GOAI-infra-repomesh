@@ -35,6 +35,14 @@ class RunnerTaskProjectionRequest:
     workspace_path: Path
     base_sha: str
     context_manifest_uri: str
+    catalog_test_commands: tuple[str, ...] = ()
+    """How the repository catalog says this repository is verified, right now.
+
+    A fallback, never an override — see :meth:`RunnerTaskProjector.project`.
+    Resolved by the caller because this projector is a pure translation with no
+    I/O in it, and reading the catalog is the dispatcher's business; it already
+    holds the profile it fetched to get the clone URL.
+    """
     context_version: int = 1
     attempt: int = 1
     permission_mode: RunnerPermissionMode = RunnerPermissionMode.ACCEPT_EDITS
@@ -47,6 +55,33 @@ class RunnerTaskProjector:
     """Translate governed product objects into the frozen runtime.v1 task."""
 
     def project(self, request: RunnerTaskProjectionRequest) -> RunnerTask:
+        """Build the frozen runtime.v1 task this dispatch will send.
+
+        **Verification commands are resolved here, not baked in** (defect A-19,
+        second half). The Task Specification states them and wins whenever it
+        has any; when it is silent the repository catalog's *current* answer is
+        used. That precedence — spec-stated over catalog-current — matters in
+        both directions: a task somebody deliberately scoped to one test suite
+        keeps it, and a task nobody scoped at all still gets verified.
+
+        Resolving at dispatch time rather than only at materialization is what
+        makes the commands convergent. A08 fixed materialization, so fresh
+        rounds carry their commands in the spec; every round materialized
+        *before* that has an empty ``tests`` baked into its task rows, and
+        re-dispatch replays those rows verbatim — so ``testCommands`` stayed
+        ``[]`` forever no matter what the catalog said (live: re-dispatched run
+        8aa3b0a5 completed with ``testResults: []`` while its catalog row read
+        ``["python scripts/run_tests.py"]``). Reading the catalog on the way
+        out rescues every one of those rounds on its next dispatch, and means
+        an operator correcting a wrong command reaches the next run without
+        re-materialising anything.
+
+        Empty on both sides stays empty. The dispatch then carries no
+        verification, the Runner honestly runs none, and delivery refuses the
+        unverified candidate downstream — visibly, since the refusal is
+        recorded on the round.
+        """
+
         package = request.package
         grant = request.context_grant
         self._validate_bindings(request)
@@ -116,7 +151,7 @@ class RunnerTaskProjector:
                     dict.fromkeys((*grant.denied_paths, *package.forbidden_paths))
                 ),
             ),
-            test_commands=package.test_commands,
+            test_commands=package.test_commands or request.catalog_test_commands,
             resume_session_id=request.resume_session_id,
             credential_refs=request.credential_refs,
             worker_agent_id=package.worker_agent_id,

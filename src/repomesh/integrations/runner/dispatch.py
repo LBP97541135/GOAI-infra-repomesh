@@ -86,6 +86,14 @@ class DispatchWorkerTask:
                     workspace_path=workspace.path,
                     base_sha=workspace.base_sha,
                     context_manifest_uri=manifest.resolve().as_uri(),
+                    # Defect A-19: the catalog's current answer to "how is this
+                    # repository verified", carried alongside the package so the
+                    # projector can fall back to it when the Specification is
+                    # silent. Read off the profile already fetched above rather
+                    # than through a second port — the dispatcher is the one
+                    # place that holds both the package and the catalog row, and
+                    # a second reader would be a second source of truth.
+                    catalog_test_commands=tuple(repository.test_commands),
                     attempt=command.attempt,
                     permission_mode=RunnerPermissionMode(command.permission_mode),
                     resume_session_id=command.resume_session_id,
