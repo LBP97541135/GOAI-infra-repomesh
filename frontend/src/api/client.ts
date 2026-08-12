@@ -9,6 +9,13 @@ import type {
   DecisionsResponse,
   DeliveryAggregate,
   DeliveryEventsPage,
+  DiscoveryAnalysisRequest,
+  DiscoveryApprovalRequest,
+  DiscoveryCandidatesRequest,
+  DiscoveryStepRequest,
+  DiscoveryTaskView,
+  DiscoveryWriteReceipt,
+  DiscoveryView,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
   IssueDetailView,
@@ -168,6 +175,45 @@ export function createApiClient(config: ApiClientConfig) {
         "GET",
         `/console/repositories/scan-tasks/${encodeURIComponent(taskId)}`,
       ),
+
+    /* ── 契约 v0.4 发现链（批次 B）───────────────────────────────────────── */
+
+    /** §3.1 发现链读投影。**从未发起发现的 issue 返 200 空块**（不是 404）；
+     *  `step` / `step_state` 由读模型按 §3.2 判定，前端只渲染不自判。 */
+    getDiscovery: (issueId: string) =>
+      request<DiscoveryView>(config, "GET", `/issues/${issueId}/discovery`),
+
+    /** §4.5 轮询。**404 = 任务状态随进程重启丢失**（端点 detail 自述）——
+     *  此时改读 `getDiscovery` 即可判断该步到底落没落，不必重跑。 */
+    getDiscoveryTask: (issueId: string, taskId: string) =>
+      request<DiscoveryTaskView>(
+        config,
+        "GET",
+        `/issues/${issueId}/discovery/tasks/${encodeURIComponent(taskId)}`,
+      ),
+
+    /** §4.3 Step 0 需求分析（202）。`force_continue: true` 走 §4.6 的强行继续留痕，
+     *  此时**不重跑 LLM**，只在既有 analysis 上记 forced_continue。 */
+    postDiscoveryAnalysis: (issueId: string, payload: DiscoveryAnalysisRequest) =>
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/analysis`, payload),
+
+    /** §4.3 Step 1 候选评分（202）。前置未满足（分析未通过且未强行继续）→ 409。 */
+    postDiscoveryCandidates: (issueId: string, payload: DiscoveryCandidatesRequest) =>
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/candidates`, payload),
+
+    /** §4.3 Step 2 三档分类（202）。候选为空 → 409。 */
+    postDiscoveryClassification: (issueId: string, payload: DiscoveryStepRequest) =>
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/classification`, payload),
+
+    /** §4.3 Step 3 生成计划（202）。**审批 v1 必经**：approval 非 approved → 409。 */
+    postDiscoveryPlan: (issueId: string, payload: DiscoveryStepRequest) =>
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/plan`, payload),
+
+    /** §5.2 分档审批（**同步** 200，无 LLM 调用）。`evidence_version` 漂移 → 409。
+     *  回执与四个触发同形（`task_id` 恒 null），**不回投影审批块**——按 §4.5 同一条，
+     *  写完一律重取读投影。 */
+    postDiscoveryApproval: (issueId: string, payload: DiscoveryApprovalRequest) =>
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/approval`, payload),
 
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),

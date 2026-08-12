@@ -208,6 +208,10 @@ export function IssueDetailContainer({
     // 依赖整个对象会让每次刷新多发一次计划请求（B2 的同款教训）。
   }, [issueId, hasDetail, anchorRepositoryId, anchorRepositoryName, reload, planReload]);
 
+  /** 计划纸面重取。**必须是稳定引用**：发现面板把它存进 ref 之外还会随 issue 变化
+   *  重建轮询，内联箭头函数每次 render 换 identity 会让下游的 effect 白白重跑。 */
+  const handlePlanReload = useCallback(() => setPlanReload((n) => n + 1), []);
+
   const handleToggleRound = useCallback(
     (round: IssueRoundView) => {
       const id = round.round_id;
@@ -377,7 +381,8 @@ export function IssueDetailContainer({
         }
         onDecisionAction={handleDecisionAction}
         planState={planState}
-        onRetryPlan={() => setPlanReload((n) => n + 1)}
+        onRetryPlan={handlePlanReload}
+        onPlanGenerated={handlePlanReload}
         onBack={onBack}
         onOpenRoom={onOpenRoom}
         onToast={onToast}

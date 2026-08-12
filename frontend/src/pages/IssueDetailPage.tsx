@@ -1,6 +1,7 @@
 import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { Decision } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
+import { DiscoveryPanel } from "../components/DiscoveryPanel";
 import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
 import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, eventTime, openedBy, shortId } from "../display";
@@ -82,6 +83,7 @@ export function IssueDetailPage({
   onDecisionAction,
   planState,
   onRetryPlan,
+  onPlanGenerated,
   onBack,
   onOpenRoom,
   onToast,
@@ -104,6 +106,9 @@ export function IssueDetailPage({
   /** 计划 DAG 面板（C-2）的取数四态：加载 / 无快照 / 失败 / 就绪，由容器持有 */
   planState: PlanDagState;
   onRetryPlan: () => void;
+  /** 发现面板（B-1/B-2）生成计划成功后刷新计划纸面。与 onRetryPlan 是同一个动作
+   *  （重取该 issue 的计划快照），但两个入口的语义不同，故分成两个 prop 各自命名。 */
+  onPlanGenerated: () => void;
   onBack: () => void;
   onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
@@ -177,6 +182,16 @@ export function IssueDetailPage({
           本 issue 设有人工检查点：{detail.required_checkpoints.join(" · ")} ›
         </button>
       )}
+
+      {/* 发现面板（B-1/B-2）：位置按任务书——原始需求卡之后、计划 DAG 之前。
+          发现在计划之前发生（需求 → 发现 → 计划），版面顺序照这条时间线。
+          面板自持取数与轮询（同 AddRepositoryCard 的取舍），容器只给 issue 与工作区。 */}
+      <DiscoveryPanel
+        issueId={detail.issue_id}
+        organizationId={detail.organization_id}
+        onToast={onToast}
+        onPlanGenerated={onPlanGenerated}
+      />
 
       <div className="microlabel pt-4 pb-2">关联仓库 · 团队</div>
       {/* 空要说出来，不能让区块凭空消失——草稿 issue 尚未确定范围就是这个形态 */}

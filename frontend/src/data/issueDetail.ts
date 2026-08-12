@@ -78,6 +78,10 @@ export const issueDetailFixture: IssueDetailView = {
   contract: null,
   human_grants: [{ human_principal_id: "h-0001", role: "delivery_owner", code_access: "write" }],
   required_checkpoints: ["specification", "delivery"],
+  // 契约 v0.4 §3.3 两标量，恒存在。与本 issue 的发现夹具默认形态（done）一致——
+  // 这一单已经跑完整条发现链，计划快照就是它产出的。
+  discovery_step: 4,
+  discovery_state: "done",
 };
 
 /** §5.1：每仓两条（teamRoom + leaderDM）。docs 团队尚未 ready，其 leaderDM 是空房间
