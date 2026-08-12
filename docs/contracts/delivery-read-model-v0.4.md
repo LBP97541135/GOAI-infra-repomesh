@@ -1090,6 +1090,85 @@ POST，客户端也没有 PUT/DELETE**。因此本节生效后，**存量 `openc
 `tests/api/test_issue_materialize.py` 增 2 例（503 而非裸 500、派活中途断掉的轮次可被下一次
 重放接上）。反证已做：撤掉翻译后端点恢复 `500 text/plain "Internal Server Error"`。
 
+### 8.7.2 Team 属于仓库，不属于拓扑行（**提案 · 待主脑裁决**，2026-08-12，A-8）
+
+> 本节改 §8.7 的 Team 命名与 `ensure_team` 时序两点，并把 §8.7.1 那条「spec 冲突不得
+> 冒充 503」的裁决从 backlog 变成实现——它现在有活体实例了。实现在分支
+> `feat/repo-team-converge`。
+
+核实事实（A-8，2026-08-12 活体，只读取证）：同一 org 下三个 issue
+（`96896557` / `35e66beb` / `5c1b3567`）都物化到同一对仓库（checkout `579a61c4` /
+billing `9dfa78f2`）。仓库 leader/worker 是**目录单例**（这是对的，设计如此：
+`CreateAgent` 的 `singleton_key = "repository:{id}:leader"`），三个 issue 的六行
+拓扑因此共用同一批 principal——checkout 三行同为 leader `4160c8de`，billing 三行同为
+`996dfd64`。但 `project/domain.py:157-162` 用**行自己的 id** 铸 Team 名
+（`rm-team-{self.id.hex}`），于是一个 issue 一个名字。
+
+AgentTeams 控制器对 worker 的 Team 归属是**排他**的。第一个投影成功的 issue
+（`96896557`，team `rm-team-6c503f02…`）占住了两个 leader，其余每个 issue 的
+`ensure_team` 都得到
+`AgentTeams HTTP 400: Worker rm-leader-b-checkout is already a member of Team rm-team-6c503f02…`
+——一个**确定性冲突**，却经 `bootstrap/container.py::topology_runtime_projector` 被折成
+`RuntimeProjectionUnavailable` → 503「materialize again once AgentTeams answers」。
+**重试永远不会好**，因为 AgentTeams 早就答了。
+
+这不是新缺陷，是旧假设到期：脚本时代从没让两个项目共用一个仓库，所以「一行一个 Team」
+一直成立得很偶然。
+
+补充事实（本次核实，超出初始报告）：该表实为 **10 行**而非 6 行——种子行
+`rm-team-b-checkout`（项目 `9129f894`）与 `rm-team-c-billing`（项目 `e94499f9`）
+也压在这两个仓库上，且这两个名字在控制器上**根本不存在**（房间 id 是种子脚本直接写库的）。
+即同一仓库在库里最多曾有四个「Team 名」，控制器上只有一个真 Team。
+
+裁决请求：
+
+1. **Team 是仓库级资源**。规范名由仓库派生：`rm-team-{repository_id.hex}`，不再由拓扑行
+   id 派生。凡触及同一仓库的项目，共用同一个控制器 Team 及其两个 Matrix 房间。控制台的
+   「rooms」本就是协作消息的读模型投影，不是 Team 的镜像，此变更不影响其语义。
+2. **收敛靠认领，不靠外科手术**（`ReconcileProjectAgentTopology`）。`ensure_team` 之前先问
+   控制器：**仓库 leader 当前属于哪个 Team**。已核实部署态控制器 v1.2.0 的
+   `GET /api/v1/workers/{name}` 响应**直接带 `team` 字段**（另有 `GET /api/v1/teams` 列表
+   端点），因此**不需要**去解析 400 那句话——`WorkerRuntimeRef` 增一个 `team` 字段即可。
+   读到就**认领**它（用它的名字去 `ensure_team`，拿到它的两个房间），并把认领到的名字
+   **回写到拓扑行**（沿用该行已有的房间 id 回写机制）；读不到才用规范名新建。
+   以 leader 为锚点：它是 Team 必然包含的那一个 principal，且是目录单例，**谁持有它，
+   谁就是这个仓库的 Team**，不管它叫什么。
+   代价：每次投影每个 team 多一次 GET，且不缓存——要观察的正是「别的项目刚建了 Team」。
+3. **唯一约束改域**（`project/infrastructure.py:74`，迁移 `20260812_0024`）。原
+   `UNIQUE (agentteams_team_name)` 读作「两行不得指向同一个 Team」，在共享 Team 之后
+   **恰好禁止了正确行为**。改为 `UNIQUE (project_id, agentteams_team_name)`：保留仍然成立
+   的那一半——**单个项目内两个仓库必须是两个 Team**（否则两仓流量并进一个房间且无人察觉）。
+   **迁移不改任何一行的名字**：存量 stale 名由下一次投影认领后自行回写，收敛是跑出来的，
+   不是迁移断言出来的——一个事务内看不见控制器状态，改名就是猜。
+4. **翻译收窄**（落实 §8.7.1 第二条裁决）。`topology_runtime_projector` 拆分：
+   `AgentTeamsConflict` 与 `AgentTeamsResponseError` 的 **4xx** → 新拒绝
+   `RuntimeProjectionConflict`（`repository_intelligence/ports/runtime_projection.py`），
+   在 `api/discovery_chain.py` 译为 **409**，原样带上控制器那句话；
+   `AgentTeamsRoomsPending`（房间还没建出来）、`AgentTeamsUnavailable`、5xx 仍为 503。
+   认领落地后 already-a-member 一支应不再出现，409 是**其余** spec 冲突
+   （runtime / skills 不一致等）的诚实归宿。
+
+三个标本的重放推演（认领后，无需碰控制器）：`96896557` 读到 leader 已在
+`rm-team-6c503f02…`（正是自己建的），认领＝原地不动，房间不变；`35e66beb` 与 `5c1b3567`
+各自读到同一个 `rm-team-6c503f02…`，认领它、拿到同一对房间、把名字回写掉自己那个
+从未存在过的 stale 名——三行收敛到一个 Team、一对房间，且**没有任何控制器侧改动**。
+这正是验收判据。
+
+**派活兼容性**（`collaboration.SendCollaborationMessage._route`）：`_route` 走
+「项目 → 该项目拓扑内按成员匹配 team → 取 `room_id`」，不假设房间在项目间唯一，因此共享
+房间不破坏它。多个 issue 的流量在同一个仓库房间里交织**是架构本意**（消息按
+delivery/task 键区分，且落库时带 project_id/repository_id）。
+
+验证：`tests/integrations/agentteams/test_runtime_projection.py` 增 5 例
+（规范名来自仓库、第二个 issue 共用第一个的 Team、旧行认领既有 Team 并回写、
+leader 是唯一被读的锚点、成员真不一致仍是 400）+ `tests/api/test_issue_materialize.py`
+增 2 例（refuse-on-merits 得 409 且不含重试话术、composition root 五分支分流）。
+反证已做两次：撤掉认领 → 重现活体原句
+`AgentTeams HTTP 400: Worker … is already a member of Team rm-team-6c503f02…`；
+撤掉 409 分流 → 重现原误导性 503「materialize again once AgentTeams answers」。
+迁移 up/down 在一次性 Postgres 上实测：升级后跨项目同名可插入、项目内同名被拒；
+降级在存在共享行时**如实失败**（数据已越过 schema），无共享行时干净回滚。
+
 ---
 
 ## 附录 A：两条既有勘误（**已批准并同批实施**，2026-08-12）
