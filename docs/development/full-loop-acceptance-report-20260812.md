@@ -52,9 +52,9 @@ console-demo，物化成功标本）。
 | B2 | 发现四步（真 LLM）×3 次实走 | √ | ①充分判定（0.90/0.85/0.90）+关键词；②4 候选评分、rationale 英文原文原样；③三档生成+行内改档+批准：改档留痕（谁改的、原判、时间戳）、审批意见原文入档、`approval.evidence_version` 绑定界面指纹（e8578f9b/7842adbd 亲证两枚）、`effective_tiers` 记 `adjusted:true/original_tier`；④计划生成 {3,1,3}/{2,1,1}/{2,1,0} 与读模型一致。**缺失依赖诚实呈现**：模型点名 catalog 外的 pricing 仓，界面挂「缺失依赖」「模型补充进来的仓库」不吞（该形态与远端现实意外吻合——pricing-core 真存在而不在 catalog） |
 | B2-DAG | 计划 DAG 泳道 | √ | 「3 节点 · 1 批次 · 2 条依赖边」批次泳道、锚点仓徽标、图例、四条诚实脚注（未着色原因/边来源/丢弃依赖只进服务端日志/graph_edges 恒空另立项） |
 | B2-clarify | 追问回路 + 强行继续留痕 | √ | 含糊 issue `de2973ab` → 「不充分（0.10）· 3 条追问」+缺失维度+逐条答复框；强行继续按钮自述诚实（永久留痕+审计+不重跑模型）；点击后 `forced_continue {at, by_agent_id, ignored_question_count:3}` 落库、GUI 琥珀留痕、步进器按 §3.2 规则 2 放行 |
-| B3 | 物化并开工 | **弹窗与负路径全过；正路径五走全部断在执行面** | 确认弹窗数字五次全对（3任务3团队 / 2任务2团队×3 / 1任务1团队 · 主体派生 · 不可逆文案）。第一走 500=A-1（跨组织异常未翻译）；第二走 500=A-3 首触发；第三走 `35e66beb` **HTTP 200 但收据 `status=failed`（"AgentTeams room is not ready"）**——【**勘正**：本报告先前版本称此走「物化 200 成功」，与库中收据矛盾，实为半执行，是 A-5 修复前「记录失败被吞成 200」的直接产物】；第四走 `96896557` 裸 500=A-6；第五走 `425efbbc` 503=A-9 |
+| B3 | 物化并开工 | **√（第七走真成功）/ 沿途揪出 A-1·A-3·A-6·A-8·A-9·A-10** | 确认弹窗数字七次全对（3任务3团队 / 2任务2团队×3 / 1任务1团队×3 · 主体派生 · 不可逆文案）。①500=A-1；②500=A-3 首触发；③`35e66beb` **HTTP 200 但收据 `status=failed`**【**勘正**：先前版本称此走「物化 200 成功」，与库中收据矛盾，实为半执行，是 A-5 修复前「记录失败被吞成 200」的产物】；④`96896557` 裸 500=A-6；⑤`425efbbc` 503=A-9；⑥`425efbbc` 重试裸 500=A-10（**任务行首次落库**）；⑦`425efbbc` 重试 → **`status=materialized`、`error=null`、`execution_plan_id` 回填**（A-5 回填语义首个正向实证），GUI 转「第 1 轮交付 · 1 仓 · 第 1/1 批执行中」、工程契约 `AE8312D7 V1 DRAFT`、轮次卡 `计划 v1 · 更新于 08-12`（A-4 的 null 降级文案自然消失=修复后形状分叉）、**DAG 节点首次着执行态色 `pending`**（C-4 活体）、**房间区块渲染出 teamRoom+leaderDM 双房间各 2 成员**（B-11 活体） |
 | B3-负路径 | 跨组织物化拒绝 | √（A-1 关闭证据） | ba7e827 + REQUIRED_CHECKS 修正后，GUI 重放 a2c0c2f9 → 弹窗「服务端拒绝 … **HTTP 409 · repository 48ff85ee… already has a leader in another organization (d68a5926…); it cannot join this project's topology**」原文透传（截图 S16） |
-| B4 | 执行观测（派工→runner→真仓分支→PR→CI→merge gate） | **未达（四条路全断在派工前）** | 复走后阻断层层剥到第九层：①宿主→控制面通路（⑮ sidecar 已通，`/health/ready` 由 503 转 ready）→ ②B-11 运行时投影缺失（⑱ 已修，**房间首次真长出**）→ ③A-6 派工异常裸 500（已修为 503）→ ④**A-8 争仓**：35e66beb/5c1b3567 的 leader 已被 96896557 的 team 占住，重放不好转 → ⑤**A-9**：换无争仓的 pricing-core 走干净路，team 与房间都建成，但新铸的 `agt-leader-*` 在控制器上没有容器/入队事件。**runner、真仓候选分支、PR、CI `tests`、merge gate 五项均未发生** |
+| B4 | 执行观测（派工→runner→真仓分支→PR→CI→merge gate） | **未达；到达边界=「任务实体+房间齐备，但任务包未投递」** | 阻断层层剥离共十层，逐层实证逐层修：①宿主→控制面三重墙（⑮ sidecar，`/health/ready` 503→ready）→ ②**B-11** 运行时投影零调用点（⑱，房间首次真长出）→ ③**A-6** 派工异常裸 500（译 503）→ ④runtime/镜像配对坏死（`f16925c`，openclaw→copaw）→ ⑤**A-8** 仓库 leader 争仓 400 穿 503（㉑ 收养语义）→ ⑥**A-9** 巡检迟到一整圈（僵尸清理+守卫）→ ⑦MinIO 凭据转义错（环境，主脑自首）→ ⑧**A-10 发布半** S3 异常裸 500 → ⑨**A-10 重放半** 认领任务却不补写任务包、不重投点名 → ⑩观察哨 c：worker 容器侧 mc 对 storage `Access Denied`（威胁后续交付物上传，未立号）。**到达点**：任务行落库、双房间齐备、GUI 显示「执行中」；**未发生**：任务包写入 MinIO（`teams/…/shared/tasks/` 只有 `.keep`）、新点名消息、worker 动工、runner、候选分支、PR、CI `tests`、merge gate |
 | B4（旁证） | 执行面读模型（种子 B） | √ | DAG 执行态着色（succeeded 节点+6 态图例+「本页没有轮询」自述）；teamRoom 消息头像/系统条目结构之别+「控制台投影」脚注（§5.2 合规）；环境窗（变更文件/commit/PR #7/基线快照）；事件时间线四 kind 过滤 |
 | B5 | GUI 回滚（整 change set） | **√（GUI 语义闭环）** | 种子 B 轮 `9129f894`：轮次卡「回滚…」入口 → 对话框与 v0.1 §4.6 及设计定稿④逐项吻合（范围表 checkout/未 merge/withhold 免费撤回/逆序第 1 步/PR #7；琥珀条不许诺一键还原；理由必填；主体派生随组织正确切换；确认框门控）。pre/post 三中：merge_gate `{allowed:true}`→`{allowed:false,["an active recovery plan is incomplete"]}`；新增 head-bound `ROLLBACK_REQUIRED` 决策（理由原文入档）；recovery_in_progress false→true。GUI 即时呈现「关注·修复观察」+「已有恢复计划在执行」+决策卡 |
 | B5-saga | 回滚 saga 真执行 | **待复走** | 勘正：种子 B 的 catalog URL 是占位符，saga 对它的 close 动作在 URL 解析处必失败——**saga 活体证据不能从种子 B 拿**，须在 B4 真交付产生 change set 后对其走 GUI 回滚获取。`gate_display` 仍 "open" 为 §5.3 合规（映射交付 status 非 merge_gate），亲核契约后判非缺陷 |
@@ -81,7 +81,9 @@ console-demo，物化成功标本）。
 | A-5 | ~~草稿快照消费不持久化~~ → **原假设被推翻，真缺陷是「轮次记录失败被吞成 200」** | 初判：`5c1b3567`/`35e66beb` 快照行 `execution_plan_id IS NULL`，疑 `link_execution_plan` 在 Postgres 路径不落盘。**⑰ 以真 Postgres 16 六测证伪该假设**——link 本身无缺陷；两标本的真身是「半执行 + 收据缺 prefix/fingerprint」。**真缺陷**=计划已启动但快照记录失败时吞异常返 200。修复 `1555abd`：改具名 500 `RoundNotRecorded`，detail 明说重按物化即可补录 | **已修已合并**；条目按实测改写（**方法论**：SQL 现象与代码假设吻合≠根因，六测正对照才是判据） |
 | A-6 | **派工期 Matrix 身份不可用以裸 500 逃逸，且再产半执行轮次** | GUI 实走（96896557，2026-08-12 11:42）：第二次确认物化返 **HTTP 500，响应体 `Internal Server Error`（text/plain）=未捕获异常**，非任何具名错误。收据落 `status=failed, error="AgentTeams recipient Matrix identity is unavailable"`；轮次 `c6101abe` 已建、tasks 0——半执行第三例。定性=A-3 已翻译的 `CollaborationRouteUnavailable` 的同族兄弟漏网 | **关闭候选**。修复 `89ee168`+`f16925c`（译 503 + runtime 入 settings）。**活体实证已取得**：425efbbc 三按均为 `503 · the execution plane is not ready to take this plan (AgentTeams recipient Matrix identity is unavailable)` JSON 原文，裸 500 不再复现。待 §7 终判时正式关闭 |
 | A-8 | **「每 issue×每仓一队」与「仓库 leader 全局单例」在控制器侧正面冲突** | 35e66beb 复走重放两按，同一原文：`503 · … (AgentTeams HTTP 400: Worker rm-leader-b-checkout is already a member of Team rm-team-6c503f0227a44e9280b3ab29775c0b76)`——**确定性冲突，重试不好转**。DB 铁证：三个 issue（35e66beb/5c1b3567/96896557）的 checkout 队 `leader_agent_id` 同为 `4160c8de…`、billing 队同为 `996dfd64…`；只有先跑成功投影的 96896557 占住了两个 leader 的 team 归属，另两标本从此拉不到人。铸造点 `project/domain.py:161` 用拓扑行 id 铸 `rm-team-{hex}`=每 issue 新名，而架构事实是团队按**仓库**建（主脑核实）。RepoMesh 侧当年为 `AgentAlreadyExists` 做过 converge，**控制器侧 team 成员归属没有对应 converge** | 修复在途（㉑：仓库级共享团队+收养语义、唯一约束迁移 0024、**AgentTeams 400 改译 409**——即「规格冲突不得穿可重试 503 外衣」，契约 §8.7.1 已裁定）。判据=三标本重放自然并入现有团队，零控制器手术 |
-| A-9 | **为一个全新仓从零拉起 agent 这条路，产线从未走通过** | GUI 实走（425efbbc / pricing-core，无争仓干净路径）：team 建成、**房间已落** `!5b3ZRusNdXX7K5k4bX:…`，但三按均 503 `recipient Matrix identity is unavailable`。定位：该仓 leader principal 的 `agentteams_resource_name` = **`agt-leader-cbc9e44a49dc`（RepoMesh 新铸名）**，而 `docker ps -a` 中**不存在任何 `agt-leader-*` 容器**。对照：能走到派工的三标本，其 leader 资源名全是**种子预置的 `rm-leader-b-checkout` / `rm-leader-c-billing`**（控制器上早已存在、且有活容器）。即历史上所有「跑得动」的场景无一例外是**复用既有 worker**。代码侧 `runtime_projection.py:148-160` 的 `ensure_worker(state=RUNNING)` 看似正确。主脑控制器内证补充：**worker reconciler 从未收到该资源的入队事件**（应用日志零记录，同一 reconciler 此刻仍在正常处理 gh-*），team reconciler 每 5 分钟撞一次 `credentials not found for agt-leader…` 死循环；spec 与能跑的 `rm-leader-b` 逐字段一致 | 入册待修，**根因待 ㉒ 定**（核心问题=同一条 REST 路建的资源，04:45 那批能被拉起、12:53 这个不能）。并发现 **A-9b**：`console-demo-org-leader` 的 manager 容器被宿主端口 18888 写死卡住（4 天前老 manager 占用，Bind 失败无限重试）——一宿主一 manager 的结构性冲突，另立不并入 |
+| A-9 | **为一个全新仓从零拉起 agent 这条路，产线从未走通过** | GUI 实走（425efbbc / pricing-core，无争仓干净路径）：team 建成、**房间已落** `!5b3ZRusNdXX7K5k4bX:…`，但三按均 503 `recipient Matrix identity is unavailable`。定位：该仓 leader principal 的 `agentteams_resource_name` = **`agt-leader-cbc9e44a49dc`（RepoMesh 新铸名）**，而 `docker ps -a` 中**不存在任何 `agt-leader-*` 容器**。对照：能走到派工的三标本，其 leader 资源名全是**种子预置的 `rm-leader-b-checkout` / `rm-leader-c-billing`**（控制器上早已存在、且有活容器）。即历史上所有「跑得动」的场景无一例外是**复用既有 worker**。代码侧 `runtime_projection.py:148-160` 的 `ensure_worker(state=RUNNING)` 看似正确。主脑控制器内证补充：**worker reconciler 从未收到该资源的入队事件**（应用日志零记录，同一 reconciler 此刻仍在正常处理 gh-*），team reconciler 每 5 分钟撞一次 `credentials not found for agt-leader…` 死循环；spec 与能跑的 `rm-leader-b` 逐字段一致 | **已修已关（结论翻案）**。㉒ 诊断实证：不是「永不拉起」而是**迟到一整圈**——控制器 worker 巡检串行（并发=1），一圈约 16 分钟且被 25 个僵尸 worker 拖满，我的观察窗短于一圈才见「零日志」；`credentials not found` 循环是同一根因的症状。处置=僵尸清理（8 队墓碑+16 worker+10 死容器）+ `df884bd` 守卫（worker 无 Matrix 身份→物化前 503 拒绝，不让轮次死在派工半途）+ 契约 §8.7.2。**活体反证**：`agt-leader-cbc9e44a49dc` / `agt-worker-cbc9e44a49dc` 其后自行排到队并 Running。**方法论**：观察窗短于系统周期时，「零日志」不等于「零事件」。并发现 **A-9b**：`console-demo-org-leader` 的 manager 容器被宿主端口 18888 写死卡住（4 天前老 manager 占用，Bind 失败无限重试）——一宿主一 manager 的结构性冲突，另立不并入 |
+| A-10 | **对象存储发布异常裸 500，且重放不补发布——被认领的轮次永久不开工** | 两半。**发布半**：425efbbc 重试物化返 **HTTP 500 `Internal Server Error`（text/plain，未捕获异常）**，收据 `error="S3 operation failed; code: InvalidAccessKeyId … bucket_name: agentteams-storage"`；此时 `execution_plan_tasks` 已首次落库 1 行——**异常发生在任务行之后，又留半执行**。这是 A-6 同族第三个漏网口（前两个 `CollaborationRouteUnavailable`、Matrix identity 均已译 503）。**重放半**：凭据修复后再重试得 `status=materialized`、`error=null`、`execution_plan_id` 回填，GUI 全绿，**但任务包从未写进 MinIO**（主脑亲证 `teams/rm-team-c51f652f…/shared/tasks/` 只有 `.keep`），leaderDM `message_count` 恒为 1、唯一那条 `task_assignment` 停在 **12:54:45**（第一次失败尝试的产物，早于 worker 容器约 13:10 的出生时刻）。而 copaw worker 是 **Matrix @提及驱动**（mirror 源码：`matrix_channel.py` 缓冲消息、被点名才动工；存储 sync 只管文件与 skills，不触发任务），其 Matrix 会话自容器启动起同步——**出生前的那次点名它永远看不见**。三事实闭合：重放认领任务行却跳过「写任务包 + 重投点名」，本轮永久不启动，而界面显示「物化成功·第 1/1 批执行中」 | 修复在途（㉓）。判据已精确化：**重放须补写任务包 + 重投点名，且真正落为新的 Matrix 事件**——附带坑：transaction_id 若按任务稳定派生，重投会被 Matrix 服务器去重静默吞掉 |
+| A-12 | **运行时投影不收敛：`runtime_status` 停在 pending，而房间、容器、派工全已就位** | 成功物化那次（13:51:48）明明跑了 reconcile，`project.repository_agent_teams.runtime_status` 仍为 `pending`，同时 `room_id`/`leader_room_id` 双房间落库、worker 容器 Running、派工消息已达。GUI「关联仓库 · 团队」因此写「团队待建」，与同页「房间」区块渲染出的真实双房间自相矛盾。此现象初见于 A-6 期（当时判「修活后应自然收敛」而未立号），本轮**实测否定了该预期** | 入册待修（疑 reconcile 写 `runtime_status` 的条件或时机有缺口）；不阻断 B4 |
 | A-4 | **每个刚物化的轮次杀死 issue 详情页** | 全链：读模型对新轮次投影 `updated_at:null`+`plan_version:null`（curl 双标本实证；**数据源头=A-5**）→ `RoundsPanel.tsx:107` `dayLabel(round.updated_at)` → `display.ts:151` 对 null 调 `.match` → TypeError → **无错误边界，SPA 整树卸载**，hash 导航救不回须整页刷新。**产线主流程必踩**（物化后到首个活动 stamp 前该 issue 页必死）；种子轮次全带时间戳，故此前历轮验收未暴露 | 修复在途（⑯：空值容忍+区块级错误边界+「刚物化·尚无活动」与「物化中断产物」两种诚实文案分开；判据=5c1b3567 活标本页面恢复可达且半执行态诚实呈现） |
 
 ### B 类
@@ -117,7 +119,7 @@ B-3~B-10 未复测，仍以上一轮报告为准。本轮新增一条（编号�
 
 ## 4. 未实走路径（如实列举）
 
-1. **B4 主链的执行段**（派工→runner→推真仓候选分支→PR→CI `tests`→merge gate）——建团与双房间已达成（B-11 关闭），**派工及其之后全部未发生**，阻断见 A-8/A-9；
+1. **B4 主链的执行段**（worker 动工→runner→推真仓候选分支→PR→CI `tests`→merge gate）——物化、建团、双房间、任务实体均已达成，**任务包投递及其之后全部未发生**，阻断见 A-10 重放半；
 2. **B5 saga 真执行**——依赖 B4 产出真 change set（GUI 语义半已于新头复核通过，见 B5 行与 S21）；
 3. **5c1b3567 / 35e66beb / 96896557 / 425efbbc 四个半执行标本的重放转正**——35e66beb 已试并撞 A-8（零副作用），其余三个待 ㉑/㉒ 落地后走；
 4. dev 档一键冷路径（A-2，本机不可安全实走）；
@@ -134,7 +136,7 @@ B-3~B-10 未复测，仍以上一轮报告为准。本轮新增一条（编号�
 | `5c1b3567`（console-demo） | **A-3/A-4 活体标本**：半执行轮次（轮次 1+仓 2+任务 0+房间 0） | **保全勿动**——A-3 重放收敛与 A-4 页面恢复的修复验证件 |
 | `35e66beb`（console-demo） | **半执行标本**（勘正，非「物化成功」）：HTTP 200 但收据 `status=failed`；轮次 1+仓 2+团队 2（pending，room_id null） | **保全勿动**——A-8 修复（㉑ 收养语义）的验证件；复走已证其重放撞争仓 400 |
 | `96896557`（console-demo） | **A-6 标本**：裸 500 半执行；轮次 `c6101abe` tasks 0；**两队 room_id 落真 Matrix 房间**（B-11 修复的活体正面证据同源） | **保全勿动**——A-8 的争仓占位方与 A-6 断点续上的验证件 |
-| `425efbbc`（console-demo，pricing-core） | **A-9 标本**：team+房间建成、`agt-leader-cbc9e44a49dc` 无容器；轮次 `1dcdfea7` tasks 0 | **保全勿动**——㉒ 定根因后的验证件 |
+| `425efbbc`（console-demo，pricing-core） | **A-10 标本（形态已推进）**：物化成功（收据 `materialized`、`execution_plan_id` 回填）、轮次 `1dcdfea7`、**任务 1 行**、双房间齐备、DAG 着 `pending`；但任务包未落 MinIO、worker 未动工 | **保全勿动**——㉓「重放补完」的验证件；判据=任务包落库+新点名入房+worker 出现任务处理迹象 |
 | `repomesh-e2e-pricing-core` | 经 GUI 添加仓库卡片注册进 catalog（注册 1/跳过 0/失败 0） | 随种子重置清理 |
 | `de2973ab` | clarify 验证：不充分判定+forced_continue 留痕 | 随种子重置清理 |
 | `9129f894`（种子 B） | 已改性：+ROLLBACK_REQUIRED 决策+恢复计划（占位 URL 上不会真执行） | 种子重置时复位；不再是「唯一 approve 待放行」形态 |
@@ -168,20 +170,41 @@ B-3~B-10 未复测，仍以上一轮报告为准。本轮新增一条（编号�
 | S20 | **B-11 关闭证据：房间首次真实渲染** | 96896557 房间区块 teamRoom/leaderDM 双房间、各 2 成员 |
 | S21 | **B5 GUI 语义新头复核** | 范围表+琥珀条+**「已有恢复计划在执行 … 换一个理由再提交会被 409 拒绝；重复提交同一份表单则是重放（后端零写入）」**+三道闸 |
 | S22 | **B-12 关闭证据：重试物化入口** | 「重试物化」按钮 + 上次失败时间与原文 + 「重试会补完这一轮而不是另起一轮」 |
+| S23 | **执行面首次越过：425efbbc 物化成功** | 「第 1 轮交付 · 1 仓」「第 1/1 批执行中」+ 工程契约 `AE8312D7 V1 DRAFT` + 轮次卡「计划 v1 · 更新于 08-12」+ **DAG 节点着 `pending` 执行态色** + **teamRoom/leaderDM 双房间各 2 成员**（leaderDM 末条为 12:54 的 `task_assignment`——A-10 重放半的界面侧证据） |
 
 瞬态与白屏备注：materialize 500 两次、A-4 白屏（空 a11y 树+console TypeError）以
 DOM/console 实读留档；A-4 崩溃页面无帧可拍（白屏本身即证据形态）。
 
 ## 7. 总结论（待复走更新）
 
-**当前判定：不可进入推送。** 判据②全过（compose 冷路径首跑即通为本轮重要正面结论）；
-判据①：发现链、审批、计划、DAG、回滚语义、clarify 全部实走通过且契约红线零违例，
-但物化之后的执行面在活体上层层断裂：**A-3（非原子，修复已合并待活体验证）、A-4（新
-轮次杀死详情页，⑯ 在修）、A-5（草稿消费不持久化，⑰ 在修）、B-11（GUI 物化从不投影
-运行时，⑱ 在修）**。修复齐（⑮ 通路已通 + ⑯⑰⑱）、8100 换 env 重启后复走
-B4 + B5-saga，再作终判。
+**当前判定：不可进入推送。** 判据②全过（compose 冷路径首跑即通为本轮重要正面结论）。
+判据①：发现链、审批、计划、DAG、回滚语义、clarify 全部实走通过且契约红线零违例；
+**物化本身已在活体上真正走通**（第七走 `425efbbc`：收据 `materialized`、任务实体落库、
+双房间齐备、执行态着色生效）；**但执行面止步于「任务包未投递」**——worker 从未动工，
+runner / 候选分支 / PR / CI `tests` / merge gate 五项均未发生（A-10 重放半，㉓ 在修）。
 
-方法论沉淀：本轮五个 A 类与 B-11 全部只在「发现链亲产数据 + 全新轮次 + 活体
-Postgres/控制面」的形态下触发——种子数据是熟路、测试 store 是替身（A-5 即
-「测到的≠想测的对象」活体案例）、脚本旁路是暗门（B-11），**终态验收的价值恰恰在
-走生路**。
+**已关闭**：A-1、A-3、A-5（改写）、A-9、B-11、B-12。**待修**：A-2、A-4 的余项无、
+A-6（关闭候选，待终判正式关）、A-8（㉑ 已合并，三标本收养重放待验）、A-10（㉓ 在修）、
+A-12（投影不收敛）、A-9b（manager 端口冲突）、C-1、C-2；观察哨 A-11（org leader 上行
+消息 503）与观察哨 c（worker 侧 mc 对 storage `Access Denied`，威胁交付物上传）挂起。
+
+终判前置：㉓ 落地 → `425efbbc` 重放补完 → 三标本收养重放 → B4 全链 → B5-saga。
+
+### 方法论沉淀（本轮）
+
+1. **走生路才验得出东西**：本轮全部 A 类与 B 类缺陷，只在「发现链亲产数据 + 全新轮次 +
+   活体 Postgres/控制面」的形态下触发。种子数据是熟路、测试 store 是替身、脚本旁路是
+   暗门——三者合起来能让一条从未跑通的链看上去一直是绿的。
+2. **零调用点族**：`B-11`（运行时投影只接在脚本，`src/` 零调用点）与 `A-9`（为全新仓
+   从零拉起 agent，历史上全靠复用既有 worker）是同一形态的两例——**「能跑」的历史证据
+   可能全部来自旁路**。判别法：问「这条路第一次跑是什么时候」，而不是「它跑过吗」。
+3. **SQL 现象与代码假设吻合 ≠ 根因**（A-5）：`execution_plan_id IS NULL` 与
+   「link 不持久化」严丝合缝，但六测正对照证伪了它，真因是记录失败被吞成 200。
+4. **探针通 ≠ 凭据对**（A-10）：MinIO `/minio/health/live` 不需要鉴权，200 只证明网络
+   通。与「信号对≠原因对」同族。
+5. **观察窗短于系统周期时，「零日志」不等于「零事件」**（A-9 翻案）：控制器巡检串行
+   一圈约 16 分钟，我的观察窗短于一圈，于是把「迟到」误读成「永不发生」。
+6. **界面绿 ≠ 链路通**（A-10 重放半）：物化收据 `materialized`、GUI 写「第 1/1 批执行
+   中」、DAG 着 `pending`——而任务包根本没写进对象存储、点名消息停在收件人出生之前。
+   **状态机说成功，物理世界没发生**：验收必须落到最外层的真实副作用（仓库分支、对象
+   存储里的字节、容器日志里的动作），不能停在读模型。
