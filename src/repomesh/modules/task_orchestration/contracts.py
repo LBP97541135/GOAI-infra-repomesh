@@ -29,6 +29,22 @@ class TaskOrigin(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class TaskTestResultView:
+    """One test command the Runner reports as executed.
+
+    ``summary`` is whichever of the Runner's ``stderr``/``stdout``/``summary``
+    keys is present; the Runner engine writes none of them today, so it is
+    routinely empty. It is declared because delivery's validation snapshot
+    already read it out of the raw payload and must keep reading the same
+    thing.
+    """
+
+    command: str
+    exit_code: int
+    summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class TaskEvidenceView:
     """Structured Runner evidence for a task, when the task has any.
 
@@ -47,6 +63,51 @@ class TaskEvidenceView:
     # Declared here because delivery cannot publish a candidate without it and
     # was otherwise re-parsing ``result_summary`` to get it.
     workspace_path: str | None = None
+
+    # -- A-18: what the coding agent said about its own verification ---------
+    # A Runner run reaching ``runner.completed`` means the *process* finished,
+    # not that anything was executed inside it. The live evidence for A-18 is a
+    # task that succeeded with ``testResults: []`` while its own summary opens
+    # "I could not execute anything to verify it". Those two facts were both in
+    # the payload and neither was declared, so nothing downstream could show
+    # them at the merge decision.
+    #
+    # The Runner's ``summary``, verbatim, un-parsed. It is prose the agent
+    # wrote; the only honest thing to do with it is show it.
+    summary_text: str | None = None
+    # Agent-declared blockers, verbatim, **only when the payload carries them
+    # as a structured list**. Today's Runner emits no ``blockers`` key at all
+    # (see ``repomesh_runner.contracts.RunnerExecutionResult``), so this is
+    # empty for every existing row, and that emptiness is the honest answer:
+    # the live agent wrote its blockers as a markdown section inside
+    # ``summary``, under a heading of its own choosing. Recovering them from
+    # there means pattern-matching agent prose, which would report "0 blockers"
+    # for every agent that titles the section differently -- a fabricated
+    # distinction, and the same class of bug as A-18 itself. Until the Runner
+    # declares them, ``summary_text`` is where the words are.
+    blockers: tuple[str, ...] = ()
+    # The command the Runner says it ran, and what came back. Empty/``None``
+    # is exactly the live shape and exactly what makes ``verified`` false.
+    test_command: str | None = None
+    test_results: tuple[TaskTestResultView, ...] = ()
+    # Presence only. The wire carries ``{kind, uri, contentHash}`` per artifact;
+    # nothing downstream can fetch one yet, so counting them is the whole claim.
+    artifact_count: int = 0
+
+    @property
+    def verified(self) -> bool:
+        """Did anything actually run, and pass?
+
+        A property rather than a field so no producer can set it to a value its
+        own evidence contradicts. The rule is deliberately narrow and reads
+        only structured facts: at least one recorded test command, and every
+        recorded exit code zero. Absent test results are *not* verified -- the
+        run's terminal status says the process ended, never that it checked.
+        """
+
+        return bool(self.test_results) and all(
+            result.exit_code == 0 for result in self.test_results
+        )
 
 
 @dataclass(frozen=True, slots=True)

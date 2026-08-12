@@ -29,6 +29,15 @@ export const PHASE_SKIN: Record<Phase, { dot: string; badge: string }> = {
 
 export const PHASE_SKIN_FALLBACK = { dot: "bg-tx2", badge: "border-line text-tx2" };
 
+/** A-18 未验证标记的措辞**唯一表**（同 PHASE_SKIN 的做法）。DAG 节点、证据面、
+ *  授权单共用一句；四处各写各的，日后漏改一处就成了「同一件事在两屏说两种话」。
+ *
+ *  `blockerCount === 0` 时**只说「未验证」**，绝不写「0 条 blocker」——载荷没有结构化
+ *  声明过 blocker（契约 6.12）和 agent 提出了零条 blocker 是两回事，界面不替它表态。 */
+export function unverifiedMarkerLabel(blockerCount: number): string {
+  return blockerCount > 0 ? `未验证 · agent 声明 ${blockerCount} 条 blocker` : "未验证";
+}
+
 /** 建团三态措辞与皮肤唯一表（X3 合并：主脑裁决「团队待建」为正——「建团中」暗示
  *  进行中动作，而拓扑只记录「未就绪」，措辞不得超出事实精度）。 */
 export const TEAM_STATUS_LABEL: Record<"pending" | "ready" | "failed", string> = {

@@ -28,6 +28,30 @@ export interface ApprovalInfo {
   changeSetId: string | null;
   repositoryId: string | null;
   headSha: string | null;
+  /** A-18：本次要合的那些任务里，agent 自己说没验证的（`evidence.verified === false`）。
+   *  摆在确认框之前、按钮之上。**不拦**动作——门禁语义是另一轮裁决，这里只是不让
+   *  人在没看见这段话的情况下按下去。空数组 = 没有任何任务做过「未验证」的声明。 */
+  unverified: TaskAgentReport[];
+}
+
+/** A-18：一条任务的 agent 自述（契约 v0.1 §5.4，【提案】）。字段与契约一一对应，
+ *  只做 snake→camel 改名，**不重算、不摘要、不补词**。
+ *
+ *  只有 `evidence !== null` 的任务才会有一条本记录：没有结构化证据的任务（superseded、
+ *  纯散文回报、Runner 之前的行）不进这张表，也就不会被标上任何标记——它从没做过声明。 */
+export interface TaskAgentReport {
+  taskId: string;
+  repositoryId: string;
+  title: string;
+  /** 服务端派生（§5.4），前端只渲染 */
+  verified: boolean;
+  /** 逐字。为空**不代表没有 blocker**，只代表载荷没有结构化声明过（契约 6.12） */
+  blockers: string[];
+  /** agent 原话，逐字。未验证时这里往往就是唯一说明原因的地方 */
+  summaryText: string | null;
+  testCommand: string | null;
+  testResults: Array<{ command: string; exitCode: number; summary: string }>;
+  artifactCount: number;
 }
 
 /** 证据面（B-3 最小版）：治理决策的支撑证据，从 v0.1 交付聚合切单仓作用域派生。
@@ -48,6 +72,10 @@ export interface EvidenceView {
   governance: Array<{ decision: string; headSha: string; reason: string; decidedAt: string }>;
   commits: Array<{ sha: string; files: string[] }>;
   snapshot: { id: string; status: string; environmentHash: string; expiresAt: string } | null;
+  /** A-18：本仓任务的 agent 自述，验证过的和没验证过的都在，按聚合顺序。
+   *  这是证据面里唯一**不是**机器观测的一段——CI、评审、门禁都是系统看到的，
+   *  这一段是执行者自己说的，两者不能互相顶替。 */
+  agentReports: TaskAgentReport[];
 }
 
 /** 计划纸面（§5.4）的**锚点仓**。端点是单仓作用域，而 DAG 与 execution_batches 是
@@ -70,6 +98,13 @@ export interface DagExecutionView {
   byRepository: Record<string, TaskDisplayStatus | null>;
   /** 该仓本轮的任务条数（0 = 本轮没有这个仓的任务） */
   taskCountByRepository: Record<string, number>;
+  /** A-18：该仓本轮里 agent 自述「未验证」的任务条数（0 = 没有这样的声明）。
+   *  与 `byRepository` 的展示态**正交**：一个任务可以既是 succeeded 又是未验证，
+   *  live 那条就是。所以它是节点上另加的一个标记，不是换一种颜色。 */
+  unverifiedCountByRepository: Record<string, number>;
+  /** 该仓未验证任务里，agent 结构化声明的 blocker 总条数。为 0 时节点只说「未验证」，
+   *  绝不写「0 条 blocker」——没声明和声明了零条是两回事（契约 6.12）。 */
+  blockerCountByRepository: Record<string, number>;
   /** 着色取自哪一轮，页脚如实标注（决策夹的 deckNote 同款语义） */
   roundLabel: string;
 }

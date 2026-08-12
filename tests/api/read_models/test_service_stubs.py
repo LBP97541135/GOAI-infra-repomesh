@@ -43,6 +43,7 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskEvidenceView,
     TaskOrigin,
     TaskStatus,
+    TaskTestResultView,
     TaskView,
 )
 
@@ -869,3 +870,135 @@ async def test_a_task_reports_when_it_was_last_dispatched() -> None:
         StubArchives(),
     )
     assert (await silent.get_delivery(plan.id))["tasks"][0]["last_dispatched_at"] is None
+
+
+# --------------------------------------------------------------- A-18 -------
+
+UNVERIFIED_SUMMARY = (
+    "Implementation is complete. I could not execute anything to verify it — see below.\n"
+    "\n"
+    "1. **Nothing was executed.** The sandbox refused every `python` invocation. "
+    "Please re-run before merging."
+)
+"""Abridged from the live A-18 row (task 6ba476ab / run d261dbb4), verbatim at
+both ends. The two sentences kept are the ones the GUI never showed."""
+
+
+@pytest.mark.asyncio
+async def test_tasks_carry_the_agents_verification_claim() -> None:
+    """§3 tasks[].evidence: the reason A-18 was invisible, made visible.
+
+    Everything here was already in ``result_summary`` — as a JSON string the
+    GUI received and never opened. The task is a genuine ``succeeded`` run and
+    stays one; what changes is that the run's own report of having executed
+    nothing now has a field to live in.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = replace(
+        _worker(project_id, repository_id, leader_task_id),
+        status=TaskStatus.SUCCEEDED,
+        result_summary="{...}",
+        evidence=TaskEvidenceView(
+            commit_sha="5" * 40,
+            run_id=uuid4(),
+            changed_files=("src/checkout/tax_calculator.py",),
+            base_sha="e" * 40,
+            summary_text=UNVERIFIED_SUMMARY,
+            test_results=(),
+            test_command=None,
+            artifact_count=0,
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: _manual_intervention_change_set(plan, repository_id, worker.id)}),
+        StubArchives(),
+    )
+
+    task = (await service.get_delivery(plan.id))["tasks"][0]
+
+    # The run did succeed and still says so — the display status is not the lie.
+    assert task["display_status"] == "succeeded"
+    assert task["evidence"]["verified"] is False
+    assert task["evidence"]["test_results"] == []
+    assert task["evidence"]["test_command"] is None
+    assert task["evidence"]["artifact_count"] == 0
+    # Verbatim: the projection transcribes, it does not summarise.
+    assert task["evidence"]["summary_text"] == UNVERIFIED_SUMMARY
+    # No blocker list was declared, so none is reported — the words are in the
+    # summary and the GUI shows them from there.
+    assert task["evidence"]["blockers"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_verified_task_says_what_it_ran() -> None:
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = replace(
+        _worker(project_id, repository_id, leader_task_id),
+        status=TaskStatus.SUCCEEDED,
+        result_summary="{...}",
+        evidence=TaskEvidenceView(
+            commit_sha="a" * 40,
+            run_id=uuid4(),
+            changed_files=("src/pricing.py",),
+            base_sha="9" * 40,
+            summary_text="Implemented pricing; the suite is green.",
+            test_command="python scripts/run_tests.py",
+            test_results=(TaskTestResultView(command="python scripts/run_tests.py", exit_code=0),),
+            artifact_count=1,
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: _manual_intervention_change_set(plan, repository_id, worker.id)}),
+        StubArchives(),
+    )
+
+    task = (await service.get_delivery(plan.id))["tasks"][0]
+
+    assert task["evidence"]["verified"] is True
+    assert task["evidence"]["test_results"] == [
+        {"command": "python scripts/run_tests.py", "exit_code": 0, "summary": ""}
+    ]
+    assert task["evidence"]["artifact_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_task_without_declared_evidence_reports_null_not_unverified() -> None:
+    """"We do not know" and "it did not verify" are different claims.
+
+    A superseded or pre-Runner task has no evidence at all. Flattening that to
+    ``verified: false`` would put an accusing marker on rows nobody ever made a
+    claim about, which is the mirror image of the defect.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = replace(
+        _worker(project_id, repository_id, leader_task_id),
+        status=TaskStatus.SUCCEEDED,
+        result_summary="Implemented pricing and all tests pass.",
+        evidence=None,
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: _manual_intervention_change_set(plan, repository_id, worker.id)}),
+        StubArchives(),
+    )
+
+    assert (await service.get_delivery(plan.id))["tasks"][0]["evidence"] is None

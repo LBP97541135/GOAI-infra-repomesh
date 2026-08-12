@@ -1,5 +1,6 @@
 import type { EvidenceView } from "../types";
 import { eventTime, governanceLabel, governanceSkin, shortId } from "../display";
+import { AgentVerificationBlock } from "./AgentVerificationBlock";
 import { Modal } from "./Modal";
 
 /** 证据面弹窗（验收缺陷 B-3 最小版）。
@@ -47,6 +48,26 @@ export function EvidenceModal({
 
       {evidence && (
         <div className="grid gap-3 px-4 py-3.5">
+          {/* A-18：放在最前，在 CI 与门禁之前。
+              下面几节全是**系统观测到的**（CI 结果、评审、门禁），这一节是**执行者自己
+              说的**。系统看到「CI 绿」和 agent 说「我一行都没跑」可以同时为真——live 那条
+              就是——所以两者不能互相顶替，也不该让人翻到最后才看到后者。 */}
+          <section>
+            <div className="microlabel pb-1.5">AGENT 自述验证状态</div>
+            {evidence.agentReports.length === 0 ? (
+              <p className="text-[11.5px] text-tx3">
+                本仓任务没有结构化的 Runner 证据（`tasks[].evidence` 为 null）——没有做过任何
+                自述，这与「声明了未验证」不是一回事，故此处留白而不是标记未验证。
+              </p>
+            ) : (
+              <div className="grid gap-2">
+                {evidence.agentReports.map((report) => (
+                  <AgentVerificationBlock key={report.taskId} report={report} />
+                ))}
+              </div>
+            )}
+          </section>
+
           <section>
             <div className="microlabel pb-1.5">候选</div>
             <div className="grid gap-1 font-mono text-[11.5px] text-tx2">

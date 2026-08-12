@@ -337,6 +337,13 @@ def test_read_model_aggregates_a_delivered_two_repository_plan(
             assert api_task["display_status"] == "succeeded"
             assert api_task["attempt"] == 1
             assert api_task["escalated_to_human"] is False
+            # A-18: a success that actually ran its tests says so, and the marker
+            # the GUI draws for an unverified run stays off for this one.
+            assert api_task["evidence"]["verified"] is True
+            assert api_task["evidence"]["test_results"] == [
+                {"command": "pytest", "exit_code": 0, "summary": ""}
+            ]
+            assert api_task["evidence"]["blockers"] == []
             assert client_task["depends_on"] == [api_task["task_id"]]
 
             change_set = body["change_set"]

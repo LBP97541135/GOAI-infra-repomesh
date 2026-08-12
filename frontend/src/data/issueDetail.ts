@@ -588,6 +588,16 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       attempt: 1,
       depends_on: [],
       result_summary: "PR 19466：迁移 + 必填校验 + 审计字段，隐藏验收 9/9",
+      // A-18 对照组：跑过、也跑绿了。默认形态里没有任何未验证标记，这样
+      // `?tasks=unverified` 那一屏出现的琥珀标记才证明得了东西。
+      evidence: {
+        verified: true,
+        blockers: [],
+        summary_text: "迁移 + 必填校验 + 审计字段已完成，隐藏验收 9/9 全绿。",
+        test_command: "pytest -q",
+        test_results: [{ command: "pytest -q", exit_code: 0, summary: "412 passed" }],
+        artifact_count: 1,
+      },
       repair_timeline: [],
       escalated_to_human: false,
       last_dispatched_at: "2026-08-11T09:12:00Z",
@@ -605,6 +615,8 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       attempt: 2,
       depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
       result_summary: null,
+      // 还在跑，没有回报过——`evidence` 为 null 是「没有做过声明」，不是「未验证」
+      evidence: null,
       repair_timeline: [{ at: "2026-08-11T11:40:00Z", what: "隐藏验收测试 3/9 失败，开返工任务" }],
       escalated_to_human: false,
       last_dispatched_at: "2026-08-11T11:41:00Z",
@@ -620,6 +632,8 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       attempt: 1,
       depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
       result_summary: null,
+      // 尚未派工，同样是「没有做过声明」
+      evidence: null,
       repair_timeline: [],
       escalated_to_human: false,
       last_dispatched_at: "2026-08-11T09:12:00Z",
@@ -822,6 +836,81 @@ export const deliveryAggregateSettledFixture: DeliveryAggregate = {
   })),
 };
 
+/** A-18 形态：**跑成功了、但 agent 说它一行都没执行过**。
+ *
+ *  形状照抄 live 任务 `6ba476ab`（run `d261dbb4`）：`succeeded` + 有 commit +
+ *  `testResults: []` + `testCommand: null` + `artifacts: []`，而 agent 的 summary
+ *  逐字写着它没跑过任何东西。原文这里节选自那一行的实际载荷（首尾两句一字未改），
+ *  中段按篇幅省略，省略处显式标注——夹具可以短，但**不能替 agent 改口**。
+ *
+ *  三屏对照就在这份夹具里：默认形态 REPO_API 是验证过的干净成功（对照组），本形态
+ *  同一条任务变成未验证（琥珀标记 + 授权单提示 + 证据面原话），另两条任务
+ *  `evidence: null`（从没做过声明 → 什么标记都不出）。 */
+const A18_SUMMARY = [
+  "Implementation is complete. I could not execute anything to verify it — see below.",
+  "",
+  "## Blockers and gaps — read before accepting",
+  "",
+  "1. **Nothing was executed.** The sandbox refused every `python` invocation " +
+    '("requires approval") and `git` as well. I have not run `scripts/run_tests.py` or the new ' +
+    'tests, so "code compiles / existing tests pass" is reviewed-by-reading only, not verified. ' +
+    "Please re-run before merging.",
+  "",
+  "2. **The task's vocabulary doesn't exist in this repo.** …（夹具节选，原文此处另有两段）",
+  "",
+  "3. **The \"matches billing's calculation\" test cannot be written honestly.** " +
+    "`test_rate_consistency.py` contains it as an explicitly skipped test with the reason inline.",
+  "",
+  "4. **Allowed paths are `src/checkout/**`, which excludes `tests/`.** The new tests live in " +
+    "`src/checkout/tests/` and are therefore *not* discovered by `scripts/run_tests.py`.",
+].join("\n");
+
+export const deliveryAggregateUnverifiedFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: [
+    {
+      ...deliveryAggregateFixture.tasks[0],
+      evidence: {
+        verified: false,
+        // live 那条载荷没有结构化的 blockers 键（契约 6.12）——夹具照此留空，
+        // 否则就是拿一个后端今天给不出的形状去验前端。
+        blockers: [],
+        summary_text: A18_SUMMARY,
+        test_command: null,
+        test_results: [],
+        artifact_count: 0,
+      },
+    },
+    deliveryAggregateFixture.tasks[1],
+    deliveryAggregateFixture.tasks[2],
+  ],
+};
+
+/** A-18 的另一半：Runner **确实**结构化声明了 blocker 时（契约 6.12 补齐后的形态）。
+ *  与上一份的唯一差别是 blockers 非空——用来验「有声明才数条数」那条分支。 */
+export const deliveryAggregateDeclaredBlockersFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: [
+    {
+      ...deliveryAggregateFixture.tasks[0],
+      evidence: {
+        verified: false,
+        blockers: [
+          "Nothing was executed. The sandbox refused every `python` invocation, so \"existing tests pass\" is reviewed-by-reading only. Please re-run before merging.",
+          "The cross-repo consistency test is an explicitly skipped test with the reason inline; asserting against a figure this repo invented would be self-agreement, not verification.",
+          "The new tests live in `src/checkout/tests/` and are not discovered by `scripts/run_tests.py`.",
+        ],
+        summary_text: A18_SUMMARY,
+        test_command: null,
+        test_results: [],
+        artifact_count: 0,
+      },
+    },
+    deliveryAggregateFixture.tasks[1],
+    deliveryAggregateFixture.tasks[2],
+  ],
+};
+
 export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
   default: deliveryAggregateFixture,
   conflict: deliveryAggregateTaskConflictFixture,
@@ -829,6 +918,8 @@ export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
   never_dispatched: deliveryAggregateNeverDispatchedFixture,
   rerun_needed: deliveryAggregateRerunNeededFixture,
   all_settled: deliveryAggregateSettledFixture,
+  unverified: deliveryAggregateUnverifiedFixture,
+  blockers: deliveryAggregateDeclaredBlockersFixture,
 };
 
 export const decisionsFixture: DecisionsResponse = {

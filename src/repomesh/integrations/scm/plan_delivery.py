@@ -280,27 +280,28 @@ class PlanDeliveryFinalizer:
                 )
             )
             workspaces[planned.repository_id] = workspace
-            # REMAINING UNDECLARED READ: test results are still dug out of the
-            # free-text summary, because TaskEvidenceView does not declare them
-            # yet. Everything delivery needs to *publish* a candidate is now
-            # declared; this last one only feeds the validation snapshot.
-            raw_tests = self._evidence(worker.result_summary).get("testResults") or ()
-            if not isinstance(raw_tests, list) or not raw_tests:
+            # The last undeclared read is gone (A-18): test results are now part
+            # of TaskEvidenceView, so this reads the producer's parse like every
+            # other field above instead of re-opening the free-text summary.
+            #
+            # The refusal stays exactly as strict. ``_parse_evidence`` drops an
+            # entry it cannot read, which is right for a *display* projection
+            # and wrong here: delivery must not publish a candidate whose test
+            # evidence was partly unreadable. A dropped entry therefore surfaces
+            # as a count mismatch against the raw list and refuses, same as the
+            # old ``isinstance`` check did.
+            raw_test_count = len(self._evidence(worker.result_summary).get("testResults") or ())
+            if not evidence.test_results:
                 raise ValueError("Runner evidence has no test results")
-            for result in raw_tests:
-                if not isinstance(result, dict):
-                    raise ValueError("Runner test evidence is malformed")
+            if len(evidence.test_results) != raw_test_count:
+                raise ValueError("Runner test evidence is malformed")
+            for result in evidence.test_results:
                 tests.append(
                     ValidationTestInput(
                         repository_id=planned.repository_id,
-                        command=str(result.get("command") or "").strip(),
-                        exit_code=int(result.get("exitCode", -1)),
-                        summary=str(
-                            result.get("stderr")
-                            or result.get("stdout")
-                            or result.get("summary")
-                            or ""
-                        ),
+                        command=result.command,
+                        exit_code=result.exit_code,
+                        summary=result.summary,
                     )
                 )
             earlier_repositories.append(planned.repository_id)
