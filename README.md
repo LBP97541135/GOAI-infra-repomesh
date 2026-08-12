@@ -50,6 +50,29 @@ uv run ruff check .
 uv run pytest
 ```
 
+## Console v2: a second instance on port 8100
+
+`Run locally` starts the v1 platform API on port 8000. The delivery console under
+`frontend/` does not talk to it: the Vite dev server proxies `/api` to a **second
+instance of the same app on port 8100**, which serves the delivery read model and
+local identity endpoints. Start it with the action token the frontend dev config
+expects, then start the frontend:
+
+```powershell
+$env:REPOMESH_AGENT_ACTION_TOKEN = "console-dev-token"
+uv run uvicorn repomesh.main:app --host 127.0.0.1 --port 8100
+```
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://127.0.0.1:5280`; the first visit bootstraps the local admin account.
+See `frontend/README.md` ("联调后端起法") for the full four-step walkthrough
+(postgres → migrations → 8100 → dev server), the seed script, and first-run notes.
+
 ## Team entry points
 
 - Documentation index: `docs/README.md`
