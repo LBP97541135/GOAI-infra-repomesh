@@ -41,6 +41,7 @@ from repomesh.integrations.scm import (
 )
 from repomesh.integrations.scm.github_auth import (
     GitHubAppTokenProvider,
+    StaticTokenProvider,
     private_key_file_loader,
 )
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
@@ -129,6 +130,13 @@ def build_default_container() -> ApplicationContainer:
             settings.github_app_id,
             private_key_file_loader(settings.github_app_private_key_file),
         )
+        scm_adapter = GitHubAdapter(scm_token_provider)
+        resources = (*resources, scm_adapter, scm_token_provider)
+    elif settings.delivery_github_token:
+        # Local-dev seam: one personal token for every repository. The App
+        # pair above wins when both are configured (short-lived per-repo
+        # tokens beat a static credential).
+        scm_token_provider = StaticTokenProvider(settings.delivery_github_token)
         scm_adapter = GitHubAdapter(scm_token_provider)
         resources = (*resources, scm_adapter, scm_token_provider)
     agent_directory = PostgresAgentDirectory(database)

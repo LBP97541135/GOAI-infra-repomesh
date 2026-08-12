@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     github_app_private_key_file: Path | None = None
     github_webhook_secret: str | None = None
     delivery_auto_enabled: bool = False
+    # Local-dev alternative to the GitHub App pair above: one personal
+    # token for every repository (StaticTokenProvider). The App path
+    # wins when both are configured.
+    delivery_github_token: str = ""
     delivery_base_branch: str = "main"
     delivery_required_checks: tuple[str, ...] = ()
     delivery_required_approvals: int = Field(default=1, ge=0)

@@ -10,7 +10,7 @@ from .delivery import (
 )
 from .git_branch import GitBranchPublisher
 from .github import GitHubAdapter, verify_github_webhook
-from .github_auth import GitHubAppTokenProvider, private_key_file_loader
+from .github_auth import GitHubAppTokenProvider, StaticTokenProvider, private_key_file_loader
 from .github_events import (
     GitHubCIObservation,
     GitHubReviewObservation,
@@ -52,6 +52,7 @@ __all__ = [
     "DeliveryReconciler",
     "GitHubAdapter",
     "GitHubAppTokenProvider",
+    "StaticTokenProvider",
     "GitHubCIObservation",
     "GitHubObservationProcessor",
     "GitHubObservationPoller",
