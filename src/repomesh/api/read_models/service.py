@@ -1423,11 +1423,44 @@ class DeliveryReadModelService:
             *(bounded(kind, name) for kind, name in probes),
             return_exceptions=True,
         )
+        unreachable = 0
+        absent = 0
         for row, block in zip(rows, blocks, strict=True):
             if isinstance(block, BaseException):
                 _logger.warning("runtime block failed unexpectedly", exc_info=block)
                 block = {"reachable": False}
+            if block is None:
+                absent += 1
+            elif block.get("reachable") is False:
+                unreachable += 1
             row["runtime"] = block
+        self._report_degradation(len(rows), unreachable, absent)
+
+    def _report_degradation(self, total: int, unreachable: int, absent: int) -> None:
+        """One line per page saying how much of it degraded.
+
+        The per-row warnings say a probe failed; none of them says how much of
+        the page that adds up to, and the response cannot — it answers 200
+        either way, which is the whole point of §4.4. So an entire roster
+        coming back unreachable, one agent's worker being gone, and a healthy
+        page all look the same to anything watching from outside.
+
+        A log line rather than a counter because this repository has no metrics
+        facility — the observability module is still a planned shell, and
+        inventing one here would be a larger decision than the gap warrants.
+        """
+
+        if self._runtime is None:
+            return  # AgentTeams is not configured; nothing degraded, nothing to say
+        if not unreachable and not absent:
+            return
+        _logger.warning(
+            "runtime probes degraded: %d/%d unreachable, %d/%d absent (404)",
+            unreachable,
+            total,
+            absent,
+            total,
+        )
 
     async def _runtime_block(self, kind: str, name: str, shape) -> dict | None:
         """§4.4 live proxy with the per-item isolation the contract mandates.

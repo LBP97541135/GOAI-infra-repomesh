@@ -536,3 +536,62 @@ async def test_probe_fan_out_stays_under_the_ceiling() -> None:
     await service.list_agents()
 
     assert unbounded.peak == len(principals)
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_page_says_how_much_of_it_degraded(monkeypatch, caplog) -> None:
+    """§4.4 makes the page answer 200 no matter how the probes went, which is
+    right for the reader and blind for the operator: a whole roster coming
+    back unreachable and one missing worker produce the same status code and,
+    before this, the same scattered per-row warnings with no total."""
+
+    monkeypatch.setattr(service_module, "_RUNTIME_PROBE_TIMEOUT", 0.05)
+    healthy = _principal(AgentRole.WORKER, "healthy", repository_id=uuid4())
+    broken = _principal(AgentRole.WORKER, "broken", repository_id=uuid4())
+    gone = _principal(AgentRole.WORKER, "gone", repository_id=uuid4())
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        agents=StubRoster(healthy, broken, gone),
+        runtime=StubRuntime(
+            {
+                "healthy": RuntimeSnapshot(phase="Running"),
+                "broken": RuntimeError("controller exploded"),
+                "gone": None,
+            }
+        ),
+    )
+
+    with caplog.at_level("WARNING"):
+        payload = await service.list_agents()
+
+    assert len(payload["agents"]) == 3
+    assert "1/3 unreachable" in caplog.text
+    assert "1/3 absent" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_page_says_nothing(caplog) -> None:
+    """The summary has to stay quiet when nothing degraded, or it becomes the
+    kind of line operators filter out and then miss when it matters."""
+
+    principals = [
+        _principal(AgentRole.WORKER, f"agent-{index}", repository_id=uuid4()) for index in range(3)
+    ]
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        agents=StubRoster(*principals),
+        runtime=StubRuntime({}),
+    )
+
+    with caplog.at_level("WARNING"):
+        await service.list_agents()
+
+    assert "degraded" not in caplog.text
