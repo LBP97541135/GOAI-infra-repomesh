@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import type { Account } from "../api/auth";
 import type { ConsoleAgentView, RuntimeKind } from "../api/contract";
 import { fetchConsoleAgents, gridSourceMode } from "../api/grid";
 import { useRuntimeRows } from "./useRuntimeRows";
@@ -39,7 +38,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-export function SettingsPage({ account }: { account: Account }) {
+export function SettingsPage() {
   const fetcher = useCallback((withRuntime: boolean) => fetchConsoleAgents(withRuntime), []);
   const { rows, error, phase, probeError } = useRuntimeRows<ConsoleAgentView>(fetcher);
 
@@ -93,9 +92,9 @@ export function SettingsPage({ account }: { account: Account }) {
           note={`鉴权：${import.meta.env.VITE_API_TOKEN ? "已配置 Bearer 动作 token" : "未配置 token"} · 当前数据源 ${gridSourceMode()}`}
         />
         <Row
-          label="本地身份服务"
-          value={`已登录 · ${account.username}`}
-          note={`${account.is_admin ? "管理员" : "本地账户"} · 会话是 httpOnly cookie，前端不持有 token`}
+          label="控制台身份"
+          value="默认管理员 · 管理员"
+          note="控制台不设登录门（裁决 2026-08-12），打开即以默认管理员进入；这是写死的呈现，不是某个真实账号。后端 /auth 端点仍保留供脚本使用，前端不再依赖，故此处不报它的健康。"
         />
       </Section>
 
@@ -125,7 +124,10 @@ export function SettingsPage({ account }: { account: Account }) {
             期望态（DesiredRuntimeState）不是观测态。补齐路径在 AgentTeams 侧。
           </li>
           <li>· 房间刷新仍为轮询（5s）；SSE 推送需先定「哪些事实值得推」，另立项。</li>
-          <li>· 读端点用共享动作 token，与本地登录会话是两套鉴权，尚未打通。</li>
+          <li>
+            · 单用户：无登录门，读写端点一律用共享动作 token，控制台不区分操作者。
+            多用户与按人鉴权、审计归属另立项。
+          </li>
           <li>· 工作区（组织）删除与改名未接入；列表、切换与创建已接入（契约 v0.3 §2）。</li>
         </ul>
       </Section>
