@@ -57,6 +57,11 @@ FINAL_TASK_STATUSES = frozenset(
     }
 )
 
+#: Final statuses an operator may send back to work (§8.7.4, ``Task.redo``).
+#: A result that came out wrong, as opposed to a decision that the work should
+#: not happen — see ``Task.redo`` for why the other two are excluded.
+_REDOABLE_TASK_STATUSES = frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED})
+
 
 def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
     """Read structured Runner evidence out of a task's free-text summary.
@@ -157,6 +162,48 @@ class Task:
             self,
             status=status,
             result_summary=summary.strip(),
+            version=self.version + 1,
+        )
+
+    def redo(self) -> "Task":
+        """Send a finished task back to work, for an explicit operator re-run.
+
+        Re-dispatch (§8.7.4) normally leaves rows alone: it repeats the telling
+        and nothing else. That is right for a task still in flight, and wrong
+        for the shape the live evidence turned up on 2026-08-12 — a task that
+        reported SUCCEEDED without producing what the next stage needs. Its
+        delivery then refuses (``_candidates_for_batch`` raising "Runner
+        evidence has no test results" inside ``_advance_if_ready``, a silent
+        background crash-loop), the operator fixes the condition, and the work
+        has to actually happen again.
+
+        Re-sending the mention alone would not do it. ``report`` refuses a
+        final task — "a final task cannot be reported again" — so the re-run's
+        own report would be swallowed and the round would sit on a result from
+        the attempt that failed. A re-run has to make the task unfinished again
+        or it is not a re-run.
+
+        The batch consequence is intended, not a side effect: ``_batch_succeeded``
+        now answers False, so the plan stops treating the batch as done. That
+        is the correct state for a round whose delivery was refused, and
+        restoring it is half the point of the button.
+
+        CANCELLED and SUPERSEDED are deliberately not redoable. Those are not
+        results that came out wrong; they are decisions that this work should
+        not happen, and a superseded task belongs to a plan version that has
+        been replaced. Resurrecting one would put a task from a retired plan
+        back on a live Worker.
+        """
+
+        if self.status not in _REDOABLE_TASK_STATUSES:
+            raise TaskConflict(
+                f"a {self.status.value} task cannot be re-run; only a succeeded "
+                "or failed task can be sent back to work"
+            )
+        return replace(
+            self,
+            status=TaskStatus.ASSIGNED,
+            result_summary=None,
             version=self.version + 1,
         )
 

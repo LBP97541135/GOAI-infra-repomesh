@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from repomesh.api.router import api_router
 from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
 from repomesh.modules.task_orchestration.contracts import (
+    RedispatchScope,
     RoundRedispatch,
     TaskPublicationUnavailable,
 )
@@ -43,14 +44,18 @@ class StubRedispatch:
         self.raises = raises
         self.calls: list[tuple] = []
 
-    async def execute(self, round_id, *, attempt: str) -> RoundRedispatch:
-        self.calls.append((round_id, attempt))
+    async def execute(
+        self, round_id, *, attempt: str, scope: RedispatchScope = RedispatchScope.UNFINISHED
+    ) -> RoundRedispatch:
+        self.calls.append((round_id, attempt, scope))
         if self.raises is not None:
             raise self.raises
         return RoundRedispatch(
             round_id=round_id,
             attempt=attempt,
+            scope=scope,
             task_ids=(ROUND_ID,),
+            reopened_task_ids=(ROUND_ID,) if scope is RedispatchScope.RERUN else (),
             settled_task_ids=(),
         )
 
@@ -90,7 +95,42 @@ def test_a_re_dispatch_reports_what_it_did(monkeypatch) -> None:
     assert payload["attempt"] == "console-redispatch-1"
     assert payload["task_ids"] == [str(ROUND_ID)]
     # The request key *is* the attempt token; the console mints one per press.
-    assert service.calls == [(ROUND_ID, "console-redispatch-1")]
+    # And the default scope is the one that writes nothing.
+    assert service.calls == [(ROUND_ID, "console-redispatch-1", RedispatchScope.UNFINISHED)]
+    assert payload["scope"] == "unfinished"
+    assert payload["reopened_task_ids"] == []
+
+
+def test_a_rerun_must_be_asked_for_explicitly(monkeypatch) -> None:
+    """The scope that writes task rows is never the default.
+
+    ``unfinished`` costs a duplicate notification when pressed by mistake;
+    ``rerun`` un-succeeds a batch and sends finished work back out. Those are
+    not the same risk, so they are not the same button.
+    """
+
+    service = StubRedispatch()
+    response = _post(
+        _client(service, monkeypatch),
+        body={"idempotency_key": "console-redispatch-1", "scope": "rerun"},
+    )
+
+    assert response.status_code == 200
+    assert service.calls == [(ROUND_ID, "console-redispatch-1", RedispatchScope.RERUN)]
+    # The receipt names what was sent back to work, separately from what was
+    # merely re-told — the operator has to be able to see the write happened.
+    assert response.json()["reopened_task_ids"] == [str(ROUND_ID)]
+
+
+def test_an_unknown_scope_is_refused(monkeypatch) -> None:
+    service = StubRedispatch()
+    response = _post(
+        _client(service, monkeypatch),
+        body={"idempotency_key": "k", "scope": "everything"},
+    )
+
+    assert response.status_code == 422
+    assert service.calls == []
 
 
 def test_the_token_is_required(monkeypatch) -> None:

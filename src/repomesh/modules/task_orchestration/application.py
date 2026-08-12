@@ -28,6 +28,7 @@ from repomesh.modules.task_orchestration.contracts import (
     PlannedTaskExecutionStatus,
     ProjectTaskProgress,
     PublishedTaskPackage,
+    RedispatchScope,
     ReportTaskCommand,
     RoundRedispatch,
     SupersedeTaskCommand,
@@ -41,6 +42,7 @@ from repomesh.modules.task_orchestration.contracts import (
     WorkerTaskExecutionStatus,
 )
 from repomesh.modules.task_orchestration.domain import (
+    _REDOABLE_TASK_STATUSES,
     FINAL_TASK_STATUSES,
     ExecutionPlan,
     RoundNotDispatchable,
@@ -283,14 +285,24 @@ class TaskOrchestrator:
             idempotency_key=_dispatch_message_key(key, dispatch_attempt),
         )
 
-    async def redispatch(self, task_id: UUID, *, attempt: str) -> TaskView:
+    async def redispatch(
+        self, task_id: UUID, *, attempt: str, redo: bool = False
+    ) -> TaskView:
         """Dispatch an already-assigned task again, under a new attempt (§8.7.4).
 
         Everything a first dispatch does except create the task: the package is
-        re-published and the room is told again. The task row itself is left
-        exactly as it is — this is a repeat of the *telling*, not a second
-        assignment, and a Worker that was already working sees one duplicate
-        notification rather than a rival task.
+        re-published and the room is told again. With ``redo`` false the task
+        row itself is left exactly as it is — this is a repeat of the
+        *telling*, not a second assignment, and a Worker that was already
+        working sees one duplicate notification rather than a rival task.
+
+        ``redo`` is the operator saying the result on file is wrong and the
+        work must happen again — the shape found live on 2026-08-12, where a
+        task reported SUCCEEDED without the evidence its delivery needed and
+        the refusal became a silent background loop. It is the only path here
+        that writes a task row, and it has to: ``report`` refuses a final task,
+        so a re-run whose task is still SUCCEEDED could never record its own
+        outcome. See :meth:`Task.redo` for what it will and will not reopen.
 
         The key handed to :meth:`_deliver_assignment` is the task's *original*
         assignment key, and that is not a convenience — it is forced. The
@@ -307,10 +319,14 @@ class TaskOrchestrator:
 
         task = await self._required_task(task_id)
         if task.status in FINAL_TASK_STATUSES:
-            raise TaskConflict(
-                f"task {task.id} has already finished ({task.status.value}); "
-                "there is nothing to dispatch again"
-            )
+            if not redo:
+                raise TaskConflict(
+                    f"task {task.id} has already finished ({task.status.value}); "
+                    "there is nothing to dispatch again"
+                )
+            reopened = task.redo()
+            await self._tasks.update(reopened, expected_version=task.version)
+            task = reopened
         key = await self._tasks.assignment_key(task.id)
         if key is None:
             # The row exists and nothing remembers how it was written. Nothing
@@ -968,7 +984,13 @@ class RedispatchRound:
         self._tasks = tasks
         self._dispatcher = dispatcher
 
-    async def execute(self, round_id: UUID, *, attempt: str) -> RoundRedispatch:
+    async def execute(
+        self,
+        round_id: UUID,
+        *,
+        attempt: str,
+        scope: RedispatchScope = RedispatchScope.UNFINISHED,
+    ) -> RoundRedispatch:
         token = attempt.strip()
         if not token:
             raise ValueError("attempt is required")
@@ -977,7 +999,16 @@ class RedispatchRound:
             raise TaskNotFound(f"round does not exist: {round_id}")
 
         pending, settled = await self._partition(plan)
-        if not pending and not settled:
+        # ``rerun`` reaches the finished tasks too — the shape where the result
+        # on file is the problem. Only the ones that may be sent back to work:
+        # a CANCELLED or SUPERSEDED task is a decision, not a bad result, and
+        # ``Task.redo`` refuses it, so it must not be queued here either.
+        redoable = (
+            [task for task in settled if task.status in _REDOABLE_TASK_STATUSES]
+            if scope is RedispatchScope.RERUN
+            else []
+        )
+        if not pending and not redoable and not settled:
             # A plan row with no task rows under it: materialization wrote the
             # round and stopped before it wrote any work. Re-dispatch has
             # nothing to re-send, and answering 200 would be a lie the operator
@@ -988,22 +1019,31 @@ class RedispatchRound:
                 "materialised, so there is nothing to dispatch again — "
                 "materialize the issue instead"
             )
-        if not pending:
+        if not pending and not redoable:
             raise RoundNotDispatchable(
                 f"every task of round {round_id} has already finished "
                 f"({len(settled)} task(s)); a finished round is history, not "
-                "unfinished work"
+                "unfinished work — ask for scope=rerun if a result on file is "
+                "the thing that is wrong"
             )
 
         dispatched: list[UUID] = []
         for task in pending:
             await self._dispatcher.redispatch(task.id, attempt=token)
             dispatched.append(task.id)
+        reopened: list[UUID] = []
+        for task in redoable:
+            await self._dispatcher.redispatch(task.id, attempt=token, redo=True)
+            dispatched.append(task.id)
+            reopened.append(task.id)
+        untouched = {task.id for task in settled} - set(reopened)
         return RoundRedispatch(
             round_id=round_id,
             attempt=token,
+            scope=scope,
             task_ids=tuple(dispatched),
-            settled_task_ids=tuple(task.id for task in settled),
+            reopened_task_ids=tuple(reopened),
+            settled_task_ids=tuple(task.id for task in settled if task.id in untouched),
         )
 
     async def _partition(self, plan: ExecutionPlan) -> tuple[list[Task], list[Task]]:

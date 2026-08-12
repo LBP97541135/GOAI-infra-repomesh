@@ -256,14 +256,40 @@ class TaskAssignmentGateway(Protocol):
     ) -> TaskView: ...
 
 
+class RedispatchScope(StrEnum):
+    """Which of a round's tasks an explicit re-dispatch reaches (§8.7.4).
+
+    Two shapes, because the live evidence produced two and one setting cannot
+    serve both honestly.
+
+    ``UNFINISHED`` is the A-13 shape and the default: tasks that never reached
+    a result. Nothing is written to any task row — the mention is simply sent
+    again — so the cost of pressing it early is one duplicate notification.
+
+    ``RERUN`` is the shape found on 2026-08-12: a task that reported SUCCEEDED
+    without producing what the next stage needed, whose delivery then refused
+    in a silent background loop. Fixing the condition is not enough, because
+    the result on file is the bad one and ``report`` will not overwrite a final
+    task. So this scope additionally sends finished tasks back to work (see
+    ``Task.redo``) — a real write, a real re-run, and a batch that stops
+    counting itself as done. Kept off the default for exactly that reason.
+    """
+
+    UNFINISHED = "unfinished"
+    RERUN = "rerun"
+
+
 @dataclass(frozen=True, slots=True)
 class RoundRedispatch:
     """What one explicit re-dispatch of a round did (contract v0.4 §8.7.4)."""
 
     round_id: UUID
     attempt: str
+    scope: RedispatchScope
     task_ids: tuple[UUID, ...]
-    """The non-terminal tasks that were dispatched again, leaders included."""
+    """Tasks that were dispatched again, leaders included."""
+    reopened_task_ids: tuple[UUID, ...]
+    """Finished tasks this call sent back to work; empty unless scope=rerun."""
     settled_task_ids: tuple[UUID, ...]
     """Tasks of the round left alone because they had already finished."""
 
@@ -277,7 +303,9 @@ class TaskRedispatchGateway(Protocol):
     message a new Matrix event instead of a deduplicated repeat.
     """
 
-    async def redispatch(self, task_id: UUID, *, attempt: str) -> TaskView: ...
+    async def redispatch(
+        self, task_id: UUID, *, attempt: str, redo: bool = False
+    ) -> TaskView: ...
 
 
 class TaskSpecificationAuthor(Protocol):

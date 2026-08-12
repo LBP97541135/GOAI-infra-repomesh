@@ -38,10 +38,11 @@ from repomesh.modules.task_orchestration import (
     TaskStatus,
 )
 from repomesh.modules.task_orchestration.application import (
+    AdvanceExecutionPlan,
     RedispatchRound,
     _dispatch_message_key,
 )
-from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage
+from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage, RedispatchScope
 from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
     PlannedRepositoryTask,
@@ -577,3 +578,135 @@ async def test_an_unknown_round_is_not_found() -> None:
             orchestrator._tasks,  # noqa: SLF001
             orchestrator,
         ).execute(uuid4(), attempt="press-1")
+
+
+# ---------------------------------------------------------------------------
+# The re-run scope — a result on file that is itself the problem
+# ---------------------------------------------------------------------------
+#
+# Found live 2026-08-12, downstream of the same root. The execution plane's own
+# dispatch queue turns out to be convergent already — a queued runner dispatch
+# waited 100 minutes and ran correctly once a runner came online — so the
+# one-shot half is the *chat* plane and the round/batch progression. This is
+# the progression half: a task reported SUCCEEDED without the evidence its
+# delivery needed, ``_candidates_for_batch`` raised inside ``_advance_if_ready``,
+# and the round sat in a silent background loop. After the operator fixes the
+# condition the work has to actually happen again, and a mention alone will not
+# do it.
+
+
+@pytest.mark.asyncio
+async def test_a_rerun_sends_a_finished_task_back_to_work() -> None:
+    orchestrator, messenger, task, _ = await _assigned_worker_task()
+    stored = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    await orchestrator._tasks.update(  # noqa: SLF001
+        stored.report(TaskStatus.SUCCEEDED, "green, but no test results"),
+        expected_version=stored.version,
+    )
+    posted = len(messenger.deliveries)
+
+    returned = await orchestrator.redispatch(task.id, attempt="press-1", redo=True)
+
+    assert returned.status is TaskStatus.ASSIGNED
+    assert returned.result_summary is None, "the bad result must not survive its re-run"
+    assert len(messenger.deliveries) == posted + 1
+    persisted = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    assert persisted.status is TaskStatus.ASSIGNED
+
+
+@pytest.mark.asyncio
+async def test_a_rerun_restores_the_task_report_path() -> None:
+    """The reason the re-run must write the row rather than only re-tell it.
+
+    ``Task.report`` refuses a final task — "a final task cannot be reported
+    again" — so a Worker re-running under a still-SUCCEEDED row could never
+    record what it found. Reopening is what makes the second attempt's answer
+    landable, and this asserts the before and the after.
+    """
+
+    orchestrator, _messenger, task, _ = await _assigned_worker_task()
+    stored = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    succeeded = stored.report(TaskStatus.SUCCEEDED, "green, but no test results")
+    await orchestrator._tasks.update(succeeded, expected_version=stored.version)
+
+    with pytest.raises(TaskConflict, match="final task cannot be reported again"):
+        succeeded.report(TaskStatus.FAILED, "tests actually fail")
+
+    await orchestrator.redispatch(task.id, attempt="press-1", redo=True)
+
+    reopened = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    assert reopened.report(TaskStatus.FAILED, "tests actually fail").status is TaskStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_task_is_not_resurrected() -> None:
+    """A decision that work should not happen is not a result that came out wrong."""
+
+    orchestrator, _messenger, task, _ = await _assigned_worker_task()
+    stored = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    await orchestrator._tasks.update(
+        stored.supersede(reason="plan v2"), expected_version=stored.version
+    )
+
+    with pytest.raises(TaskConflict, match="cannot be re-run"):
+        await orchestrator.redispatch(task.id, attempt="press-1", redo=True)
+
+
+@pytest.mark.asyncio
+async def test_a_settled_round_can_still_be_re_run_on_request() -> None:
+    """The 409 the default scope raises is not the end of the conversation."""
+
+    orchestrator, messenger, task, project_id = await _assigned_worker_task(
+        key="round-1:b0:leader"
+    )
+    stored = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    await orchestrator._tasks.update(
+        stored.report(TaskStatus.SUCCEEDED, "green, but no test results"),
+        expected_version=stored.version,
+    )
+    plans, plan = await _round(orchestrator, project_id, task.id)
+    service = RedispatchRound(plans, orchestrator._tasks, orchestrator)  # noqa: SLF001
+    posted = len(messenger.deliveries)
+
+    # Default scope still refuses — and now says what to ask for instead.
+    with pytest.raises(RoundNotDispatchable, match="scope=rerun"):
+        await service.execute(plan.id, attempt="press-1")
+    assert len(messenger.deliveries) == posted
+
+    receipt = await service.execute(
+        plan.id, attempt="press-1", scope=RedispatchScope.RERUN
+    )
+
+    assert receipt.scope is RedispatchScope.RERUN
+    assert receipt.reopened_task_ids == (task.id,)
+    assert receipt.task_ids == (task.id,)
+    assert receipt.settled_task_ids == (), "a task sent back to work is not settled"
+    assert len(messenger.deliveries) == posted + 1
+
+
+@pytest.mark.asyncio
+async def test_a_rerun_un_succeeds_the_batch() -> None:
+    """The intended consequence, stated as a test.
+
+    A round whose delivery was refused should stop counting its batch as done;
+    that is half of what the operator is trying to restore. ``_batch_succeeded``
+    is the function the plan actually asks, so it is the one asserted.
+    """
+
+    orchestrator, _messenger, task, project_id = await _assigned_worker_task(
+        key="round-1:b0:leader"
+    )
+    stored = await orchestrator._tasks.get(task.id)  # noqa: SLF001
+    await orchestrator._tasks.update(
+        stored.report(TaskStatus.SUCCEEDED, "green, but no test results"),
+        expected_version=stored.version,
+    )
+    plans, plan = await _round(orchestrator, project_id, task.id)
+    advancer = AdvanceExecutionPlan(plans, orchestrator._tasks, orchestrator, None)  # noqa: SLF001
+    assert await advancer._batch_succeeded(plan) is True  # noqa: SLF001
+
+    await RedispatchRound(plans, orchestrator._tasks, orchestrator).execute(  # noqa: SLF001
+        plan.id, attempt="press-1", scope=RedispatchScope.RERUN
+    )
+
+    assert await advancer._batch_succeeded(plan) is False  # noqa: SLF001

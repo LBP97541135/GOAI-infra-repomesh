@@ -45,7 +45,10 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
-from repomesh.modules.task_orchestration.contracts import TaskPublicationUnavailable
+from repomesh.modules.task_orchestration.contracts import (
+    RedispatchScope,
+    TaskPublicationUnavailable,
+)
 from repomesh.modules.task_orchestration.domain import (
     RoundNotDispatchable,
     TaskConflict,
@@ -74,6 +77,16 @@ class RoundRedispatchRequest(BaseModel):
     room event; re-sending the *same* key — a double-click, a retried fetch —
     replays and posts nothing. See ``_dispatch_message_key`` for the mechanism
     both halves rest on.
+    """
+
+    scope: RedispatchScope = RedispatchScope.UNFINISHED
+    """Which tasks to reach; ``unfinished`` by default, and the default matters.
+
+    ``unfinished`` writes no task row at all, so the worst a mistaken press can
+    do is put one duplicate notification in a room. ``rerun`` additionally
+    sends finished tasks back to work — a real write that un-succeeds a batch —
+    and asking for it explicitly is the point: it is the answer to "the result
+    on file is wrong", not to "this looks slow".
     """
 
 
@@ -106,7 +119,9 @@ async def redispatch_round(
             ),
         )
     try:
-        receipt = await service.execute(round_id, attempt=body.idempotency_key)
+        receipt = await service.execute(
+            round_id, attempt=body.idempotency_key, scope=body.scope
+        )
     except TaskNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except RoundNotDispatchable as error:
