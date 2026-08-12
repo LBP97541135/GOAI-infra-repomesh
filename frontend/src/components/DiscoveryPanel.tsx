@@ -25,7 +25,7 @@ import { agentLabel, errText } from "../display";
 import { DiscoveryApproval, type ApprovalPrincipal } from "./DiscoveryApproval";
 
 /** issue 详情页 · 发现面板（批次 B-1/B-2）。
- *  契约 `docs/contracts/delivery-read-model-v0.4-draft.md`；设计定稿
+ *  契约 `docs/contracts/delivery-read-model-v0.4.md`；设计定稿
  *  `docs/development/full-loop-gui-design-20260812.md` ②；版式基准
  *  `frontend-prototype/full-loop-surfaces.html` ②。
  *
@@ -138,12 +138,9 @@ function CandidateRow({ item, llmUsed }: { item: DiscoveryCandidateItem; llmUsed
         {item.is_entry_point && (
           <span className="rounded-hard border border-amber px-1.5 py-px text-[10.5px] text-amber">入口仓</span>
         )}
-        {/* 契约里 repository_id 可为 null：名字没在 catalog 里解析到，如实留痕不隐藏 */}
-        {item.repository_id === null && (
-          <span className="rounded-hard border border-line px-1.5 py-px text-[10.5px] text-tx3">
-            catalog 未解析
-          </span>
-        )}
+        {/* 这里**没有**「catalog 未解析」分支：§2.2 定死本块的 repository_id 不可为 null
+            （不在 catalog 的候选评分阶段就被过滤了）。§5.4 计划纸面的节点是另一回事，
+            那边的 null 由 PlanDagPanel 如实留痕，两处不要互相搬结论。 */}
         {/* 回退评分的条走弱色：同一根琥珀条会把词频分数看成模型评分 */}
         <span className="h-[6px] w-[84px] flex-none overflow-hidden rounded-hard bg-line">
           <i className={`block h-full ${llmUsed ? "bg-amber" : "bg-tx2"}`} style={{ width: `${pct}%` }} />
@@ -396,6 +393,9 @@ export function DiscoveryPanel({
       setBusy(step);
       setWriteError(null);
       call(takeKey(step))
+        // 回执的 `task_id` **有意不消费**：重放（200 / status:"replayed"）时它恒为 null，
+        // 而在途任务的唯一权威是读投影的 `running_task_id`。认回执就得在两种 status 上
+        // 分叉出两套等待逻辑，还会漏掉「别的标签页起的任务」这一种。
         .then(() => afterTrigger(step))
         // 409（前置未满足 / 已有在跑任务）、403（主体不合格）、503（LLM 未配置）
         // 都在这里，服务器 detail 原文展示——键留着，原样重试沿用同一把
@@ -425,6 +425,14 @@ export function DiscoveryPanel({
     adjustments: { repository: string; tier: DiscoveryTier }[],
   ) => {
     if (!agentId || !view) return;
+    // 提交的是**当前分档的指纹**（顶层 classification_evidence_version），不是
+    // approval.evidence_version——后者是「上一次决定绑在哪份证据上」，未审批时为 null、
+    // 已审批时是旧指纹，两种都必然换来 409。§3.1 的两字段分工表把这条写死了。
+    const evidence = view.classification_evidence_version;
+    if (!evidence) {
+      setApprovalError("当前分档没有证据指纹（classification_evidence_version 为空），无法提交审批。");
+      return;
+    }
     setBusy("approval");
     setApprovalError(null);
     setEvidenceDrift(false);
@@ -434,7 +442,7 @@ export function DiscoveryPanel({
       decision,
       reason,
       adjustments,
-      evidence_version: view.approval.evidence_version,
+      evidence_version: evidence,
     })
       .then(() => {
         dropKey("approval");
@@ -687,12 +695,15 @@ export function DiscoveryPanel({
           ) : (
             <>
               {classification.error && <StepErrorLine error={classification.error} />}
-              {/* key 绑证据版本：上游重跑换版即重挂，下拉草稿随之清空（见 DiscoveryApproval 注释） */}
+              {/* key 绑**当前分档指纹**：上游重跑换指纹即重挂，下拉草稿随之清空。
+                  绑 approval.evidence_version 不行——它未审批时恒 null，四种不同的分档
+                  会共用同一个 key，草稿就跨着证据活下来了（见 DiscoveryApproval 注释）。 */}
               <DiscoveryApproval
-                key={approval.evidence_version}
+                key={view.classification_evidence_version ?? "no-evidence"}
                 classification={classification}
                 effectiveTiers={view.effective_tiers}
                 approval={approval}
+                evidenceVersion={view.classification_evidence_version}
                 principal={approvalPrincipal(mode, principalResolving, principal)}
                 submitting={busy === "approval"}
                 errorText={approvalError}
@@ -797,7 +808,7 @@ function CandidatesBlock({ block }: { block: DiscoveryCandidatesBlock }) {
       ) : (
         <div className="mt-1.5">
           {block.items.map((item) => (
-            <CandidateRow key={`${item.repository_name}-${item.repository_id ?? "unresolved"}`} item={item} llmUsed={block.llm_used} />
+            <CandidateRow key={item.repository_id} item={item} llmUsed={block.llm_used} />
           ))}
         </div>
       )}

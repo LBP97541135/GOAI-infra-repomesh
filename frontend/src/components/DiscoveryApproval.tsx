@@ -18,12 +18,21 @@ import { TIER_LABEL, TIER_SKIN, agentLabel, shortId, tierStatusLabel } from "../
  *
  *  **改档与放行一次提交**（§5.2）：拆成两个写会造出「改了但没批」的中间态。
  *
- *  **草稿绑在证据上**。本组件由父级以 `key={approval.evidence_version}` 挂载：
- *  上游重跑会换掉 evidence_version（§5.3），组件随之重挂、下拉草稿清空。若草稿跨
- *  证据版本存活，用户就会拿着对 A 版分档的判断去批 B 版分档——而那正是 §5.3 的
- *  409 要防的事，前端不该先制造出这个状态再等服务端拒绝。 */
+ *  **草稿绑在证据上**。本组件由父级以 `key={classification_evidence_version}` 挂载：
+ *  上游重跑会换掉当前分档指纹（§5.3），组件随之重挂、下拉草稿清空。若草稿跨证据版本
+ *  存活，用户就会拿着对 A 版分档的判断去批 B 版分档——而那正是 §5.3 的 409 要防的事，
+ *  前端不该先制造出这个状态再等服务端拒绝。
+ *
+ *  **两个指纹分工不同，别混用**（§3.1 的表）：
+ *   - `evidenceVersion`（顶层 `classification_evidence_version`）= 服务端当前分档的指纹，
+ *     **提交审批回填的是它**，分档存在即非空；
+ *   - `approval.evidence_version` = 已记录的那次决定绑的指纹，**审计用**，未审批时为 null。 */
 
 const TIERS: DiscoveryTier[] = ["required", "maybe", "excluded"];
+
+/** `sha256:<64 hex>` → 前 8 位。剥前缀再截，否则截出来的是 "sha256:9"，
+ *  两份不同的证据看起来会一模一样。 */
+const shortSha = (v: string) => shortId(v.replace(/^sha256:/, ""));
 
 /** 审批主体展示态，与 ApprovalModal 的同款四态（决策主体从花名册派生，见
  *  api/decisions.ts 的单点实现——本面不新增取数路径）。 */
@@ -114,6 +123,7 @@ export function DiscoveryApproval({
   classification,
   effectiveTiers,
   approval,
+  evidenceVersion,
   principal,
   submitting,
   errorText,
@@ -124,6 +134,8 @@ export function DiscoveryApproval({
   classification: DiscoveryClassificationBlock;
   effectiveTiers: DiscoveryEffectiveTier[];
   approval: DiscoveryApprovalBlock;
+  /** 顶层 `classification_evidence_version`：提交审批回填的那一个（§3.1） */
+  evidenceVersion: string | null;
   principal: ApprovalPrincipal;
   submitting: boolean;
   /** 提交失败的服务端 detail 原文（409 证据漂移也走这里） */
@@ -146,7 +158,8 @@ export function DiscoveryApproval({
     .filter((t) => draftOf(t) !== t.tier)
     .map((t) => ({ repository: t.repository, tier: draftOf(t) }));
 
-  const canSubmit = principal.state === "ready" && !submitting;
+  // 没有当前指纹就没法提交（§5.3 要求审批绑在它看到的那份证据上），禁用而不是发一个注定 409 的请求
+  const canSubmit = principal.state === "ready" && !submitting && evidenceVersion !== null;
 
   return (
     <div className="mt-2 rounded-hard border border-line bg-panel px-3 py-2.5">
@@ -262,8 +275,11 @@ export function DiscoveryApproval({
         </p>
       )}
 
+      {/* 两个指纹都显示出来：一个是「我正在批的这份」，一个是「上次批的那份」。
+          只显示一个，就没人能看出两者已经不同（也就是 409 的成因）。 */}
       <p className="mt-1.5 font-mono text-[10px] text-tx3">
-        evidence_version {shortId(approval.evidence_version.replace(/^sha256:/, ""))} ·
+        当前分档指纹 {evidenceVersion ? shortSha(evidenceVersion) : "无（分档未生成）"}
+        {approval.evidence_version && ` · 上次审批绑定 ${shortSha(approval.evidence_version)}`} ·
         改档与放行一次提交（§5.2）· 幂等键随表单生成
       </p>
     </div>

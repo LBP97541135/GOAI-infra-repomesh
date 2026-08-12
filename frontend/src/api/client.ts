@@ -14,7 +14,7 @@ import type {
   DiscoveryCandidatesRequest,
   DiscoveryStepRequest,
   DiscoveryTaskView,
-  DiscoveryTriggerAccepted,
+  DiscoveryWriteReceipt,
   DiscoveryView,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
@@ -195,24 +195,25 @@ export function createApiClient(config: ApiClientConfig) {
     /** §4.3 Step 0 需求分析（202）。`force_continue: true` 走 §4.6 的强行继续留痕，
      *  此时**不重跑 LLM**，只在既有 analysis 上记 forced_continue。 */
     postDiscoveryAnalysis: (issueId: string, payload: DiscoveryAnalysisRequest) =>
-      request<DiscoveryTriggerAccepted>(config, "POST", `/issues/${issueId}/discovery/analysis`, payload),
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/analysis`, payload),
 
     /** §4.3 Step 1 候选评分（202）。前置未满足（分析未通过且未强行继续）→ 409。 */
     postDiscoveryCandidates: (issueId: string, payload: DiscoveryCandidatesRequest) =>
-      request<DiscoveryTriggerAccepted>(config, "POST", `/issues/${issueId}/discovery/candidates`, payload),
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/candidates`, payload),
 
     /** §4.3 Step 2 三档分类（202）。候选为空 → 409。 */
     postDiscoveryClassification: (issueId: string, payload: DiscoveryStepRequest) =>
-      request<DiscoveryTriggerAccepted>(config, "POST", `/issues/${issueId}/discovery/classification`, payload),
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/classification`, payload),
 
     /** §4.3 Step 3 生成计划（202）。**审批 v1 必经**：approval 非 approved → 409。 */
     postDiscoveryPlan: (issueId: string, payload: DiscoveryStepRequest) =>
-      request<DiscoveryTriggerAccepted>(config, "POST", `/issues/${issueId}/discovery/plan`, payload),
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/plan`, payload),
 
     /** §5.2 分档审批（**同步** 200，无 LLM 调用）。`evidence_version` 漂移 → 409。
-     *  响应体形状契约未定义，故不消费——按 §4.5 同一条，写完一律重取读投影。 */
+     *  回执与四个触发同形（`task_id` 恒 null），**不回投影审批块**——按 §4.5 同一条，
+     *  写完一律重取读投影。 */
     postDiscoveryApproval: (issueId: string, payload: DiscoveryApprovalRequest) =>
-      request<unknown>(config, "POST", `/issues/${issueId}/discovery/approval`, payload),
+      request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/approval`, payload),
 
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),

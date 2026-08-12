@@ -3,9 +3,9 @@
  *  形状唯一来源是契约 v0.4 §2.2/§3.1/§4.5，类型在 `api/contract.ts`——本文件只有
  *  数据，不另抄一份字段表（同 data/issueDetail.ts 的分工）。
  *
- *  **为什么夹具要覆盖十种形态**：本批后端端点尚未合并，写路径无法对 live 验证。
- *  夹具是这一批渲染逻辑唯一能自检的地方，所以按「哪些分支会走出不同界面」逐个建，
- *  而不是只建一个好看的成功态——只测成功态等于没测。
+ *  **为什么夹具要覆盖十种形态**：按「哪些分支会走出不同界面」逐个建，而不是只建一个
+ *  好看的成功态——只测成功态等于没测。失败态、回退评分、证据漂移这些分支，正是出事
+ *  时才会被看到的那几屏。
  *
  *  ⚠ 夹具**不模拟状态机**：`step` / `step_state` 在每份夹具里都是**写死的常量**，
  *  正如 live 下它们是读模型算出来的常量。前端在任何模式下都不许按 §3.2 自行推导
@@ -25,6 +25,9 @@ const LEADER = "a7c9e2f1-5b3d-4e8a-9f01-2c4d6e8a0b13";
 const REPO_API = "b1c2d3e4-0001-4a2b-9c3d-4e5f6a7b8c01";
 const REPO_WEB = "b1c2d3e4-0002-4a2b-9c3d-4e5f6a7b8c02";
 const REPO_DOCS = "b1c2d3e4-0003-4a2b-9c3d-4e5f6a7b8c03";
+/** 评分到但最终没进交付范围的候选。它在 catalog 里（否则评分阶段就被过滤掉了，
+ *  §2.2），只是分档判到 maybe——所以详情页的关联仓库里没有它。 */
+const REPO_STORE = "b1c2d3e4-0004-4a2b-9c3d-4e5f6a7b8c04";
 
 const REQUIREMENT =
   "运营侧需要在订单结账时记录价格被修改的原因（促销、议价、纠错），原因随订单落库并在后台订单详情页展示。价格修改入口不变，新增原因必填校验与审计字段。";
@@ -32,15 +35,19 @@ const REQUIREMENT =
 const AT = "2026-08-12T02:14:05Z";
 
 /** 空审批块。契约 §3.1 里 `approval` **不可为 null**（三块可以为 null，它不行），
- *  所以「还没人批」的形态是 state=not_requested，而不是整块缺席。 */
+ *  所以「还没人批」的形态是 state=not_requested，而不是整块缺席。
+ *  `evidence_version` 此时为 **null**——它记的是「上一次决定绑在哪份证据上」，
+ *  还没决定过就没有值（§3.1 的两字段分工表）。 */
 const APPROVAL_NONE = {
   state: "not_requested" as const,
-  evidence_version: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  evidence_version: null,
   decided_by_agent_id: null,
   reason: "",
   decided_at: null,
 };
 
+/** 当前分档指纹（顶层 `classification_evidence_version`）。分档存在即非空，
+ *  与审批与否无关——提交审批回填的就是它。 */
 const EVIDENCE = "sha256:9f2c4a17b83e0d5641ca77b0e9d2183c6a5b4e0f7c1d9a2b3e4f5061728394ab";
 
 /** 需求分析：不充分 + 两条追问（原型 ② 的那两条）。 */
@@ -91,8 +98,7 @@ const CANDIDATE_ITEMS: DiscoveryCandidateItem[] = [
     is_entry_point: false,
   },
   {
-    // repository_id 为 null 的真实形态：名字没在 catalog 里解析到
-    repository_id: null,
+    repository_id: REPO_STORE,
     repository_name: "saleor-storefront",
     score: 0.41,
     matched_terms: [],
@@ -112,7 +118,8 @@ const CANDIDATE_ITEMS: DiscoveryCandidateItem[] = [
 const CANDIDATES_LLM = {
   items: CANDIDATE_ITEMS,
   llm_used: true,
-  limit: 5,
+  // 服务端缺省（§4.3：面板入口缺省 10，与脚本入口的 5 有意不同）
+  limit: 10,
   entry_point: null,
   ran_at: AT,
   by_agent_id: LEADER,
@@ -207,6 +214,8 @@ const base = {
   analysis: null,
   candidates: null,
   classification: null,
+  // 分档不存在 → 当前指纹为 null（无档可指纹）
+  classification_evidence_version: null,
   effective_tiers: [],
   approval: APPROVAL_NONE,
   integration: null,
@@ -301,8 +310,11 @@ export const discoveryFixtures: Record<string, DiscoveryView> = {
     analysis: ANALYSIS_SUFFICIENT,
     candidates: CANDIDATES_LLM,
     classification: CLASSIFICATION,
+    // 分档在、还没人批：当前指纹非空，而 approval.evidence_version 仍是 null。
+    // 这正是两个字段不可互换的形态——拿 approval 那个去提交必然 409。
+    classification_evidence_version: EVIDENCE,
     effective_tiers: TIERS_UNADJUSTED,
-    approval: { ...APPROVAL_NONE, evidence_version: EVIDENCE },
+    approval: APPROVAL_NONE,
   },
 
   /** 被要求改动：state=changes_requested，**不清空** classification（人只是要求改，
@@ -315,6 +327,7 @@ export const discoveryFixtures: Record<string, DiscoveryView> = {
     analysis: ANALYSIS_SUFFICIENT,
     candidates: CANDIDATES_LLM,
     classification: CLASSIFICATION,
+    classification_evidence_version: EVIDENCE,
     effective_tiers: TIERS_UNADJUSTED,
     approval: {
       state: "changes_requested",
@@ -340,6 +353,7 @@ export const discoveryFixtures: Record<string, DiscoveryView> = {
         { repository: "saleor-docs", from: "EXCLUDED", to: "REQUIRED", by_agent_id: LEADER, at: AT },
       ],
     },
+    classification_evidence_version: EVIDENCE,
     effective_tiers: TIERS_ADJUSTED,
     approval: {
       state: "approved",
@@ -364,6 +378,7 @@ export const discoveryFixtures: Record<string, DiscoveryView> = {
         { repository: "saleor-docs", from: "EXCLUDED", to: "REQUIRED", by_agent_id: LEADER, at: AT },
       ],
     },
+    classification_evidence_version: EVIDENCE,
     effective_tiers: TIERS_ADJUSTED,
     approval: {
       state: "approved",

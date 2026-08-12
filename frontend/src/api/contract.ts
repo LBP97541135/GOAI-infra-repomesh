@@ -175,6 +175,17 @@ export interface IssueDetailView extends IssueListItemView {
   /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest。本字段只用于提示「本 issue 设有
    *  人工检查点」并链接 main 既有审核台，前端不得据此自造决策项 */
   required_checkpoints: string[];
+  /** 契约 v0.4 §3.3：发现链两个标量，**恒存在**（从未发起发现时为 1 / "idle"），
+   *  与 §3.1 的 `step`/`step_state` 同源同实现。
+   *
+   *  **消费时机（契约明文）**：只供详情页在**不打开发现面板**时出徽标（如「发现 3/4 ·
+   *  待审批」）。面板一旦打开，内部渲染一律以 §3.1 专用端点为准——这两个标量**取不到
+   *  `running_task_id`，无法据以轮询**，拿它们驱动面板会得到一个永远不知道任务何时
+   *  结束的界面。列表 `GET /issues` 不加这两个字段（IA 里没有它们的位置）。
+   *
+   *  本批（B-1/B-2）不做徽标，先把类型对齐，免得徽标落地时又改一次形状。 */
+  discovery_step: 1 | 2 | 3 | 4;
+  discovery_state: "idle" | "running" | "failed" | "done";
 }
 
 export interface RoomMemberView {
@@ -666,7 +677,7 @@ export interface GovernanceDecisionRequest {
 
 /* ------------------------------------------------- 契约 v0.4 发现链（批次 B） */
 
-/** 形状唯一来源：`docs/contracts/delivery-read-model-v0.4-draft.md`
+/** 形状唯一来源：`docs/contracts/delivery-read-model-v0.4.md`（**已裁决 · 生效**）
  *  §2.2（discovery 块）/ §3.1（读投影）/ §4.3+§4.5（写触发与轮询）/ §5.2（审批）。
  *  嵌套的 `ConfirmationResultView` 复用 `repository_intelligence/api/models.py:255`
  *  既有形状（契约 §2.2 明写「不另写第二套序列化」）。
@@ -723,10 +734,16 @@ export interface DiscoveryAnalysisBlock {
   error: DiscoveryStepError | null;
 }
 
-/** §2.2 candidates.items 单条。`repository_id` 契约写作 `uuid|null`
- *  （既有 `DiscoveryCandidate` 模型该列不可空，以契约为准）。 */
+/** §2.2 candidates.items 单条。
+ *
+ *  **`repository_id` 不可为 null**（v0.4 正式版实施定死，草案 `uuid|null` 是笔误）：
+ *  LLM 与关键词两条产出路径都只能从 catalog 已有的 profile 取 id，不在 catalog 的候选
+ *  在评分时就被过滤掉了，故本块内该字段恒为真实 id，消费方**不需要「catalog 未解析」
+ *  的渲染分支**。
+ *  ⚠ 与 §5.4 计划纸面的 `dag.nodes[].repository_id` 是两回事——那边**确实可为 null**
+ *  （那是按名字解析，不是本块的 catalog 直取），不要把这条结论搬过去。 */
 export interface DiscoveryCandidateItem {
-  repository_id: string | null;
+  repository_id: string;
   repository_name: string;
   score: number;
   matched_terms: string[];
@@ -798,9 +815,12 @@ export interface DiscoveryClassificationBlock {
  *  生成计划端点 409。 */
 export interface DiscoveryApprovalBlock {
   state: "not_requested" | "approved" | "changes_requested";
-  /** §5.3：规范化三档结果的 sha256。审批必须绑在它实际看到的那份分档上，
-   *  提交时不符即 409（Q18，head-bound 语义在发现期的等价物）。 */
-  evidence_version: string;
+  /** **已记录的那次决定绑定的指纹，审计用；未审批时为 `null`。**
+   *
+   *  ⚠ 提交审批时**不要回填这个**——§3.1 的表把两个字段的分工写死了：
+   *  「当前这份分档的指纹」是顶层的 `classification_evidence_version`。拿本字段去提交，
+   *  未审批时是 null、已审批时是上一次的旧指纹，两种都必然 409。 */
+  evidence_version: string | null;
   decided_by_agent_id: string | null;
   reason: string;
   decided_at: string | null;
@@ -808,8 +828,14 @@ export interface DiscoveryApprovalBlock {
 
 /** §3.1 派生字段：原始分档叠加 adjustments 后的**唯一生效分档来源**。
  *  前端**禁止**自己把 adjustments 叠到 classification 上（状态映射唯一实现在读模型）。
- *  `original_tier` 在 `adjusted === false` 时的取值契约未写死，故渲染只在
- *  `adjusted` 为真时读它（见批次回报悬挂项）。 */
+ *
+ *  `original_tier` 取值定死（v0.4 正式版）：
+ *  | `adjusted` | `original_tier` | 含义 |
+ *  | false | **恒 null** | 模型分档，审批人未动 |
+ *  | true  | `"maybe"` 等 | 模型分了档，审批人改成了 `tier` |
+ *  | true  | null        | 模型从未给该仓库分档，审批人自行加入 |
+ *  改档后又改回原档 → `adjusted:false` + `original_tier:null`（没有净改动就不宣称有）。
+ *  两种 null 靠 `adjusted` 区分，所以渲染必须先看 `adjusted` 再读 `original_tier`。 */
 export interface DiscoveryEffectiveTier {
   repository: string;
   tier: DiscoveryTier;
@@ -845,6 +871,10 @@ export interface DiscoveryView {
   analysis: DiscoveryAnalysisBlock | null;
   candidates: DiscoveryCandidatesBlock | null;
   classification: DiscoveryClassificationBlock | null;
+  /** **服务端当前分档的指纹——提交审批时回填的就是这个**（§3.1 实施新增）。
+   *  分档存在即非空；`classification` 为 null 时为 null。
+   *  与 `approval.evidence_version`（上一次决定绑的那份，审计用）不可互相替代。 */
+  classification_evidence_version: string | null;
   effective_tiers: DiscoveryEffectiveTier[];
   approval: DiscoveryApprovalBlock;
   integration: DiscoveryIntegrationCounts | null;
@@ -869,10 +899,24 @@ export interface DiscoveryTaskView {
   finished_at: string | null;
 }
 
-/** §4.3 四个写触发的 202 体。 */
-export interface DiscoveryTriggerAccepted {
-  task_id: string;
+/** §4.3 + §5.2：**五个写端点（四个触发 + 审批）同形的三字段回执**。
+ *
+ *  | 情形 | HTTP | `task_id` | `status` |
+ *  | 已受理、任务已起 | 202 | 任务 id | `accepted` |
+ *  | 同幂等键重放     | 200 | **null** | `replayed` |
+ *  | 审批（同步端点） | 200 | **恒 null** | `accepted` / `replayed` |
+ *
+ *  重放**不给 task_id**：原任务记录是进程内的、可能早被清掉，编一个回去等于承诺一次
+ *  答不上来的轮询。所以 `task_id` 非空才轮询，为空就直接重取读投影——两种情形下
+ *  「下一步做什么」本来就是同一个动作。
+ *
+ *  回执**不投影结果**（不回审批块、不回步块）：那是 §3.1 已经拥有的数据，回一份就是
+ *  同一事实两处序列化。 */
+export interface DiscoveryWriteReceipt {
+  task_id: string | null;
   step: 1 | 2 | 3 | 4;
+  /** 重放必须可分辨：否则客户端重试会把 adjustments 再追加一遍，分档上凭空多一条改档 */
+  status: "accepted" | "replayed";
 }
 
 /** §4.3 Step 0 需求分析。**不收 requirement**：需求文本的事实源是快照的
@@ -888,9 +932,10 @@ export interface DiscoveryAnalysisRequest {
 }
 
 /** §4.3 Step 1 候选评分。需求文本取 `analyzed_requirement`，不收。
- *  `limit` / `entry_point` **不由 GUI 送**，交服务端缺省——契约示例写 10 而既有
- *  `DiscoveryRequest.limit` 缺省是 5，前端硬编任一个都会变成第二份缺省
- *  （同 repositoryScan.ts 不送 max_workers 的取舍）。 */
+ *  `limit` / `entry_point` **均可选**（实施定死）：`limit` 缺省 10、范围 1..50，
+ *  `entry_point` 缺省 null。**前端不送，交服务端缺省**——硬编一个就是第二份缺省
+ *  （同 repositoryScan.ts 不送 max_workers 的取舍）。
+ *  与既有脚本入口 `POST /discovery` 的缺省 5 **有意不同**，两处各自独立、不统一。 */
 export interface DiscoveryCandidatesRequest {
   created_by_agent_id: string;
   idempotency_key: string;
@@ -915,6 +960,8 @@ export interface DiscoveryApprovalRequest {
   decision: "approved" | "changes_requested";
   reason: string;
   adjustments: { repository: string; tier: DiscoveryTier }[];
-  /** §5.3：与服务端当前分档指纹不符 → 409（批的必须是它实际看到的那份证据） */
+  /** §5.3：回填 §3.1 顶层的 `classification_evidence_version`（**不是**
+   *  `approval.evidence_version`）。与服务端当前分档指纹不符 → 409：
+   *  批的必须是它实际看到的那份证据。 */
   evidence_version: string;
 }

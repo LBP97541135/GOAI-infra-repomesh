@@ -12,7 +12,7 @@ import type {
   DiscoveryCandidatesRequest,
   DiscoveryStepRequest,
   DiscoveryTaskView,
-  DiscoveryTriggerAccepted,
+  DiscoveryWriteReceipt,
   DiscoveryView,
 } from "./contract";
 import { defaultClient } from "./client";
@@ -64,7 +64,7 @@ export function fetchDiscoveryTask(issueId: string, taskId: string): Promise<Dis
 export function triggerAnalysis(
   issueId: string,
   payload: DiscoveryAnalysisRequest,
-): Promise<DiscoveryTriggerAccepted> {
+): Promise<DiscoveryWriteReceipt> {
   refuseInReplay();
   return defaultClient().postDiscoveryAnalysis(issueId, payload);
 }
@@ -72,7 +72,7 @@ export function triggerAnalysis(
 export function triggerCandidates(
   issueId: string,
   payload: DiscoveryCandidatesRequest,
-): Promise<DiscoveryTriggerAccepted> {
+): Promise<DiscoveryWriteReceipt> {
   refuseInReplay();
   return defaultClient().postDiscoveryCandidates(issueId, payload);
 }
@@ -80,7 +80,7 @@ export function triggerCandidates(
 export function triggerClassification(
   issueId: string,
   payload: DiscoveryStepRequest,
-): Promise<DiscoveryTriggerAccepted> {
+): Promise<DiscoveryWriteReceipt> {
   refuseInReplay();
   return defaultClient().postDiscoveryClassification(issueId, payload);
 }
@@ -88,12 +88,13 @@ export function triggerClassification(
 export function triggerPlan(
   issueId: string,
   payload: DiscoveryStepRequest,
-): Promise<DiscoveryTriggerAccepted> {
+): Promise<DiscoveryWriteReceipt> {
   refuseInReplay();
   return defaultClient().postDiscoveryPlan(issueId, payload);
 }
 
-/** §5.2 同步端点。响应体形状契约未定义故不消费——写完一律重取读投影（§4.5 同一条）。 */
+/** §5.2 同步端点。回执三字段（`task_id` 恒 null）不投影结果，故不消费——
+ *  写完一律重取读投影（§4.5 同一条）。 */
 export async function submitDiscoveryApproval(
   issueId: string,
   payload: DiscoveryApprovalRequest,

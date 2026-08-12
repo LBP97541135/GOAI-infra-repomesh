@@ -281,8 +281,8 @@ function PlanDagSheet({ plan, anchorName }: { plan: RepositoryPlanView; anchorNa
           </div>
         )}
         <div>
-          本图只画 depends_on 投影出的边；无法解析或落在批次之外的依赖名在服务端被丢弃、**只进服务端日志**，
-          故本图不等于完整依赖图。任务级 / 接口级依赖边（graph_edges）恒空，另立项。
+          本图只画 depends_on 投影出的边；无法解析或落在批次之外的依赖名在服务端被丢弃、
+          <b>只进服务端日志</b>，故本图不等于完整依赖图。任务级 / 接口级依赖边（graph_edges）恒空，另立项。
         </div>
       </div>
     </div>
