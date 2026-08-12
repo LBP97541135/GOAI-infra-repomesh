@@ -4,6 +4,8 @@ import type {
   GovernanceDecisionView,
   IssueListItemView,
   Phase,
+  RollbackRepositoryAction,
+  RollbackRepositoryState,
   RuntimeBlock,
 } from "./api/contract";
 
@@ -108,6 +110,41 @@ export function governanceLabel(decision: string): string {
 export function governanceSkin(decision: string): string {
   return decision === "ready" ? "border-olive text-olive" : "border-salmon text-salmon";
 }
+
+/** 回滚范围表的措辞与皮肤（§4.6，E-1）。**纯展示**：merged/unmerged 与
+ *  withhold/revert_pull_request 都是读模型算好的枚举，这里只翻译不判定。
+ *  零新颜色语义——沿用既有令牌：琥珀=还要过 CI 的 revert，橄榄=免费撤回。 */
+export const ROLLBACK_STATE_LABEL: Record<RollbackRepositoryState, string> = {
+  merged: "已 merge",
+  unmerged: "未 merge",
+};
+
+export const ROLLBACK_STATE_SKIN: Record<RollbackRepositoryState, string> = {
+  merged: "border-amber text-amber",
+  unmerged: "border-line text-tx2",
+};
+
+/** 动作措辞按设计定稿 ④ 原文：「withhold 免费撤回 / revert PR 逆序第 k 步」。
+ *  第 k 步由调用方拼上——k 是服务端给的 `step`，不在这里数。 */
+export const ROLLBACK_ACTION_LABEL: Record<RollbackRepositoryAction, string> = {
+  withhold: "withhold 免费撤回",
+  revert_pull_request: "revert PR",
+  none: "无可撤销项",
+};
+
+export const ROLLBACK_ACTION_SKIN: Record<RollbackRepositoryAction, string> = {
+  withhold: "border-olive text-olive",
+  revert_pull_request: "border-amber text-amber",
+  none: "border-line text-tx3",
+};
+
+/** 入口不可用的两种原因，措辞必须不同：一个是「本轮还没有 ChangeSet」，
+ *  另一个是「有 ChangeSet 但没有一个仓真的发布过」。糊成一句会让人以为
+ *  是同一种空。 */
+export const ROLLBACK_UNAVAILABLE_LABEL: Record<"no_change_set" | "nothing_delivered", string> = {
+  no_change_set: "本轮尚未建立 ChangeSet——没有已发布的交付候选可回滚。",
+  nothing_delivered: "本轮的候选一个都还没发布（既没 merge，也没开过 PR）——没有可撤销的东西。",
+};
 
 /** ISO 时间戳 → MM-DD。取不到格式时原样回显，不猜。 */
 export function dayLabel(at: string): string {

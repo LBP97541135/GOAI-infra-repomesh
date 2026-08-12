@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { DeliveryAggregate, IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
+import type {
+  DeliveryAggregate,
+  IssueDetailView,
+  IssueRoundView,
+  RollbackScopeView,
+  RoomListItemView,
+} from "../api/contract";
 import type { ApprovalInfo, Decision, EvidenceView, PlanAnchor } from "../types";
 import {
   archiveRound,
@@ -13,7 +19,9 @@ import type { RoundHistoryState } from "../components/RoundsPanel";
 import { fetchIssueDetail, fetchRepositoryPlan, fetchRooms } from "../api/rooms";
 import { ApiError } from "../api/client";
 import { resolveDataSourceMode } from "../api/source";
+import { submitRollback } from "../api/rollback";
 import { ApprovalModal } from "../components/ApprovalModal";
+import { RollbackModal } from "../components/RollbackModal";
 import { EvidenceModal } from "../components/EvidenceModal";
 import type { PlanDagState } from "../components/PlanDagPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
@@ -66,6 +74,14 @@ export function IssueDetailContainer({
    *  点击其他轮次或成功/失败后确认态复位。 */
   const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+
+  /** 回滚（E-1）：范围表随轮次展开已经取到了（roundsHistory），弹窗只是把它
+   *  连同该轮的 id 一起端出来——打开弹窗零额外取数。 */
+  const [rollbackOpen, setRollbackOpen] = useState(false);
+  const [rollbackRound, setRollbackRound] = useState<IssueRoundView | null>(null);
+  const [rollbackScope, setRollbackScope] = useState<RollbackScopeView | null>(null);
+  const [rollbackSubmitting, setRollbackSubmitting] = useState(false);
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
 
   // B5：「确认归档？」不能永久驻留——用户点了第一步后转头看别的，几分钟后
   // 误触同一按钮就是真归档。8 秒无第二击自动复位回「归档本轮」。
@@ -309,13 +325,20 @@ export function IssueDetailContainer({
       const existing = roundsHistory[id];
       if (!willExpand || (existing && !existing.loading && !existing.error)) return;
       const epoch = roundsEpoch.current;
-      setRoundsHistory((prev) => ({ ...prev, [id]: { loading: true, error: null, pending: [], recorded: [] } }));
+      setRoundsHistory((prev) => ({ ...prev, [id]: { loading: true, error: null, pending: [], recorded: [], rollback: null, rollbackError: null } }));
       fetchRoundDecisionHistory(id)
         .then((data) => {
           if (epoch !== roundsEpoch.current) return; // A6：缓存已整体清空，旧响应不落桶
           setRoundsHistory((p) => ({
             ...p,
-            [id]: { loading: false, error: null, pending: data.pending, recorded: data.recorded },
+            [id]: {
+              loading: false,
+              error: null,
+              pending: data.pending,
+              recorded: data.recorded,
+              rollback: data.rollback,
+              rollbackError: data.rollbackError,
+            },
           }));
         })
         .catch((err: unknown) => {
@@ -327,6 +350,8 @@ export function IssueDetailContainer({
               error: errText(err),
               pending: [],
               recorded: [],
+              rollback: null,
+              rollbackError: null,
             },
           }));
         });
@@ -361,6 +386,46 @@ export function IssueDetailContainer({
     },
     [archiveConfirmId, onToast],
   );
+
+  const handleRollbackRound = useCallback((round: IssueRoundView, scope: RollbackScopeView) => {
+    setRollbackRound(round);
+    setRollbackScope(scope);
+    setRollbackError(null);
+    setRollbackOpen(true);
+  }, []);
+
+  /** 提交后的措辞与实际发生的事逐条对应：决策已记录、gate 已堵死、执行交给 saga。
+   *  **不写「已回滚」**——按下按钮的那一刻什么都还没被撤销。 */
+  const handleRollback = (reason: string) => {
+    if (!rollbackRound || !rollbackScope) return;
+    if (resolveDataSourceMode() === "replay") {
+      setRollbackError(
+        "回放模式不写后端：回滚会在真实世界里关 PR、开 revert PR、动 base 分支，夹具里没有可写的对象。",
+      );
+      return;
+    }
+    if (!principal) {
+      setRollbackError("决策主体未接入，无法提交。");
+      return;
+    }
+    setRollbackSubmitting(true);
+    setRollbackError(null);
+    submitRollback(rollbackRound.round_id, rollbackScope, reason, principal.agentId)
+      .then((receipt) => {
+        setRollbackOpen(false);
+        onToast(
+          receipt.replayed
+            ? "同一份回滚请求已记录过，本次为重放（后端零写入）；执行进度看房间事件流。"
+            : "回滚决策已记录，merge gate 已堵死；执行由回滚 saga 接管（每 30s 一轮），进度看房间事件流。",
+        );
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409（已有恢复计划在执行）等，detail 原文留在弹窗里，不静默
+        setRollbackError(errText(err));
+      })
+      .finally(() => setRollbackSubmitting(false));
+  };
 
   const handleDecisionAction = useCallback(
     (decision: Decision, actionIdx: number) => {
@@ -486,6 +551,29 @@ export function IssueDetailContainer({
         archiveConfirmId={archiveConfirmId}
         archivingId={archivingId}
         onArchiveRound={handleArchiveRound}
+        onRollbackRound={handleRollbackRound}
+      />
+      <RollbackModal
+        open={rollbackOpen}
+        roundLabel={
+          rollbackRound
+            ? `第 ${detail.rounds.findIndex((r) => r.round_id === rollbackRound.round_id) + 1} 轮`
+            : ""
+        }
+        scope={rollbackScope}
+        principal={
+          resolveDataSourceMode() === "replay"
+            ? { state: "replay", label: "回放演示（不写后端）" }
+            : principalResolving
+              ? { state: "resolving", label: "解析中…" }
+              : principal
+                ? { state: "ready", label: `AGENT ${principal.label}` }
+                : { state: "missing", label: "决策主体未接入" }
+        }
+        submitting={rollbackSubmitting}
+        errorText={rollbackError}
+        onCancel={() => setRollbackOpen(false)}
+        onConfirm={handleRollback}
       />
       <ApprovalModal
         open={approvalOpen}

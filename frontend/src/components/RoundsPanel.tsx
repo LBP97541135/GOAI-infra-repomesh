@@ -1,6 +1,20 @@
-import type { GovernanceDecisionView, IssueDetailView, IssueRoundView } from "../api/contract";
+import type {
+  GovernanceDecisionView,
+  IssueDetailView,
+  IssueRoundView,
+  RollbackScopeView,
+} from "../api/contract";
 import type { Decision } from "../types";
-import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, eventTime, governanceLabel, governanceSkin, shortId } from "../display";
+import {
+  PHASE_SKIN,
+  PHASE_SKIN_FALLBACK,
+  ROLLBACK_UNAVAILABLE_LABEL,
+  dayLabel,
+  eventTime,
+  governanceLabel,
+  governanceSkin,
+  shortId,
+} from "../display";
 
 /** 轮次索引 + 跨轮决策查看（验收缺陷 B-6）。
  *
@@ -19,6 +33,9 @@ export interface RoundHistoryState {
   error: string | null;
   pending: Decision[];
   recorded: GovernanceDecisionView[];
+  /** E-1 交付卡的数据（§4.6）。null + rollbackError 说明为什么没有 */
+  rollback: RollbackScopeView | null;
+  rollbackError: string | null;
 }
 
 /** 归档按钮（B-4）的呈现规则：只对 `delivered` / `failed` 终态轮次给出动作；
@@ -35,6 +52,7 @@ export function RoundsPanel({
   archivingId,
   onToggleRound,
   onArchiveRound,
+  onRollbackRound,
 }: {
   detail: IssueDetailView;
   /** 决策夹正在呈现的那一轮（active ?? latest）；展开该轮时提示去上方处理待决策 */
@@ -47,6 +65,8 @@ export function RoundsPanel({
   archivingId: string | null;
   onToggleRound: (round: IssueRoundView) => void;
   onArchiveRound: (round: IssueRoundView) => void;
+  /** E-1：打开该轮的回滚对话框；范围表已随本轮展开取到，弹窗零额外取数 */
+  onRollbackRound: (round: IssueRoundView, scope: RollbackScopeView) => void;
 }) {
   if (detail.rounds.length === 0) return null;
 
@@ -66,6 +86,9 @@ export function RoundsPanel({
           const open = expanded[round.round_id] ?? false;
           const state = history[round.round_id];
           const isCurrent = round.round_id === currentRoundId;
+          // 局部常量而非 state.rollback：回调闭包里 TS 的收窄跟不到属性访问，
+          // 否则只能靠一个 `!` 断言把「取到了没有」这件事糊过去
+          const rollbackScope = state?.rollback ?? null;
           return (
             <div key={round.round_id} className="border-b border-panel last:border-b-0">
               {/* 行内两个动作（展开 / 归档）不能嵌套 button，行是布局容器 */}
@@ -118,6 +141,38 @@ export function RoundsPanel({
                   {state?.error && <p className="text-[11.5px] text-salmon">决策取用失败：{state.error}</p>}
                   {state && !state.loading && !state.error && (
                     <>
+                      {/* 交付卡（E-1 挂载点）。回滚是整 change set 的动作，所以它
+                          挂在轮次上而不是某一条决策上；入口仅在服务端报告
+                          available 时出现（§4.6），不给一个注定 409/无事可做的按钮。 */}
+                      <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 rounded-hard border border-line bg-panel-2 px-2.5 py-2">
+                        <span className="font-mono text-[10px] tracking-[0.1em] text-tx3">交付</span>
+                        {rollbackScope === null ? (
+                          <span className="text-[11px] text-tx3">
+                            回滚范围未取到{state.rollbackError ? `：${state.rollbackError}` : ""}
+                          </span>
+                        ) : rollbackScope.available ? (
+                          <>
+                            <span className="text-[11px] text-tx2">
+                              {rollbackScope.repositories.filter((r) => r.action !== "none").length}{" "}
+                              个仓库有已发布候选可撤销
+                              {rollbackScope.recovery_in_progress ? " · 已有恢复计划在执行" : ""}
+                            </span>
+                            <button
+                              className="ml-auto flex-none rounded-hard border border-line px-1.5 font-mono text-[10px] text-tx2 hover:border-amber hover:text-amber-hi"
+                              onClick={() => onRollbackRound(round, rollbackScope)}
+                            >
+                              回滚…
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-[11px] text-tx3">
+                            {rollbackScope.unavailable_reason
+                              ? ROLLBACK_UNAVAILABLE_LABEL[rollbackScope.unavailable_reason]
+                              : "服务端报告本轮无可回滚项，但没有给出原因。"}
+                          </span>
+                        )}
+                      </div>
+
                       {state.pending.length === 0 && state.recorded.length === 0 && (
                         <p className="text-[11.5px] text-tx3">该轮无待决策事项，也无已记录的治理决策。</p>
                       )}
