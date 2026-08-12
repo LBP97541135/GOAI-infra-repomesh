@@ -305,8 +305,10 @@ export interface AgentRuntimeFields {
   uptime_seconds: null;
 }
 
-/** §4.1 单条。`auto_card` **不投影**（发现证据未按 project 存储，v0.1 §6.10），
- *  故仓库卡片没有「证据」一栏可填，页面以一句说明交代而不是每张卡糊一个占位。 */
+/** §4.1 单条。`auto_card`（发现证据）**按仓库已存、本版不渲染**（M-13 勘正：
+ *  数据随 RepositoryProfile 落库有源，端点暂不投影是版本取舍，不是存储缺失）。
+ *  仓库卡片没有证据栏，页面以页脚一句话交代而不是每张卡糊一个占位；渲染已入
+ *  backlog，届时按 AutoCard 全量五字段原样投影。 */
 export interface ConsoleRepositoryView {
   repository_id: string;
   name: string;

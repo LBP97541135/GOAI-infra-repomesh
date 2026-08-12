@@ -13,8 +13,8 @@ import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
  *     有两处无源——issue **标题**不在本端点的响应里（要 join /issues，而 /issues 是
  *     分页的，join 出来的会是部分结果冒充全量），「修复中」是任务态本端点也不给。
  *     芯片改为可点击跳转到该 issue 详情，比一个编出来的标题更有用；
- *   - `auto_card` 契约明写**不投影**（发现证据未按 project 存储），所以没有「证据」
- *     一栏可填——页脚一句话交代，而不是每张卡糊一个「未接入」占位；
+ *   - `auto_card`（发现证据）**按仓库已存、本版不渲染**（M-13 勘正：数据有源，
+ *     端点暂不投影是版本取舍）——页脚一句话交代，而不是每张卡糊一个占位；
  *   - `description` / `topics` / `languages` 是**有源字段**，空就是真的空，
  *     留白即可，不写「未接入」（那是无源字段的措辞，混用会让读者以为数据丢了）。 */
 
@@ -122,7 +122,7 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
 
       <p className="pt-4 text-[11px] text-tx3">
         团队按「issue × 仓库」自动组建（rm-team-*，teamRoom + leaderDM 双房间）。
-        仓库的「发现证据」（auto_card）未按 project 存储，本页不投影 ——
+        仓库的「发现证据」（auto_card）按仓库已存，本版不渲染 ——
         <ProbeNote sourceNote={gridSourceMode() === "live" ? "live · GET /console/repositories（契约 v0.2 §4.1）" : "replay 夹具"} />
       </p>
     </div>
