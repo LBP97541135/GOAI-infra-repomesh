@@ -57,6 +57,19 @@ class PlanSnapshotRecord(Base):
     execution_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     requirement_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     integration_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discovery: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True, default=None
+    )
+    """Contract v0.4 §2: the whole discovery chain for this round.
+
+    One column rather than four because the four steps are four stages of one
+    chain: they are read together and invalidated together (§4.4 — re-running
+    an upstream step voids the downstream ones), and four columns would make
+    that void a four-statement write that can land half-done.
+
+    NULL means the chain was never started, which is not the same as an empty
+    object; ``{}`` would be a chain that ran and produced nothing.
+    """
 
 
 class HandoffDocRecord(Base):
