@@ -57,6 +57,9 @@ stop_pid() {
     # Windows: uv/npm wrap the real server in a child process; kill the tree.
     taskkill //PID "${pid}" //T //F >/dev/null 2>&1 && return 0
   fi
+  # Elsewhere: the recorded pid is `uv run` / `npm run`, and the server it
+  # spawned would outlive it and keep holding the port.
+  command -v pkill >/dev/null 2>&1 && pkill -P "${pid}" >/dev/null 2>&1
   kill "${pid}" >/dev/null 2>&1 || return 1
   for _ in $(seq 1 10); do
     alive "${pid}" || return 0
