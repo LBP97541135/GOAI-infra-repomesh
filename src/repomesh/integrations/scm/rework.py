@@ -1,3 +1,6 @@
+from uuid import UUID
+
+from repomesh.modules.project.contracts import ProjectTopologyReader
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
     CreateCIReworkTaskCommand,
@@ -5,6 +8,8 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskView,
 )
 from repomesh.shared.git import normalize_full_sha
+
+from .recovery import RecoveryExecutionContext
 
 
 class CIReworkTaskCreator:
@@ -32,3 +37,65 @@ class CIReworkTaskCreator:
             ),
             idempotency_key=(f"ci-rework:{command.change_set_id}:{command.repository_id}:{sha}"),
         )
+
+
+class RecoveryConflictTaskCreator:
+    """Hand a revert conflict to the repository's Worker as one durable task.
+
+    A revert the platform cannot produce mechanically is a human-scale repair,
+    not a retry: the Saga parks the action in ``waiting_worker`` and never
+    releases the later rollback actions until this task comes back. The task is
+    keyed on the recovery action, so every replay of that action reuses the same
+    task instead of flooding the Worker.
+    """
+
+    def __init__(self, tasks: TaskAssignmentGateway, topology: ProjectTopologyReader) -> None:
+        self._tasks = tasks
+        self._topology = topology
+
+    async def create_for_conflict(self, context: RecoveryExecutionContext, error: str) -> UUID:
+        change_set = context.change_set
+        action = context.action
+        if action.repository_id is None:
+            raise ValueError("a revert conflict must name the repository that conflicts")
+        view = await self._topology.get_view(change_set.project_id)
+        if view is None:
+            raise ValueError(f"project topology is unavailable: {change_set.project_id}")
+        team = next(
+            (item for item in view.repository_teams if item.repository_id == action.repository_id),
+            None,
+        )
+        if team is None or not team.worker_agent_ids:
+            raise ValueError(
+                f"repository {action.repository_id} has no Worker to resolve a revert conflict"
+            )
+        candidate = next(
+            (
+                item
+                for item in change_set.repositories
+                if item.repository_id == action.repository_id
+            ),
+            None,
+        )
+        task = await self._tasks.assign(
+            AssignTaskCommand(
+                organization_id=change_set.organization_id,
+                project_id=change_set.project_id,
+                repository_id=action.repository_id,
+                assigned_by_agent_id=team.leader_agent_id,
+                assignee_agent_id=team.worker_agent_ids[0],
+                parent_task_id=candidate.task_id if candidate is not None else None,
+                title="Resolve delivery revert conflict",
+                instruction=(
+                    f"Recovery action {action.kind.value} for ChangeSet {change_set.id} "
+                    f"could not roll back repository {action.repository_id} automatically. "
+                    f"Conflict evidence: {error.strip()}"
+                ),
+                acceptance=(
+                    "The revert applies cleanly on top of the delivery base branch.",
+                    "Shared history is not force-reset; the rollback stays a revert commit.",
+                ),
+            ),
+            idempotency_key=f"revert-conflict:{change_set.id}:{action.id}",
+        )
+        return task.id
