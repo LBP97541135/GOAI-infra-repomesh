@@ -858,10 +858,41 @@ export function DiscoveryPanel({
           {/* ── 物化并开工（C-3）───────────────────────────────────────────
               出现条件只看两条**事实**：读模型说整链走完（step 4 且 done），
               且 issue 详情说还没有轮次。不看 integration 是否为空去反推——
-              那就是在前端重写 §3.2 的第 7 条。 */}
+              那就是在前端重写 §3.2 的第 7 条。
+
+              三岔口的**次序**是有讲究的（缺陷 B-12）：先问收据，再问轮次。
+              物化自 7659c89 起可重入，半截跑砸的一轮再调一次就能补完；但那种一轮
+              往往**已经有轮次行**，只看 `roundCount > 0` 就会把它判成「已成交」，
+              于是按钮永远消失、卡住的一轮再没有 GUI 出口——正是本缺陷。
+              `materialization.status` 是服务端对这件事的原话，所以它先说话。
+
+              收据缺席时（收据机制之前的旧轮次，如种子数据）**一律走原逻辑**：不知道
+              就不猜，不拿「没有收据」反推「多半没事」。 */}
           {step === 4 && stepState === "done" && (
             <div className="mt-3 border-t border-line pt-3">
-              {materialize.roundCount > 0 ? (
+              {view.materialization?.status === "failed" ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+                      disabled={anyBusy}
+                      onClick={openMaterialize}
+                    >
+                      重试物化
+                    </button>
+                    {triggerHint(4) && <span className="text-[11px] text-tx3">{triggerHint(4)}</span>}
+                  </div>
+                  {/* 服务端原文 + 原时间戳，不改写不归类（§3.1 诚实条款）。
+                      读模型只给 `status`，「卡在哪、要不要重试」由人看原文决定。 */}
+                  <p className="mt-1.5 text-[11px] leading-[1.7] text-salmon">
+                    上次物化失败（{view.materialization.at}）：{view.materialization.error ?? "服务端未记录原因"}
+                  </p>
+                  <p className="mt-1 text-[11px] leading-[1.7] text-tx3">
+                    重试会<b className="text-tx2">补完这一轮</b>而不是另起一轮：服务端按 §8.3 认领上次留下的
+                    痕迹，已经建好的队与任务不会重复创建。仍要创建什么，确认弹窗里数给你看。
+                  </p>
+                </>
+              ) : materialize.roundCount > 0 ? (
                 <p className="text-[11.5px] text-olive">
                   本 issue 已物化 · 第 {materialize.roundCount} 轮交付已建立。任务与团队见下方「关联仓库 · 团队」
                   与「房间」区块，执行进度在「计划 DAG」上按读模型着色。

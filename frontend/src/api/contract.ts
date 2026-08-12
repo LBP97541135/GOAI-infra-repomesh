@@ -974,6 +974,34 @@ export interface DiscoveryIntegrationCounts {
   contract_count: number;
 }
 
+/** §3.1 `materialization`：§8.3 那张物化收据里**客户端可以看的那几栏**
+ *  （提案 · 待主脑裁决；实现见 `read_models/service.py:_materialization_receipt`）。
+ *
+ *  **为什么要投影它**（缺陷 B-12）：物化自 7659c89 起就是可重入的——半截跑完的一轮
+ *  再调一次就能补完——但收据从不进读投影，于是「跑砸了一半」和「压根没试过」在界面上
+ *  长得一模一样，GUI 也就没有任何诚实的理由把重试入口摆出来。
+ *
+ *  `idempotency_key` / `prefix` / `plan_fingerprint` **不投影**：那是服务端的重放账本，
+ *  发给客户端等于邀请它去伪造一个跟真键撞车的键。成功态那几栏（`task_ids` /
+ *  `team_count` / `repositories` / `skipped_repos`）也不投影——轮次、团队、房间早已各自
+ *  投影过，第二份副本只是多一次自相矛盾的机会。
+ *
+ *  **`error` 是服务端原文，原样渲染**（§3.1 诚实条款）。读模型不给判断，只给 `status`：
+ *  「卡住了没有」由前端按 `status` 一条决定，别处不许再长出第二套判定。 */
+export interface DiscoveryMaterializationReceipt {
+  /** `"failed"` = 上一次物化没跑完，这一轮可以重试补完（§8.3）；
+   *  `"materialized"` = 已成交。**只有这两个取值**，服务端原样透传。 */
+  status: "materialized" | "failed";
+  /** 收据写下的时刻（ISO 8601）。 */
+  at: string;
+  by_agent_id: string;
+  /** 失败原因原文。成功态为 null。 */
+  error: string | null;
+  /** 失败态**恒为 null**——服务端 `_record_failure` 根本不写这一栏（没起来的计划
+   *  没有 id 可指）；成功态为该轮执行计划 id。 */
+  plan_id: string | null;
+}
+
 /** §3.1 `GET /issues/{issue_id}/discovery` 全体。
  *
  *  **issue 存在但从未发起发现 → HTTP 200** 且三块全 null、`step: 1`、
@@ -1002,6 +1030,9 @@ export interface DiscoveryView {
   effective_tiers: DiscoveryEffectiveTier[];
   approval: DiscoveryApprovalBlock;
   integration: DiscoveryIntegrationCounts | null;
+  /** 从未物化过 → **null**（同 `integration` 的缺席口径：键在、值为 null）。
+   *  收据先于轮次存在：失败的那次没有轮次，却正是最需要被看见的那次。 */
+  materialization: DiscoveryMaterializationReceipt | null;
 }
 
 /** §4.5 轮询视图。**进程内记录、重启即丢**（沿 A-2 的诚实注记）：404 不是坏 id。

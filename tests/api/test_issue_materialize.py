@@ -1074,6 +1074,78 @@ def test_a_failed_materialize_does_not_become_a_replayable_receipt(
         assert Exploding.calls == 2
 
 
+def test_the_discovery_read_carries_the_materialization_receipt(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Defect B-12: the receipt the panel needs to know a retry is warranted.
+
+    Materialize has been re-entrant since 7659c89, but §8.3's receipt never
+    reached ``GET …/discovery`` — so a round that half-executed looked, to the
+    GUI, exactly like a round that had never been tried, and the console had no
+    honest reason to offer the retry the server was already prepared to serve.
+
+    Three states in one walk, because it is the *transition* that matters: no
+    receipt before an attempt, a failed one after a refusal, and a materialized
+    one once the retry lands. The failed leg also pins the two things that make
+    the projection honest — the error is the server's own words, verbatim, and
+    the replay bookkeeping stays server-side.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+    starter = StubPlanStarter()
+
+    class Flaky:
+        """Refuses once, then behaves — the half-executed round B-12 is about."""
+
+        calls = 0
+
+        async def start_plan(self, **kwargs):
+            Flaky.calls += 1
+            if Flaky.calls == 1:
+                raise ExecutionPlaneUnavailable("plane went away mid-flight")
+            return await starter.start_plan(**kwargs)
+
+    _with_execution_plane(monkeypatch, Flaky())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        # (1) Never attempted: null, not an empty object posing as an attempt.
+        assert chain.read()["materialization"] is None
+
+        assert _materialize(chain, key="doomed-key").status_code == 503
+
+        # (2) Refused. This is the whole defect: the panel can now see it.
+        receipt = chain.read()["materialization"]
+        assert receipt is not None
+        assert receipt["status"] == "failed"
+        assert receipt["by_agent_id"] == str(leader_id)
+        assert receipt["at"]
+        # Verbatim — the server's words, not a category we invented for them.
+        assert "plane went away mid-flight" in receipt["error"]
+        # Nothing was started, so there is no plan to point at.
+        assert receipt["plan_id"] is None
+        # Replay bookkeeping stays server-side: a client that can read the key
+        # namespace is a client that can collide with it (§8.3).
+        assert set(receipt) == {"status", "at", "by_agent_id", "error", "plan_id"}
+        # And no derived judgment: the reader decides from `status` alone.
+        assert "stuck" not in receipt and "retryable" not in receipt
+
+        # (3) The retry the receipt justifies, under a fresh key as the modal
+        # mints one, finishes the round the refusal half-started.
+        retry = _materialize(chain, key="retry-key")
+        assert retry.status_code == 200, retry.text
+
+        settled = chain.read()["materialization"]
+        assert settled["status"] == "materialized"
+        assert settled["error"] is None
+        assert settled["plan_id"] == retry.json()["plan_id"]
+
+
 def test_a_repository_staffed_by_another_organization_is_a_409_not_a_500(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:

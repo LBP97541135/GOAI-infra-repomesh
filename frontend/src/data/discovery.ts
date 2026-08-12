@@ -3,7 +3,7 @@
  *  形状唯一来源是契约 v0.4 §2.2/§3.1/§4.5，类型在 `api/contract.ts`——本文件只有
  *  数据，不另抄一份字段表（同 data/issueDetail.ts 的分工）。
  *
- *  **为什么夹具要覆盖十种形态**：按「哪些分支会走出不同界面」逐个建，而不是只建一个
+ *  **为什么夹具要覆盖十三种形态**：按「哪些分支会走出不同界面」逐个建，而不是只建一个
  *  好看的成功态——只测成功态等于没测。失败态、回退评分、证据漂移这些分支，正是出事
  *  时才会被看到的那几屏。
  *
@@ -219,9 +219,40 @@ const base = {
   effective_tiers: [],
   approval: APPROVAL_NONE,
   integration: null,
+  // 从未物化 → null（不填空对象冒充「试过但没结果」，同三块的口径）
+  materialization: null,
 } satisfies Omit<DiscoveryView, "step" | "step_state">;
 
-/** 十种形态。名字即 `?discovery=<name>` 的取值。 */
+/** 整链走完的那一份。提到外面单独命名，是因为 B-12 的两份物化形态都以它为底：
+ *  三者的 `step`/`step_state`/`integration` **必须逐字相同**，差别只能在
+ *  `materialization` 一栏——那正是缺陷要证明的事（收据缺席时这几屏无从分辨）。
+ *  就地各抄一份，抄歪一个字这条对照就散了。 */
+const DONE: DiscoveryView = {
+  ...base,
+  step: 4,
+  step_state: "done",
+  analyzed_requirement: ANALYSIS_SUFFICIENT.analyzed_requirement,
+  analysis: ANALYSIS_SUFFICIENT,
+  candidates: CANDIDATES_LLM,
+  classification: {
+    ...CLASSIFICATION,
+    adjustments: [
+      { repository: "saleor-docs", from: "EXCLUDED", to: "REQUIRED", by_agent_id: LEADER, at: AT },
+    ],
+  },
+  classification_evidence_version: EVIDENCE,
+  effective_tiers: TIERS_ADJUSTED,
+  approval: {
+    state: "approved",
+    evidence_version: EVIDENCE,
+    decided_by_agent_id: LEADER,
+    reason: "范围认可；saleor-docs 提为必需，价格原因的运营文档同批改。",
+    decided_at: AT,
+  },
+  integration: { task_dag_count: 6, batch_count: 3, contract_count: 2 },
+};
+
+/** 十三种形态。名字即 `?discovery=<name>` 的取值。 */
 export const discoveryFixtures: Record<string, DiscoveryView> = {
   /** §3.2 规则 1：从未发起 → step 1 / idle，三块全 null（200 而非 404） */
   empty: { ...base, step: 1, step_state: "idle" },
@@ -365,29 +396,37 @@ export const discoveryFixtures: Record<string, DiscoveryView> = {
   },
 
   /** §3.2 规则 7：整链走完 → step 4 / done，集成计数非空 */
-  done: {
-    ...base,
-    step: 4,
-    step_state: "done",
-    analyzed_requirement: ANALYSIS_SUFFICIENT.analyzed_requirement,
-    analysis: ANALYSIS_SUFFICIENT,
-    candidates: CANDIDATES_LLM,
-    classification: {
-      ...CLASSIFICATION,
-      adjustments: [
-        { repository: "saleor-docs", from: "EXCLUDED", to: "REQUIRED", by_agent_id: LEADER, at: AT },
-      ],
+  done: DONE,
+
+  /** 缺陷 B-12 的那一屏：整链走完、物化跑砸了一半（§8.3 的失败收据）。
+   *
+   *  这是**收据缺席时看不出来**的形态——`step`/`step_state`/`integration` 与 `done`
+   *  一模一样，轮次行也可能已经在了，只有 `materialization.status` 说出了实话。
+   *  面板据此把「重试物化」摆回来；`error` 原样显，`plan_id` 为 null 因为没起来的
+   *  计划没有 id 可指。 */
+  materialize_failed: {
+    ...DONE,
+    materialization: {
+      status: "failed",
+      at: "2026-08-12T03:41:22Z",
+      by_agent_id: LEADER,
+      error:
+        "AgentTeams HTTP 503: controller is not ready — no rooms for this project's teams",
+      plan_id: null,
     },
-    classification_evidence_version: EVIDENCE,
-    effective_tiers: TIERS_ADJUSTED,
-    approval: {
-      state: "approved",
-      evidence_version: EVIDENCE,
-      decided_by_agent_id: LEADER,
-      reason: "范围认可；saleor-docs 提为必需，价格原因的运营文档同批改。",
-      decided_at: AT,
+  },
+
+  /** 成交态的收据。界面与 `done` 无异（已物化留痕由轮次数说话），留这份是为了
+   *  把「收据在、且是成功的」这条分支也钉住：它**不该**长出重试入口。 */
+  materialized: {
+    ...DONE,
+    materialization: {
+      status: "materialized",
+      at: "2026-08-12T03:41:22Z",
+      by_agent_id: LEADER,
+      error: null,
+      plan_id: "d4e5f6a7-0001-4b2c-8d3e-5f6a7b8c9d01",
     },
-    integration: { task_dag_count: 6, batch_count: 3, contract_count: 2 },
   },
 };
 

@@ -349,6 +349,62 @@ first」（`api/read_models/sources.py:69-71`）。若发现中间态各占一�
 `step: 1`、`step_state: "idle"`（**不是 404**；沿用 v0.2 §7.2「未建团的 issue 返 200 空集」
 的同一口径）。issue 本身不存在（无任何快照）→ 404。
 
+#### 3.1.1 `materialization`：把 §8.3 的物化收据投影出来（**提案 · 待主脑裁决**，B-12）
+
+> 提案，未生效。实现在分支 `feat/retry-materialize-entry`，等主脑裁决后随合并生效。
+> 本节只动 §3.1 的响应形状，不动 §8 任何一节的语义。
+
+核实事实（B-12）：物化自 `7659c89` 起是**可重入**的——一轮跑到一半（计划起了、任务或
+房间没齐）再调一次 materialize 就能补完，同键异键皆可（§8.3）。收据也确实按 §8.3 落进了
+草稿的 `discovery.materialization`。**但 `GET …/discovery` 从不投影它**：实测该端点顶层只有
+`issue_id / plan_version / step / step_state / running_task_id / requirement_text /
+analyzed_requirement / analysis / candidates / classification /
+classification_evidence_version / effective_tiers / approval / integration`，没有
+`materialization`。
+
+后果是「跑砸了一半的一轮」与「压根没试过」在读模型里**长得完全一样**——`step` / `step_state`
+/ `integration` 三者逐字相同。GUI 于是只能拿轮次数去猜，而失败的那一轮往往**已经有轮次行**，
+就被判成「已物化」，物化入口从此消失。服务端早已准备好受理的重试，界面上没有任何入口。
+按本项目验收口径（**GUI 走不通即缺陷**），这是缺陷而非待办。
+
+响应新增一栏（`approval` 之后、与 `integration` 并列）：
+
+```json
+{ "materialization": { "status": "materialized|failed",
+                       "at": "iso8601",
+                       "by_agent_id": "uuid",
+                       "error": "string|null",
+                       "plan_id": "uuid|null" } }
+```
+
+**缺席口径**：从未物化过 → `"materialization": null`（**键在、值为 null**，与 `integration`
+同一写法）。不填空对象冒充「试过但没结果」，沿 §3.1 诚实条款。
+
+**只投影五栏，其余一律不投影**，理由分两类：
+
+| 不投影的字段 | 理由 |
+| --- | --- |
+| `idempotency_key` / `prefix` / `plan_fingerprint` | §8.3 的**重放账本**，服务端独占。发给客户端等于邀请它伪造一个与真键撞车的键，而 §8.3 的全部保证都建立在服务端独占这个命名空间上 |
+| `task_ids` / `team_count` / `repositories` / `skipped_repos` | 轮次、团队、房间**各自已经投影过**（§5.1、§3.3）。第二份副本只是多一次自相矛盾的机会 |
+
+**`error` 原文照登，不摘要不归类**（§3.1 诚实条款在物化场景的延伸）。
+
+**读模型不给判断，只给 `status`。** 不投影 `stuck` / `retryable` 之类的派生栏——那是把
+「要不要重试」的判断从人手里拿走，塞进一个消费方无法复核的布尔里。前端只按 `status` 一条
+分支，`error` 原样摆给人看。红线延续：读模型载事实、载服务端原话，不造派生的区分。
+
+**消费方约束（随实现验收）**：
+
+- `status === "failed"` → 必须重新给出物化入口（措辞如「重试物化」），**并同屏显 `error` 原文
+  与 `at`**，如实归因为「上次物化失败」。点它走的必须是**首次物化那同一个确认弹窗**（弹窗按
+  §8.3 自行取新幂等键，服务端重放机制负责其余），不得另起一条平行路径；
+- `status === "materialized"` → 维持既有「已物化」留痕，不变；
+- **`materialization` 为 null 但已有轮次**（收据机制之前的旧轮次，如种子数据）→ **维持既有
+  留痕不变，不得猜测**。「没有收据」不等于「多半没事」。
+
+落点：`api/read_models/service.py` 的 `discovery()`（该端点返回裸 `dict`，无 pydantic 响应
+模型，故本次新增不涉及模型类）。
+
 ### 3.2 步进器「走到哪」的判定（唯一实现在读模型）
 
 GUI 步进器（1..4）与管线步（Step 0..4）的映射，本契约以**管线编号**描述行为、
