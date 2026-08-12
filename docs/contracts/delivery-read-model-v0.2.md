@@ -442,11 +442,35 @@ specification，优先 `FROZEN`，其次 `APPROVED`，同级取最新 `revision`
 （前端显「本仓无独立 spec，适用项目工程契约」）。`ENGINEERING` kind 是项目级，走
 `engineering_contract`，不混入 `spec`。
 
-**节点与边的降级不对称（2026-08-11 补记）**：§7.2 只裁决了「无法解析的依赖名丢弃该边」。
-节点侧规则不同——`execution_batches` 存的是仓库**名**，catalog 解析不到时**节点保留、
-`repository_id` 为 `null`**（丢掉节点会让批次缺项，布局就错了）。消费方据此不得拿
-`nodes[].repository_id` 当列表 key 或跳转参数。**已知缺口**：节点侧目前不像边那样记
-warning，「N 个节点无法解析」不留痕，与 §7.2「不静默截断」的口径不齐，见 §6.1。
+**节点与边的降级不对称（2026-08-11 补记；2026-08-12 勘正）**：§7.2 只裁决了「无法解析的
+依赖名丢弃该边」。节点侧规则不同——`execution_batches` 存的是仓库**名**，catalog 解析不到
+时**节点保留、`repository_id` 为 `null`**（丢掉节点会让批次缺项，布局就错了）。消费方据此
+不得拿 `nodes[].repository_id` 当列表 key 或跳转参数。
+
+**2026-08-12 勘正（v0.4 附录 A）**：本段原写「**已知缺口**：节点侧目前不像边那样记
+warning」——**该描述当时即已不实**，节点侧的 warning 早已落地（`service.py:1288`，含条数与
+全部名字，与边侧同口径）。§6.1 对应条目同批标为已闭环，两处同批改，不再重演「同一事实两节
+只改一节」。
+
+**边被丢弃有两个原因，不是一个**（本次核实补写，契约此前从未记载第二条）：
+1. 端点名 catalog 解析不到 → 丢弃（§7.2 记录的那条）；
+2. **端点不在任何批次里** → 丢弃。节点来自 `execution_batches`、边来自 `task_dag`，两者
+   本无约束使其一致，画一条通向空白处的线比少一条线更糟。
+
+两条的处置路径不同：(1) 要补 catalog 行，(2) 指向规划产物自身不自洽。
+
+**自述计数（v0.4 附录 A.1，加法向后兼容）**：`dag` 块增三个计数，供消费方如实告知用户
+「这张图可能不完整」——日志是给运维看的，而看图的人看不到日志：
+
+```json
+{ "dag": { "...": "...",
+  "unresolved_node_count": 1,          // 名字在 catalog 里查不到的节点数（节点仍在图上）
+  "dropped_edge_unresolved_count": 2,  // 因端点名解析不到而丢弃的边数（原因 1）
+  "dropped_edge_off_batch_count": 1 }} // 因端点不在任何批次里而丢弃的边数（原因 2）
+```
+
+分两个边计数而非合一：合成一个数，用户仍然答不出「为什么少了边」。
+`unresolved_node_count` **不可**由 `nodes` 长度推出——无法解析的节点仍留在图上。
 
 ### 5.5 DAG 显式依赖边确认（**主脑点名问询项，结论：部分可得**）
 
@@ -504,7 +528,7 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 探测并发上限 | `asyncio.gather` 扇出无上限，httpx 默认 `max_connections=100`，超出后连接池排队时间**计入每条自己的超时预算** → 规模上去后健康 controller 也可能被判 `reachable: false`（§4.4） | 加 `Semaphore` 限流或显式配 `httpx.Limits`；超时值提到 settings |
 | 运行时降级可观测性 | 探测失败一律 `{"reachable": false}` + 无细节 warning，**token 配错 / controller 宕机 / 适配器自身 bug 三者同形**，HTTP 200 之下无告警信号（§4.4） | 日志带 `exc_info` 与 status_code，按 kind 聚合 degraded 计数 |
 | 404 与未配置不可分辨 | 两者都返 `runtime: null`，运维含义不同却渲染成同一个「未接入」（§4.4） | 给 404 一个可辨识取值，如 `{"reachable": false, "present": false}` |
-| DAG 节点丢失不留痕 | 边有「丢弃 + warning」，节点只是 `repository_id: null` 且不记日志（§5.4） | 节点侧补 warning，与 §7.2 口径对齐 |
+| ~~DAG 节点丢失不留痕~~ **已闭环（2026-08-12 勘误）** | 本行起草时即已过期：节点侧 warning 早已落地（`api/read_models/service.py:1288`，含条数与全部名字，与边侧同口径）。v0.4 附录 A.1 之后更进一步——`unresolved_node_count` 等三个自述计数进了响应体，看图的人不必读日志（§5.4） | 无需补齐；§5.4 正文同批勘正 |
 
 ## 7. 裁决记录（2026-08-11，八项全部裁决 · 生效）
 
@@ -546,7 +570,7 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 种子扩展 | 拓扑 + 双房间 + 4 仓库 leader/worker 注册 + A 两仓单仓 spec（frozen rev3 / approved rev2）；消息由占位房间迁入所属 teamRoom。**幂等，只动 5533** | 见 `scripts/seed-console-demo.py` |
 | 名称解析恢复 | 补注册 principals 后 `members[].name`、v0.1 `messages[].sender_name`、`tasks[].agent` 不再恒 null（值仍是 agent 资源名） | §5.1、v0.1 §4.2 |
 | live 锚点 | 派生自 in_progress 任务。**场景 C 的返工任务处于 in_progress，故 `!rm-team-c-billing` 与 `!rm-leader-c-billing` 实测 `live: true`**；A/B 任务全终态故 false。两个房间同属一仓，所以一仓在途时该仓两个房间都 live——这是 §5.3 原文「该房间所属仓库存在 in_progress 任务」的直接结果，不是 bug | §5.3 |
-| 丢弃边留痕 | §5.4 丢弃无法解析的依赖名时**记 warning 日志**（含丢弃条数与 issue/仓库），不静默截断。选日志而非响应字段是因为 plan 端点形状已对前端冻结；如需自述字段再加 | §5.4 |
+| 丢弃边留痕 | §5.4 丢弃无法解析的依赖名时**记 warning 日志**（含丢弃条数与 issue/仓库），不静默截断。选日志而非响应字段是因为 plan 端点形状已对前端冻结；如需自述字段再加。**2026-08-12：这个口子已经用了**——C-2 的 DAG 面板落地后，消费方自己声明「可能在画一张不完整的图」却无字段告知用户，故 §5.4 增三个自述计数（v0.4 附录 A.1），并同批补记边被丢弃的**第二个原因**（端点不在任何批次里） | §5.4 |
 
 ### 7.3 CONS-44 消费期勘误（2026-08-11，主脑允诺后同批入文本）
 

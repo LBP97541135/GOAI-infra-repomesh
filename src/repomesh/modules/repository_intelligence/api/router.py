@@ -506,16 +506,34 @@ def _confirmation_summary_to_view(
 async def confirm_repositories(
     body: ConfirmationRequest, request: Request
 ) -> ConfirmationSummaryView:
-    """Phase 2: Team Managers confirm involvement and produce plans."""
+    """Phase 2: Team Managers confirm involvement and produce plans.
+
+    Two refusals corrected here to match ``/requirement-analysis`` and the
+    discovery chain (contract v0.4 Q12/Q13). Both used to reach the caller as
+    500s: an unconfigured LLM blew up inside ``chat()``, and a candidate list
+    with nothing in the catalog escaped as a bare ``ValueError``. Neither is a
+    server fault — one is a deployment that has no model, the other is a
+    request naming repositories nobody registered — and reporting them as
+    crashes sent people looking for a bug instead of at their configuration or
+    their request.
+    """
     container = request.app.state.container
     llm = container.llm_client
+    if llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured — repository confirmation unavailable",
+        )
 
     service = await container.confirmation_service(llm)
     profiles = service._profiles  # noqa: SLF001
 
     candidate_repos = [r for r in body.candidate_repos if r in profiles]
     if not candidate_repos:
-        raise ValueError("No valid candidate repositories found in catalog")
+        raise HTTPException(
+            status_code=422,
+            detail="No valid candidate repositories found in catalog",
+        )
 
     evidence = {}
     for repo, val in body.discovery_evidence.items():
@@ -565,9 +583,18 @@ def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
 
 @router.post("/integration", response_model=IntegratedPlanView, dependencies=[ACTION_TOKEN])
 async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
-    """Phase 3: Leader integrates per-repo plans into a project-level plan."""
+    """Phase 3: Leader integrates per-repo plans into a project-level plan.
+
+    503 rather than a 500 from inside ``chat()`` when no model is configured
+    (v0.4 Q12), matching ``/requirement-analysis``.
+    """
     container = request.app.state.container
     llm = container.llm_client
+    if llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured — plan integration unavailable",
+        )
 
     summary = _summary_from_view(body.confirmation)
 

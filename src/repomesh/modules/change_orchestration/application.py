@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -93,6 +94,24 @@ def _truncate(text: str, limit: int = 60) -> str:
 
     text = text.strip()
     return text[:limit] + "…" if len(text) > limit else text
+
+
+def _jsonable(item: object) -> dict:
+    """Serialise one plan element for the snapshot's JSON columns.
+
+    ``ContractSpec`` and ``TaskNode`` are frozen slotted dataclasses with no
+    ``to_dict`` — the previous ``dict(item)`` fallback raised ``TypeError`` on
+    every one of them, and the enclosing ``except Exception`` turned that into
+    a log line, so materialize wrote no snapshot at all while reporting
+    success. ``asdict`` is the conversion those dataclasses actually support.
+    """
+
+    to_dict = getattr(item, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if is_dataclass(item) and not isinstance(item, type):
+        return asdict(item)
+    return dict(item)  # type: ignore[call-overload]
 
 
 # ---------------------------------------------------------------------------
@@ -297,32 +316,79 @@ class PlanExecutionBridge:
         span.set_attribute("repomesh.materialize.task_count", len(tasks_created))
         span.set_attribute("repomesh.materialize.skipped_repos", list(skipped))
 
-        # --- 5. Save plan snapshot (if store configured) ---------------------
+        # --- 5. Record the plan snapshot (if store configured) ---------------
+        #
+        # Contract v0.4 §2.4 / Q3 case (b): when the round already has a draft
+        # snapshot — which it does whenever the issue was created through the
+        # console, and whenever the discovery chain ran — materialize fills
+        # that row in and consumes it rather than writing a second one.
+        #
+        # The alternative was to keep writing a fresh version here. That works,
+        # but it makes every console round cost two versions (draft v1 holding
+        # the discovery archive, execution v2 holding the plan) and pushes
+        # `rounds[].plan_version` to start at 2, with the round's own discovery
+        # evidence sitting on a different row from the plan it produced.
+        # Reusing the draft keeps v1 meaning "the first round" and keeps the
+        # archive and the plan on one row.
+        #
+        # The script path is untouched: with no draft — nothing created the
+        # issue through intake — this still allocates the next version and
+        # inserts, which is what a replan-style second materialize does too.
         plan_version: int | None = None
         if self._snapshots is not None:
             try:
-                plan_version = await self._snapshots.next_version(project_id)
-                await self._snapshots.save(
-                    project_id=project_id,
-                    plan_version=plan_version,
-                    engineering_spec=plan.engineering_spec or requirement,
-                    contracts=[
-                        c.to_dict() if hasattr(c, "to_dict") else dict(c)
-                        for c in plan.contracts
-                    ],
-                    task_dag=[
-                        t.to_dict() if hasattr(t, "to_dict") else dict(t)
-                        for t in plan.task_dag
-                    ],
-                    execution_batches=[list(b) for b in plan.execution_batches],
-                    graph_edges=[],
-                    created_by_agent_id=leader_agent_id,
-                    execution_plan_id=plan_id,
-                    requirement_text=requirement,
-                    integration_method="llm_only",
-                )
+                # Inside the try, deliberately: a snapshot problem must not
+                # undo tasks that have already been created. That leniency is
+                # also what hid the serialisation bug for the life of this
+                # feature, so the guard against it is a test that asserts a row
+                # was written, not a narrower except here.
+                contracts_payload = [_jsonable(c) for c in plan.contracts]
+                task_dag_payload = [_jsonable(t) for t in plan.task_dag]
+                batches_payload = [list(b) for b in plan.execution_batches]
+                draft = await self._snapshots.current_draft(project_id)
+                if draft is not None:
+                    plan_version = draft.plan_version
+                    await self._snapshots.set_integration(
+                        draft.id,
+                        engineering_spec=plan.engineering_spec or requirement,
+                        contracts=contracts_payload,
+                        task_dag=task_dag_payload,
+                        execution_batches=batches_payload,
+                        integration_method="llm_only",
+                    )
+                    if plan_id is not None:
+                        # Only an actual execution plan consumes the draft. With
+                        # nothing schedulable the row stays open, because a
+                        # snapshot that claims to have been executed when no
+                        # plan started is the dishonesty this column exists to
+                        # avoid.
+                        await self._snapshots.link_execution_plan(draft.id, plan_id)
+                else:
+                    plan_version = await self._snapshots.next_version(project_id)
+                    await self._snapshots.save(
+                        project_id=project_id,
+                        plan_version=plan_version,
+                        engineering_spec=plan.engineering_spec or requirement,
+                        contracts=contracts_payload,
+                        task_dag=task_dag_payload,
+                        execution_batches=batches_payload,
+                        graph_edges=[],
+                        created_by_agent_id=leader_agent_id,
+                        execution_plan_id=plan_id,
+                        requirement_text=requirement,
+                        integration_method="llm_only",
+                    )
             except Exception:
-                _logger.warning("Failed to save plan snapshot", exc_info=True)
+                # Loud about which project lost its snapshot: the previous
+                # message named neither the project nor the round, so the one
+                # line this bug ever produced was indistinguishable from noise.
+                _logger.warning(
+                    "Failed to record the plan snapshot for project %s (v%s); "
+                    "the plan executed but the DAG panel has nothing to read",
+                    project_id,
+                    plan_version,
+                    exc_info=True,
+                )
 
         # --- 5b. Generate handoff documents (if store configured) ------------
         # One PENDING document per repository so the repository owner can

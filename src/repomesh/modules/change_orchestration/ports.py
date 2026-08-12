@@ -34,8 +34,37 @@ class ExecutionPlanStarter(Protocol):
     ) -> StartedExecutionPlan: ...
 
 
+class PlanSnapshotDraft(Protocol):
+    """The unconsumed snapshot a round is being assembled on."""
+
+    @property
+    def id(self) -> UUID: ...
+
+    @property
+    def plan_version(self) -> int: ...
+
+
 class PlanSnapshotWriter(Protocol):
     async def next_version(self, project_id: UUID) -> int: ...
+
+    async def current_draft(self, project_id: UUID) -> PlanSnapshotDraft | None:
+        """The round's own snapshot, when one is already open (v0.4 §2.4)."""
+        ...
+
+    async def set_integration(
+        self,
+        snapshot_id: UUID,
+        *,
+        engineering_spec: str,
+        contracts: list[dict],
+        task_dag: list[dict],
+        execution_batches: list[list[str]],
+        integration_method: str | None = ...,
+    ) -> None: ...
+
+    async def link_execution_plan(
+        self, snapshot_id: UUID, execution_plan_id: UUID
+    ) -> None: ...
 
     async def save(
         self,

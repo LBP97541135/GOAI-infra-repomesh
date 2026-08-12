@@ -35,6 +35,26 @@ class PlanSnapshotData:
     task_dag: tuple[dict, ...]
     execution_plan_id: UUID | None
     created_by_agent_id: UUID | None = None
+    contracts: tuple[dict, ...] = ()
+    discovery: dict | None = None
+    """Contract v0.4 §2: the round's discovery chain, or None if it never ran.
+
+    None and ``{}`` are different answers — "never started" versus "started and
+    holds nothing" — and §3.1 projects them differently, so this must not be
+    defaulted to an empty dict for convenience.
+    """
+
+
+class DiscoveryTaskProbe(Protocol):
+    """Whether a discovery step is in flight right now (v0.4 §3.1).
+
+    Task records live in the writing module's process memory, and the read
+    model does not reach into other modules' internals — the composition root
+    supplies this the same way it supplies the AgentTeams runtime probe.
+    Returns ``(task_id, gui_step)`` or None.
+    """
+
+    def running(self, issue_id: UUID) -> tuple[UUID, int] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
