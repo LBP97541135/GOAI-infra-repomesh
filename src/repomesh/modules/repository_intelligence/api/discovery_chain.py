@@ -56,6 +56,7 @@ from repomesh.modules.repository_intelligence.contracts import (
     DiscoveryApprovalCommand,
     DiscoveryStepCommand,
 )
+from repomesh.modules.repository_intelligence.ports import RuntimeProjectionUnavailable
 from repomesh.shared.workflow import WorkflowBlocked
 
 from .models import (
@@ -487,6 +488,19 @@ async def materialize_discovery_plan(
         # caller may simply retry once the plane is configured — same reading
         # as `POST /bridge/materialize` gives it.
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except RuntimeProjectionUnavailable as error:
+        # The runtime projection could not give the teams their rooms, so the
+        # plan was never started. Read it exactly as the 503 above: the round
+        # is still open and the same key will finish it once the controller
+        # answers. Saying it here beats letting the round start and die on its
+        # first dispatch, which is what defect B-11 actually looked like.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"the execution plane has no rooms for this project's teams ({error}); "
+                "nothing was started — materialize again once AgentTeams answers"
+            ),
+        ) from error
     except Exception as error:
         raise _translate(error) from error
 

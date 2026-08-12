@@ -61,6 +61,7 @@ from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store
 from repomesh.modules.repository_intelligence.ports import (
     PlanMaterializer,
     RepositoryCatalog,
+    TopologyRuntimeProjector,
 )
 
 _logger = logging.getLogger(__name__)
@@ -167,6 +168,7 @@ class DiscoveryMaterializationService:
         topologies: ProjectTopologyReader,
         provisioner: ProjectTopologyProvisioner,
         materializer: PlanMaterializer,
+        runtime: TopologyRuntimeProjector,
     ) -> None:
         self._snapshots = snapshots
         self._directory = directory
@@ -174,6 +176,7 @@ class DiscoveryMaterializationService:
         self._topologies = topologies
         self._provisioner = provisioner
         self._materializer = materializer
+        self._runtime = runtime
 
     async def materialize(
         self, command: MaterializeIssueCommand
@@ -211,6 +214,20 @@ class DiscoveryMaterializationService:
             prefix=prefix,
         )
 
+        # The rooms, before the round. A topology is rows; the Matrix rooms its
+        # teams are dispatched over are the controller's, and nothing on this
+        # path used to ask for them — so every console round started with
+        # `room_id` NULL and died on its first dispatch (defect B-11). Placed
+        # here rather than inside `_ensure_topology` on purpose: a project that
+        # already has a topology skips that repair and still needs this, and a
+        # topology made by an earlier round whose runtime has since been rebuilt
+        # needs it again.
+        try:
+            await self._runtime.project(draft.project_id)
+        except Exception as error:
+            await self._record_failure(draft, block, command, prefix, fingerprint, error)
+            raise
+
         try:
             result = await self._materializer.materialize(
                 plan=plan,
@@ -220,21 +237,7 @@ class DiscoveryMaterializationService:
                 idempotency_prefix=prefix,
             )
         except Exception as error:
-            # Recorded, then surfaced — the same bargain the four steps make.
-            # The receipt is deliberately left incomplete so the same key can
-            # be retried once the operator has cleared whatever blocked it.
-            # `prefix` and `plan_fingerprint` are what let a retry under a
-            # *different* key land on the same rows; see `_prefix`.
-            block["materialization"] = {
-                "idempotency_key": command.idempotency_key,
-                "prefix": prefix,
-                "plan_fingerprint": fingerprint,
-                "status": "failed",
-                "by_agent_id": str(command.created_by_agent_id),
-                "at": _now(),
-                "error": str(error)[:500] or error.__class__.__name__,
-            }
-            await self._snapshots.set_discovery(draft.id, block)
+            await self._record_failure(draft, block, command, prefix, fingerprint, error)
             raise
 
         outcome = IssueMaterialization(
@@ -264,6 +267,43 @@ class DiscoveryMaterializationService:
             command.issue_id, outcome.plan_id, len(outcome.task_ids), outcome.team_count,
         )
         return outcome
+
+    # ------------------------------------------------------------ failures
+
+    async def _record_failure(
+        self,
+        draft: Any,
+        block: dict[str, Any],
+        command: MaterializeIssueCommand,
+        prefix: str,
+        fingerprint: str,
+        error: Exception,
+    ) -> None:
+        """Recorded, then surfaced — the same bargain the four steps make.
+
+        The receipt is deliberately left incomplete so the same key can be
+        retried once the operator has cleared whatever blocked it. ``prefix``
+        and ``plan_fingerprint`` are what let a retry under a *different* key
+        land on the same rows; see :meth:`_prefix`.
+
+        Both failing stages write the same receipt, and that is safe for the
+        runtime one for a reason worth naming: nothing the projection does is
+        keyed on ``prefix`` (its controller keys are per agent and per team,
+        the reconcile's are per repository), so lending the prefix to a later
+        key costs nothing there and still buys the materializer what it was
+        introduced for.
+        """
+
+        block["materialization"] = {
+            "idempotency_key": command.idempotency_key,
+            "prefix": prefix,
+            "plan_fingerprint": fingerprint,
+            "status": "failed",
+            "by_agent_id": str(command.created_by_agent_id),
+            "at": _now(),
+            "error": str(error)[:500] or error.__class__.__name__,
+        }
+        await self._snapshots.set_discovery(draft.id, block)
 
     # ------------------------------------------------------------- replay
 
