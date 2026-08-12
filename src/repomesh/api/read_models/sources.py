@@ -172,6 +172,8 @@ class RepositoryProfileData:
     profiled_at: datetime
     test_commands: tuple[str, ...] = ()
     """Defect A-19: the verification commands every round over this repo inherits."""
+    test_paths: tuple[str, ...] = ()
+    """Defect A-21: where those commands read from; added to a task's allowed paths."""
 
 
 @dataclass(frozen=True, slots=True)

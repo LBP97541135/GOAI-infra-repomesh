@@ -34,10 +34,18 @@ class RepositoryCatalogStub:
     production read a field the double never had.
     """
 
-    def __init__(self, repository_id, url: str, *, test_commands: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        repository_id,
+        url: str,
+        *,
+        test_commands: tuple[str, ...] = (),
+        test_paths: tuple[str, ...] = (),
+    ) -> None:
         self.repository_id = repository_id
         self.url = url
         self.test_commands = test_commands
+        self.test_paths = test_paths
 
     async def get(self, repository_id):
         if repository_id != self.repository_id:
@@ -47,6 +55,7 @@ class RepositoryCatalogStub:
             name="pricing",
             url=self.url,
             test_commands=self.test_commands,
+            test_paths=self.test_paths,
         )
 
 
@@ -114,8 +123,11 @@ async def test_worker_dispatch_builds_mounts_and_enqueues(tmp_path: Path) -> Non
 async def _dispatch(
     tmp_path: Path,
     *,
-    spec_tests: tuple[str, ...],
-    catalog_tests: tuple[str, ...],
+    spec_tests: tuple[str, ...] = (),
+    catalog_tests: tuple[str, ...] = (),
+    spec_paths: tuple[str, ...] | None = None,
+    grant_paths: tuple[str, ...] | None = None,
+    catalog_paths: tuple[str, ...] = (),
 ):
     """Run one real dispatch, stubbing only what talks to the world.
 
@@ -128,6 +140,10 @@ async def _dispatch(
     projection, package, capabilities = scenario(tmp_path)
     package = replace(package, test_commands=spec_tests)
     grant = projection.context_grant
+    if spec_paths is not None:
+        package = replace(package, allowed_paths=spec_paths)
+    if grant_paths is not None:
+        grant = replace(grant, allowed_paths=grant_paths)
     gateway = GatewayStub()
     dispatcher = DispatchWorkerTask(
         ReturningService(package),
@@ -137,6 +153,7 @@ async def _dispatch(
             package.repository_id,
             projection.repository_url,
             test_commands=catalog_tests,
+            test_paths=catalog_paths,
         ),
         WorkspaceStub(tmp_path),
         RunnerContextMaterializer(Path.cwd()),
@@ -198,3 +215,54 @@ async def test_a_dispatch_whose_repository_declares_nothing_stays_empty(
     task = await _dispatch(tmp_path, spec_tests=(), catalog_tests=())
 
     assert task.test_commands == ()
+
+
+@pytest.mark.asyncio
+async def test_a_pre_fix_round_redispatches_with_its_test_directory_permitted(
+    tmp_path: Path,
+) -> None:
+    """Defect A-21, in the shape a re-dispatch of the failed round actually has.
+
+    The Specification of a round materialized before this fix carries only the
+    Worker's responsibility paths — ``src/checkout/**`` — and re-dispatch
+    rebuilds the package from that same stored row, so the narrow permit comes
+    back however many times the operator presses the button. Live, the run that
+    followed died on ``changed_path_denied: tests/test_discount.py`` with a null
+    commitSha: the agent had written the test exactly where its own verification
+    command discovers from.
+
+    Driven through the real ``DispatchWorkerTask`` because the fix is only
+    worth anything if the dispatcher hands the catalog's answer over, and
+    because the projector validates the widened list against the grant — the
+    half a projector-level test cannot see.
+    """
+
+    task = await _dispatch(
+        tmp_path,
+        spec_paths=("src/checkout/**",),
+        grant_paths=("src/checkout/**", "tests/**"),
+        catalog_paths=("tests/**",),
+    )
+
+    assert task.permissions.allowed_paths == ("src/checkout/**", "tests/**")
+
+
+@pytest.mark.asyncio
+async def test_a_repository_with_no_declared_test_paths_dispatches_unchanged(
+    tmp_path: Path,
+) -> None:
+    """The honest half, through the same real path.
+
+    Without it the rescue above passes just as well against a fallback that
+    invented ``tests/**`` for everyone, and "the catalog said so" would stop
+    being a checkable claim about a permission grant.
+    """
+
+    task = await _dispatch(
+        tmp_path,
+        spec_paths=("src/checkout/**",),
+        grant_paths=("src/checkout/**", "tests/**"),
+    )
+
+    assert task.permissions.allowed_paths == ("src/checkout/**",)
+

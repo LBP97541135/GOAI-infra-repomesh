@@ -398,6 +398,15 @@ def test_the_console_round_carries_its_repositories_verification_commands(
         "Implement changes for ts-notify": ("python scripts/run_tests.py",),
         "Implement changes for ts-order": (),
     }
+    # Defect A-21: and where the command reads from, so the permit downstream
+    # can let the agent write the test the command will look for.
+    by_paths = {
+        planned.title: planned.test_paths for batch in batches for planned in batch
+    }
+    assert by_paths == {
+        "Implement changes for ts-notify": ("tests/**",),
+        "Implement changes for ts-order": (),
+    }
 
 
 def test_a_plan_that_states_its_own_tests_is_not_overwritten_by_the_catalog(

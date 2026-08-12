@@ -35,6 +35,13 @@ class RunnerTaskProjectionRequest:
     workspace_path: Path
     base_sha: str
     context_manifest_uri: str
+    catalog_test_paths: tuple[str, ...] = ()
+    """Where the catalog says this repository keeps the files its tests read.
+
+    Unioned into the payload's allowed paths, never substituted for them — see
+    :meth:`RunnerTaskProjector.project`. Resolved by the caller for the same
+    reason as ``catalog_test_commands``: this projector does no I/O.
+    """
     catalog_test_commands: tuple[str, ...] = ()
     """How the repository catalog says this repository is verified, right now.
 
@@ -87,6 +94,23 @@ class RunnerTaskProjector:
         self._validate_bindings(request)
 
         allowed_paths = package.allowed_paths or grant.allowed_paths
+        if allowed_paths:
+            # Defect A-21: added, never substituted. The Specification's paths
+            # say what this task may change; the catalog's test paths say where
+            # its own verification command reads from, and a task permitted
+            # only `src/checkout/**` cannot write the test `run_tests.py` will
+            # look for in `tests/`. Live, the compliant agent wrote it there
+            # anyway and the guard voided the whole run (commitSha null); the
+            # evading one hid it under `src/` where the command never finds it.
+            #
+            # Unioned rather than replaced because a repository saying where
+            # its tests live must not widen what a Worker may touch elsewhere,
+            # and unioned *after* the emptiness check because test paths alone
+            # are not a permit to do anything — a task with no paths of its own
+            # is still a task nobody scoped, and that is still a refusal.
+            allowed_paths = tuple(
+                dict.fromkeys((*allowed_paths, *request.catalog_test_paths))
+            )
         if not allowed_paths:
             raise RunnerTaskProjectionDenied("runner task requires at least one allowed path")
         uncovered = tuple(path for path in allowed_paths if not self._path_granted(path, grant))

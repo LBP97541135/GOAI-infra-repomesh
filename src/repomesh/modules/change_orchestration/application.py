@@ -294,6 +294,7 @@ class PlanExecutionBridge:
             teamed_repository_ids=set(repo_id_to_team),
             skipped=skipped,
             verification=self._verification_commands(profiles),
+            verification_paths=self._verification_paths(profiles),
         )
         if batches:
             started = await self._plans.start_plan(
@@ -808,6 +809,7 @@ class PlanExecutionBridge:
             teamed_repository_ids=set(repo_id_to_team),
             skipped=skipped,
             verification=self._verification_commands(profiles),
+            verification_paths=self._verification_paths(profiles),
         )
         # Keep only batches that touch an affected repository.
         affected_set = set(affected_repos)
@@ -858,6 +860,7 @@ class PlanExecutionBridge:
         teamed_repository_ids: set[UUID],
         skipped: list[str],
         verification: dict[str, tuple[str, ...]] | None = None,
+        verification_paths: dict[str, tuple[str, ...]] | None = None,
     ) -> tuple[tuple[PlannedRepositoryTaskView, ...], ...]:
         """Translate the batched task DAG into planned repository tasks.
 
@@ -923,6 +926,9 @@ class PlanExecutionBridge:
                         acceptance=self._derive_task_acceptance(task_node),
                         leader_task_id=None,
                         tests=task_node.tests or (verification or {}).get(repo_name, ()),
+                        # Added to the Worker's allowed paths downstream, never
+                        # substituted for them (defect A-21).
+                        test_paths=(verification_paths or {}).get(repo_name, ()),
                     )
                 )
                 _logger.info("Planned repository task for %s (batch %d)", repo_name, batch_index)
@@ -932,33 +938,52 @@ class PlanExecutionBridge:
 
     @staticmethod
     def _verification_commands(profiles) -> dict[str, tuple[str, ...]]:
-        """Catalog verification commands by repository name (defect A-19).
+        """Catalog verification commands by repository name (defect A-19)."""
 
-        ``repositories.name`` carries no unique constraint — two owners' ``api``
-        are both legitimate rows — so two rows of one name that disagree about
-        how they are tested resolve to nothing rather than to whichever came
-        last. Running another repository's test command is worse than running
-        none: it fails for a reason the operator cannot act on, and it would
-        fail as *verification*, which is the one signal delivery trusts.
+        return PlanExecutionBridge._by_name(profiles, "test_commands", "test commands")
+
+    @staticmethod
+    def _verification_paths(profiles) -> dict[str, tuple[str, ...]]:
+        """Catalog test paths by repository name (defect A-21).
+
+        Where a repository keeps the files its verification commands read. They
+        are added to a Worker's allowed paths so the agent may write the test
+        its own command will look for — the contradiction that voided a live
+        run on ``changed_path_denied: tests/test_discount.py``.
         """
 
-        commands: dict[str, tuple[str, ...]] = {}
+        return PlanExecutionBridge._by_name(profiles, "test_paths", "test paths")
+
+    @staticmethod
+    def _by_name(profiles, attribute: str, label: str) -> dict[str, tuple[str, ...]]:
+        """One catalog list per repository name, refusing to guess on collisions.
+
+        ``repositories.name`` carries no unique constraint — two owners' ``api``
+        are both legitimate rows — so two rows of one name that disagree resolve
+        to nothing rather than to whichever came last. For commands, running
+        another repository's is worse than running none: it fails as
+        *verification*, the one signal delivery trusts. For paths it is worse
+        still — it would hand a Worker write permission somewhere on the
+        strength of a name collision.
+        """
+
+        found: dict[str, tuple[str, ...]] = {}
         ambiguous: set[str] = set()
         for profile in profiles:
-            declared = tuple(getattr(profile, "test_commands", ()) or ())
+            declared = tuple(getattr(profile, attribute, ()) or ())
             if not declared:
                 continue
-            if profile.name in commands and commands[profile.name] != declared:
+            if profile.name in found and found[profile.name] != declared:
                 ambiguous.add(profile.name)
-            commands.setdefault(profile.name, declared)
+            found.setdefault(profile.name, declared)
         for name in ambiguous:
             _logger.warning(
-                "repository name %s has conflicting catalog test commands; "
-                "tasks for it will carry none",
+                "repository name %s has conflicting catalog %s; tasks for it will carry none",
                 name,
+                label,
             )
-            commands.pop(name, None)
-        return commands
+            found.pop(name, None)
+        return found
 
     @staticmethod
     def _find_task(plan: IntegratedPlan, repo_name: str) -> TaskNode | None:

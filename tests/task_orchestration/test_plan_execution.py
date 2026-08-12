@@ -278,8 +278,10 @@ class Environment:
         batches: tuple[tuple[int, ...], ...],
         *,
         tests: dict[int, tuple[str, ...]] | None = None,
+        test_paths: dict[int, tuple[str, ...]] | None = None,
     ) -> ExecutionPlan:
         verification = tests or {}
+        verification_paths = test_paths or {}
         return ExecutionPlan(
             organization_id=self.organization_id,
             project_id=self.project_id,
@@ -292,6 +294,7 @@ class Environment:
                         instruction=f"Implement the approved scope for repository {index}.",
                         acceptance=("Tests pass",),
                         tests=verification.get(index, ()),
+                        test_paths=verification_paths.get(index, ()),
                     )
                     for index in batch
                 )
@@ -1152,3 +1155,57 @@ async def test_a_fault_in_the_delivering_side_is_not_recorded_as_its_verdict() -
 
     untouched = await environment.plans.get(plan.id)
     assert untouched is not None and untouched.delivery_refusal is None
+
+
+@pytest.mark.asyncio
+async def test_the_permit_adds_the_repositorys_test_paths_to_the_workers_own() -> None:
+    """Defect A-21: the agent has to be *told* it may write its test.
+
+    The execution permit is not only enforcement — ``current-task.md`` renders
+    "Allowed paths" verbatim and the agent reads it. The round before the live
+    failure said so itself, in a blocker: "Allowed paths are src/checkout/**,
+    which excludes tests/". It then complied, wrote the test where its own
+    verification command discovers from, and the guard voided the run.
+
+    So the permit is widened by the repository's declared test paths and the
+    Worker's responsibility paths are kept, in order and unchanged: this adds
+    to what a Worker may touch, it never re-scopes it.
+    """
+
+    environment = Environment(repository_count=2, worker_paths=("src/checkout/**",))
+    plan = environment.plan(((0,), (1,)), test_paths={0: ("tests/**",)})
+
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    permit = environment.recorded_specifications[0]
+    assert permit.allowed_paths == ("src/checkout/**", "tests/**")
+
+
+@pytest.mark.asyncio
+async def test_a_repository_with_no_test_paths_permits_exactly_what_it_did_before() -> None:
+    """No directory is added to a permit on a repository that named none."""
+
+    environment = Environment(repository_count=2, worker_paths=("src/checkout/**",))
+    plan = environment.plan(((0,), (1,)))
+
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert environment.recorded_specifications[0].allowed_paths == ("src/checkout/**",)
+
+
+@pytest.mark.asyncio
+async def test_a_worker_that_already_owns_everything_is_left_alone() -> None:
+    """``**`` already permits the tests; appending would only read as a carve-out.
+
+    A permit rendered as "src/**, tests/**" when the real answer is "anything"
+    invites the same wrong inference the narrow permit did, in the other
+    direction.
+    """
+
+    environment = Environment(repository_count=2, worker_paths=())
+    plan = environment.plan(((0,), (1,)), test_paths={0: ("tests/**",)})
+
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert environment.recorded_specifications[0].allowed_paths == ("**",)
+

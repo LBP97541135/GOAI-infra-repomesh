@@ -188,6 +188,10 @@ def _seed(container: ApplicationContainer) -> tuple[UUID, UUID, UUID, UUID]:
                     test_commands=(
                         ("python scripts/run_tests.py",) if name == "ts-notify" else ()
                     ),
+                    # Defect A-21: and where that command reads from. Declared
+                    # together because a command without its path is the trap
+                    # that voided a live run.
+                    test_paths=(("tests/**",) if name == "ts-notify" else ()),
                     auto_card=AutoCard(
                         top_dirs=("src",),
                         recent_commits=("fix 通知邮件",),

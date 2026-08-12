@@ -729,6 +729,7 @@ class ApplicationContainer:
                         topics=tuple(profile.topics),
                         languages=tuple(profile.languages),
                         test_commands=tuple(profile.test_commands),
+                        test_paths=tuple(profile.test_paths),
                         profiled_at=profile.profiled_at,
                     )
                     for profile in await container.repository_catalog.list()
