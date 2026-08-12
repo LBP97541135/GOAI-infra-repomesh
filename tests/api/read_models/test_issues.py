@@ -33,6 +33,7 @@ from .test_service_stubs import (
     StubPlans,
     StubSnapshots,
     StubTasks,
+    _Empty,
     _manual_intervention_change_set,
     _plan,
     _service,
@@ -563,3 +564,77 @@ async def test_round_order_survives_an_older_round_being_touched_later() -> None
     assert [r["plan_version"] for r in overview["rounds"]] == [1, 2]
     assert [r["round_id"] for r in overview["rounds"]] == [first.id, second.id]
     assert overview["latest_round_id"] == first.id
+
+
+class _Counting:
+    """Wraps a stub and records how many times each method was awaited."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.calls: dict[str, int] = {}
+
+    def __getattr__(self, name: str):
+        attribute = getattr(self._inner, name)
+        if not callable(attribute):
+            return attribute
+
+        async def _counted(*args, **kwargs):
+            self.calls[name] = self.calls.get(name, 0) + 1
+            return await attribute(*args, **kwargs)
+
+        return _counted
+
+
+@pytest.mark.asyncio
+async def test_the_list_reads_each_source_once_per_request() -> None:
+    """Repeated reads were the shape of the 18s roster bug, one layer down.
+
+    Deriving each round's pending decisions re-read the entire repository
+    catalog and the project's task list, once per round, and seven call sites
+    each scanned the whole execution_plans table. None of it shows up in a
+    response body, so only a call count catches it; at seed scale the wall
+    clock hides it completely.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    rounds = [
+        _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.FAILED) for _ in range(3)
+    ]
+    plans = _Counting(StubPlans(*rounds))
+    tasks = _Counting(StubTasks())
+    repositories = _Counting(_Empty())
+    service = _service(
+        plans,
+        StubSnapshots(
+            *(
+                _snapshot(
+                    project_id,
+                    item.id,
+                    version=index + 1,
+                    created_at=T0.replace(hour=10 + index),
+                )
+                for index, item in enumerate(rounds)
+            )
+        ),
+        tasks,
+        # A change set per round is what makes the decision derivation run,
+        # and that derivation is where the repeated reads live.
+        StubChangeSets(
+            {
+                item.id: _manual_intervention_change_set(item, repository_id, uuid4())
+                for item in rounds
+            }
+        ),
+        StubArchives(),
+        repositories=repositories,
+    )
+
+    payload = await service.list_issues(state="all")
+
+    assert payload["issues"][0]["round_count"] == 3
+    # One scan of the plan table, one catalog read, one task read — not one of
+    # each per round.
+    assert plans.calls.get("list_all", 0) == 1
+    assert repositories.calls.get("list", 0) == 1
+    assert tasks.calls.get("list_by_project", 0) == 1
