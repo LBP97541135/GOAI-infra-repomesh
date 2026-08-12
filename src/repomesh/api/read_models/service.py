@@ -982,12 +982,39 @@ class DeliveryReadModelService:
 
         snapshots = await self._snapshots.for_project(issue_id)
         if not snapshots:
-            if not await self._issue_exists(issue_id):
-                return None
-            return None  # no plan was ever snapshotted for this issue
+            # Two cases here — the issue does not exist, and the issue exists
+            # but was never planned — and both are a 404 to the caller. They
+            # used to be written as separate branches returning the same
+            # value, so the existence query ran for nothing.
+            return None
         snapshot = snapshots[0]
         catalog = {item.id: item for item in await self._repositories.list()}
         id_by_name = {item.name: item.id for item in catalog.values()}
+
+        # Membership check. Without it the sheet for an unrelated repository
+        # came back 200 carrying this issue's DAG, is_focus false everywhere
+        # and spec null — which §5.4 tells the frontend to read as "this
+        # repository has no spec of its own", so a wrong page rendered as a
+        # perfectly normal one.
+        #
+        # The set is the union of two things that are not the same: the
+        # repositories this sheet is drawn from (the snapshot's batches, which
+        # is what carries a repository into the DAG) and the issue's own
+        # repositories per §3 (every round's plan plus the topology). A
+        # repository can sit in either one alone and still legitimately belong
+        # here, so checking only the bundle rejects rows the sheet itself
+        # draws.
+        planned = {
+            id_by_name[name]
+            for batch in snapshot.execution_batches
+            for name in batch
+            if name in id_by_name
+        }
+        if repository_id not in planned:
+            plans = (await self._plans_by_project()).get(issue_id, ())
+            bundle = await self._issue_bundle(issue_id, plans)
+            if repository_id not in bundle.repository_ids:
+                return None
 
         nodes = []
         for batch_index, batch in enumerate(snapshot.execution_batches):
