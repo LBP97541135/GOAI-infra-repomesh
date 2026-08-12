@@ -89,6 +89,14 @@ export function RoundsPanel({
           // 局部常量而非 state.rollback：回调闭包里 TS 的收窄跟不到属性访问，
           // 否则只能靠一个 `!` 断言把「取到了没有」这件事糊过去
           const rollbackScope = state?.rollback ?? null;
+          // A-4：这两个字段与 created_at 同源（该轮 PlanSnapshot），为 null 就是
+          // 「轮次行落库了、该轮快照没落库」。**只陈述这一件事，不判断为什么**——
+          // 实测（8100，两个活标本 5c1b3567 / 35e66beb）「刚物化尚未开工」与
+          // 「物化半途中断」两条来路的读模型投影逐字段一致，界面无从分辨，
+          // 挑一句说就是拿信号冒充原因。措辞与皮肤都取中性，理由写在 title 里。
+          const missingPlanVersion = round.plan_version === null;
+          const missingUpdatedAt = round.updated_at === null;
+          const noSnapshot = missingPlanVersion || missingUpdatedAt;
           return (
             <div key={round.round_id} className="border-b border-panel last:border-b-0">
               {/* 行内两个动作（展开 / 归档）不能嵌套 button，行是布局容器 */}
@@ -104,9 +112,23 @@ export function RoundsPanel({
                     {round.phase}
                   </span>
                   <span className="text-[10.5px] text-tx3">
-                    计划 v{round.plan_version} · 更新于 {dayLabel(round.updated_at)}
+                    计划 {missingPlanVersion ? "版本未落库" : `v${round.plan_version}`} · 更新于{" "}
+                    {missingUpdatedAt ? "时间未落库" : dayLabel(round.updated_at)}
                     {isCurrent ? " · 决策夹当前轮" : ""}
                   </span>
+                  {noSnapshot && (
+                    <span
+                      className="flex-none rounded-hard border border-line px-1.5 font-mono text-[10px] text-tx2"
+                      title={
+                        "本轮的 PlanSnapshot 尚未落库：计划版本、创建时间、更新时间三个字段同源，此刻一起为空。\n" +
+                        "两条真实来路读模型都投影成这一个形状——① 刚物化、执行还没产出任何东西；② 物化半途中断。" +
+                        "服务端没有给出区分二者的字段（两个活标本逐字段一致），所以这里不替它挑一句。\n" +
+                        "轮次行本身是真的：展开仍可查看该轮已记录的决策与交付卡。"
+                      }
+                    >
+                      本轮尚无快照
+                    </span>
+                  )}
                 </button>
                 {round.phase === "archived" && (
                   <span className="flex-none rounded-hard border border-line px-1.5 font-mono text-[10px] text-tx2">
