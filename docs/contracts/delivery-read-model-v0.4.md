@@ -1,7 +1,7 @@
-# 交付读模型契约 v0.4 增量草案（发现链读投影 / 写触发 / 分档审批）
+# 交付读模型契约 v0.4（发现链读投影 / 写触发 / 分档审批）
 
-- 状态：**提案待主脑裁决**（起草：批次 B-3 契约位，2026-08-12；本文件带 `-draft`
-  后缀，裁决前不得据此开工）
+- 状态：**已裁决 · 生效**（Q1~Q18 按建议案，2026-08-12 主脑裁决）。B 批后端已按本文实施，
+  正文与实现最终形状一致；实施中与草案有出入之处逐条列在 §6.1，**以本文为准**。
 - 版本：0.4（**增量**：v0.1/v0.2/v0.3 全文继续有效，本文件只定义发现链的一个读端点、
   四个写触发端点、一个审批写端点，以及承载它们的快照版本语义）
 - 基线：`docs/contracts/delivery-read-model-v0.3.md`（截至 §6 S-8）
@@ -9,7 +9,7 @@
 - 界面定稿：`docs/development/full-loop-gui-design-20260812.md` ②（发现面板）
 - 消费方：`frontend/` issue 详情页「发现」面板
 - 体例沿用：诚实数据、状态映射唯一实现在读模型、写端点幂等与审计（v0.1 §4.4 风格）、
-  开放问题列 Q 表交裁决
+  开放问题列 Q 表（§6，已全部裁决）
 
 ---
 
@@ -33,7 +33,7 @@ v0.3 把「从界面发起需求」的入口打通到「建 issue = 落 `plan_ve
    全自动模式进 backlog（`full-loop-plan-20260812.md` §3）。
 2. **clarify 可强行继续但必须留痕**：留痕内容为「忽略 N 条追问继续」（GUI 裁决 2）。
 3. **零新展示实体延续**：发现各步结果挂 issue 的快照（PlanSnapshot 系），不建新展示实体。
-   ⚠ **零新实体 ≠ 零新列**——见 §2 与 Q1，这是本草案第一个必须裁决的点。
+   ⚠ **零新实体 ≠ 零新列**——见 §2 与 Q1。这一条起草时被单独拎出来请求裁决，已裁为「加一列 `discovery`」。
 4. **LLM 失败显示错误原文摘要**，不显示假进度；**rationale 原样展示**，读模型不摘要不截断。
 5. 写请求**幂等键 + 花名册派生主体**（v0.3 §1.2 同款）；鉴权维持 `Authorization: Bearer`
    动作 token（v0.2 Q1）。
@@ -140,10 +140,10 @@ run_pipeline 调一遍即可」。
 
 ## 2. 事实源：发现链状态存在哪
 
-### 2.1 提案：`plan_snapshots` 增一列 `discovery`（JSONB，nullable）
+### 2.1 裁决：`plan_snapshots` 增一列 `discovery`（JSONB，nullable）
 
 零新**实体**（不建表、不建 Project 行、不建 Discovery 聚合）；代价是零新**列**做不到——
-§1.3 已核实无处可放。提案新增一列，Alembic 迁移编号接现链尾 `20260811_0022_task_origin`
+§1.3 已核实无处可放。新增一列，Alembic 迁移编号接现链尾 `20260811_0022_task_origin`
 之后：
 
 ```text
@@ -172,7 +172,7 @@ repository_intelligence.plan_snapshots
     "error": null
   },
   "candidates": {
-    "items": [ { "repository_id": "uuid|null", "repository_name": "string",
+    "items": [ { "repository_id": "uuid", "repository_name": "string",
                  "score": 0.82, "matched_terms": ["..."],
                  "rationale": "原样，不摘要", "is_entry_point": false } ],
     "llm_used": true,
@@ -206,6 +206,18 @@ repository_intelligence.plan_snapshots
   `classification.required/maybe/excluded` 保留 LLM 原始分档，**生效分档 = 原始分档
   叠加 `adjustments` 后的结果，派生规则唯一实现在读模型**（§3.1 的 `effective_tiers`）。
   覆盖写会抹掉「模型说什么、人改成什么」的对照，属删证据。
+- **`candidates.items[].repository_id` 不可为 null**（实施定死；草案原文误写
+  `uuid|null`）。两条产出路径（LLM / 关键词）都只能从 catalog 里已存在的 profile 取
+  `repository_id`，评分时不在 catalog 的候选会被直接过滤掉，故本块内该字段恒为真实 id。
+  既有 `DiscoveryCandidate` pydantic 模型的不可空 UUID **是对的，不放宽**。消费方无需为
+  「catalog 未解析」渲染分支。（注意区分：§5.4 plan 端点的 `dag.nodes[].repository_id`
+  **确实可为 null**——那是名字解析，不是本块。）
+- **两个拼写是有意的，不是笔误**：`force_continue` 是**请求标志**（§4.6 的写端点字段，
+  祈使：「忽略追问继续」），`forced_continue` 是**留痕记录**（本块内的对象，过去式：
+  「已忽略 N 条追问」）。请求里不存在 `forced_continue`，读投影里不存在 `force_continue`。
+- **`analysis.forced_continue` 为 `null`** 表示未强行继续；非空时形如
+  `{ "ignored_question_count": 2, "by_agent_id": "uuid", "at": "..." }`。强行继续
+  **不改写 `sufficient`**——模型的判断仍是事实，覆盖它就没人知道曾被绕过。
 
 ### 2.3 承载 `discovery` 的是「当前草稿快照」
 
@@ -255,7 +267,7 @@ first」（`api/read_models/sources.py:69-71`）。若发现中间态各占一�
 > **已消费的快照（`execution_plan_id` 非空）不可变；当前草稿快照（`execution_plan_id`
 > 为空）在被消费前可变，且同一 `project_id` 至多只有一张。**
 
-裁决通过后须同批勘正该 docstring，否则又是「同一事实两处、只改一处」。→ Q2。
+已按 Q2 同批勘正该 docstring（`plan_snapshot_store.py` 模块头），未留「同一事实两处、只改一处」。
 
 ---
 
@@ -279,14 +291,41 @@ first」（`api/read_models/sources.py:69-71`）。若发现中间态各占一�
   "analysis": { ... }|null,                // §2.2 requirement_analysis 直投影
   "candidates": { ... }|null,              // §2.2 candidates 直投影
   "classification": { ... }|null,          // §2.2 classification 直投影
+  "classification_evidence_version": "sha256:...|null",  // 当前分档指纹，审批必带
   "effective_tiers": [                     // 派生：原始分档叠加 adjustments
     { "repository": "repo-a", "tier": "required|maybe|excluded",
-      "adjusted": true, "original_tier": "maybe" } ],
+      "adjusted": true, "original_tier": "maybe|null" } ],
   "approval": { ... },                     // §2.2 approval 直投影
   "integration": { "task_dag_count": 6, "batch_count": 3,
                    "contract_count": 2 }|null   // 集成产物已落草稿快照时的计数
 }
 ```
+
+**`classification_evidence_version`（实施新增，草案缺）**：审批端点要求请求带
+`evidence_version`（§5.3），审批人必须有地方拿到「当前这份分档的指纹」。
+`approval.evidence_version` 回答的是**另一个问题**——「上一次决定绑在哪份证据上」，
+未审批时为 `null`，拿它去提交审批必然 409。两个字段不可互相替代：
+
+| 字段 | 含义 | 未审批时 |
+| --- | --- | --- |
+| `classification_evidence_version` | 服务端当前分档的指纹，**提交审批时回填这个** | 分档存在即非空 |
+| `approval.evidence_version` | 已记录的那次决定绑定的指纹（审计用） | `null` |
+
+**`effective_tiers[].original_tier` 取值定死**：**`adjusted` 为 `false` 时恒为 `null`**。
+该字段的存在意义是描述「改动」，未改动却回显当前档位，会诱使面板渲染出「原为 required，
+现为 required」。两种 `null` 靠 `adjusted` 区分，不会混淆：
+
+| `adjusted` | `original_tier` | 含义 |
+| --- | --- | --- |
+| `false` | `null` | 模型分档，审批人未动 |
+| `true` | `"maybe"` 等 | 模型分了档，审批人改成了 `tier` |
+| `true` | `null` | 模型从未给该仓库分档，审批人自行加入 |
+
+改档后又改回原档 → `adjusted: false`、`original_tier: null`（没有净改动就不宣称有）。
+
+`integration` 的三个计数取自草稿快照的 `task_dag` / `execution_batches` / `contracts`
+实际长度。注意 `batch_count` **由依赖图决定，不等于 LLM 提议的批次数**：有依赖图时
+集成只用图的拓扑分批，LLM 仅负责语义内容（`plan_integration.py:_integrate_with_graph`）。
 
 诚实条款（消费方约束，随实现验收）：
 
@@ -342,6 +381,11 @@ GUI 步进器（1..4）与管线步（Step 0..4）的映射，本契约以**管�
   "discovery_state": "idle|running|failed|done" }
 ```
 
+**消费时机（实施补写）**：两个标量**恒存在**（issue 从未发起发现时为 `1` / `"idle"`），
+供 issue 详情页在**不打开发现面板**时出徽标——例如「发现 3/4 · 待审批」。打开面板后
+一律以 §3.1 的专用端点为准，不要拿这两个标量驱动面板内部渲染：它们与 §3.1 的
+`step`/`step_state` 同源同实现，但**取不到 `running_task_id`**，无法据以轮询。
+
 其余（追问列表、候选评分、rationale、三档、审批记录）**只在 §3.1 的专用端点里**——
 它们是打开面板才看的整块数据，塞进详情聚合会让每次列表刷新都拖着一堆 rationale 长文。
 
@@ -361,7 +405,7 @@ GUI 步进器（1..4）与管线步（Step 0..4）的映射，本契约以**管�
   只注册 GET，**方法与路径均不冲突**。
   ⚠ 代码库里现存两种落位风格：v0.3 的 `POST /issues`（原生路径）与 A-1 的
   `POST /console/repositories/scan-org`（console 面，`api/console.py:212`）。本文按
-  v0.3 风格提案，但**需要一条统一裁决**，见 Q10。
+  已按 Q10 裁为 **RI router 原生路径**：console 面的存在理由是掐断凭据透传，本批请求体里没有凭据字段，该理由不成立。
 - **鉴权**：`ACTION_TOKEN`（`router.py:130`），与本 router 全部写路由一致。
 - **主体**：请求体 `created_by_agent_id` / `decided_by_agent_id`，必须是**活跃的
   ORGANIZATION_LEADER**，且其所属组织与该 issue 的工作区一致，否则 403——校验规则与
@@ -397,9 +441,23 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 
 ### 4.3 四个写触发端点
 
-四者共同：`202` + `{ "task_id": ..., "step": ... }`；`403` 主体不合格 / 跨工作区；
-`404` issue 不存在；`409` 前置未满足或该 issue 已有在跑任务；`422` 参数非法；
-`503` LLM 未配置（**统一口径**，见 Q12）。
+四者共同的响应形状（**实施定死**，草案只写了 202 那一半）：
+
+```json
+{ "task_id": "uuid|null", "step": 1, "status": "accepted|replayed" }
+```
+
+| 情形 | HTTP | `task_id` | `status` |
+| --- | --- | --- | --- |
+| 已受理、任务已起 | `202` | 任务 id | `accepted` |
+| 同幂等键重放（§4.4） | `200` | **`null`** | `replayed` |
+
+重放不给 `task_id`：原任务记录是进程内的、可能早已被清掉，编一个回去等于承诺一次
+答不上来的轮询。两种情形下前端的下一步是同一个动作——重取 `GET …/discovery`；
+只有 `accepted` 需要先轮询 `…/discovery/tasks/{task_id}`。
+
+错误：`403` 主体不合格 / 跨工作区；`404` issue 不存在或主体不存在；`409` 前置未满足
+或该 issue 已有在跑任务；`422` 参数非法；`503` LLM 未配置（见 Q12 与 §6.1 第 3 条）。
 
 **Step 0 需求分析** `POST /api/v1/issues/{issue_id}/discovery/analysis`
 
@@ -426,6 +484,11 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 - 前置：`analysis` 非空，且（`sufficient == true` **或** `forced_continue` 非空）；
   否则 **409**，detail 说明「需求分析未通过且未强行继续」。
 - 需求文本取 `analyzed_requirement`，不收。
+- **`limit` / `entry_point` 均可选**（实施定死）。`limit` 缺省 **10**、范围 `1..50`；
+  `entry_point` 缺省 `null`。前端不送、交服务端缺省即可。
+  与既有 `POST /discovery` 的 `DiscoveryRequest.limit` 缺省 5 **有意不同**：那是脚本
+  入口，改它会动既有调用方的行为；面板一屏展示 10 条是设计稿的形状。两处缺省各自
+  独立，不统一。
 
 **Step 2 三档分类** `POST /api/v1/issues/{issue_id}/discovery/classification`
 
@@ -505,7 +568,7 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 
 置 `true` 时**不重跑 LLM**，只在既有 `analysis` 上记 `forced_continue`
 （`ignored_question_count = len(analysis.questions)`）；`analysis` 为 `null` 时 409
-（没有追问可忽略）。→ Q15 确认这个落点是否等价于「决策记录」。
+（没有追问可忽略）。Q15 已确认该落点即「决策记录」的等价物——发现期不存在决策记录实体，快照那份给人看、审计那份给审计看。
 
 ---
 
@@ -523,7 +586,7 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 主体 + 服务器 detail 原样展示），在**机制**上三套都不可复用——它们各自绑在发现期尚不
 存在的对象上（ChangeSet / topology / handoff doc）。硬接任一套都要先伪造那个对象。
 
-### 5.2 提案：审批记录落 `discovery.approval` + 专用写端点
+### 5.2 裁决：审批记录落 `discovery.approval` + 专用写端点
 
 `POST /api/v1/issues/{issue_id}/discovery/approval`（落位与鉴权同 §4.1）
 
@@ -537,7 +600,17 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
   "evidence_version": "sha256:..." }
 ```
 
-- **同步端点**（无 LLM 调用），`200`；重放同键 → `200` 既有记录。
+- **同步端点**（无 LLM 调用），`200`。响应体形状（**实施定死**，草案未写）与四个写触发
+  **同形**，是回执而非审批块：
+
+  ```json
+  { "task_id": null, "step": 3, "status": "accepted|replayed" }
+  ```
+
+  `task_id` 恒 `null`（没有异步任务）；首次记录为 `accepted`，同键重放为 `replayed`。
+  **不回投影审批块**——那是 §3.1 已经拥有的数据，回一份就是同一事实两处序列化
+  （v0.3 §1.4 同一条红线）。前端写完重取 `GET …/discovery`，与步骤触发后的动作一致。
+  重放必须可分辨：否则客户端重试会把 `adjustments` 再追加一遍，分档上凭空多出一条改档。
 - `adjustments` 与 `decision` **一次提交**：设计稿是「行内下拉调整后放行」，拆成两个写
   会造出「改了但没批」的中间态，且要多一套并发处理。
 - `decision == "changes_requested"` → `approval.state` 置同名，`step` 停在 3；
@@ -579,9 +652,11 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 
 ---
 
-## 6. 开放问题 Q 表（全部交主脑裁决）
+## 6. 裁决记录（Q1~Q18 全部按建议案 · 2026-08-12 生效）
 
-| # | 问题 | 建议案 | 理由 / 代价 |
+下表「建议案」列即**最终裁决**，已全部落地。与建议案有出入的实现细节见 §6.1。
+
+| # | 问题 | 裁决（原建议案） | 理由 / 代价 |
 | --- | --- | --- | --- |
 | Q1 | 发现链中间态落哪：`plan_snapshots` 新增 `discovery` JSONB 列 / 新表 / 复用既有列 | **新增一列 `discovery`（JSONB, NULL）** | 现有列无一能诚实容纳（§1.3）；新表违背零新实体；复用 `contracts`/`task_dag` 是一列两义。**零新实体 ≠ 零新列**，这一条需要主脑明确点头 |
 | Q2 | 草稿快照可变性 | **承认「已消费不可变、当前草稿可变」，并同批勘正 `plan_snapshot_store.py:1-6` 的 write-once 描述** | 每步涨版会让 v0.2 §5.4 的 plan 端点取到空 `execution_batches` 的最高版快照，打空 C-2 的 DAG 面板（§2.4）；write-once 描述当前就已不实（`link_execution_plan`） |
@@ -602,25 +677,57 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 | Q17 | Step 2 是否投影每候选进度 | **投影**（`progress.done/total/label`，复用 `confirm()` 已有的 `on_progress`） | N 次 LLM 调用无进度＝几分钟静默，正是 A-2 要解决的那个问题。成本近零（回调已在签名里） |
 | Q18 | 审批的 `evidence_version` 漂移是否必须 409 | **必须** | 审批必须绑在它实际看到的证据上（v0.1 §4.4 head-bound 的同一条道理）。备选「以最新分档为准直接放行」＝批准了一份没人看过的分档 |
 
+### 6.1 实施与建议案的出入（逐条，**以本节为准**）
+
+裁决是「Q1~Q18 全按建议案」，下列各条是**实施中发现建议案说不到位或说错**的地方，
+均已落地并有测试。
+
+| # | 出入 | 实施结论与理由 |
+| --- | --- | --- |
+| 1 | **Q6「四步全 202」中，Step 1 在 LLM 未配置时不再 503** | 候选评分**有关键词回退**，没有模型也能真跑，产出自述 `llm_used: false`。对它 503 等于否认一个真实且诚实的能力。`analysis` / `classification` / `plan` 三步没有回退，维持 503。 |
+| 2 | **503 在触发时判，不在任务里判** | 建议案只说「503 LLM 未配置」。若在任务体里判，请求会先拿到 202、再轮询出一个从创建起就注定失败的任务。202 的含义是「已受理并已开始」，为跑不起来的活儿发 202 是要靠轮询才能拆穿的谎。 |
+| 3 | **`404` 也覆盖「主体不存在」** | 草案 §4.3 只写「404 issue 不存在」。`created_by_agent_id` 查无此人同样是 404（与 v0.3 §1 的 `POST /issues` 同口径），非活跃/非 leader/跨工作区才是 403。 |
+| 4 | **`classification_evidence_version` 为新增顶层字段** | 见 §3.1。不加则审批人无处取当前指纹，§5.3 的 409 语义无法被正确使用。 |
+| 5 | **`effective_tiers[].original_tier` 在未改档时为 `null`** | 见 §3.1 表。草案示例只给了改档那一种，未定义未改档的取值。 |
+| 6 | **写触发/审批响应体形状定死为三字段回执** | 见 §4.3、§5.2。草案只写了 202 那一半，重放的 200 没给形状。 |
+| 7 | **`summary_in_force` 会改写 `ConfirmationResult.status`** | §4.3 说「送进集成的分档 = `effective_tiers`」。只把结果换桶不够：集成内部按 `status != "EXCLUDED"` 过滤 `repo_names`，进而决定 **contracts 与分批**。只换桶会让被审批人从 excluded 提上来的仓库「有任务、没契约、不在任何批次」——界面上提上来了，计划里只兑现了一半。已修并有回归测试。 |
+| 8 | **Q3 案 (b) 实施时发现 materialize 从来没存过快照** | `ContractSpec` / `TaskNode` 是 frozen+slots dataclass 且无 `to_dict`，原 `dict(item)` 回退对每个真实计划都抛 `TypeError`，被外层 `except Exception` 降级成一行日志：接口返 200、任务照建、DAG 面板要读的那行从未写入。已修（两个 dataclass 各自实现 `to_dict`），并补「快照确实写了且能 JSON 往返」的回归测试。 |
+| 9 | **`replan` 的 `plan_version` 无需改动** | Q3 案 (b) 要求「同步核 replan 的 plan_version 语义」。核实结论：`replan` **不写任何快照**，只按请求体的 `plan_version + 1` 派生 handoff 文档与任务版本。案 (b) 之后第一轮是 v1（原为 v2），replan 得到 v2（原为 v3），单调性与语义都更干净，代码零改动。 |
+
 ---
 
-## 7. 实现顺序（裁决通过后）
+## 7. 实现顺序与落点（1~5 **已完成**，2026-08-12 · 分支 `feat/b-backend`）
 
-1. **迁移 + 契约**：`plan_snapshots.discovery` 列（Q1）、`repository_intelligence/contracts.py`
-   增发现链命令/结果 dataclass；勘正 store docstring（Q2）。
-2. **写触发四端点 + 轮询端点**（含线程池，Q6）——前端面板在等；
-3. **读投影**（§3.1 新端点 + §3.3 详情两标量）——步进器判定唯一实现；
-4. **审批端点**（§5.2）；
-5. **既有缺陷顺带修**（Q12/Q13）；
-6. **前端发现面板接线**（四步步进器、追问表单、强行继续、评分行、行内分档下拉、审批弹窗）。
+| # | 内容 | 状态 | 落点 |
+| --- | --- | --- | --- |
+| 1 | 迁移 + 存储 + store docstring 勘正（Q1/Q2） | ✅ | `migrations/versions/20260812_0023_plan_snapshot_discovery.py`、`infrastructure/models.py`、`infrastructure/plan_snapshot_store.py`、`repository_intelligence/contracts.py` |
+| 1b | Q3 案 (b)：物化复用草稿快照 | ✅ | `change_orchestration/{application,ports}.py` |
+| 2 | 四个写触发 + 轮询端点（线程池，Q6） | ✅ | `repository_intelligence/api/discovery_chain.py`、`application/discovery_chain.py` |
+| 3 | 读投影（§3.1 端点 + §3.3 两标量） | ✅ | `api/read_models/{router,service,sources}.py` |
+| 4 | 审批端点（§5.2） | ✅ | 同 2 |
+| 5 | 既有缺陷顺带修（Q12/Q13） | ✅ | `repository_intelligence/api/router.py` |
+| 6 | 前端发现面板接线 | 前端批次 | `frontend/` |
 
-每项独立任务分支、独立提交、定向验证（pytest + curl 实调 + 前端 `tsc -b` / oxlint /
-浏览器实走）。**Q3（materialize 衔接）若裁为案 (b)，须排在 3 之前**，否则读投影要按两套
-版本语义各写一次。
+派生规则（步进器判定、`effective_tiers`、分档指纹、大小写映射）**唯一实现**在
+`repository_intelligence/contracts.py` 的纯函数里，读模型与写触发同取一处——
+它们必须给出同一个答案，两份实现正是本项目反复吃亏的那类缺陷。
+
+验证：`tests/api/test_issue_discovery.py`（HTTP 全链、鉴权、幂等、作废下游、单飞、
+**线程池不阻塞事件循环**、诚实失败、审批漂移 409、改档进计划）、
+`tests/test_discovery_contracts.py`（§3.2 七条判定逐条 + 派生纯函数）、
+`tests/test_plan_execution_bridge.py::TestMaterializeSnapshot`（Q3 案 (b) 与快照回归）。
+全程零真实网络/LLM 调用。
 
 ---
 
-## 附录 A：两条既有勘误提案（顺带评估，不属 B 批）
+## 附录 A：两条既有勘误（**已批准并同批实施**，2026-08-12）
+
+两条都已落地：A.1 的三个自述计数进了 `GET /issues/{id}/repositories/{repo}/plan` 的
+`dag` 块（`api/read_models/service.py`，测试
+`tests/api/read_models/test_rooms.py::test_the_dag_counts_separate_the_two_reasons_an_edge_is_dropped`），
+A.2 的两处文本已在 `docs/contracts/delivery-read-model-v0.2.md` **同批**改完
+（§5.4 正文 + §6.1 表格行 + §7.2 裁决行）。
+前端消费不受影响：三个字段是可选加法，既有渲染不读也不坏。
 
 ### A.1 §5.4 plan 端点增加自述字段（v0.2 §7.2 留的口子）
 
@@ -637,7 +744,7 @@ v0.2 §7.2 原文：「选日志而非响应字段是因为 plan 端点形状已
 即：消费方**已经知道**自己可能在画一张不完整的图，却没有任何字段能把这件事告诉用户。
 口子该用了。
 
-**提案**：`GET /issues/{id}/repositories/{repo}/plan` 的 `dag` 块增加三个自述计数
+**已实施**：`GET /issues/{id}/repositories/{repo}/plan` 的 `dag` 块增加三个自述计数
 （**向后兼容的加法**，前端 TS 接口加可选字段不破坏现有渲染）：
 
 ```json
@@ -670,7 +777,7 @@ v0.2 §6.1 backlog 表最后一行：「边有『丢弃 + warning』，节点只
 `unresolved_nodes`，并在 `:1165-1172` 记 warning，含**条数与全部名字**、附
 `issue_id`/`repository_id`，与边侧（`:1193-1202`）完全同一口径。
 
-**提案（纯文本勘正，实现零改动）**：
+**已实施（纯文本勘正，实现零改动）**：
 
 1. §6.1 该 backlog 行标为**已闭环**，注明落点 `service.py:1165`；
 2. §5.4 正文那句「**已知缺口**：节点侧目前不像边那样记 warning，『N 个节点无法解析』
