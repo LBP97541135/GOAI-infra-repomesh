@@ -4,13 +4,15 @@ import { api, type Account, type ReviewRequest } from './api'
 import { Login } from './Login'
 import { ProjectSetup } from './ProjectSetup'
 import { ReviewWorkbench } from './ReviewWorkbench'
+import { Workspace } from './Workspace'
 
-type View = 'reviews' | 'projects' | 'accounts'
+type View = 'reviews' | 'projects' | 'accounts' | 'workspace'
 
 export function App() {
   const [account, setAccount] = useState<Account | null>(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<View>('reviews')
+  const [activeProject, setActiveProject] = useState<{ projectId: string; leaderAgentId: string } | null>(null)
   const [reviews, setReviews] = useState<ReviewRequest[]>([])
   const [connected, setConnected] = useState(false)
 
@@ -41,9 +43,10 @@ export function App() {
       <div className="sidebar-foot"><div className="account-chip"><span>{account.display_name.slice(0, 1)}</span><div><strong>{account.display_name}</strong><small>{account.is_admin ? '本地管理员' : '审核人员'}</small></div></div><button className="icon-button" title="退出登录" onClick={() => api.logout().finally(() => setAccount(null))}><LogOut size={18} /></button></div>
     </aside>
     <main>
-      <header className="topbar"><div><span className="crumb">组织 / GOAI</span><h1>{view === 'reviews' ? '人工审核台' : view === 'projects' ? '创建协作项目' : '人员与权限'}</h1></div><div className={`live ${connected ? 'online' : ''}`}><i />{connected ? '实时推送已连接' : '正在重连'}</div></header>
+      <header className="topbar"><div><span className="crumb">组织 / GOAI</span><h1>{view === 'reviews' ? '人工审核台' : view === 'projects' ? '创建协作项目' : view === 'workspace' ? '项目工作台' : '人员与权限'}</h1></div><div className={`live ${connected ? 'online' : ''}`}><i />{connected ? '实时推送已连接' : '正在重连'}</div></header>
       {view === 'reviews' && <ReviewWorkbench reviews={reviews} onRefresh={() => api.reviews().then(setReviews)} />}
-      {view === 'projects' && <ProjectSetup onCreated={() => setView('reviews')} />}
+      {view === 'projects' && <ProjectSetup onCreated={(info) => { setActiveProject(info); setView('workspace') }} />}
+      {view === 'workspace' && activeProject && <Workspace projectId={activeProject.projectId} leaderAgentId={activeProject.leaderAgentId} />}
       {view === 'accounts' && <AccountPanel current={account} />}
     </main>
   </div>
