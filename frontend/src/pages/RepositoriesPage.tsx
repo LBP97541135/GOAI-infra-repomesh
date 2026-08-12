@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ConsoleRepositoryView } from "../api/contract";
 import { fetchConsoleRepositories, gridSourceMode } from "../api/grid";
 import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, errText, shortId } from "../display";
+import { AddRepositoryCard } from "../components/AddRepositoryCard";
 import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 
 /** 仓库网格页（CONS-44 / 契约 v0.2 §4.1）。
@@ -78,6 +79,12 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
   const [repos, setRepos] = useState<ConsoleRepositoryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [addOpen, setAddOpen] = useState(false);
+
+  /** 扫描走到终态后刷新列表。**引用必须稳定**：卡片把它作为轮询 effect 的依赖，
+   *  每次 render 换一个新函数会让轮询不断重启。 */
+  const refresh = useCallback(() => setReload((n) => n + 1), []);
+  const openAdd = useCallback(() => setAddOpen(true), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,7 +109,22 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
             {repos.length} 个 · {resident} 个有驻扎团队
           </span>
         )}
+        <button
+          className="ml-auto rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
+          onClick={() => setAddOpen((v) => !v)}
+        >
+          + 添加仓库
+        </button>
       </div>
+
+      {/* 卡片在收起时也保持挂载：轮询活在它内部，收起卡片不该中断一次在跑的扫描 */}
+      <AddRepositoryCard
+        open={addOpen}
+        mode={gridSourceMode()}
+        onClose={() => setAddOpen(false)}
+        onRestored={openAdd}
+        onScanSettled={refresh}
+      />
 
       {error ? (
         <ErrorPanel title="仓库网格加载失败" message={error} onRetry={() => setReload((n) => n + 1)} />
