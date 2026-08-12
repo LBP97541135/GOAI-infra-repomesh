@@ -29,13 +29,15 @@ from .plan_integration import (
     PlanIntegrationService,
     TaskNode,
 )
-from .registration import RegisterRepository
+from .registration import RegisterRepository, ScanRegistration, register_scanned_profiles
 from .requirement_analysis import RequirementAnalysis, RequirementAnalyzer
 from .scan import infer_languages, infer_name, scan_repo
 from .scan_remote import (
     extract_entry_repo_name,
+    identify_url_type,
     load_requirement,
     scan_org,
+    scan_single_repo,
 )
 
 __all__ = [
@@ -61,14 +63,18 @@ __all__ = [
     "RepositoryPlan",
     "RequirementAnalysis",
     "RequirementAnalyzer",
+    "ScanRegistration",
     "TaskNode",
     "TopoResult",
     "build_doc_content",
     "extract_entry_repo_name",
+    "identify_url_type",
     "infer_languages",
     "infer_name",
     "load_requirement",
+    "register_scanned_profiles",
     "render_markdown",
     "scan_org",
     "scan_repo",
+    "scan_single_repo",
 ]

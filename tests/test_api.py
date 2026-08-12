@@ -414,6 +414,7 @@ def test_repository_intelligence_writes_all_require_the_action_token(
         ("/api/v1/issues", {}),
         ("/api/v1/repositories", {}),
         ("/api/v1/repositories/scan-org", {}),
+        ("/api/v1/repositories/scan-repo", {}),
         ("/api/v1/discovery", {}),
         ("/api/v1/requirement-analysis", {}),
         ("/api/v1/confirmation", {}),
@@ -501,4 +502,178 @@ def test_org_scan_failures_do_not_echo_the_underlying_error(
 
     assert response.status_code == 502
     assert response.json()["detail"] == "organization scan failed"
+    assert "10.0.0.7" not in response.text
+
+
+def test_url_type_endpoint_is_the_console_badge_source_of_truth(
+    application_container: ApplicationContainer,
+) -> None:
+    """Organization / single repo / neither, decided in Python.
+
+    The console debounces against this instead of reimplementing
+    ``detect_platform`` in TypeScript, so the badge cannot drift from what the
+    scan endpoints will actually do. It is a read: no token, no egress.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        org = client.get("/api/v1/repositories/url-type", params={"url": "https://github.com/acme"})
+        repo = client.get(
+            "/api/v1/repositories/url-type",
+            params={"url": "https://github.com/acme/order-service"},
+        )
+        junk = client.get("/api/v1/repositories/url-type", params={"url": "order-service"})
+        gitlab = client.get(
+            "/api/v1/repositories/url-type",
+            params={"url": "https://gitlab.internal.example/acme"},
+        )
+
+    assert org.status_code == 200
+    assert org.json() == {
+        "url": "https://github.com/acme",
+        "url_type": "group",
+        "platform": "github",
+        "repository_name": None,
+    }
+    assert repo.json()["url_type"] == "single_repo"
+    assert repo.json()["repository_name"] == "order-service"
+    assert junk.json()["url_type"] == "unknown"
+    assert junk.json()["platform"] == "local"
+    # A host this server would refuse to scan still classifies honestly: the
+    # badge must not double as an oracle for the operator's allowlist.
+    assert gitlab.json() == {
+        "url": "https://gitlab.internal.example/acme",
+        "url_type": "group",
+        "platform": "gitlab",
+        "repository_name": None,
+    }
+
+
+def test_single_repo_scan_registers_the_repository_from_its_url(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A pasted repo URL becomes a catalog entry with a real AutoCard.
+
+    POST /repositories already existed but makes the caller type every field;
+    this one fetches the tree/deps/commits. The scan itself is stubbed — the
+    test asserts the endpoint's contract, not GitHub's.
+    """
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+    from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+
+    async def _fake_scan(url: str, fetcher: object) -> RepositoryProfile:
+        return RepositoryProfile(
+            name="order-service",
+            url=url,
+            auto_card=AutoCard(top_dirs=("src",), recent_commits=("add wechat pay",)),
+        )
+
+    monkeypatch.setattr(scan_remote, "scan_single_repo", _fake_scan)
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            first = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://github.com/acme/order-service"},
+            )
+            # Re-scanning is the only retry the console offers, so it has to be
+            # safe to repeat: the second run skips instead of duplicating.
+            again = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://github.com/acme/order-service"},
+            )
+            listed = client.get("/api/v1/repositories")
+    finally:
+        get_settings.cache_clear()
+
+    assert first.status_code == 200
+    body = first.json()
+    assert body["repo_url"] == "https://github.com/acme/order-service"
+    assert (body["total_scanned"], body["registered"], body["skipped"], body["failed"]) == (
+        1,
+        1,
+        0,
+        0,
+    )
+    assert body["repositories"][0]["name"] == "order-service"
+    assert body["repositories"][0]["auto_card"]["recent_commits"] == ["add wechat pay"]
+
+    assert again.json()["registered"] == 0
+    assert again.json()["skipped"] == 1
+    assert [r["name"] for r in listed.json()] == ["order-service"]
+
+
+def test_single_repo_scan_refuses_a_group_url_and_hosts_off_the_allowlist(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Both refusals happen before anything leaves this process.
+
+    The group URL is caught by the same identification the console badges
+    with; the internal host by the SSRF allowlist that scan-org already had.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            group = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://github.com/acme"},
+            )
+            internal = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://gitlab.internal.example/acme/orders"},
+            )
+            metadata = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "http://169.254.169.254/latest/meta-data/"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert group.status_code == 400
+    assert "single repository" in group.json()["detail"]
+    assert internal.status_code == 400
+    assert "allowlist" in internal.json()["detail"]
+    assert metadata.status_code == 400
+
+
+def test_single_repo_scan_failures_do_not_echo_the_underlying_error(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Same silence as scan-org: the caller does not learn what we reached."""
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("connect to 10.0.0.7:5432 refused")
+
+    monkeypatch.setattr(scan_remote, "scan_single_repo", _explode)
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers={"Authorization": "Bearer internal-secret"},
+                json={"repo_url": "https://github.com/acme/order-service"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "repository scan failed"
     assert "10.0.0.7" not in response.text

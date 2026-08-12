@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
@@ -56,6 +56,35 @@ class OrgScanRequest(BaseModel):
     max_workers: int = Field(default=5, ge=1, le=20)
 
 
+class RepoScanRequest(BaseModel):
+    """Request body for single-repository URL scanning."""
+
+    repo_url: HttpUrl
+    github_token: str = Field(default="", description="GitHub access token")
+    gitlab_token: str = Field(default="", description="GitLab access token")
+
+
+class UrlIdentification(BaseModel):
+    """The backend's verdict on what a pasted URL points at.
+
+    The console shows this as a badge next to the URL box. It exists so the
+    console does not have to reimplement ``detect_platform`` in TypeScript and
+    then drift from it — the judgement has exactly one home, and it is here.
+    """
+
+    url: str
+    url_type: Literal["single_repo", "group", "unknown"] = Field(
+        description="What the URL points at: one repository, a group/org, or neither",
+    )
+    platform: Literal["github", "gitlab", "local"] = Field(
+        description="Hosting platform inferred from the URL; 'local' means a filesystem path",
+    )
+    repository_name: str | None = Field(
+        default=None,
+        description="The name a single-repo scan would register, so the console can preview it",
+    )
+
+
 class RepositoryView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,6 +101,22 @@ class OrgScanResult(BaseModel):
     """Response for organization-level batch scanning."""
 
     org_url: str
+    total_scanned: int
+    registered: int
+    skipped: int
+    failed: int
+    repositories: list[RepositoryView] = Field(default_factory=list)
+
+
+class RepoScanResult(BaseModel):
+    """Response for single-repository URL scanning.
+
+    Counts rather than a boolean, even though every one of them is 0 or 1: the
+    console renders the org scan, the single-repo scan and the async task view
+    with one component, and that only stays true if the shapes agree.
+    """
+
+    repo_url: str
     total_scanned: int
     registered: int
     skipped: int
