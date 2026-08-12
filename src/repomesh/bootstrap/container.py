@@ -230,9 +230,7 @@ class ApplicationContainer:
             require_validation=get_settings().delivery_auto_enabled,
             validation_reader=validation,
             contract_catalog=(
-                self.contract_catalog()
-                if get_settings().delivery_contract_gate
-                else None
+                self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
         )
 
@@ -282,11 +280,7 @@ class ApplicationContainer:
                     consumer = by_name.get(content.scope[1])
                     if producer is None or consumer is None:
                         continue
-                    interface = (
-                        content.interface_changes[0]
-                        if content.interface_changes
-                        else ""
-                    )
+                    interface = content.interface_changes[0] if content.interface_changes else ""
                     contracts.append(
                         ContractView(
                             producer=producer.id,
@@ -359,9 +353,7 @@ class ApplicationContainer:
                         created_at=record.created_at,
                         engineering_spec=record.engineering_spec,
                         requirement_text=record.requirement_text,
-                        execution_batches=tuple(
-                            tuple(batch) for batch in record.execution_batches
-                        ),
+                        execution_batches=tuple(tuple(batch) for batch in record.execution_batches),
                         task_dag=tuple(record.task_dag),
                         execution_plan_id=record.execution_plan_id,
                         created_by_agent_id=record.created_by_agent_id,
@@ -377,15 +369,11 @@ class ApplicationContainer:
                 )
 
             async def list_all(self):
-                return tuple(
-                    task.to_view() for task in await container.task_store.list_all()
-                )
+                return tuple(task.to_view() for task in await container.task_store.list_all())
 
         class _ChangeSets:
             async def for_delivery(self, delivery_id: UUID):
-                return await delivery.get_by_idempotency_key(
-                    delivery_change_set_key(delivery_id)
-                )
+                return await delivery.get_by_idempotency_key(delivery_change_set_key(delivery_id))
 
             async def merge_gate(self, change_set_id: UUID, repository_id: UUID):
                 return await delivery.evaluate_merge_gate(change_set_id, repository_id)
@@ -408,11 +396,7 @@ class ApplicationContainer:
                 ]
                 if not candidates:
                     return None
-                frozen = [
-                    item
-                    for item in candidates
-                    if item.status is SpecificationStatus.FROZEN
-                ]
+                frozen = [item for item in candidates if item.status is SpecificationStatus.FROZEN]
                 chosen = (frozen or candidates)[-1]
                 content = chosen.current_version.content
                 return SpecificationContractData(
@@ -434,8 +418,7 @@ class ApplicationContainer:
                         project_id
                     )
                     if specification.repository_id == repository_id
-                    and specification.kind
-                    in {SpecificationKind.REPOSITORY, SpecificationKind.TASK}
+                    and specification.kind in {SpecificationKind.REPOSITORY, SpecificationKind.TASK}
                 ]
                 if not candidates:
                     return None
@@ -495,8 +478,7 @@ class ApplicationContainer:
 
             async def list_all(self):
                 return tuple(
-                    principal.to_view()
-                    for principal in await container.agent_directory.list()
+                    principal.to_view() for principal in await container.agent_directory.list()
                 )
 
         class _Topology:
@@ -533,23 +515,19 @@ class ApplicationContainer:
         class _Messages:
             async def for_project(self, project_id: UUID):
                 return tuple(
-                    message.to_view()
-                    for message in await message_store.list_by_project(project_id)
+                    message.to_view() for message in await message_store.list_by_project(project_id)
                 )
 
             async def for_room(self, room_id: str):
                 return tuple(
-                    message.to_view()
-                    for message in await message_store.list_by_room(room_id)
+                    message.to_view() for message in await message_store.list_by_room(room_id)
                 )
 
         class _Observations:
             async def for_change_set(self, change_set_id: UUID):
                 return tuple(
                     observation.to_view()
-                    for observation in await observation_store.list_by_change_set(
-                        change_set_id
-                    )
+                    for observation in await observation_store.list_by_change_set(change_set_id)
                 )
 
         class _Runtime:
@@ -564,9 +542,7 @@ class ApplicationContainer:
                 self._control_plane = control_plane
 
             async def worker(self, name: str):
-                ref = await self._not_found_as_none(
-                    self._control_plane.get_worker(name)
-                )
+                ref = await self._not_found_as_none(self._control_plane.get_worker(name))
                 if ref is None:
                     return None
                 return RuntimeSnapshot(
@@ -578,9 +554,7 @@ class ApplicationContainer:
                 )
 
             async def manager(self, name: str):
-                ref = await self._not_found_as_none(
-                    self._control_plane.get_manager(name)
-                )
+                ref = await self._not_found_as_none(self._control_plane.get_manager(name))
                 if ref is None:
                     return None
                 return RuntimeSnapshot(
@@ -629,6 +603,8 @@ class ApplicationContainer:
                 if self.agent_team_control_plane is not None
                 else None
             ),
+            probe_timeout=get_settings().runtime_probe_timeout_seconds,
+            probe_concurrency=get_settings().runtime_probe_concurrency,
         )
 
     def organization_registry_service(self):
@@ -860,11 +836,7 @@ class ApplicationContainer:
             ),
             validation=self.validation_snapshot_service(),
             checkpoints=self.project_checkpoint_service(),
-            contracts=(
-                self.contract_catalog()
-                if settings.delivery_contract_gate
-                else None
-            ),
+            contracts=(self.contract_catalog() if settings.delivery_contract_gate else None),
         )
 
     @cached_service

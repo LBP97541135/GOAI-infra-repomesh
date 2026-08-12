@@ -455,3 +455,84 @@ async def test_a_row_whose_snapshot_breaks_the_shape_degrades_alone() -> None:
     assert runtimes["healthy"]["reachable"] is True
     assert runtimes["malformed"] == {"reachable": False}
     assert len(payload["agents"]) == 2  # the page survived
+
+
+class _ConcurrencyWatchingRuntime:
+    """Records the high-water mark of simultaneously in-flight probes."""
+
+    def __init__(self) -> None:
+        self.in_flight = 0
+        self.peak = 0
+
+    async def _resolve(self, name: str):
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            return RuntimeSnapshot(phase="Running")
+        finally:
+            self.in_flight -= 1
+
+    async def worker(self, name: str):
+        return await self._resolve(name)
+
+    async def manager(self, name: str):
+        return await self._resolve(name)
+
+    async def team(self, name: str):
+        return await self._resolve(name)
+
+
+@pytest.mark.asyncio
+async def test_probe_fan_out_stays_under_the_ceiling() -> None:
+    """Unbounded concurrency is not the opposite of the serial bug, it is the
+    other end of it.
+
+    httpx caps a client at 100 connections; past that the requests queue in
+    the pool, and that queue time counts against each probe's own timeout. The
+    rows then report reachable:false while the controller is healthy — a
+    fabricated outage, which is worse than the slow page §4.4 removed.
+    """
+
+    ceiling = 4
+    principals = [
+        _principal(AgentRole.WORKER, f"agent-{index}", repository_id=uuid4()) for index in range(20)
+    ]
+    watcher = _ConcurrencyWatchingRuntime()
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        agents=StubRoster(*principals),
+        runtime=watcher,
+        probe_concurrency=ceiling,
+    )
+
+    payload = await service.list_agents()
+
+    assert len(payload["agents"]) == 20
+    assert all(row["runtime"]["reachable"] is True for row in payload["agents"])
+    assert watcher.peak <= ceiling, f"{watcher.peak} probes were in flight at once"
+
+    # Positive control. Stashing the fix cannot prove this one — the parameter
+    # would not exist, so the failure would be a TypeError rather than a
+    # demonstration of unbounded fan-out. Raising the ceiling instead shows the
+    # watcher does observe every probe running at once, which is what the
+    # bounded assertion above rules out.
+    unbounded = _ConcurrencyWatchingRuntime()
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        agents=StubRoster(*principals),
+        runtime=unbounded,
+        probe_concurrency=len(principals),
+    )
+
+    await service.list_agents()
+
+    assert unbounded.peak == len(principals)
