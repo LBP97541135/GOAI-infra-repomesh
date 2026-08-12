@@ -203,7 +203,14 @@ export type PlanDagState =
   | { status: "loading" }
   | { status: "absent"; reason: string }
   | { status: "error"; message: string }
-  | { status: "ready"; plan: RepositoryPlanView; anchorName: string };
+  | {
+      status: "ready";
+      plan: RepositoryPlanView;
+      anchorName: string;
+      /** 锚点取自发现链候选块而非 issue 拓扑（草稿 issue 的范围尚未冻结）。
+       *  这不是同一件事实，页脚必须说出来：拓扑锚点意味着范围已定，候选锚点不意味着。 */
+      anchorFromCandidate: boolean;
+    };
 
 export function PlanDagPanel({ state, onRetry }: { state: PlanDagState; onRetry: () => void }) {
   return (
@@ -228,12 +235,26 @@ export function PlanDagPanel({ state, onRetry }: { state: PlanDagState; onRetry:
         </p>
       )}
 
-      {state.status === "ready" && <PlanDagSheet plan={state.plan} anchorName={state.anchorName} />}
+      {state.status === "ready" && (
+        <PlanDagSheet
+          plan={state.plan}
+          anchorName={state.anchorName}
+          anchorFromCandidate={state.anchorFromCandidate}
+        />
+      )}
     </>
   );
 }
 
-function PlanDagSheet({ plan, anchorName }: { plan: RepositoryPlanView; anchorName: string }) {
+function PlanDagSheet({
+  plan,
+  anchorName,
+  anchorFromCandidate,
+}: {
+  plan: RepositoryPlanView;
+  anchorName: string;
+  anchorFromCandidate: boolean;
+}) {
   const unresolved = plan.dag.nodes.filter((n) => n.repository_id === null);
 
   return (
@@ -268,6 +289,13 @@ function PlanDagSheet({ plan, anchorName }: { plan: RepositoryPlanView; anchorNa
           锚点仓 <span className="font-bold">{anchorName}</span>：§5.4 端点是单仓作用域，本面取该仓的计划纸面；
           DAG 与批次是 issue 级、同一份，锚点只决定哪个节点带 `is_focus`。
         </div>
+        {anchorFromCandidate && (
+          <div>
+            本 issue 的交付范围<b>尚未冻结</b>（详情的关联仓库为空），上面这个锚点取自发现链的候选块，
+            不是拓扑事实——它只用来把这张 issue 级的图取回来，<b>不代表该仓已进入交付范围</b>。
+            范围以「关联仓库 · 团队」区块为准。
+          </div>
+        )}
         {unresolved.length > 0 && (
           <div className="text-salmon">
             {unresolved.length} 个节点在 catalog 中查无仓库（{unresolved.map((n) => n.name).join("、")}）——名字未注册，

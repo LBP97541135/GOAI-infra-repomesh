@@ -14,13 +14,27 @@ import { resolveDataSourceMode } from "./source";
 import { shortId } from "../display";
 import { repositoryEnvFromAggregate } from "../viewmodel";
 import {
+  ISSUE_DETAIL_FIXTURE_DEFAULT,
   deliveryAggregateFixture,
   issueDetailFixture,
+  issueDetailFixtures,
   repositoryPlanFixture,
   roomStreamFixtures,
   roomsFixture,
   roundEventsFixture,
 } from "../data/issueDetail";
+
+/** 回放形态选择：`?issue=<name>`，取值见 data/issueDetail.ts 的夹具表。
+ *  **自检开关**（同 discovery.ts 的 `?discovery=`），live 模式下完全不参与取数。
+ *  名字打错时不静默回落到默认形态——那会让人以为自己在看 A 其实在看 B。 */
+function replayIssueDetail(): IssueDetailView {
+  const name = new URLSearchParams(window.location.search).get("issue");
+  const picked = name ? issueDetailFixtures[name] : undefined;
+  if (name && !picked) {
+    throw new Error(`回放夹具没有 issue 形态「${name}」。可选：${Object.keys(issueDetailFixtures).join(" / ")}`);
+  }
+  return picked ?? issueDetailFixtures[ISSUE_DETAIL_FIXTURE_DEFAULT];
+}
 
 /** 房间流单页条数：种子每房间 0-5 条，取 50 足够；真实规模由 next_cursor 续读。 */
 export const ROOM_STREAM_LIMIT = 50;
@@ -38,7 +52,7 @@ const EMPTY_STREAM: RoomStreamPage = { items: [], next_cursor: null };
 export async function fetchIssueDetail(issueId: string): Promise<IssueDetailView> {
   if (resolveDataSourceMode() === "replay") {
     if (issueId !== issueDetailFixture.issue_id) throw new Error(`replay 夹具未覆盖 issue ${shortId(issueId)}`);
-    return issueDetailFixture;
+    return replayIssueDetail();
   }
   return defaultClient().getIssueDetail(issueId);
 }
@@ -46,7 +60,10 @@ export async function fetchIssueDetail(issueId: string): Promise<IssueDetailView
 /** §5.1：未建团的 issue 返回空清单且 HTTP 200——空态不是错误，调用方渲染空态。 */
 export async function fetchRooms(issueId: string): Promise<RoomListItemView[]> {
   if (resolveDataSourceMode() === "replay") {
-    return issueId === issueDetailFixture.issue_id ? roomsFixture : [];
+    if (issueId !== issueDetailFixture.issue_id) return [];
+    // 未物化形态没有拓扑就没有团队，也就没有房间——夹具世界要自洽，
+    // 不能让一个 repositories 为空的 issue 摆出三仓六房间
+    return replayIssueDetail().repositories.length === 0 ? [] : roomsFixture;
   }
   const res = await defaultClient().listRooms(issueId);
   return res.rooms;
@@ -69,7 +86,8 @@ export async function fetchRepositoryPlan(issueId: string, repositoryId: string)
  *  纯草稿 issue（无轮次）返回 null，调用方按缺口呈现。 */
 export async function fetchRoundId(issueId: string): Promise<string | null> {
   if (resolveDataSourceMode() === "replay") {
-    return issueDetailFixture.active_round_id ?? issueDetailFixture.latest_round_id;
+    const fixture = replayIssueDetail();
+    return fixture.active_round_id ?? fixture.latest_round_id;
   }
   const detail = await defaultClient().getIssueDetail(issueId);
   return detail.active_round_id ?? detail.latest_round_id;

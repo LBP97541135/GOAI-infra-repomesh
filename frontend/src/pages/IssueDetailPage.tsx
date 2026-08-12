@@ -1,5 +1,5 @@
 import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
-import type { Decision } from "../types";
+import type { Decision, PlanAnchor } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
 import { DiscoveryPanel } from "../components/DiscoveryPanel";
 import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
@@ -84,6 +84,7 @@ export function IssueDetailPage({
   planState,
   onRetryPlan,
   onPlanGenerated,
+  onCandidateAnchor,
   onBack,
   onOpenRoom,
   onToast,
@@ -109,6 +110,9 @@ export function IssueDetailPage({
   /** 发现面板（B-1/B-2）生成计划成功后刷新计划纸面。与 onRetryPlan 是同一个动作
    *  （重取该 issue 的计划快照），但两个入口的语义不同，故分成两个 prop 各自命名。 */
   onPlanGenerated: () => void;
+  /** 锚点回退：发现面板把候选块里的仓库报给容器，容器据此给计划 DAG 面板兜底取数。
+   *  本页只做管道——两个面板分属两个取数容器，不许互相 import。 */
+  onCandidateAnchor: (anchor: PlanAnchor | null) => void;
   onBack: () => void;
   onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
@@ -191,6 +195,7 @@ export function IssueDetailPage({
         organizationId={detail.organization_id}
         onToast={onToast}
         onPlanGenerated={onPlanGenerated}
+        onCandidateAnchor={onCandidateAnchor}
       />
 
       <div className="microlabel pt-4 pb-2">关联仓库 · 团队</div>

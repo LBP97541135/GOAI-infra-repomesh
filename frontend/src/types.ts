@@ -50,6 +50,15 @@ export interface EvidenceView {
   snapshot: { id: string; status: string; environmentHash: string; expiresAt: string } | null;
 }
 
+/** 计划纸面（§5.4）的**锚点仓**。端点是单仓作用域，而 DAG 与 execution_batches 是
+ *  issue 级、每个仓取回的是同一份——所以画整张图只需要任取一个落在本 issue 域内的
+ *  仓库。issue 详情的 `repositories` 为空时（草稿 issue 尚未冻结范围），发现链候选块
+ *  的 `repository_id` 是同一个域内的另一条来路，由发现面板报给容器、容器转给 DAG 面板。 */
+export interface PlanAnchor {
+  repositoryId: string;
+  name: string;
+}
+
 /** 环境窗（CONS-43）的单仓切片：轮次粒度的交付聚合切到本仓作用域。
  *  gate 相关字段原样透传读模型，前端不映射。 */
 export interface RepositoryEnv {

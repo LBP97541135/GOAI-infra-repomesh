@@ -8,6 +8,7 @@ import type {
   DiscoveryTier,
   DiscoveryView,
 } from "../api/contract";
+import type { PlanAnchor } from "../types";
 import { ApiError } from "../api/client";
 import {
   fetchDiscovery,
@@ -240,6 +241,7 @@ export function DiscoveryPanel({
   organizationId,
   onToast,
   onPlanGenerated,
+  onCandidateAnchor,
 }: {
   issueId: string;
   /** 审批主体按 issue 所属组织派生（跨组织 leader 会被后端 403） */
@@ -247,6 +249,10 @@ export function DiscoveryPanel({
   onToast: (text: string) => void;
   /** Step 4 集成成功后请父级刷新计划 DAG 面板（planReload 现成） */
   onPlanGenerated: () => void;
+  /** 锚点回退：把候选块里的任一仓库报给容器，供计划 DAG 面板在 issue 详情
+   *  `repositories` 为空时兜底取数。**取数落定后才报**（含报 null），否则容器
+   *  会把「还没问过」当成「问过、没有」，草稿 issue 一进页面就先闪一屏假的空态。 */
+  onCandidateAnchor: (anchor: PlanAnchor | null) => void;
 }) {
   const mode = resolveDataSourceMode();
 
@@ -331,6 +337,29 @@ export function DiscoveryPanel({
   useEffect(() => {
     callbacks.current = { onToast, onPlanGenerated };
   }, [onToast, onPlanGenerated]);
+
+  /** 锚点回退（主脑实走发现的缺口）：Step 4 走完后，草稿 issue 的拓扑仍是空的，
+   *  于是 `detail.repositories` 为空、DAG 面板恒显「尚未确定范围」——尽管计划已经
+   *  在快照里了。候选块的 `repository_id` **恒为真实 catalog id**（§2.2：不在 catalog
+   *  的候选在评分阶段就被过滤掉了），拿它当锚点即可，§5.4 端点对本 issue 域内的仓库
+   *  本就返回 200。
+   *
+   *  **报给容器、不直接递给 DAG 面板**：两个面板分属两个取数容器，互相 import 会让
+   *  「谁负责取哪份数据」变成一张环。回调走 ref 与轮询同一个理由（父级内联箭头函数
+   *  每次 render 换 identity，列进依赖会让本 effect 空转重跑）。 */
+  const anchorSink = useRef(onCandidateAnchor);
+  useEffect(() => {
+    anchorSink.current = onCandidateAnchor;
+  }, [onCandidateAnchor]);
+
+  const anchorId = view?.candidates?.items[0]?.repository_id ?? null;
+  const anchorName = view?.candidates?.items[0]?.repository_name ?? null;
+  useEffect(() => {
+    // 取数未落定（含换 issue 后的重取）时一个字都不报：此刻 view 还是上一份，
+    // 报出去的是**别的 issue** 的仓库，容器会拿它去请求一条注定 404 的计划纸面。
+    if (loading) return;
+    anchorSink.current(anchorId && anchorName ? { repositoryId: anchorId, name: anchorName } : null);
+  }, [loading, anchorId, anchorName]);
 
   /** 轮询（§4.5）。终态即停并**重取读投影**——任务视图不投影结果，
    *  「这一步到底落没落」只有 `GET …/discovery` 说了算。 */

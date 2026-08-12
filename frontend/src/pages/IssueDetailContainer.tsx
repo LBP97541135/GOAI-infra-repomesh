@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeliveryAggregate, IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
-import type { ApprovalInfo, Decision, EvidenceView } from "../types";
+import type { ApprovalInfo, Decision, EvidenceView, PlanAnchor } from "../types";
 import {
   archiveRound,
   fetchDecisionDeck,
@@ -79,6 +79,19 @@ export function IssueDetailContainer({
    *  所以自成一态，与决策夹同款单区块降级。 */
   const [planState, setPlanState] = useState<PlanDagState>({ status: "loading" });
   const [planReload, setPlanReload] = useState(0);
+
+  /** 锚点回退的中转站：发现面板报上来的候选锚点。三态有意义——
+   *  `undefined` = 发现读投影还没落定（**还没问过**），`null` = 问过、没有候选，
+   *  对象 = 有候选。把前两者压成一个 null 会让草稿 issue 一进页面就先闪一屏
+   *  「尚未确定范围」，然后再跳成图。 */
+  const [candidateAnchor, setCandidateAnchor] = useState<PlanAnchor | null | undefined>(undefined);
+
+  /** 只跟 issueId 清空，**不跟 reload**：容器刷新不会让发现面板重取（它有自己的
+   *  reload 计数），跟着 reload 清就会把锚点永久卡在「还没问过」，DAG 面板恒转圈。 */
+  useEffect(() => setCandidateAnchor(undefined), [issueId]);
+
+  // 稳定引用：发现面板把它存进 ref，内联箭头函数每次 render 换 identity 会让下游空转
+  const handleCandidateAnchor = useCallback((anchor: PlanAnchor | null) => setCandidateAnchor(anchor), []);
 
   /** 证据面（B-3）：决策夹取数时保留的本轮聚合 + 当前打开的单仓证据 */
   const [deckAggregate, setDeckAggregate] = useState<DeliveryAggregate | null>(null);
@@ -172,32 +185,59 @@ export function IssueDetailContainer({
   /** 计划纸面的锚点仓。§5.4 端点是**单仓作用域**，而 DAG 与 execution_batches 是
    *  issue 级、每个仓取回的是同一份（服务端只用 repository_id 决定哪个节点带
    *  `is_focus` 和取哪一份 spec）——所以画整张图只需要任取一个本 issue 的仓库。
-   *  取第一个，并在面板页脚把「锚点是谁」说出来，免得读者把 is_focus 读成别的意思。 */
-  const anchorRepositoryId = detail?.repositories[0]?.repository_id ?? null;
-  const anchorRepositoryName = detail?.repositories[0]?.name ?? null;
+   *
+   *  **两条来路，按可信度排序**：
+   *   1. issue 拓扑 `detail.repositories[0]`——范围已冻结时的事实源；
+   *   2. 发现链候选块（发现面板报上来）——发现走完但**尚未物化**时拓扑还是空的，
+   *      此时只有候选块认识本 issue 域内的仓库。缺了这条回退，「计划已在快照里、
+   *      DAG 面板却恒显尚未确定范围」就是本批开工前实走撞到的那个洞。
+   *  两条都空才是真的没有锚点。 */
+  const scopeAnchor = detail?.repositories[0] ?? null;
+  const anchorFromCandidate = scopeAnchor === null;
+  const anchorRepositoryId = scopeAnchor?.repository_id ?? candidateAnchor?.repositoryId ?? null;
+  const anchorRepositoryName = scopeAnchor?.name ?? candidateAnchor?.name ?? null;
+  /** 拓扑没有、发现链还没落定：此刻「没有锚点」尚未成立，不能就宣布 absent。 */
+  const anchorPending = scopeAnchor === null && candidateAnchor === undefined;
   const hasDetail = detail !== null;
 
   useEffect(() => {
     if (!hasDetail) return;
+    if (anchorPending) {
+      // 还在等发现读投影。这一态是「不知道」，不是「没有」。
+      setPlanState({ status: "loading" });
+      return;
+    }
     if (!anchorRepositoryId || !anchorRepositoryName) {
-      // 草稿 issue：范围未定 → 没有仓库可作锚点，端点无从调用。空要说出来。
+      // 拓扑与候选块都空 → 没有仓库可作锚点，端点无从调用。空要说出来。
       setPlanState({
         status: "absent",
-        reason: "尚未确定交付范围，暂无计划 DAG（计划在范围冻结后由发现链生成，纸面按仓取数）。",
+        reason:
+          "尚未确定交付范围，发现链也还没有候选仓库——两处都取不到锚点仓，" +
+          "而 §5.4 计划纸面是按仓取数的，端点无从调用。",
       });
       return;
     }
     let cancelled = false;
     setPlanState({ status: "loading" });
     fetchRepositoryPlan(issueId, anchorRepositoryId)
-      .then((plan) => !cancelled && setPlanState({ status: "ready", plan, anchorName: anchorRepositoryName }))
+      .then(
+        (plan) =>
+          !cancelled &&
+          setPlanState({ status: "ready", plan, anchorName: anchorRepositoryName, anchorFromCandidate }),
+      )
       .catch((err: unknown) => {
         if (cancelled) return;
         // 404 = 无计划快照。服务端把「issue 不存在」与「issue 从未规划」写成同一个
         // 404，但此处 issue 详情已经取到了，所以只可能是后者——不是错误态。
         setPlanState(
           err instanceof ApiError && err.status === 404
-            ? { status: "absent", reason: "本 issue 还没有计划快照，DAG 无从绘制（计划由发现链在分档审批后生成）。" }
+            ? {
+                status: "absent",
+                reason: anchorFromCandidate
+                  ? `以候选仓 ${anchorRepositoryName} 作回退锚点取计划纸面，服务端返回 404：` +
+                    "要么本 issue 还没有计划快照，要么该候选不在计划范围内——服务端把两者写成同一个 404，界面无从分辨。"
+                  : "本 issue 还没有计划快照，DAG 无从绘制（计划由发现链在分档审批后生成）。",
+              }
             : { status: "error", message: errText(err) },
         );
       });
@@ -206,7 +246,16 @@ export function IssueDetailContainer({
     };
     // 依赖只列锚点标识与刷新计数，不列 detail 整体：reload 时 detail 的 identity 必变，
     // 依赖整个对象会让每次刷新多发一次计划请求（B2 的同款教训）。
-  }, [issueId, hasDetail, anchorRepositoryId, anchorRepositoryName, reload, planReload]);
+  }, [
+    issueId,
+    hasDetail,
+    anchorRepositoryId,
+    anchorRepositoryName,
+    anchorFromCandidate,
+    anchorPending,
+    reload,
+    planReload,
+  ]);
 
   /** 计划纸面重取。**必须是稳定引用**：发现面板把它存进 ref 之外还会随 issue 变化
    *  重建轮询，内联箭头函数每次 render 换 identity 会让下游的 effect 白白重跑。 */
@@ -383,6 +432,7 @@ export function IssueDetailContainer({
         planState={planState}
         onRetryPlan={handlePlanReload}
         onPlanGenerated={handlePlanReload}
+        onCandidateAnchor={handleCandidateAnchor}
         onBack={onBack}
         onOpenRoom={onOpenRoom}
         onToast={onToast}

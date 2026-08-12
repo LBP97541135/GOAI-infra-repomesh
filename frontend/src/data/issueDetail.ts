@@ -84,6 +84,47 @@ export const issueDetailFixture: IssueDetailView = {
   discovery_state: "done",
 };
 
+/** 自检形态：**发现走完但尚未物化**的同一个 issue（`?issue=draft`）。
+ *
+ *  物化之前拓扑是空的——这正是本批开工前实走撞到的洞：`repositories` 为空 →
+ *  计划 DAG 面板取不到锚点 → 恒显「尚未确定范围」，尽管计划已经在快照里。本形态
+ *  同时是三块工作各自的自检屏：
+ *   - 锚点回退：`repositories` 空，锚点只能走发现候选块那条回退路；
+ *   - C-3 物化按钮：`rounds` 空 = 尚未物化，按钮此时才该出现；
+ *   - C-4 着色：未物化 → 无轮次 → 无交付聚合 → 节点维持结构三视觉，不着执行态色。
+ *
+ *  与 `?discovery=done`（默认发现形态）同一个 issue 世界：那份夹具的 integration
+ *  计数就是确认弹窗里要显示的 N。 */
+export const issueDetailDraftFixture: IssueDetailView = {
+  ...issueDetailFixture,
+  phase: "plan",
+  // 读模型派生，夹具照抄 live 上同形态 issue 的原文，不自造措辞
+  phase_note: "计划 v1 待物化",
+  operational_status: null,
+  execution_mode: null,
+  round_count: 0,
+  active_round_id: null,
+  latest_round_id: null,
+  pending_decision_count: 0,
+  repository_count: 0,
+  team_count: 0,
+  rounds: [],
+  repositories: [],
+  teams: [],
+  human_grants: [],
+  required_checkpoints: [],
+  discovery_step: 4,
+  discovery_state: "done",
+};
+
+/** `?issue=<name>` 的取值表（自检开关，与 `?discovery=<name>` 同款；live 下不参与取数）。 */
+export const issueDetailFixtures: Record<string, IssueDetailView> = {
+  default: issueDetailFixture,
+  draft: issueDetailDraftFixture,
+};
+
+export const ISSUE_DETAIL_FIXTURE_DEFAULT = "default";
+
 /** §5.1：每仓两条（teamRoom + leaderDM）。docs 团队尚未 ready，其 leaderDM 是空房间
  *  → last_message: null / message_count: 0（「空房间不装满」）。 */
 export const roomsFixture: RoomListItemView[] = [
