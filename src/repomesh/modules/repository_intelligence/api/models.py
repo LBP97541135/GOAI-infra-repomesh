@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
@@ -56,6 +56,114 @@ class OrgScanRequest(BaseModel):
     max_workers: int = Field(default=5, ge=1, le=20)
 
 
+class RepoScanRequest(BaseModel):
+    """Request body for single-repository URL scanning."""
+
+    repo_url: HttpUrl
+    github_token: str = Field(default="", description="GitHub access token")
+    gitlab_token: str = Field(default="", description="GitLab access token")
+
+
+class ConsoleOrgScanRequest(BaseModel):
+    """Console request body for an organization scan.
+
+    A whitelist, not a copy of :class:`OrgScanRequest`: ``github_token`` and
+    ``gitlab_token`` are absent on purpose. A browser is not a place to type a
+    personal access token, so the console's credentials come from the server's
+    env (``REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN`` / ``..._GITLAB_TOKEN``) and
+    from nowhere else. The native RI endpoints keep their token fields for
+    scripts and operators; this face closes that bypass.
+
+    ``extra="forbid"`` makes the closure audible: a client that sends a token
+    anyway gets a 422 naming the field, rather than having it silently dropped
+    and believing the private repo it asked for simply was not there.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_url: HttpUrl
+    max_workers: int = Field(default=5, ge=1, le=20)
+
+
+class ConsoleRepoScanRequest(BaseModel):
+    """Console request body for a single-repository scan.
+
+    Same whitelist rule as :class:`ConsoleOrgScanRequest`: no token fields,
+    credentials from the server env only.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    repo_url: HttpUrl
+
+
+class ScanTaskView(BaseModel):
+    """A console scan in flight, or the record of one that finished.
+
+    Honest about what it is: an in-process record. It does not survive a
+    restart of the API, and polling one that vanished is answered with a 404
+    that says so rather than one that implies a bad id.
+    """
+
+    task_id: UUID
+    kind: Literal["organization", "repository"]
+    url: str
+    status: Literal["running", "succeeded", "failed"] = Field(
+        description="While 'running' the counts below are partial, not a result",
+    )
+    total: int = Field(
+        default=0,
+        description="Repositories the scan found to work through; 0 until the listing returns",
+    )
+    scanned: int = Field(default=0, description="How many of them have been scanned so far")
+    last_scanned_repository: str | None = Field(
+        default=None,
+        description="Most recently *finished* repository, not the one in progress",
+    )
+    registered: int = Field(
+        default=0, description="Newly added to the catalog; only final once status is 'succeeded'"
+    )
+    skipped: int = Field(
+        default=0,
+        description="Already in the catalog under this name — what makes a re-scan idempotent",
+    )
+    failed: int = Field(
+        default=0,
+        description=(
+            "Could not be registered. A count, not a list: which ones failed and why is in the "
+            "server log, because echoing outbound failures back to a caller is the bug this "
+            "codebase already fixed once. Retry granularity is the whole scan, not these rows."
+        ),
+    )
+    error: str | None = Field(
+        default=None,
+        description="Why the scan as a whole failed, in the same generic terms a 502 would use",
+    )
+    started_at: datetime
+    finished_at: datetime | None = None
+
+
+class UrlIdentification(BaseModel):
+    """The backend's verdict on what a pasted URL points at.
+
+    The console shows this as a badge next to the URL box. It exists so the
+    console does not have to reimplement ``detect_platform`` in TypeScript and
+    then drift from it — the judgement has exactly one home, and it is here.
+    """
+
+    url: str
+    url_type: Literal["single_repo", "group", "unknown"] = Field(
+        description="What the URL points at: one repository, a group/org, or neither",
+    )
+    platform: Literal["github", "gitlab", "local"] = Field(
+        description="Hosting platform inferred from the URL; 'local' means a filesystem path",
+    )
+    repository_name: str | None = Field(
+        default=None,
+        description="The name a single-repo scan would register, so the console can preview it",
+    )
+
+
 class RepositoryView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -72,6 +180,22 @@ class OrgScanResult(BaseModel):
     """Response for organization-level batch scanning."""
 
     org_url: str
+    total_scanned: int
+    registered: int
+    skipped: int
+    failed: int
+    repositories: list[RepositoryView] = Field(default_factory=list)
+
+
+class RepoScanResult(BaseModel):
+    """Response for single-repository URL scanning.
+
+    Counts rather than a boolean, even though every one of them is 0 or 1: the
+    console renders the org scan, the single-repo scan and the async task view
+    with one component, and that only stays true if the shapes agree.
+    """
+
+    repo_url: str
     total_scanned: int
     registered: int
     skipped: int
