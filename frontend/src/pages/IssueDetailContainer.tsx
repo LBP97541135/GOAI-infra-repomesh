@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeliveryAggregate, IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
-import type { ApprovalInfo, Decision, EvidenceView } from "../types";
+import type { ApprovalInfo, Decision, EvidenceView, PlanAnchor } from "../types";
 import {
   archiveRound,
   fetchDecisionDeck,
@@ -18,7 +18,7 @@ import { EvidenceModal } from "../components/EvidenceModal";
 import type { PlanDagState } from "../components/PlanDagPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 import { errText, shortId } from "../display";
-import { approvalForDecision, evidenceFromAggregate } from "../viewmodel";
+import { approvalForDecision, dagExecutionFromAggregate, evidenceFromAggregate } from "../viewmodel";
 import { IssueDetailPage } from "./IssueDetailPage";
 
 /** issue 详情取数容器（§3 概览 + §5.1 房间清单 + §4.3 决策夹 + §4.4 写回路）。
@@ -79,6 +79,19 @@ export function IssueDetailContainer({
    *  所以自成一态，与决策夹同款单区块降级。 */
   const [planState, setPlanState] = useState<PlanDagState>({ status: "loading" });
   const [planReload, setPlanReload] = useState(0);
+
+  /** 锚点回退的中转站：发现面板报上来的候选锚点。三态有意义——
+   *  `undefined` = 发现读投影还没落定（**还没问过**），`null` = 问过、没有候选，
+   *  对象 = 有候选。把前两者压成一个 null 会让草稿 issue 一进页面就先闪一屏
+   *  「尚未确定范围」，然后再跳成图。 */
+  const [candidateAnchor, setCandidateAnchor] = useState<PlanAnchor | null | undefined>(undefined);
+
+  /** 只跟 issueId 清空，**不跟 reload**：容器刷新不会让发现面板重取（它有自己的
+   *  reload 计数），跟着 reload 清就会把锚点永久卡在「还没问过」，DAG 面板恒转圈。 */
+  useEffect(() => setCandidateAnchor(undefined), [issueId]);
+
+  // 稳定引用：发现面板把它存进 ref，内联箭头函数每次 render 换 identity 会让下游空转
+  const handleCandidateAnchor = useCallback((anchor: PlanAnchor | null) => setCandidateAnchor(anchor), []);
 
   /** 证据面（B-3）：决策夹取数时保留的本轮聚合 + 当前打开的单仓证据 */
   const [deckAggregate, setDeckAggregate] = useState<DeliveryAggregate | null>(null);
@@ -172,32 +185,59 @@ export function IssueDetailContainer({
   /** 计划纸面的锚点仓。§5.4 端点是**单仓作用域**，而 DAG 与 execution_batches 是
    *  issue 级、每个仓取回的是同一份（服务端只用 repository_id 决定哪个节点带
    *  `is_focus` 和取哪一份 spec）——所以画整张图只需要任取一个本 issue 的仓库。
-   *  取第一个，并在面板页脚把「锚点是谁」说出来，免得读者把 is_focus 读成别的意思。 */
-  const anchorRepositoryId = detail?.repositories[0]?.repository_id ?? null;
-  const anchorRepositoryName = detail?.repositories[0]?.name ?? null;
+   *
+   *  **两条来路，按可信度排序**：
+   *   1. issue 拓扑 `detail.repositories[0]`——范围已冻结时的事实源；
+   *   2. 发现链候选块（发现面板报上来）——发现走完但**尚未物化**时拓扑还是空的，
+   *      此时只有候选块认识本 issue 域内的仓库。缺了这条回退，「计划已在快照里、
+   *      DAG 面板却恒显尚未确定范围」就是本批开工前实走撞到的那个洞。
+   *  两条都空才是真的没有锚点。 */
+  const scopeAnchor = detail?.repositories[0] ?? null;
+  const anchorFromCandidate = scopeAnchor === null;
+  const anchorRepositoryId = scopeAnchor?.repository_id ?? candidateAnchor?.repositoryId ?? null;
+  const anchorRepositoryName = scopeAnchor?.name ?? candidateAnchor?.name ?? null;
+  /** 拓扑没有、发现链还没落定：此刻「没有锚点」尚未成立，不能就宣布 absent。 */
+  const anchorPending = scopeAnchor === null && candidateAnchor === undefined;
   const hasDetail = detail !== null;
 
   useEffect(() => {
     if (!hasDetail) return;
+    if (anchorPending) {
+      // 还在等发现读投影。这一态是「不知道」，不是「没有」。
+      setPlanState({ status: "loading" });
+      return;
+    }
     if (!anchorRepositoryId || !anchorRepositoryName) {
-      // 草稿 issue：范围未定 → 没有仓库可作锚点，端点无从调用。空要说出来。
+      // 拓扑与候选块都空 → 没有仓库可作锚点，端点无从调用。空要说出来。
       setPlanState({
         status: "absent",
-        reason: "尚未确定交付范围，暂无计划 DAG（计划在范围冻结后由发现链生成，纸面按仓取数）。",
+        reason:
+          "尚未确定交付范围，发现链也还没有候选仓库——两处都取不到锚点仓，" +
+          "而 §5.4 计划纸面是按仓取数的，端点无从调用。",
       });
       return;
     }
     let cancelled = false;
     setPlanState({ status: "loading" });
     fetchRepositoryPlan(issueId, anchorRepositoryId)
-      .then((plan) => !cancelled && setPlanState({ status: "ready", plan, anchorName: anchorRepositoryName }))
+      .then(
+        (plan) =>
+          !cancelled &&
+          setPlanState({ status: "ready", plan, anchorName: anchorRepositoryName, anchorFromCandidate }),
+      )
       .catch((err: unknown) => {
         if (cancelled) return;
         // 404 = 无计划快照。服务端把「issue 不存在」与「issue 从未规划」写成同一个
         // 404，但此处 issue 详情已经取到了，所以只可能是后者——不是错误态。
         setPlanState(
           err instanceof ApiError && err.status === 404
-            ? { status: "absent", reason: "本 issue 还没有计划快照，DAG 无从绘制（计划由发现链在分档审批后生成）。" }
+            ? {
+                status: "absent",
+                reason: anchorFromCandidate
+                  ? `以候选仓 ${anchorRepositoryName} 作回退锚点取计划纸面，服务端返回 404：` +
+                    "要么本 issue 还没有计划快照，要么该候选不在计划范围内——服务端把两者写成同一个 404，界面无从分辨。"
+                  : "本 issue 还没有计划快照，DAG 无从绘制（计划由发现链在分档审批后生成）。",
+              }
             : { status: "error", message: errText(err) },
         );
       });
@@ -206,7 +246,53 @@ export function IssueDetailContainer({
     };
     // 依赖只列锚点标识与刷新计数，不列 detail 整体：reload 时 detail 的 identity 必变，
     // 依赖整个对象会让每次刷新多发一次计划请求（B2 的同款教训）。
-  }, [issueId, hasDetail, anchorRepositoryId, anchorRepositoryName, reload, planReload]);
+  }, [
+    issueId,
+    hasDetail,
+    anchorRepositoryId,
+    anchorRepositoryName,
+    anchorFromCandidate,
+    anchorPending,
+    reload,
+    planReload,
+  ]);
+
+  /** DAG 执行态着色（C-4）的输入。数据源是**本轮交付聚合**——决策夹取数时已经把它
+   *  留下了（`deckAggregate`），这里零额外请求。
+   *
+   *  `null` 有两种来路，页脚都能说清：草稿 issue 没有轮次（聚合根本没取）、
+   *  或本轮聚合取用失败。两种都是「无执行事实」，节点维持结构三视觉——
+   *  取不到就不上色，比摆一排灰块让人以为「全都在等」诚实。
+   *
+   *  轮次标签与决策夹同一份算法（第 N 轮 / 轮次 短id），免得同一页出现两种叫法。 */
+  const roundIndex = roundId && detail ? detail.rounds.findIndex((r) => r.round_id === roundId) : -1;
+  const roundLabel = !roundId ? "" : roundIndex >= 0 ? `第 ${roundIndex + 1} 轮` : `轮次 ${shortId(roundId)}`;
+  const planExecution = useMemo(
+    () => (deckAggregate ? dagExecutionFromAggregate(deckAggregate, roundLabel) : null),
+    [deckAggregate, roundLabel],
+  );
+
+  /** 物化确认弹窗（C-3）里的 M。设计定稿写死「**每仓一队**」，所以数的是计划里的
+   *  **仓库**——`execution_batches` 去重后的仓库名数，不是 `dag.nodes.length`
+   *  （同一仓库在多个批次里出现就会被数两遍），也不是候选数。
+   *
+   *  计划纸面没取到时为 null：弹窗照实说「取不到」，不拿别的数顶替一个看着像的数字。 */
+  const planRepositoryCount =
+    planState.status === "ready" ? new Set(planState.plan.execution_batches.flat()).size : null;
+
+  /** catalog 查无仓库的节点数。>0 时上面那个 M 与服务端实际建队数可能不等
+   *  （要不要为一个查无此仓的名字建队是服务端的判断），弹窗里如实旁注。 */
+  const planUnresolvedCount =
+    planState.status === "ready"
+      ? planState.plan.dag.nodes.filter((n) => n.repository_id === null).length
+      : 0;
+
+  /** 物化成功后刷整页：轮次、房间、关联仓库、DAG 着色全在这一次写里变了，
+   *  只刷发现面板会让页面上半截是新事实、下半截还是物化前的旧图。 */
+  const handleMaterialized = useCallback(() => {
+    setReload((n) => n + 1);
+    setPlanReload((n) => n + 1);
+  }, []);
 
   /** 计划纸面重取。**必须是稳定引用**：发现面板把它存进 ref 之外还会随 issue 变化
    *  重建轮询，内联箭头函数每次 render 换 identity 会让下游的 effect 白白重跑。 */
@@ -381,8 +467,16 @@ export function IssueDetailContainer({
         }
         onDecisionAction={handleDecisionAction}
         planState={planState}
+        planExecution={planExecution}
         onRetryPlan={handlePlanReload}
         onPlanGenerated={handlePlanReload}
+        onCandidateAnchor={handleCandidateAnchor}
+        materialize={{
+          roundCount: detail.rounds.length,
+          planRepositoryCount,
+          planUnresolvedCount,
+        }}
+        onMaterialized={handleMaterialized}
         onBack={onBack}
         onOpenRoom={onOpenRoom}
         onToast={onToast}

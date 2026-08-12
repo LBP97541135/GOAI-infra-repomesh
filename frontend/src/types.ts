@@ -2,7 +2,7 @@
  *  契约数据（src/api/contract.ts）经 src/viewmodel.ts 派生成本文件的展示形状；
  *  display_status / gate_display / phase 由后端（或 replay 夹具）给出，前端只渲染，
  *  不做任何状态映射（契约 §5 是唯一实现）。 */
-import type { DecisionAction, GateDisplay } from "./api/contract";
+import type { DecisionAction, GateDisplay, TaskDisplayStatus } from "./api/contract";
 
 /** 契约 §4.3 仅此两类。clarify 已删（X4 裁决：无消费方；真机制落地时按
  *  ChangeRequest 回路立项重建，届时是真实体不是演示枚举） */
@@ -48,6 +48,30 @@ export interface EvidenceView {
   governance: Array<{ decision: string; headSha: string; reason: string; decidedAt: string }>;
   commits: Array<{ sha: string; files: string[] }>;
   snapshot: { id: string; status: string; environmentHash: string; expiresAt: string } | null;
+}
+
+/** 计划纸面（§5.4）的**锚点仓**。端点是单仓作用域，而 DAG 与 execution_batches 是
+ *  issue 级、每个仓取回的是同一份——所以画整张图只需要任取一个落在本 issue 域内的
+ *  仓库。issue 详情的 `repositories` 为空时（草稿 issue 尚未冻结范围），发现链候选块
+ *  的 `repository_id` 是同一个域内的另一条来路，由发现面板报给容器、容器转给 DAG 面板。 */
+export interface PlanAnchor {
+  repositoryId: string;
+  name: string;
+}
+
+/** 计划 DAG 的执行态着色输入（C-4）。由**本轮交付聚合的 `tasks[]`** 切成按仓一份，
+ *  值全部是读模型给出的 `display_status` 字面值——前端不派生、不翻译、不兜底。
+ *
+ *  `null` 是一种诚实的取舍而不是缺省值：同一个仓在本轮可能有多条任务（CI rework
+ *  与父任务同仓），它们的展示态不一致时，读模型**没有**给出「这个仓整体算什么态」
+ *  这一事实，前端挑一条充数就是自造了一份仓级状态映射。 */
+export interface DagExecutionView {
+  /** repository_id → 该仓本轮任务的展示态；多条且不一致时为 null */
+  byRepository: Record<string, TaskDisplayStatus | null>;
+  /** 该仓本轮的任务条数（0 = 本轮没有这个仓的任务） */
+  taskCountByRepository: Record<string, number>;
+  /** 着色取自哪一轮，页脚如实标注（决策夹的 deckNote 同款语义） */
+  roundLabel: string;
 }
 
 /** 环境窗（CONS-43）的单仓切片：轮次粒度的交付聚合切到本仓作用域。

@@ -84,6 +84,47 @@ export const issueDetailFixture: IssueDetailView = {
   discovery_state: "done",
 };
 
+/** 自检形态：**发现走完但尚未物化**的同一个 issue（`?issue=draft`）。
+ *
+ *  物化之前拓扑是空的——这正是本批开工前实走撞到的洞：`repositories` 为空 →
+ *  计划 DAG 面板取不到锚点 → 恒显「尚未确定范围」，尽管计划已经在快照里。本形态
+ *  同时是三块工作各自的自检屏：
+ *   - 锚点回退：`repositories` 空，锚点只能走发现候选块那条回退路；
+ *   - C-3 物化按钮：`rounds` 空 = 尚未物化，按钮此时才该出现；
+ *   - C-4 着色：未物化 → 无轮次 → 无交付聚合 → 节点维持结构三视觉，不着执行态色。
+ *
+ *  与 `?discovery=done`（默认发现形态）同一个 issue 世界：那份夹具的 integration
+ *  计数就是确认弹窗里要显示的 N。 */
+export const issueDetailDraftFixture: IssueDetailView = {
+  ...issueDetailFixture,
+  phase: "plan",
+  // 读模型派生，夹具照抄 live 上同形态 issue 的原文，不自造措辞
+  phase_note: "计划 v1 待物化",
+  operational_status: null,
+  execution_mode: null,
+  round_count: 0,
+  active_round_id: null,
+  latest_round_id: null,
+  pending_decision_count: 0,
+  repository_count: 0,
+  team_count: 0,
+  rounds: [],
+  repositories: [],
+  teams: [],
+  human_grants: [],
+  required_checkpoints: [],
+  discovery_step: 4,
+  discovery_state: "done",
+};
+
+/** `?issue=<name>` 的取值表（自检开关，与 `?discovery=<name>` 同款；live 下不参与取数）。 */
+export const issueDetailFixtures: Record<string, IssueDetailView> = {
+  default: issueDetailFixture,
+  draft: issueDetailDraftFixture,
+};
+
+export const ISSUE_DETAIL_FIXTURE_DEFAULT = "default";
+
 /** §5.1：每仓两条（teamRoom + leaderDM）。docs 团队尚未 ready，其 leaderDM 是空房间
  *  → last_message: null / message_count: 0（「空房间不装满」）。 */
 export const roomsFixture: RoomListItemView[] = [
@@ -426,6 +467,55 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
     execution_batches: [["saleor-core"], ["saleor-dashboard", "saleor-docs"]],
     merge_order: [REPO_API, REPO_WEB, REPO_DOCS],
   },
+  /** C-4 着色的数据源。三仓三态**有意各不相同**：只摆一屏全绿等于没测——
+   *  真出事时看的正是琥珀（在跑 / 修复中）与灰（等前置）那几个节点。
+   *  `display_status` 是读模型按 §5.1 算好的，夹具照抄字面值，不在这里重算一遍。 */
+  tasks: [
+    {
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a002",
+      task_key: null,
+      repository_id: REPO_API,
+      title: "价格修改原因：模型、审计与 GraphQL 暴露",
+      backend_status: "succeeded",
+      display_status: "succeeded",
+      agent: "rm-worker-597869c4",
+      attempt: 1,
+      depends_on: [],
+      result_summary: "PR 19466：迁移 + 必填校验 + 审计字段，隐藏验收 9/9",
+      repair_timeline: [],
+      escalated_to_human: false,
+    },
+    {
+      // §5.2：in_progress 且存在未终态 rework 链 → 展示 repairing（attempt 2）。
+      // 这是 CI 失败后返工的形态，与 change_set 里那条 ci_failed 是同一件事的两个面。
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a003",
+      task_key: null,
+      repository_id: REPO_WEB,
+      title: "后台订单详情页展示价格修改原因",
+      backend_status: "in_progress",
+      display_status: "repairing",
+      agent: "rm-worker-b6b2f051",
+      attempt: 2,
+      depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
+      result_summary: null,
+      repair_timeline: [{ at: "2026-08-11T11:40:00Z", what: "隐藏验收测试 3/9 失败，开返工任务" }],
+      escalated_to_human: false,
+    },
+    {
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a005",
+      task_key: null,
+      repository_id: REPO_DOCS,
+      title: "运营文档补价格修改原因章节",
+      backend_status: "assigned",
+      display_status: "pending",
+      agent: null,
+      attempt: 1,
+      depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
+      result_summary: null,
+      repair_timeline: [],
+      escalated_to_human: false,
+    },
+  ],
   change_set: {
     change_set_id: CHANGE_SET_ID,
     status: "delivering",
@@ -539,6 +629,41 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
 
 /** 本轮决策夹（§4.3）。approve 指向 REPO_API，与上面 change_set 里那条
  *  `merge_gate.allowed: false / 缺 head-bound 治理决策` 对应——批准它正是补上那一条。 */
+/** C-4 的两条「拒绝派生」分支的自检形态（`?tasks=conflict`）。默认形态里每仓恰好
+ *  一条任务，这两条分支永远走不到——而它们正是出事时才会被看到的那两个节点：
+ *
+ *   - saleor-dashboard 有**两条任务、展示态不一致**（父任务 failed + 返工任务
+ *     running）。读模型没有给出「这个仓整体算什么态」这一事实，界面留白并写明
+ *     几条任务不一致，不挑一条充数；
+ *   - saleor-docs **本轮没有任务**：计划里有它，执行面还没有它。这与「等待」
+ *     不是一回事，节点上如实写「本轮无任务」而不是涂成灰的 pending。 */
+export const deliveryAggregateTaskConflictFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: [
+    deliveryAggregateFixture.tasks[0],
+    {
+      ...deliveryAggregateFixture.tasks[1],
+      backend_status: "failed",
+      display_status: "failed",
+      attempt: 1,
+      repair_timeline: [],
+    },
+    {
+      ...deliveryAggregateFixture.tasks[1],
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a004",
+      title: "后台订单详情页展示价格修改原因（返工）",
+      backend_status: "in_progress",
+      display_status: "running",
+      attempt: 2,
+    },
+  ],
+};
+
+export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
+  default: deliveryAggregateFixture,
+  conflict: deliveryAggregateTaskConflictFixture,
+};
+
 export const decisionsFixture: DecisionsResponse = {
   items: [
     {

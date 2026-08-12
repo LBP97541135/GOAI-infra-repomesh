@@ -8,10 +8,12 @@ import type {
   DiscoveryTier,
   DiscoveryView,
 } from "../api/contract";
+import type { PlanAnchor } from "../types";
 import { ApiError } from "../api/client";
 import {
   fetchDiscovery,
   fetchDiscoveryTask,
+  materializeDiscovery,
   newIdempotencyKey,
   submitDiscoveryApproval,
   triggerAnalysis,
@@ -21,8 +23,9 @@ import {
 } from "../api/discovery";
 import { resolveGovernanceAgent } from "../api/decisions";
 import { resolveDataSourceMode } from "../api/source";
-import { agentLabel, errText } from "../display";
+import { agentLabel, errText, shortId } from "../display";
 import { DiscoveryApproval, type ApprovalPrincipal } from "./DiscoveryApproval";
+import { MaterializeModal } from "./MaterializeModal";
 
 /** issue 详情页 · 发现面板（批次 B-1/B-2）。
  *  契约 `docs/contracts/delivery-read-model-v0.4.md`；设计定稿
@@ -48,9 +51,24 @@ import { DiscoveryApproval, type ApprovalPrincipal } from "./DiscoveryApproval";
 
 const POLL_MS = 2000;
 
-type StepKey = "analysis" | "candidates" | "classification" | "plan" | "approval";
+type StepKey = "analysis" | "candidates" | "classification" | "plan" | "approval" | "materialize";
 
 const STEP_TITLES = ["需求分析", "候选评分", "分档审批", "生成计划"];
+
+/** 物化开工（C-3）要用的、发现读投影**之外**的事实。都来自 issue 详情与计划纸面，
+ *  由容器持有并传进来——发现面板自己再取一遍 issue 详情就成了第二个取数点。
+ *
+ *  步进器仍只有四格：物化不是发现链的第五步（发现四步改的是同一份草稿快照，
+ *  物化建的是执行面的实体）。 */
+export interface MaterializeContext {
+  /** `detail.rounds.length`。非 0 = 已物化，按钮不再出现，改显已物化留痕。 */
+  roundCount: number;
+  /** M（「每仓一队」）：计划纸面 `execution_batches` 去重后的仓库数。
+   *  计划纸面未就绪时为 null——弹窗照实说取不到，不拿别的数顶替。 */
+  planRepositoryCount: number | null;
+  /** 计划里 catalog 查无仓库的节点数，用于弹窗旁注（M 与实际建队数可能不等）。 */
+  planUnresolvedCount: number;
+}
 
 /* ── 步进器 ─────────────────────────────────────────────────────────────── */
 
@@ -240,6 +258,9 @@ export function DiscoveryPanel({
   organizationId,
   onToast,
   onPlanGenerated,
+  onCandidateAnchor,
+  materialize,
+  onMaterialized,
 }: {
   issueId: string;
   /** 审批主体按 issue 所属组织派生（跨组织 leader 会被后端 403） */
@@ -247,6 +268,14 @@ export function DiscoveryPanel({
   onToast: (text: string) => void;
   /** Step 4 集成成功后请父级刷新计划 DAG 面板（planReload 现成） */
   onPlanGenerated: () => void;
+  /** 锚点回退：把候选块里的任一仓库报给容器，供计划 DAG 面板在 issue 详情
+   *  `repositories` 为空时兜底取数。**取数落定后才报**（含报 null），否则容器
+   *  会把「还没问过」当成「问过、没有」，草稿 issue 一进页面就先闪一屏假的空态。 */
+  onCandidateAnchor: (anchor: PlanAnchor | null) => void;
+  /** C-3 物化开工所需的 issue 侧事实（见 MaterializeContext） */
+  materialize: MaterializeContext;
+  /** 物化成功后请父级刷新**整页**详情：轮次、房间、DAG 着色全都在这一次写里变了 */
+  onMaterialized: () => void;
 }) {
   const mode = resolveDataSourceMode();
 
@@ -267,6 +296,11 @@ export function DiscoveryPanel({
   const [writeError, setWriteError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [evidenceDrift, setEvidenceDrift] = useState(false);
+
+  /** 物化确认弹窗（C-3）。错误单列一份：它要显示在弹窗里，与面板顶部的
+   *  writeError 不是同一个位置（关掉弹窗就看不见了，那才是真的静默失败）。 */
+  const [materializeOpen, setMaterializeOpen] = useState(false);
+  const [materializeError, setMaterializeError] = useState<string | null>(null);
 
   /** 幂等键（§4.1「随表单生成」、Q9「每步一个键」）。
    *  一把键代表**一次逻辑触发**：请求失败后原样重试沿用同一把（服务端据此去重，
@@ -306,6 +340,8 @@ export function DiscoveryPanel({
     setApprovalError(null);
     setEvidenceDrift(false);
     setTaskLost(false);
+    setMaterializeOpen(false);
+    setMaterializeError(null);
     keys.current = {};
   }, [issueId]);
 
@@ -331,6 +367,29 @@ export function DiscoveryPanel({
   useEffect(() => {
     callbacks.current = { onToast, onPlanGenerated };
   }, [onToast, onPlanGenerated]);
+
+  /** 锚点回退（主脑实走发现的缺口）：Step 4 走完后，草稿 issue 的拓扑仍是空的，
+   *  于是 `detail.repositories` 为空、DAG 面板恒显「尚未确定范围」——尽管计划已经
+   *  在快照里了。候选块的 `repository_id` **恒为真实 catalog id**（§2.2：不在 catalog
+   *  的候选在评分阶段就被过滤掉了），拿它当锚点即可，§5.4 端点对本 issue 域内的仓库
+   *  本就返回 200。
+   *
+   *  **报给容器、不直接递给 DAG 面板**：两个面板分属两个取数容器，互相 import 会让
+   *  「谁负责取哪份数据」变成一张环。回调走 ref 与轮询同一个理由（父级内联箭头函数
+   *  每次 render 换 identity，列进依赖会让本 effect 空转重跑）。 */
+  const anchorSink = useRef(onCandidateAnchor);
+  useEffect(() => {
+    anchorSink.current = onCandidateAnchor;
+  }, [onCandidateAnchor]);
+
+  const anchorId = view?.candidates?.items[0]?.repository_id ?? null;
+  const anchorName = view?.candidates?.items[0]?.repository_name ?? null;
+  useEffect(() => {
+    // 取数未落定（含换 issue 后的重取）时一个字都不报：此刻 view 还是上一份，
+    // 报出去的是**别的 issue** 的仓库，容器会拿它去请求一条注定 404 的计划纸面。
+    if (loading) return;
+    anchorSink.current(anchorId && anchorName ? { repositoryId: anchorId, name: anchorName } : null);
+  }, [loading, anchorId, anchorName]);
 
   /** 轮询（§4.5）。终态即停并**重取读投影**——任务视图不投影结果，
    *  「这一步到底落没落」只有 `GET …/discovery` 说了算。 */
@@ -454,6 +513,45 @@ export function DiscoveryPanel({
         if (err instanceof ApiError && err.status === 409) setEvidenceDrift(true);
         setApprovalError(errText(err));
       })
+      .finally(() => setBusy(null));
+  };
+
+  /** 物化开工（C-3）。幂等键**随弹窗生成**：打开取一把（已有就沿用），失败留着——
+   *  原样重试是同一次逻辑物化，换新键会让服务端当成第二次、真去建第二批任务。
+   *  取消即作废：重新打开是一次新的决定。 */
+  const openMaterialize = () => {
+    takeKey("materialize");
+    setMaterializeError(null);
+    setMaterializeOpen(true);
+  };
+
+  const closeMaterialize = () => {
+    setMaterializeOpen(false);
+    setMaterializeError(null);
+    dropKey("materialize");
+  };
+
+  const handleMaterialize = () => {
+    if (!agentId) return;
+    setBusy("materialize");
+    setMaterializeError(null);
+    materializeDiscovery(issueId, { created_by_agent_id: agentId, idempotency_key: takeKey("materialize") })
+      .then((result) => {
+        dropKey("materialize");
+        setMaterializeOpen(false);
+        // `repositories[]` 的元素语义（id 还是名）未定稿，故只报数不报内容
+        onToast(
+          result.status === "replayed"
+            ? `已物化（同幂等键重放，未重复创建）· 计划 ${shortId(result.plan_id)} · ${result.task_ids.length} 任务 · ${result.team_count} 团队`
+            : `已物化并开工 · 计划 ${shortId(result.plan_id)} · ${result.task_ids.length} 任务 · ${result.team_count} 团队`,
+        );
+        // 轮次、房间、DAG 着色全在这一次写里变了 → 刷整页，而不是只刷本面板
+        onMaterialized();
+        setReload((n) => n + 1);
+      })
+      // 409（检查点未过 / 计划未生成…）、403、404 一律服务端 detail 原文进弹窗，
+      // 不翻译不软化——归并成一句「物化失败」会把可自助解决的前置问题伪装成故障
+      .catch((err: unknown) => setMaterializeError(errText(err)))
       .finally(() => setBusy(null));
   };
 
@@ -756,6 +854,38 @@ export function DiscoveryPanel({
               审批 v1 必经：分档未批准时本步会被服务端以 409 拒绝。
             </p>
           )}
+
+          {/* ── 物化并开工（C-3）───────────────────────────────────────────
+              出现条件只看两条**事实**：读模型说整链走完（step 4 且 done），
+              且 issue 详情说还没有轮次。不看 integration 是否为空去反推——
+              那就是在前端重写 §3.2 的第 7 条。 */}
+          {step === 4 && stepState === "done" && (
+            <div className="mt-3 border-t border-line pt-3">
+              {materialize.roundCount > 0 ? (
+                <p className="text-[11.5px] text-olive">
+                  本 issue 已物化 · 第 {materialize.roundCount} 轮交付已建立。任务与团队见下方「关联仓库 · 团队」
+                  与「房间」区块，执行进度在「计划 DAG」上按读模型着色。
+                </p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+                      disabled={anyBusy}
+                      onClick={openMaterialize}
+                    >
+                      物化并开工
+                    </button>
+                    {triggerHint(4) && <span className="text-[11px] text-tx3">{triggerHint(4)}</span>}
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-[1.7] text-tx3">
+                    把计划变成任务与团队（每仓一队 + teamRoom/leaderDM 双房间）。
+                    这是整条链的<b className="text-tx2">第二个不可逆动作</b>，具体要创建多少东西在确认弹窗里数给你看。
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </Section>
 
         {/* 页脚数据源标注，照 PlanDagPanel 的惯例 */}
@@ -768,9 +898,27 @@ export function DiscoveryPanel({
             步进器位置（step={step} · {stepState}）由读模型按 §3.2 七条规则判定，本面只渲染不自判；
             上游重跑会自动作废下游（§4.4），被作废的步在这里回到未完成态、不残留旧结果。
           </div>
-          <div>物化开工（把计划变成任务与团队）属批次 C-3，不在本面板；步进器只有这四格。</div>
+          <div>
+            物化开工（把计划变成任务与团队）挂在第 4 步之后，但<b>不是</b>发现链的第五步——
+            发现四步改的都是同一份草稿快照，物化建的是执行面的实体，所以步进器仍只有这四格。
+          </div>
         </div>
       </div>
+
+      <MaterializeModal
+        open={materializeOpen}
+        planVersion={view.plan_version}
+        // N 取服务端计数。integration 为 null 时不该走到这（step 4 且 done 意味着
+        // 集成已落），兜底显 0 而不是编一个数
+        taskCount={integration?.task_dag_count ?? 0}
+        teamCount={materialize.planRepositoryCount}
+        unresolvedCount={materialize.planUnresolvedCount}
+        principal={approvalPrincipal(mode, principalResolving, principal)}
+        submitting={busy === "materialize"}
+        errorText={materializeError}
+        onCancel={closeMaterialize}
+        onConfirm={handleMaterialize}
+      />
     </>
   );
 }

@@ -6,8 +6,9 @@ import type {
   DecisionItem,
   DeliveryAggregate,
   RepositoryDeliveryView,
+  TaskDisplayStatus,
 } from "./api/contract";
-import type { ApprovalInfo, Decision, EvidenceView, RepositoryEnv } from "./types";
+import type { ApprovalInfo, DagExecutionView, Decision, EvidenceView, RepositoryEnv } from "./types";
 import { shortId } from "./display";
 
 /** 用 Record<DecisionAction,…> 而非 Record<string,…>：契约新增动作枚举时，
@@ -98,6 +99,35 @@ export function repositoryEnvFromAggregate(agg: DeliveryAggregate, repositoryId:
       isCurrent: r.repository_id === repositoryId,
     })),
   };
+}
+
+/** 计划 DAG 的执行态着色输入（C-4）：本轮聚合的 `tasks[]` 按 `repository_id` 归拢。
+ *
+ *  **这里没有状态映射**：`display_status` 是读模型按 §5.1 算好的（后端 7 态 → 展示
+ *  6 态），本函数只把它按仓分组、原样搬过去。函数里读不到 `backend_status`、也读不到
+ *  rework 链，想改判也无从改起——这是有意的。
+ *
+ *  同仓多任务是真实形态（CI rework task 与父任务同仓，§5.2 的 attempt 就这么数）。
+ *  多条**态一致**时那就是该仓的态；**态不一致**时读模型并没有给出「这个仓整体算什么」
+ *  这一事实，所以归成 `null` 让调用方如实留白，而不是挑一条充数。 */
+export function dagExecutionFromAggregate(agg: DeliveryAggregate, roundLabel: string): DagExecutionView {
+  const seen = new Map<string, Set<TaskDisplayStatus>>();
+  for (const task of agg.tasks) {
+    const bucket = seen.get(task.repository_id) ?? new Set<TaskDisplayStatus>();
+    bucket.add(task.display_status);
+    seen.set(task.repository_id, bucket);
+  }
+
+  const byRepository: Record<string, TaskDisplayStatus | null> = {};
+  const taskCountByRepository: Record<string, number> = {};
+  for (const [repositoryId, statuses] of seen) {
+    byRepository[repositoryId] = statuses.size === 1 ? [...statuses][0] : null;
+  }
+  for (const task of agg.tasks) {
+    taskCountByRepository[task.repository_id] = (taskCountByRepository[task.repository_id] ?? 0) + 1;
+  }
+
+  return { byRepository, taskCountByRepository, roundLabel };
 }
 
 /** 证据面（B-3 最小版）：把决策指向的仓库在本轮聚合里的全部既有证据切出来。

@@ -10,6 +10,8 @@ import type {
   DiscoveryAnalysisRequest,
   DiscoveryApprovalRequest,
   DiscoveryCandidatesRequest,
+  DiscoveryMaterializeRequest,
+  DiscoveryMaterializeResult,
   DiscoveryStepRequest,
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
@@ -103,6 +105,17 @@ export async function submitDiscoveryApproval(
   await defaultClient().postDiscoveryApproval(issueId, payload);
 }
 
+/** 批次 C-3 物化开工。回放同样**如实拒绝**，理由比四个触发更硬：这一步在真实世界
+ *  里建任务、建团队、开房间，回放里就地伪造一份「已物化」等于对着夹具演一遍不可逆
+ *  动作，而下一次刷新它又会消失。 */
+export function materializeDiscovery(
+  issueId: string,
+  payload: DiscoveryMaterializeRequest,
+): Promise<DiscoveryMaterializeResult> {
+  refuseInReplay();
+  return defaultClient().postDiscoveryMaterialize(issueId, payload);
+}
+
 /** §4.1 幂等键：**随表单生成的随机 UUID**（设计稿 ②「幂等键随表单生成」，Q9
  *  「每步一个键」）。
  *
@@ -112,6 +125,8 @@ export async function submitDiscoveryApproval(
  *  重试沿用同一把，改了表单再提交换新的一把。
  *
  *  前缀带步名只为让服务端审计日志可读，不参与去重语义。 */
-export function newIdempotencyKey(step: "analysis" | "candidates" | "classification" | "plan" | "approval"): string {
+export function newIdempotencyKey(
+  step: "analysis" | "candidates" | "classification" | "plan" | "approval" | "materialize",
+): string {
   return `console-discovery-${step}-${crypto.randomUUID()}`;
 }
