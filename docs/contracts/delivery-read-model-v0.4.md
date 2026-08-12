@@ -1266,6 +1266,147 @@ Worker 拿到的活是**文件**，不是一句话：任务包写进 AgentTeams 
 
 ---
 
+### 8.7.4 派工是一次性事件、不是可收敛的状态（**提案 · 待主脑裁决**，A-13）
+
+> §8.7.3 把 A-13 挂了起来，条件是「先以 425efbbc 重放实测定夺」。实测做完了，答案比
+> 当时预设的那条候选修法大：滞留点名不是一个种类，而是**同一个根**结出的三个形状，
+> 而 §8.7.3 预设的「重放时对『投递时间早于收件人运行时出生』的消息补投」只够盖住其中
+> 一个，且要把补投判断塞进重放路径——那正是 §8.7.3 裁决 (a) 要保住的东西。本节提议
+> 换一条路：**不动重放，另立一个人按的收敛入口**。
+
+**根因（裁决原文）**：派工是一次性事件、不是可收敛的状态——agent 那一个回合没干成,
+控制台就永远停在 running,没有任何一层会重试、报警或让人在 GUI 上重发。
+
+任务包写进共享存储、房间里发一条点名，之后 Worker 的**那一个 react 回合**就是全部机制。
+那个回合没把活干完，没有任何一层会发现。
+
+#### 三个活标本（5533，2026-08-12，均保留未动）
+
+| # | 形状 | 那一回合发生了什么 | 为什么现有机制救不了 |
+| --- | --- | --- | --- |
+| 1 | issue `96896557…` | 点名被消费，worker 卡在无关缺陷上、审批超时，容器被重建；新 Matrix 会话看不见历史消息 | 回执已是 `materialized`，连「重试物化」入口都消失了 |
+| 2 | issue `89ed8942…` | 点名收到、回合跑了，任务包因存储权限缺陷（已修）拉取失败；`Consumer stopped`，processed=1/2 | 任务停在 `running`，包从未被拉走；重放认得旧键，房间里不会多任何东西 |
+| 3 | billing leaderDM | 点名投递时收件人容器还不存在 | `SendCollaborationMessage.send` 在 `status == DELIVERED` 上短路，重放永不补发 |
+
+#### 一条重要的收窄：执行面本身已经是收敛的
+
+实测另一条证据（2026-08-12）：一次排队中的 runner 派发**等了 100 分钟**，等到 runner 上线
+后被正确执行。所以「一次性」的不是整条派工链，而是其中两段——**聊天面的点名**，和
+**轮次/批次的推进**。本节的两个范围正对应这两段。
+
+#### 提议的能力：`POST /api/v1/deliveries/{round_id}/redispatch`
+
+落在 `/deliveries` 前缀下，与 §4.6 回滚、§4.5 归档同席——§0 语义等式
+`round_id = execution_plan_id = v0.1 的 delivery_id`。**人触发，本迭代不设自动重试**：
+一个仅仅是慢的轮次和一个真卡住的轮次在读模型里长得一样，只有人能分辨。
+
+请求体只有两个字段：
+
+| 字段 | 语义 |
+| --- | --- |
+| `idempotency_key` | 必填。**同时是 attempt 令牌**，见下节 |
+| `scope` | `unfinished`（默认）\| `rerun` |
+
+回执：`{round_id, attempt, scope, task_ids[], reopened_task_ids[], settled_task_ids[]}`。
+说的是**已经做了什么**，不是将要发生什么；`settled_task_ids` 如实交代哪些被有意没动。
+
+#### transaction_id 的推导，以及它与 §8.7.3 裁决 (a) 的关系
+
+协作消息的幂等键被**逐字**用作 Matrix PUT 的 `transaction_id`
+（`SendCollaborationMessage._deliver` → `AgentTeamsMatrixClient.send_task`），而 Matrix 按
+transaction id 去重。于是有**两层**吞掉重发：`send` 的 DELIVERED 短路（够不到 messenger），
+以及 homeserver 的 txn 去重（够到了也不落新事件）。两层都挂在同一个字符串上，所以提议
+**给这个字符串加版本，而不是绕过任何一层守卫**：
+
+```
+attempt is None  →  f"{key}:message"                      # 一切既有调用方，含重放
+attempt 有值     →  f"{key}:message:redispatch:{attempt}" # 一次显式重新派工
+```
+
+**这与 §8.7.3 裁决 (a) 不冲突，是同一条裁决的两侧**：那条裁决说的是**重放**不换 id
+（换了会在「原消息实际已达」时双发），本节的重放路径一个字符都没改——`attempt is None`
+就是原样。换 id 只发生在人明确按下按钮的那一次，此时「可能双发」不是缺陷而是**诉求**
+（对已在工作的 agent 表现为一条重复通知，弹窗如实写明）。一次请求内 attempt 恒定，所以
+双击是重放；两次请求 attempt 不同，所以是两条真事件。**两侧都做了反证**（见下）。
+
+#### 任务包为什么**不能**同样加版本（实现约束，非选择）
+
+`AgentTeamsTaskPublisher` 把 `idempotency_key` 写进 `meta.json`，而 `meta.json` 进内容哈希；
+路径已存在且哈希不同即 `ValueError("published AgentTeams task conflicts with existing
+content")`。§8.7.3 **有意不把 `ValueError` 翻成 503**（重试改变不了它）。所以给发布键加版本
+会让每一次重新派工都被存储拒绝。**结论：包用原始键重放，只有点名可以加版本**。为此
+`TaskStore` 增一个反查 `assignment_key(task_id)`——键的推导者早已是好几轮之前的事了。
+
+#### 两个范围
+
+**`unfinished`（默认）** — 只碰非终态任务，**不写任何任务行**。按错的代价是房间里多一条
+重复通知。这是标本 1/2/3 的形状。
+
+**`rerun`** — 2026-08-12 又一条活证据：runner 跑完但**没有测试结果**，
+`plan_delivery._candidates_for_batch` 在 `_advance_if_ready` 内抛
+`ValueError("Runner evidence has no test results")`，成为**后台静默的崩溃循环**。任务全是
+`succeeded`，默认范围会答 409，于是唯一能修的人被告知无事可修。
+
+这一档额外把已完成任务送回去重做（`Task.redo`：状态回 `ASSIGNED`、清掉 `result_summary`）。
+**必须写行**：`Task.report` 拒绝终态任务（"a final task cannot be reported again"），只补发
+点名的话，重跑的结论永远落不了地，轮次会一直拿着那次坏结果。批次因此重新变成未完成
+——这是**诉求**不是副作用：交付被拒的轮次本就不该继续把批次算作完成。
+
+`CANCELLED` / `SUPERSEDED` **不可重做**：那不是「结果错了」，是「决定不做」；重开一个
+被新版计划替换的任务等于把退役任务塞回活着的 Worker。
+
+#### 拒绝（与 §8.2 同一家族）
+
+| 码 | 情形 | detail 要点 |
+| --- | --- | --- |
+| 404 | 该 round 不存在 | — |
+| 409 | 轮次有行、无任何任务（物化没走完） | `…has no tasks yet; … materialize the issue instead`——**指向另一个按钮**，不是「等一等」 |
+| 409 | 任务全终态且默认范围 | `…a finished round is history, not unfinished work — ask for scope=rerun if a result on file is the thing that is wrong`：拒绝是一句话的开头，不是结尾 |
+| 503 | 存储接不住任务包 | 复用 §8.7.3 原话，但**不说 "nothing was started"**，说 `nothing was re-sent` |
+| 503 | 房间不可路由 | `…press re-dispatch again once the rooms exist` |
+| 503 | 执行面根本未配置 | 无 messenger 即无 orchestrator，是部署问题不是 500 |
+
+#### 读模型附带一项：`tasks[].last_dispatched_at`
+
+最近一条该任务 `TASK_ASSIGNMENT` 消息的 `created_at`。**是发出时间不是读到时间**——行上
+没有 `delivered_at`，不编。`null` 不是缺数据而是这个字段最响的一句：这条任务压根没被派
+出去过（标本 1 的形状）。代价是**整轮一次聚合查询**（`max(created_at) group by task_id`），
+不是每任务一次。
+
+#### GUI：零影子判断
+
+入口出现的条件只有「本轮有还能再派的任务」——`display_status` / `backend_status` 都是读
+模型原值，界面只转述。**界面不推「卡住了」**（一个仅仅是慢的 Worker 会让这个判断立刻出
+错），也不拿 `last_dispatched_at` 减当前时间得结论。「什么时候该用」写在文案里，由人决定。
+两个范围是两个显式单选项而非一个默认开关，因为它们是两种不同的风险。
+
+#### 三个标本如何被退役
+
+| # | 退役方式 |
+| --- | --- |
+| 1 | `unfinished` 补发点名——新 txn id ⇒ 新事件 ⇒ 新容器的 sync 看得见；包按原键重放，内容哈希不变 |
+| 2 | 同上；包重新发布（幂等），存储权限已修故这次拉得到 |
+| 3 | leader 任务与 worker 任务**一并**重发（这是把 leader 纳入遍历的直接原因）；新键绕开 DELIVERED 短路，而重放路径的短路**原样保留** |
+| 4（新） | `rerun`：修好测试命令后让工作真的重来一遍，坏结论清掉、批次重新变成未完成 |
+
+#### 落点与验证
+
+`modules/task_orchestration/{application,contracts,domain,ports,infrastructure}.py`、
+`api/round_dispatch.py`、`bootstrap/container.py`、`api/read_models/{service,sources}.py`、
+`modules/collaboration/infrastructure.py`；前端 `components/RedispatchModal.tsx` +
+`RoundsPanel.tsx` 派工卡。测试 32 例（20 服务级 + 12 端点级）+ 1 例读模型，全 mock。
+
+**两条反证**（按验收纪律各做一次）：
+
+1. **藏掉推导** → `dispatch_attempt=None` 走同一条重发路径，`MatrixDedupingMessenger`
+   （模拟真 homeserver 的 txn 去重）吞掉它，房间零新增；换成 `attempt="press-1"` 立刻 +1。
+   另有一例把两层守卫拆开单独证，避免把其中一层误当成另一层。
+2. **重放仍不重发** → 以 `AdvanceExecutionPlan._resume` 的方式重跑 `assign`（同键），
+   命中已有行、房间零新增。被"加版本"的那条守卫在重放路径上**原样成立**——它没有被削弱，
+   是被绕开的。
+
+---
+
 ## 附录 A：两条既有勘误（**已批准并同批实施**，2026-08-12）
 
 两条都已落地：A.1 的三个自述计数进了 `GET /issues/{id}/repositories/{repo}/plan` 的
