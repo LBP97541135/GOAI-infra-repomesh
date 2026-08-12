@@ -554,6 +554,46 @@ class DiscoveryTriggerView(BaseModel):
     status: Literal["accepted", "replayed"]
 
 
+class DiscoveryMaterializeRequest(BaseModel):
+    """§8. Carries a subject and a key, and nothing about the plan.
+
+    No ``task_dag``, no ``contracts``, no ``repositories``: the plan is on the
+    draft snapshot, the server put it there, and accepting a copy back from the
+    browser would make the round trip an editing opportunity. ``POST /bridge/
+    materialize`` still takes the whole plan in its body, because its caller is
+    a script that holds the only copy — the reason does not carry over to a
+    browser, and neither does the shape.
+    """
+
+    created_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+class DiscoveryMaterializeView(BaseModel):
+    """§8's answer, the same shape whether the work was done now or before.
+
+    Synchronous, unlike the four step triggers: materialize calls no model. It
+    writes rows and returns, so there is nothing to poll and a 202 would cost
+    the panel a waiting path it does not need.
+    """
+
+    plan_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Null when the plan had no schedulable repository — every one of "
+            "them was skipped. Specs exist; no work was started."
+        ),
+    )
+    task_ids: list[UUID] = Field(default_factory=list)
+    team_count: int = Field(
+        description="Repository teams in the topology this project now has"
+    )
+    repositories: list[str] = Field(
+        default_factory=list, description="Repository names in the materialised plan"
+    )
+    status: Literal["materialized", "replayed"]
+
+
 class DiscoveryTaskProgress(BaseModel):
     done: int = 0
     total: int = 1

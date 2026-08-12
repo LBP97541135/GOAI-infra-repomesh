@@ -56,7 +56,7 @@ from repomesh.modules.task_orchestration.contracts import (
 from repomesh.shared.workflow import WorkflowBlocked
 from repomesh.telemetry import SpanAttributes, traced
 
-from .contracts import MaterializationResult, ReplanResult
+from .contracts import ExecutionPlaneUnavailable, MaterializationResult, ReplanResult
 from .ports import (
     ExecutionPlanStarter,
     HandoffDocGenerator,
@@ -78,10 +78,6 @@ if TYPE_CHECKING:
     )
 
 _logger = logging.getLogger(__name__)
-
-
-class ExecutionPlaneUnavailable(RuntimeError):
-    """The task orchestration plane is not configured; materialization refused."""
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalReader,
     AgentPrincipalView,
     AgentRole,
+    RepositoryAgentTeamProvisioner,
 )
 from repomesh.modules.project.contracts import (
     CodeAccessLevel,
@@ -157,3 +158,84 @@ class CreateProjectAgentTopology:
             raise ProjectTopologyViolation(f"agent {profile.id} belongs to another repository")
         if leader_agent_id is not None and profile.leader_agent_id != leader_agent_id:
             raise ProjectTopologyViolation(f"agent {profile.id} belongs to another leader")
+
+
+class EnsureProjectAgentTopology:
+    """Implements :class:`ProjectTopologyProvisioner` (see it for the why).
+
+    A thin composition of two capabilities that already exist and had no
+    caller between them: ``ProvisionRepositoryAgentTeam`` makes the principals,
+    ``CreateProjectAgentTopology`` makes the topology out of them. The
+    *decisions* this class owns are only these three:
+
+    - a project that already has a topology is left alone, whatever it was
+      asked for;
+    - the organization is the acting leader's own, never a fresh one
+      (``scripts/run_pipeline.py`` mints a new organization per run, which is
+      right for a script bootstrapping from nothing and wrong for a console
+      round inside a workspace that already exists);
+    - one worker per repository, the smallest team that can be assigned a task.
+
+    ``execution_mode`` and ``required_checkpoints`` are left at their defaults
+    deliberately. A topology created on the way to work is not the place to
+    decide a project's supervision policy; the admin face
+    (``POST /projects/topologies``) still owns that.
+    """
+
+    def __init__(
+        self,
+        store: ProjectTopologyStore,
+        teams: RepositoryAgentTeamProvisioner,
+        creator: CreateProjectAgentTopology,
+    ) -> None:
+        self._store = store
+        self._teams = teams
+        self._creator = creator
+
+    async def ensure(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        organization_leader_id: UUID,
+        repository_ids: tuple[UUID, ...],
+        idempotency_key: str,
+    ) -> ProjectAgentTopologyView:
+        existing = await self._store.get(project_id)
+        if existing is not None:
+            return existing.to_view()
+        if not repository_ids:
+            raise ProjectTopologyViolation(
+                "cannot create a project topology with no repositories"
+            )
+
+        key = idempotency_key.strip()
+        if not key:
+            raise ValueError("idempotency_key is required")
+
+        assignments = []
+        # Sorted so the same repository set produces the same team order, and
+        # therefore the same command fingerprint on a replay.
+        for repository_id in sorted(set(repository_ids), key=str):
+            team = await self._teams.provision(
+                organization_id=organization_id,
+                organization_leader_id=organization_leader_id,
+                repository_id=repository_id,
+                idempotency_key=f"{key}:team:{repository_id.hex}",
+            )
+            assignments.append(
+                RepositoryTeamAssignment(
+                    repository_id=repository_id,
+                    leader_agent_id=team.leader.id,
+                    worker_agent_ids=tuple(worker.id for worker in team.workers),
+                )
+            )
+        return await self._creator.execute(
+            CreateProjectAgentTopologyRequest(
+                organization_id=organization_id,
+                project_id=project_id,
+                organization_leader_id=organization_leader_id,
+                repository_teams=tuple(assignments),
+            ),
+            idempotency_key=f"{key}:topology",
+        )
