@@ -46,9 +46,9 @@ docker compose --profile console exec console-api python scripts/seed-console-de
 moves the development database off 5432. Tear the stack down with
 `docker compose --profile console down`, add `-v` to drop its database too.
 
-On the first visit the console asks you to create the local administrator
-(「首次部署？初始化管理员」). That bootstrap call is accepted exactly once;
-afterwards everyone signs in.
+The console has no login gate: opening it puts you straight in as the default
+administrator. Its data plane authenticates with a Bearer action token, not a
+session, so there is nothing to sign in to.
 
 Status, honestly: what has been exercised is the re-entrant path (every
 component already serving, everything skipped) and the compose configuration.

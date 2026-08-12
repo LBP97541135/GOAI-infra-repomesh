@@ -308,8 +308,7 @@ cat <<SUMMARY
 控制台： ${CONSOLE_URL}
 接口文档： http://127.0.0.1:${API_PORT}/docs
 
-首次使用：在登录页点「首次部署？初始化管理员」创建本地管理员账号
-          （POST /auth/bootstrap 只认第一次；之后一律走登录）。
+身份：    控制台无登录门，打开即默认管理员身份。
 数据源：  默认就是真实数据（打 8100 后端）；演示夹具要显式加 ?source=replay。
 
 日志： ${STATE_DIR}/backend.log · ${STATE_DIR}/frontend.log
