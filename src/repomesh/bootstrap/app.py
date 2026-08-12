@@ -9,6 +9,7 @@ from repomesh.bootstrap.container import (
     AsyncCloseable,
     collaboration_routed_messenger,
     project_topology_reader,
+    storage_backed_task_publisher,
 )
 from repomesh.integrations.agentteams import (
     AgentTeamsControlPlaneClient,
@@ -78,6 +79,7 @@ from repomesh.modules.review_validation import (
 )
 from repomesh.modules.specification import PostgresSpecificationStore
 from repomesh.modules.task_orchestration import PostgresTaskStore, TaskOrchestrator
+from repomesh.modules.task_orchestration.contracts import TaskAssignmentPublisher
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import get_settings
@@ -95,18 +97,24 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 def build_default_container() -> ApplicationContainer:
     settings = get_settings()
-    task_publisher = AgentTeamsTaskPublisher(settings.agentteams_storage_root)
+    selected_publisher: TaskAssignmentPublisher = AgentTeamsTaskPublisher(
+        settings.agentteams_storage_root
+    )
     if (
         settings.agentteams_storage_endpoint
         and settings.agentteams_storage_access_key
         and settings.agentteams_storage_secret_key
     ):
-        task_publisher = AgentTeamsObjectTaskPublisher(
+        selected_publisher = AgentTeamsObjectTaskPublisher(
             settings.agentteams_storage_endpoint,
             settings.agentteams_storage_access_key,
             settings.agentteams_storage_secret_key,
             settings.agentteams_storage_bucket,
         )
+    # Wrapped after the choice, not inside either branch: both channels fail in
+    # their store's own vocabulary and both mean the same thing to the round
+    # (A-10). One wrapper over the port covers them.
+    task_publisher = storage_backed_task_publisher(selected_publisher)
     database = Database(settings.database_url)
     control_plane = AgentTeamsControlPlaneClient(
         settings.agentteams_controller_url,

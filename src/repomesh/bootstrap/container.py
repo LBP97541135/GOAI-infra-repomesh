@@ -55,8 +55,11 @@ from repomesh.modules.task_orchestration import (
     PostgresExecutionPlanStore,
 )
 from repomesh.modules.task_orchestration.contracts import (
+    PublishedTaskPackage,
     TaskAssignmentGateway,
+    TaskAssignmentPublisher,
     TaskReportGateway,
+    TaskView,
 )
 from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
 from repomesh.persistence import Database
@@ -143,6 +146,91 @@ def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMe
             return getattr(messenger, name)
 
     return _Messenger()
+
+
+def storage_backed_task_publisher(
+    publisher: TaskAssignmentPublisher,
+) -> TaskAssignmentPublisher:
+    """Adapt a task-package store to the refusal the publisher port owns.
+
+    A Worker is handed its work as files. ``AgentTeamsTaskPublisher`` writes
+    the package to a directory and ``AgentTeamsObjectTaskPublisher`` writes the
+    same package through AgentTeams' S3 API, and both speak their store's
+    native failure vocabulary — ``minio.error.S3Error`` and its
+    ``MinioException`` siblings, ``urllib3``'s connection errors, and plain
+    ``OSError`` from the filesystem. None of those meant anything to the
+    materialize path, so they escaped it: an S3 ``InvalidAccessKeyId`` reached
+    the console as ``text/plain`` "Internal Server Error" for a round that
+    only needed the button again once the credentials were right (defect A-10,
+    found live 2026-08-12).
+
+    So the composition root wraps the publisher once, where the port meets the
+    adapter, and retells them as ``TaskPublicationUnavailable`` with the
+    store's own sentence preserved — the same move
+    ``collaboration_routed_messenger`` makes for Matrix identities (A-6) and
+    ``topology_runtime_projector`` makes for the projection taxonomy, in the
+    same place and for the same reason: the business module must not import
+    the integration, so the composition root is where the two vocabularies are
+    allowed to meet.
+
+    Both variants are wrapped by one function because the port is what is
+    being wrapped, not the adapter. An unreachable store and a misconfigured
+    one are the same reading — the execution plane cannot take this *yet* — and
+    the live evidence was the misconfigured half.
+
+    ``ValueError`` is deliberately not translated. The file channel raises it
+    when the task path already holds a *different* package, which means the
+    store answered and the answer was no; pressing materialize again cannot
+    change it, and a 503 there would tell the operator to keep pressing a
+    button that cannot work.
+    """
+
+    from repomesh.modules.task_orchestration.contracts import TaskPublicationUnavailable
+
+    # ``minio`` is an optional import in the object publisher, so the file
+    # channel must keep working in a deployment that never installed it.
+    try:
+        from minio.error import MinioException
+    except ImportError:  # pragma: no cover - minio is a declared dependency
+        MinioException = ()
+    try:
+        from urllib3.exceptions import HTTPError as Urllib3Error
+    except ImportError:  # pragma: no cover - urllib3 arrives with minio
+        Urllib3Error = ()
+    # OSError already covers ConnectionError, TimeoutError and every
+    # filesystem failure the file channel can raise, including its own
+    # "publication verification failed".
+    unavailable: tuple[type[BaseException], ...] = tuple(
+        family
+        for family in (OSError, MinioException, Urllib3Error)
+        if isinstance(family, type)
+    )
+
+    class _Publisher:
+        async def publish(
+            self,
+            task: TaskView,
+            *,
+            team_name: str,
+            room_id: str,
+            assignee_resource_name: str,
+            idempotency_key: str,
+        ) -> PublishedTaskPackage:
+            try:
+                return await publisher.publish(
+                    task,
+                    team_name=team_name,
+                    room_id=room_id,
+                    assignee_resource_name=assignee_resource_name,
+                    idempotency_key=idempotency_key,
+                )
+            except unavailable as error:
+                raise TaskPublicationUnavailable(str(error)) from error
+
+        def __getattr__(self, name: str):
+            return getattr(publisher, name)
+
+    return _Publisher()
 
 
 def cached_service(factory):

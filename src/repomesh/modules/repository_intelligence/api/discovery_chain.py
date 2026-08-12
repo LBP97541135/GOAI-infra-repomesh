@@ -63,6 +63,7 @@ from repomesh.modules.repository_intelligence.ports import (
     RuntimeProjectionConflict,
     RuntimeProjectionUnavailable,
 )
+from repomesh.modules.task_orchestration.contracts import TaskPublicationUnavailable
 from repomesh.shared.workflow import WorkflowBlocked
 
 from .models import (
@@ -518,6 +519,28 @@ async def materialize_discovery_plan(
                 f"the execution plane refused this project's teams ({error}); "
                 "nothing was started — retrying will not help until the "
                 "AgentTeams spec is reconciled"
+            ),
+        ) from error
+    except TaskPublicationUnavailable as error:
+        # A-10, found live 2026-08-12. The round got further than any refusal
+        # above: the rooms existed, the plan started, and the task rows were
+        # written — and then the store that carries the Worker's task package
+        # refused the upload (an S3 ``InvalidAccessKeyId``). Untranslated it
+        # was a bare ``text/plain`` 500, which tells the operator to file a bug
+        # about a round that only needs the button again once the credentials
+        # are right.
+        #
+        # Unlike the two 503s above this one does *not* say "nothing was
+        # started". Tasks exist by the time it fires, and saying otherwise
+        # would be a lie the operator could act on; what the retry does is
+        # finish them, which is the whole of the replay in
+        # ``AdvanceExecutionPlan._resume``.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"the execution plane could not store this round's tasks ({error}); "
+                "the tasks are written — materialize again once AgentTeams "
+                "storage accepts them"
             ),
         ) from error
     except RuntimeProjectionUnavailable as error:
