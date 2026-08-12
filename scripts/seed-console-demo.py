@@ -28,9 +28,23 @@ workers the seeded tasks and messages already cite. Modes differ so each console
 branch has data — A automatic, B supervised with checkpoints and a human grant,
 C supervised and paused.
 
-Idempotency: every id derives from a fixed UUIDv5 namespace. If scenario A's
-execution plan already exists the script prints the id map and exits without
-writing anything, so re-running never duplicates seed data.
+Idempotency, stated honestly:
+
+- Every id derives from a fixed UUIDv5 namespace, the organization leader
+  included (it used to be the one exception, and the one id this script
+  reports back).
+- A rerun on a fully seeded database re-runs four sections that are each
+  insert-if-absent — room stream, topologies, repository specs, organization
+  registry — and skips the rest. It does not duplicate rows.
+- A rerun cannot repair a database a previous run left half written: the
+  writes for scenarios A through D are not re-entrant. That case now raises
+  SeedIncomplete instead of reporting already_seeded, which is what it used
+  to do while silently leaving B, C and D missing.
+- Reruns being no-ops is not something row counts can demonstrate. The
+  insert-if-absent guards swallow "already there" without comparing content,
+  and one section is a plain UPDATE, so an edited constant lands in neither
+  the row count nor an error. Verify by reading the rows back, not by
+  counting them.
 
 Configuration (no credentials are stored here; defaults follow the integration
 convention of a throwaway postgres on 127.0.0.1:5533):
@@ -51,7 +65,6 @@ from uuid import UUID
 
 from sqlalchemy import update
 
-from repomesh.modules.agent_directory.application import CreateAgent, CreateAgentRequest
 from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.agent_directory.domain import AgentAlreadyExists, AgentPrincipal
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
@@ -508,9 +521,7 @@ async def seed_room_stream(database: Database) -> None:
     """
 
     async with database.transaction() as session:
-        marker = await session.get(
-            RunnerEventRecord, stable_id("runner-event:a-api:started")
-        )
+        marker = await session.get(RunnerEventRecord, stable_id("runner-event:a-api:started"))
     if marker is not None:
         return
 
@@ -524,17 +535,13 @@ async def seed_room_stream(database: Database) -> None:
         ("c-billing", "plan:c", "repo:c:billing", C_HEAD, False, True),
     )
     rows: list[object] = []
-    for index, (key, plan_name, repo_name, head, ci_passed, rework) in enumerate(
-        scenarios
-    ):
+    for index, (key, plan_name, repo_name, head, ci_passed, rework) in enumerate(scenarios):
         plan_id = stable_id(plan_name)
         repository_id = stable_id(repo_name)
         project_id = stable_id(plan_name.replace("plan:", "project:"))
         worker_task_id = stable_id(f"task:{key}:worker")
         run_id = stable_id(f"run:{key}")
-        binding = await changesets.get_by_idempotency_key(
-            delivery_change_set_key(plan_id)
-        )
+        binding = await changesets.get_by_idempotency_key(delivery_change_set_key(plan_id))
         change_set_id = binding[0].id if binding is not None else None
         t0 = base + timedelta(minutes=index * 2)
 
@@ -610,9 +617,7 @@ async def seed_room_stream(database: Database) -> None:
                     provider="github",
                     source="webhook",
                     external_id=f"console-demo:{key}:check",
-                    event_type=(
-                        "check_run.completed" if ci_passed else "check_run.failed"
-                    ),
+                    event_type=("check_run.completed" if ci_passed else "check_run.failed"),
                     payload=check_payload,
                     payload_hash=hashlib.sha256(
                         json.dumps(check_payload, sort_keys=True).encode()
@@ -680,31 +685,86 @@ async def seed_room_stream(database: Database) -> None:
         session.add_all(rows)
 
 
+class SeedIncomplete(RuntimeError):
+    """A previous run wrote part of the seed and stopped."""
+
+
+async def _wrote_everything_the_fast_path_cannot_redo(database: Database) -> bool:
+    """Did the previous run get past the writes a rerun cannot repair?
+
+    The fast path keyed off scenario A's execution plan, which lands less than
+    halfway through. A run that died after it left B, C, D and A's change sets
+    unwritten, and the next run answered already_seeded and skipped them —
+    a half-seeded database reporting success.
+
+    Scenario D's draft snapshot is the last write before the four sections the
+    fast path re-runs itself (room stream, topologies, specs, registry). Those
+    four are individually idempotent and get repaired on any rerun; everything
+    ahead of D does not, so D is the honest boundary. Checking a later artifact
+    would also misjudge databases seeded before that section existed.
+    """
+
+    snapshots = PlanSnapshotStore(database)
+    return await snapshots.get_latest(stable_id("project:d")) is not None
+
+
+async def _org_leader(directory: PostgresAgentDirectory) -> UUID:
+    """The demo organization's leader, at a stable id.
+
+    It used to go through CreateAgent, whose AgentPrincipal defaults to a
+    random id — so the one id this script reports to its caller was the one id
+    it could not reproduce, while the module docstring claimed every id derives
+    from the UUIDv5 namespace. Rerun stability rested entirely on the
+    idempotency record; losing that record while the principal row survived
+    left the script unable to run at all.
+
+    Constructed directly for the same reason seed_agents does it: the command
+    validates a hierarchy this row sits at the top of, and the ids have to
+    match the rows that already cite them.
+    """
+
+    leader = AgentPrincipal(
+        id=stable_id("agent:org-leader"),
+        organization_id=stable_id("organization"),
+        role=AgentRole.ORGANIZATION_LEADER,
+        leader_agent_id=None,
+        singleton_key=f"organization:{stable_id('organization')}:leader",
+        repository_id=None,
+        responsibility_paths=(),
+        agentteams_resource_name="console-demo-org-leader",
+    )
+    with contextlib.suppress(AgentAlreadyExists):  # rerun: already registered
+        await directory.add(
+            leader,
+            idempotency_key="console-demo:agent:org-leader",
+            request_fingerprint="sha256:" + "e" * 64,
+        )
+    return leader.id
+
+
 async def seed(database_url: str) -> dict[str, object]:
     database = Database(database_url)
     try:
         plans = PostgresExecutionPlanStore(database)
         plan_a_id = stable_id("plan:a")
-        if await plans.get(plan_a_id) is not None:
-            organization_id = stable_id("organization")
-            directory = PostgresAgentDirectory(database)
-            replay = await CreateAgent(directory).execute(
-                CreateAgentRequest(
-                    organization_id=organization_id,
-                    role=AgentRole.ORGANIZATION_LEADER,
-                    agentteams_resource_name="console-demo-org-leader",
-                ),
-                idempotency_key="console-demo-org-leader",
+        seeded_a = await plans.get(plan_a_id) is not None
+        if seeded_a and not await _wrote_everything_the_fast_path_cannot_redo(database):
+            raise SeedIncomplete(
+                "the database holds a partial seed: scenario A's plan exists but "
+                "the completion marker does not, so an earlier run stopped "
+                "midway. Re-running cannot repair it — the writes ahead of the "
+                "failure point are not re-entrant. Drop and recreate the "
+                "database, then run this script again."
             )
+        if seeded_a:
+            leader_id = await _org_leader(PostgresAgentDirectory(database))
             await seed_room_stream(database)
-            await seed_project_topologies(database, replay.principal.id)
-            await seed_repository_specs(
-                PostgresSpecificationStore(database), replay.principal.id
-            )
+            await seed_project_topologies(database, leader_id)
+            await seed_repository_specs(PostgresSpecificationStore(database), leader_id)
             await seed_organization_registry(database)
             return {
                 "already_seeded": True,
-                "decided_by_agent_id": str(replay.principal.id),
+                "decided_by_agent_id": str(leader_id),
                 "A_delivered": str(plan_a_id),
                 "B_release_awaiting_approval": str(stable_id("plan:b")),
                 "C_repairing_watch": str(stable_id("plan:c")),
@@ -720,15 +780,7 @@ async def seed(database_url: str) -> dict[str, object]:
         delivery = DeliveryService(PostgresChangeSetStore(database))
 
         organization_id = stable_id("organization")
-        created = await CreateAgent(directory).execute(
-            CreateAgentRequest(
-                organization_id=organization_id,
-                role=AgentRole.ORGANIZATION_LEADER,
-                agentteams_resource_name="console-demo-org-leader",
-            ),
-            idempotency_key="console-demo-org-leader",
-        )
-        leader_id = created.principal.id
+        leader_id = await _org_leader(directory)
         out: dict[str, object] = {
             "already_seeded": False,
             "organization_id": str(organization_id),
@@ -786,8 +838,7 @@ async def seed(database_url: str) -> dict[str, object]:
                     created_by_agent_id=leader_id,
                     content=SpecificationContent(
                         goal=(
-                            "Expose discount_amount in the pricing API "
-                            "and render it in the client."
+                            "Expose discount_amount in the pricing API and render it in the client."
                         ),
                         acceptance=(
                             "Old clients remain compatible",
