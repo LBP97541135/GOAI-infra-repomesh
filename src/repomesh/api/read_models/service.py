@@ -170,6 +170,50 @@ class DeliveryReadModelService:
         # None when AgentTeams is not configured: the roster still answers, with
         # runtime null rather than a fabricated "unreachable".
         self._runtime = runtime
+        # Per-request memo for reads this aggregation repeats. The container
+        # builds a fresh service for every request — delivery_read_model_service
+        # is deliberately not a cached_service — so nothing memoised here can
+        # outlive the request that read it, and no request can serve another
+        # request's snapshot of the world.
+        self._repository_memo: list | None = None
+        self._plans_memo: dict[UUID, list[ExecutionPlanView]] | None = None
+        self._tasks_memo: dict[UUID, tuple] = {}
+        self._validation_memo: dict[UUID, tuple] = {}
+        self._name_memo: dict[UUID | None, str | None] = {}
+
+    async def _all_repositories(self) -> list:
+        """The catalog, read once per request rather than once per round."""
+
+        if self._repository_memo is None:
+            self._repository_memo = list(await self._repositories.list())
+        return self._repository_memo
+
+    async def _catalog(self) -> dict:
+        return {item.id: item for item in await self._all_repositories()}
+
+    async def _tasks_of(self, project_id: UUID) -> tuple:
+        if project_id not in self._tasks_memo:
+            self._tasks_memo[project_id] = tuple(await self._tasks.list_by_project(project_id))
+        return self._tasks_memo[project_id]
+
+    async def _validations_of(self, project_id: UUID) -> tuple:
+        if project_id not in self._validation_memo:
+            self._validation_memo[project_id] = tuple(
+                await self._validations.for_project(project_id)
+            )
+        return self._validation_memo[project_id]
+
+    async def _agent_name(self, agent_id: UUID | None) -> str | None:
+        """Resolve a name once per agent instead of once per mention.
+
+        A room stream projects two names per message and the same leader can
+        appear on every line, so this used to be 2N queries for a handful of
+        distinct agents.
+        """
+
+        if agent_id not in self._name_memo:
+            self._name_memo[agent_id] = await self._agents.name(agent_id)
+        return self._name_memo[agent_id]
 
     # ------------------------------------------------------------------ list
 
@@ -299,14 +343,14 @@ class DeliveryReadModelService:
         watch: the repository has a non-terminal recovery plan or rework task.
         """
 
-        catalog = {item.id: item for item in await self._repositories.list()}
+        catalog = await self._catalog()
         leader_task_ids = {
             planned.leader_task_id
             for batch in plan.batches
             for planned in batch
             if planned.leader_task_id is not None
         }
-        tasks = await self._tasks.list_by_project(plan.project_id)
+        tasks = await self._tasks_of(plan.project_id)
         active_rework_repos = {
             task.repository_id
             for task in tasks
@@ -443,7 +487,7 @@ class DeliveryReadModelService:
 
         bundle = await self._issue_bundle(issue_id, plans)
         topology = bundle.topology
-        catalog = {item.id: item for item in await self._repositories.list()}
+        catalog = await self._catalog()
         team_by_repository = (
             {team.repository_id: team for team in topology.repository_teams}
             if topology is not None
@@ -507,10 +551,19 @@ class DeliveryReadModelService:
         }
 
     async def _plans_by_project(self) -> dict[UUID, list[ExecutionPlanView]]:
-        plans_by_project: dict[UUID, list[ExecutionPlanView]] = {}
-        for plan in await self._plans.list_all():
-            plans_by_project.setdefault(plan.project_id, []).append(plan)
-        return plans_by_project
+        """Every plan, grouped, read once per request.
+
+        Seven call sites ask for this and each one used to scan the whole
+        execution_plans table — including the projection that answers a single
+        POST /issues.
+        """
+
+        if self._plans_memo is None:
+            plans_by_project: dict[UUID, list[ExecutionPlanView]] = {}
+            for plan in await self._plans.list_all():
+                plans_by_project.setdefault(plan.project_id, []).append(plan)
+            self._plans_memo = plans_by_project
+        return self._plans_memo
 
     async def _issue_bundle(
         self, project_id: UUID, plans: list[ExecutionPlanView] | tuple
@@ -593,7 +646,7 @@ class DeliveryReadModelService:
         # Same source and precision as v0.1's messages sender_name: an
         # AgentTeams resource name, never a human name.
         opened_by_name = (
-            await self._agents.name(opened_by_agent_id) if opened_by_agent_id is not None else None
+            await self._agent_name(opened_by_agent_id) if opened_by_agent_id is not None else None
         )
         # §2.3: the latest persisted fact across every round and snapshot.
         timestamps = [facts.updated_at for facts in rounds if facts.updated_at] + [
@@ -685,7 +738,7 @@ class DeliveryReadModelService:
             for planned in batch
             if planned.leader_task_id is not None
         }
-        tasks = await self._tasks.list_by_project(project_id)
+        tasks = await self._tasks_of(project_id)
         worker_task_ids = {task.id for task in tasks if task.parent_task_id in leader_task_ids}
         change_set = await self._change_sets.for_delivery(delivery_id)
 
@@ -767,7 +820,7 @@ class DeliveryReadModelService:
             for planned in batch
             if planned.leader_task_id is not None
         }
-        tasks = await self._tasks.list_by_project(plan.project_id)
+        tasks = await self._tasks_of(plan.project_id)
         worker_task_ids = {task.id for task in tasks if task.parent_task_id in leader_task_ids}
         items = []
         for message in await self._messages.for_project(plan.project_id):
@@ -789,9 +842,9 @@ class DeliveryReadModelService:
             "subject": message.subject,
             "body": message.body,
             "sender_agent_id": message.sender_agent_id,
-            "sender_name": await self._agents.name(message.sender_agent_id),
+            "sender_name": await self._agent_name(message.sender_agent_id),
             "recipient_agent_id": message.recipient_agent_id,
-            "recipient_name": await self._agents.name(message.recipient_agent_id),
+            "recipient_name": await self._agent_name(message.recipient_agent_id),
             "repository_id": message.repository_id,
             "task_id": message.task_id,
             "room_id": message.room_id,
@@ -819,8 +872,8 @@ class DeliveryReadModelService:
             # The issue exists but never formed a team, so it has no rooms.
             return {"rooms": []}
 
-        catalog = {item.id: item for item in await self._repositories.list()}
-        tasks = await self._tasks.list_by_project(issue_id)
+        catalog = await self._catalog()
+        tasks = await self._tasks_of(issue_id)
         live_repositories = {
             task.repository_id for task in tasks if task.status is TaskStatus.IN_PROGRESS
         }
@@ -879,7 +932,7 @@ class DeliveryReadModelService:
     async def _member(self, agent_id: UUID, role: str) -> dict:
         return {
             "agent_id": agent_id,
-            "name": await self._agents.name(agent_id),
+            "name": await self._agent_name(agent_id),
             "role": role,
         }
 
@@ -945,7 +998,7 @@ class DeliveryReadModelService:
                         )
                     )
         else:
-            tasks = await self._tasks.list_by_project(project_id)
+            tasks = await self._tasks_of(project_id)
             repository_task_ids = {
                 task.id for task in tasks if task.repository_id == team.repository_id
             }
@@ -1004,7 +1057,7 @@ class DeliveryReadModelService:
             # value, so the existence query ran for nothing.
             return None
         snapshot = snapshots[0]
-        catalog = {item.id: item for item in await self._repositories.list()}
+        catalog = await self._catalog()
         id_by_name = {item.name: item.id for item in catalog.values()}
 
         # Membership check. Without it the sheet for an unrelated repository
@@ -1170,7 +1223,7 @@ class DeliveryReadModelService:
         merged: the first is history, the second may be unreachable.
         """
 
-        catalog = {item.id: item for item in await self._repositories.list()}
+        catalog = await self._catalog()
         teams: list[dict] = []
         probes: list[str] = []
         for topology in await self._topology.list_views():
@@ -1214,7 +1267,7 @@ class DeliveryReadModelService:
                 for agent_id in (team.leader_agent_id, *team.worker_agent_ids):
                     team_by_agent[agent_id] = (team.id, topology.project_id)
 
-        catalog = {item.id: item for item in await self._repositories.list()}
+        catalog = await self._catalog()
         active_tasks: dict[UUID, int] = {}
         for task in await self._tasks.list_all():
             if task.status in _ACTIVE_TASK_STATUSES and task.assignee_agent_id:
@@ -1340,8 +1393,8 @@ class DeliveryReadModelService:
         change_set = await self._change_sets.for_delivery(delivery_id)
         validation = await self._find_validation(project_id, delivery_id, change_set)
         contract = await self._specifications.engineering_contract(project_id)
-        catalog = {item.id: item for item in await self._repositories.list()}
-        tasks = await self._tasks.list_by_project(project_id)
+        catalog = await self._catalog()
+        tasks = await self._tasks_of(project_id)
 
         plan_repository_ids = {planned.repository_id for batch in plan.batches for planned in batch}
         leader_task_ids = {
@@ -1511,7 +1564,7 @@ class DeliveryReadModelService:
                     "title": task.title,
                     "backend_status": task.status.value,
                     "display_status": display.value,
-                    "agent": await self._agents.name(task.assignee_agent_id),
+                    "agent": await self._agent_name(task.assignee_agent_id),
                     # §5.2, as an attempt number: the original try is 1 and the
                     # k-th rework on the same (repository, parent) key is 1 + k.
                     # The original row used to report the total instead, so one
@@ -1608,7 +1661,7 @@ class DeliveryReadModelService:
     async def _find_validation(
         self, project_id: UUID, delivery_id: UUID, change_set: ChangeSetView | None
     ):
-        candidates = await self._validations.for_project(project_id)
+        candidates = await self._validations_of(project_id)
         if change_set is not None and change_set.validation_snapshot_id is not None:
             for item in candidates:
                 if item.id == change_set.validation_snapshot_id:
