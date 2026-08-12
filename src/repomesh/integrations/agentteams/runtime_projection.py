@@ -62,6 +62,24 @@ class AgentTeamsRoomsPending(AgentTeamsError):
     """The controller took the Teams but has not published their rooms yet."""
 
 
+class AgentTeamsIdentitiesPending(AgentTeamsError):
+    """The controller took the Workers but has not given them Matrix identities.
+
+    The worker half of the room defect (A-9). ``POST /api/v1/workers`` returns
+    201 with the full spec the moment the resource is written, but the Matrix
+    account, the container and the personal room are the work of the
+    controller's worker reconciler — which is serial and, on a host carrying
+    many Workers, minutes behind the write. Between the two,
+    ``GET /api/v1/workers/<name>`` answers with ``matrixUserID`` absent.
+
+    That gap is not cosmetic. ``AgentTeamsMessenger.send_task`` resolves the
+    recipient's Matrix ID from exactly that field and refuses without it, so a
+    round materialised in the gap starts, dispatches, and dies — and dispatch
+    is not a button the operator has. Refusing here spends the same failure on
+    materialize, which is.
+    """
+
+
 
 #: Skills per role, copied from ``scripts/run_pipeline.py::_ensure_topology``.
 #: Not decoration: ``ensure_worker`` compares this list against an existing
@@ -114,17 +132,19 @@ class ProjectRuntimeProjection:
             )
 
         await self._register(topology.organization_leader_id, project_id)
+        workers: list[str] = []
         for team in topology.repository_teams:
             for agent_id in (team.leader_agent_id, *team.worker_agent_ids):
-                await self._register(agent_id, project_id)
+                workers.append(await self._register(agent_id, project_id))
 
         view = await self._reconcile.execute(project_id)
         self._assert_rooms(view)
+        await self._assert_identities(workers)
         return view
 
     # ------------------------------------------------------------ registration
 
-    async def _register(self, agent_id: UUID, project_id: UUID) -> None:
+    async def _register(self, agent_id: UUID, project_id: UUID) -> str:
         principal = await self._directory.get_view(agent_id)
         if principal is None:
             raise ProjectTopologyViolation(f"agent binding does not exist: {agent_id}")
@@ -144,7 +164,7 @@ class ProjectRuntimeProjection:
                 ),
                 idempotency_key=f"{key}:agentteams",
             )
-            return
+            return name
         await self._control_plane.ensure_worker(
             with_task_control(
                 WorkerProjection(
@@ -158,6 +178,7 @@ class ProjectRuntimeProjection:
             ),
             idempotency_key=f"{key}:agentteams",
         )
+        return name
 
     # ------------------------------------------------------------------ rooms
 
@@ -189,5 +210,37 @@ class ProjectRuntimeProjection:
                 f"{', '.join(sorted(pending))} yet"
             )
 
+    # -------------------------------------------------------------- identities
 
-__all__ = ["AgentTeamsRoomsPending", "ProjectRuntimeProjection"]
+    async def _assert_identities(self, workers: list[str]) -> None:
+        """Refuse workers the controller has not yet given a Matrix identity.
+
+        Re-read rather than kept from ``ensure_worker``: that answer is from
+        before the teams were reconciled, and a worker whose reconciler ran in
+        between would be refused on a stale reading. The extra GET is per
+        worker in one project, and only on the path that already talks to the
+        controller several times.
+
+        ``matrixUserID`` and not the phase or the container state: it is the
+        one field dispatch reads (``AgentTeamsMessenger.send_task``), so it is
+        the one field whose absence is a refusal here rather than a slower
+        first turn.
+        """
+
+        pending = []
+        for name in workers:
+            worker = await self._control_plane.get_worker(name)
+            if worker is None or not worker.matrix_user_id:
+                pending.append(name)
+        if pending:
+            raise AgentTeamsIdentitiesPending(
+                "the AgentTeams controller has not provisioned Matrix "
+                f"identities for {', '.join(sorted(pending))} yet"
+            )
+
+
+__all__ = [
+    "AgentTeamsIdentitiesPending",
+    "AgentTeamsRoomsPending",
+    "ProjectRuntimeProjection",
+]

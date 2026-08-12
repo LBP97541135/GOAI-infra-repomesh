@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from repomesh.integrations.agentteams.control_plane import AgentTeamsResponseError
 from repomesh.integrations.agentteams.runtime_projection import (
+    AgentTeamsIdentitiesPending,
     AgentTeamsRoomsPending,
     ProjectRuntimeProjection,
 )
@@ -78,21 +79,38 @@ class RecordingControlPlane:
         self,
         *,
         rooms: bool = True,
+        identities: bool = True,
         memberships: dict[str, str] | None = None,
     ) -> None:
         self.managers: list[ManagerProjection] = []
         self.workers: list[WorkerProjection] = []
         self.teams: list[TeamProjection] = []
         self.keys: list[str] = []
+        #: Reads of a worker the caller has not yet named a Team over — the
+        #: membership question (A-8), as opposed to the identity question the
+        #: projection asks about the same worker once its Team exists (A-9).
         self.membership_reads: list[str] = []
+        self.worker_reads: list[str] = []
         self._rooms = rooms
+        self._identities = identities
         self._memberships = dict(memberships or {})
+        self._teamed: set[str] = set()
 
     async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
-        self.membership_reads.append(name)
+        self.worker_reads.append(name)
+        if name not in self._teamed:
+            self.membership_reads.append(name)
         if name not in self._memberships:
             return None
-        return WorkerRuntimeRef(name, "Ready", team=self._memberships[name])
+        # ``matrixUserID`` is absent until the controller's worker reconciler
+        # reaches this Worker, which is minutes after the create returns 201
+        # on a busy host (A-9). ``identities=False`` is that window.
+        return WorkerRuntimeRef(
+            name,
+            "Ready",
+            matrix_user_id=f"@{name}:matrix.local" if self._identities else None,
+            team=self._memberships[name],
+        )
 
     async def ensure_manager(
         self, projection: ManagerProjection, *, idempotency_key: str
@@ -124,6 +142,7 @@ class RecordingControlPlane:
                 )
         for member in projection.members:
             self._memberships[member.name] = projection.name
+            self._teamed.add(member.name)
         self.teams.append(projection)
         self.keys.append(idempotency_key)
         return TeamRuntimeRef(
@@ -373,6 +392,70 @@ async def test_teams_without_rooms_are_refused_rather_than_reported_ready() -> N
             model=MODEL,
             **_RUNTIMES,
         ).project(project_id)
+
+
+@pytest.mark.asyncio
+async def test_workers_without_a_matrix_identity_are_refused_before_the_round() -> None:
+    """Defect A-9 in one assertion.
+
+    The rooms are there and the Workers exist, so B-11's check passes — but
+    the controller's worker reconciler has not reached them, so none of them
+    has the ``matrixUserID`` that ``AgentTeamsMatrixClient.send_task`` resolves
+    the recipient from. Returning normally here is what let a round start and
+    die on its first dispatch with ``AgentTeamsUnavailable``, which no console
+    button retries.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    control_plane = RecordingControlPlane(identities=False)
+    with pytest.raises(
+        AgentTeamsIdentitiesPending, match="has not provisioned Matrix identities"
+    ):
+        await ProjectRuntimeProjection(
+            directory,
+            store,
+            control_plane,  # type: ignore[arg-type]
+            model=MODEL,
+            **_RUNTIMES,
+        ).project(project_id)
+
+    # Refused *after* the teams were asked for, not instead of: the round that
+    # retries has to find the reconcile further along than it left it, or the
+    # refusal is a deadlock rather than a wait.
+    assert len(control_plane.teams) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_worker_identity_that_arrives_late_makes_the_retry_succeed() -> None:
+    """The other half of A-9: the refusal has to clear on its own.
+
+    Same control plane, same project — only the controller has caught up in
+    between. A retry of materialize is the operator's button, so this is the
+    path that has to end in a view rather than in a second refusal.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    control_plane = RecordingControlPlane(identities=False)
+    projection = ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **_RUNTIMES,
+    )
+    with pytest.raises(AgentTeamsIdentitiesPending):
+        await projection.project(project_id)
+
+    control_plane._identities = True  # the reconciler got there
+    view = await projection.project(project_id)
+
+    assert all(team.room_id for team in view.repository_teams)
 
 
 @pytest.mark.asyncio
