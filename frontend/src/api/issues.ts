@@ -56,6 +56,9 @@ export async function createIssue(
     requirement_text: requirementText,
     created_by_agent_id: principal.agentId,
     idempotency_key: idempotencyKey,
+    // §6 S-4 交叉校验位：声明「当前工作区」，服务端与主体所属组织比对，
+    // 不一致即 403——防 leader id 取错工作区花名册。未选工作区时不带。
+    ...(organizationId !== null ? { organization_id: organizationId } : {}),
   });
 }
 
