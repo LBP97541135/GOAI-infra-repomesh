@@ -9,6 +9,7 @@ __pycache__/
 *.pem
 .repomesh-local.db
 .repomesh-workspaces/
+.repomesh-dev/
 .test-tmp/
 .test-tmp-*/
 .runtime/
