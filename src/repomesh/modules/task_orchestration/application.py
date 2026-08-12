@@ -474,19 +474,34 @@ class DecomposeRepositoryTask:
 
         # MVP granularity: one Worker task per repository task.
         worker_agent_id = team.worker_agent_ids[0]
+        worker_key = f"{key}:worker:{worker_agent_id}"
         children = await self._tasks.list_by_parent(task.id)
         in_flight = any(
             child.assignee_agent_id == worker_agent_id and child.status not in FINAL_TASK_STATUSES
             for child in children
         )
-        if in_flight:
-            # A replay must still heal a Worker task whose execution permit is missing.
+        # Whether the in-flight Worker task is the one *this* key created, or
+        # one some other attempt's keys did, decides what a replay may do with
+        # it — and it is a question only the store can answer.
+        owned = await self._tasks.get_by_idempotency_key(worker_key)
+        if in_flight and owned is None:
+            # Someone else's Worker task is already running under this
+            # repository task. Assigning would put a second one beside it, so
+            # the replay does the one repair that is safe: heal an execution
+            # permit that never got written.
             views = tuple(child.to_view() for child in children)
             for child, view in zip(children, views, strict=True):
                 if child.status not in FINAL_TASK_STATUSES:
                     await self._ensure_specification(view, tests=tests, key=key)
             return views
 
+        # Falling through with an in-flight task this key owns is the point
+        # (defect A-10). ``assign`` recognises the key, returns the row it
+        # already wrote instead of a second one, and — crucially — re-runs the
+        # delivery that failed the first time: the task package upload and the
+        # room message. Short-circuiting here, which is what the old
+        # unconditional ``in_flight`` return did, left a Worker task nobody had
+        # published and nobody had told, and no retry could reach it.
         worker_task = await self._assigner.assign(
             AssignTaskCommand(
                 organization_id=task.organization_id,
@@ -499,7 +514,7 @@ class DecomposeRepositoryTask:
                 acceptance=task.acceptance,
                 parent_task_id=task.id,
             ),
-            idempotency_key=f"{key}:worker:{worker_agent_id}",
+            idempotency_key=worker_key,
             # A worker task inherits why its repository task exists. The old
             # title-equality judgement had the same effect by accident, since
             # the title is copied down verbatim; here it is stated.
@@ -573,30 +588,44 @@ class AdvanceExecutionPlan:
         return assigned.to_view()
 
     async def _resume(self, plan: ExecutionPlan, key: str) -> ExecutionPlanView:
-        """Finish a ``start`` that only got as far as writing the plan row.
+        """Re-drive the current batch of a plan a refusal left unfinished.
 
-        ``start`` is two writes — the plan, then its first batch's assignments
-        — and the second one talks to the execution plane, so it is the one
-        that fails: a repository team with no Matrix room raises on the first
-        assignment and leaves a plan row with an empty batch behind. Returning
-        that row unchanged on the retry, which is what recognising the key used
-        to do, reported success for a round that had started nothing; the
-        operator's only remaining move was a new key, which would have written
-        a *second* plan for the same project.
+        ``start`` is a chain of writes — the plan row, its batch's leader task
+        assignments, the plan update that records them, then each leader task's
+        decomposition into the Worker task that actually gets dispatched — and
+        the ones at the far end talk to the execution plane, so they are the
+        ones that fail. Returning the stranded row unchanged on the retry,
+        which is what recognising the key used to do, reported success for a
+        round that had started nothing.
 
         So a replay re-runs the batch instead of skipping it. Every write it
         makes is keyed off the same prefix as the first attempt — the tasks,
-        their decomposition, the assignment messages — so the repositories that
-        did get through are found rather than duplicated, and only the ones
-        that did not are created. Replaying a plan whose batch is fully
-        assigned, or one that has since failed or completed, still costs
-        nothing.
+        their decomposition, the assignment messages, the task packages — so
+        the work that did get through is *found* rather than duplicated, and
+        only what did not is created.
+
+        THE EARLY RETURN THAT USED TO BE HERE WAS THE BUG (defect A-10). It
+        skipped the batch once ``leader_task_ids`` was complete, on the theory
+        that a fully-assigned batch has nothing left to do. But the plan row is
+        updated with those ids *before* the decomposition loop, so every
+        failure downstream of it — the Worker task's package upload, its room
+        message — lands on a plan that already looks finished. Live, that meant
+        a materialize whose S3 upload was refused could never be repaired: the
+        retry answered 200 over a round with task rows, an empty bucket and a
+        Worker that had never been told anything. Counting leader tasks cannot
+        distinguish "dispatched" from "written down", so it is the wrong
+        question; re-running and letting each keyed write answer for itself is
+        the right one.
+
+        Re-running a *healthy* batch is deliberately cheap rather than
+        forbidden: the leader tasks are found by key, the packages are content-
+        hashed and rewritten identically, and a delivered room message is
+        recognised and not sent twice. A settled plan — failed or completed —
+        is still left alone, because that is history and not unfinished work.
         """
 
         index = plan.current_batch_index
         if plan.status is not ExecutionPlanStatus.IN_PROGRESS:
-            return plan.to_view()
-        if len(plan.leader_task_ids(index)) == len(plan.batches[index]):
             return plan.to_view()
         # The first batch was assigned under the caller's key; every later one
         # under the plan's id (see `_advance_if_ready`). Resuming has to reuse

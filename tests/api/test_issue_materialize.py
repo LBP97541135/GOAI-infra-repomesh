@@ -41,6 +41,7 @@ from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskPublicationUnavailable,
     TaskStatus,
     TaskView,
 )
@@ -1576,5 +1577,172 @@ def test_a_round_broken_mid_dispatch_is_finished_by_the_next_press(
     assert plane.attempts == 2
     # Same plan key both times: the retry re-enters the stranded batch rather
     # than starting a second execution plan beside it.
+    assert len(starter.calls) == 2
+    assert starter.calls[1][1] == starter.calls[0][1]
+
+
+# ---------------------------------------------------------------------------
+# The store that carries the task package (defect A-10)
+# ---------------------------------------------------------------------------
+
+#: The sentence the live acceptance walk got back, verbatim.
+LIVE_S3_REFUSAL = (
+    "S3 operation failed; code: InvalidAccessKeyId, message: The Access Key Id "
+    "you provided does not exist in our records., resource: /agentteams-storage, "
+    "bucket_name: agentteams-storage"
+)
+
+
+def test_a_storage_that_refuses_the_task_package_is_a_503_not_a_bare_500(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A-10: the round got further than any refusal before it and still died bare.
+
+    Found live 2026-08-12. The rooms existed and the identities existed, so
+    neither B-11's nor A-6's 503 fired; the plan started, the task rows were
+    written, and then the upload of the Worker's task package was refused for
+    a credential the operator could fix in a minute. ``S3Error`` was translated
+    by nobody and FastAPI answered ``text/plain`` "Internal Server Error".
+
+    Same three assertions as its two siblings: the status, the server's own
+    words inside it, and a round still repairable afterwards.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    class RefusedByStorage:
+        async def start_plan(self, **_kwargs):
+            # What the wrapped publisher now raises out of an upload the store
+            # refused; before the fix this arrived here as a raw ``S3Error``.
+            raise TaskPublicationUnavailable(LIVE_S3_REFUSAL)
+
+    _with_execution_plane(monkeypatch, RefusedByStorage())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain, key="storage-refused-key")
+
+        assert response.status_code == 503, response.text
+        # A JSON body with a detail, not a bare text/plain 500.
+        assert response.headers["content-type"].startswith("application/json")
+        detail = response.json()["detail"]
+        # The store's own words: which code, which bucket. That is the whole
+        # actionable content and nothing we could write replaces it.
+        assert "InvalidAccessKeyId" in detail
+        assert "agentteams-storage" in detail
+        assert "materialize again" in detail
+        # Unlike B-11's, this 503 must not claim nothing was started.
+        assert "nothing was started" not in detail
+        # The round is not closed: the draft was never consumed.
+        assert chain.read()["step"] == 4
+
+
+def test_a_round_broken_at_publish_is_finished_by_the_next_press(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The acceptance criterion, over HTTP: press materialize again.
+
+    A-6's failure lands after ``start_plan`` began; this one lands after it has
+    also written task rows, which is further than the replay used to reach. The
+    receipt is still written failed and the draft still left unconsumed, so the
+    same key finishes the round.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+    starter = StubPlanStarter()
+
+    class LosesTheBucketOnce:
+        """Starts the plan and writes its tasks, then fails the upload."""
+
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def start_plan(self, **kwargs):
+            self.attempts += 1
+            if self.attempts > 1:
+                return await starter.start_plan(**kwargs)
+            # The plan row and its task rows are written before the upload
+            # that fails, so the attempt is recorded the way the real one is.
+            starter.calls.append(
+                (kwargs["project_id"], kwargs["idempotency_key"], kwargs["batches"])
+            )
+            raise TaskPublicationUnavailable(LIVE_S3_REFUSAL)
+
+    plane = LosesTheBucketOnce()
+    _with_execution_plane(monkeypatch, plane)
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        first = _materialize(chain, key="broken-at-publish-key")
+        assert first.status_code == 503, first.text
+        receipt = _draft_row(container, issue_id).discovery["materialization"]
+        assert receipt["status"] == "failed"
+        assert "InvalidAccessKeyId" in receipt["error"]
+        assert "plan_id" not in receipt
+        assert chain.read()["step"] == 4
+
+        # The same key finishes the round the refusal half-started.
+        second = _materialize(chain, key="broken-at-publish-key")
+        assert second.status_code == 200, second.text
+
+    assert plane.attempts == 2
+    # Same plan key both times: the retry re-enters the stranded batch rather
+    # than starting a second execution plan beside it.
+    assert len(starter.calls) == 2
+    assert starter.calls[1][1] == starter.calls[0][1]
+
+
+def test_a_new_key_also_repairs_a_round_broken_at_publish(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A reloaded panel, or a second operator, must not fork the round.
+
+    7659c89's other half: a failed materialization receipt lends its prefix to
+    the next attempt, so a retry under a *new* key repairs the first attempt
+    instead of racing it with a second execution plan. A-10 has to inherit that
+    unchanged, because its failure leaves more behind than A-6's did.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+    starter = StubPlanStarter()
+
+    class LosesTheBucketOnce:
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def start_plan(self, **kwargs):
+            self.attempts += 1
+            if self.attempts > 1:
+                return await starter.start_plan(**kwargs)
+            starter.calls.append(
+                (kwargs["project_id"], kwargs["idempotency_key"], kwargs["batches"])
+            )
+            raise TaskPublicationUnavailable(LIVE_S3_REFUSAL)
+
+    _with_execution_plane(monkeypatch, LosesTheBucketOnce())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        assert _materialize(chain, key="publish-first-key").status_code == 503
+        second = _materialize(chain, key="publish-second-key")
+        assert second.status_code == 200, second.text
+
+    # The second attempt borrowed the failed receipt's prefix, so the plane saw
+    # one plan key and not two.
     assert len(starter.calls) == 2
     assert starter.calls[1][1] == starter.calls[0][1]

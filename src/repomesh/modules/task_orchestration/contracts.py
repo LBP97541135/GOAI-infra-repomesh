@@ -124,6 +124,29 @@ class PublishedTaskPackage:
     content_hash: str
 
 
+class TaskPublicationUnavailable(RuntimeError):
+    """The store that carries a Worker's task package cannot take it — yet.
+
+    A Worker is handed its work as files, not as a sentence: the package is
+    written to AgentTeams' shared storage and the room message only points at
+    it. So a store that is unreachable, unauthenticated or out of room stops
+    the dispatch just as surely as a missing Matrix room does, and reads the
+    same way — nothing about the request is wrong and nothing about the server
+    is broken, the execution plane simply cannot take this yet. Callers
+    translate it as retryable (503), never as a 500.
+
+    A published refusal in the same family as ``ExecutionPlaneUnavailable`` and
+    ``CollaborationRouteUnavailable``, and here rather than in ``domain``
+    because it is the ``TaskAssignmentPublisher`` port's own word: the
+    composition root raises it on the port's behalf when the adapter behind it
+    fails, and other modules' API layers have to name it to give it a status
+    code. Untranslated it escaped the whole stack as a bare ``text/plain`` 500
+    — an S3 ``InvalidAccessKeyId`` reported to the operator as "Internal Server
+    Error", with nothing to read and nothing to press (defect A-10, found live
+    2026-08-12).
+    """
+
+
 class TaskAssignmentPublisher(Protocol):
     async def publish(
         self,

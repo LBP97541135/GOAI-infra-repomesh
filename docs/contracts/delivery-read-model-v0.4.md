@@ -1171,6 +1171,91 @@ leader 是唯一被读的锚点、成员真不一致仍是 400）+ `tests/api/te
 迁移 up/down 在一次性 Postgres 上实测：升级后跨项目同名可插入、项目内同名被拒；
 降级在存在共享行时**如实失败**（数据已越过 schema），无共享行时干净回滚。
 
+### 8.7.3 任务包进不了对象存储，也是「执行面暂时接不住」（**提案 · 待主脑裁决**，A-10）
+
+> 与 §8.7 / §8.7.1 同一家族的第三例，也是走得最远的一例。房间有了、身份有了、计划起了、
+> **任务行第一次真的落进了 `task_orchestration.execution_plan_tasks`**——然后 Worker 的
+> 任务包传不上对象存储，整轮以 `500 text/plain "Internal Server Error"` 逃逸。活体回执：
+> `status=failed, error="S3 operation failed; code: InvalidAccessKeyId, message: The Access
+> Key Id you provided does not exist in our records., resource: /agentteams-storage,
+> bucket_name: agentteams-storage"`（2026-08-12）。凭据本身是 env 配错、已修；此处要裁的是
+> **翻译与重放语义**，二者与那次配错无关，仍然成立。
+
+Worker 拿到的活是**文件**，不是一句话：任务包写进 AgentTeams 共享存储，房间里的消息只
+指向它。所以一个**不可达 / 未鉴权 / 写不进**的存储，和一个没建好的房间一样能把派活按住，
+读法也该一样——请求没错、服务端没坏，执行面**暂时**接不住。
+
+**新增 503（补进 §8.2 的 503 段）**：
+
+| 情形 | detail |
+| --- | --- |
+| 对象通道（S3/minio）拒收任务包 | `the execution plane could not store this round's tasks (<存储原话，如 S3 operation failed; code: InvalidAccessKeyId, … bucket_name: agentteams-storage>); the tasks are written — materialize again once AgentTeams storage accepts them` |
+| 文件通道写不进（磁盘满 / 只读挂载 / 校验不过） | 同上包装，括号内是 `OSError` 原话 |
+
+**这一条与上面两条 503 的关键差别，必须写进 detail**：它**不能**说
+`nothing was started`。它触发时任务行已经在库里了，说「什么都没发生」是一句操作员会据以
+行动的假话；重按物化做的是**把它们做完**，不是重来一遍。
+
+翻译点：`bootstrap/container.py::storage_backed_task_publisher`，与
+`collaboration_routed_messenger`（A-6）、`topology_runtime_projector`（B-11）同一个理由与
+同一个位置——业务模块不得 import integration，组合根是两套词汇唯一允许相遇的地方。包的是
+**端口**（`TaskAssignmentPublisher`）而不是适配器，所以**文件与对象两个通道一次覆盖**。
+翻译的异常族：`minio.error.MinioException`（含 `S3Error` / `ServerError` /
+`InvalidResponseError`）、`urllib3` 的连接错误、以及 `OSError`（连接类与文件系统类，含
+两个通道各自的「写完读回来对不上」校验失败）。**不翻译 `ValueError`**——文件通道用它表示
+「同一路径上已有内容不同的包」，那是「答了且答的是不」，重按永远不会好，冒充 503 只会让
+操作员一直按一个按不好的按钮（与 A-6 划的是同一条线）。
+
+**重放（本节的实质，比翻译更重要）**：这次失败落在任务行**之后**，而 7659c89 教会
+`AdvanceExecutionPlan.start` 重入的那个判据**恰好在这里失效**——`_assign_batch` 是
+「派 leader 任务 → 把 leader id 记进计划行 → 再逐个分解出真正被派活的 Worker 任务」，
+上传发生在最后一步，所以失败时批次的 `leader_task_ids` **已经是满的**，旧的
+「这批是不是都派完了？」回答「是」，于是重放**什么都不做**。活体证据正是如此：13:51 那次
+重放回了 200、账面有任务行，而 `teams/rm-team-…/shared/tasks/` 里只有 `.keep`。
+
+裁决点（两处改动，均已实现并有测试）：
+
+1. `_resume` 去掉「批次已满即跳过」这个早退。数满 leader 任务分不出「已派活」和「只是
+   记下来了」，问错了问题；重跑整批、让每一次带键的写自己回答，才是对的。健康批次重跑是
+   **便宜**而非禁止：leader 任务按键命中、任务包按 content-hash 原样重写、已投递的房间
+   消息被识别而不重发。已结算（failed/completed）的计划仍然原样不动。
+2. `DecomposeRepositoryTask.execute` 的 `in_flight` 早退**收窄**为「在飞的 Worker 任务不是
+   本键写的」才短路。本键写的那一个要落到 `assign` 上——`assign` 认键、返回既有行而不是
+   再写一行，并且**重跑失败掉的那半段投递**（任务包上传 + 房间消息）。旧的无条件短路正是
+   第二道闸：即使 `_resume` 重跑了，分解这一层照样会把重发咽掉。
+
+**不重复**：两处重跑的每一次写都落在第一次那个 key prefix 上，所以是**查到**而不是**新建**。
+本节的重复性证明一律**按行数断言，不按调用次数**——`test_start_is_idempotent` 原来断言的
+「重放没有再调用 assign」正是放走 A-10 的那句话：它把「没试」当成了幂等的定义，而要保的
+性质是「没重复」。该用例已改为按任务行断言。
+
+**同键 / 异键**：同键重试重入停在半路的那一批（§8.3 失败收据不重放）；异键重试按 §8.3
+借用失败收据的 prefix，因此不会在旁边另开一个执行计划。二者都已有用例。
+
+**一并报给主脑的两条观察（不在本次修复范围，需单独裁决）**：
+
+- **已投递的派活提示不会再发一次**。`SendCollaborationMessage.send` 对
+  `status == DELIVERED` 的消息直接短路返回。这是对的（否则每次重放都往房间里灌一条），
+  但 copaw Worker 是 mention 驱动、且 sync 从容器**出生**开始
+  （`components/agentteams/copaw/src/copaw_worker/matrix_channel.py`），所以一条**早于
+  Worker 容器**的 mention 它永远看不见。A-10 这一形态**不受影响**——上传在派活之前失败，
+  该 Worker 的消息压根还没建，重放会生成一条全新的 mention；受影响的是「消息发成功、
+  之后才失败」的轮次。这是 Worker 启动竞态，不是翻译问题，建议单列。
+- **`transaction_id` 就是协作消息的幂等键**，`matrix.py` 直接把它当 Matrix 事务 id 放进
+  PUT 路径。因此**重投**同一条 failed 消息会被 Matrix 按事务 id 去重。这在「服务端其实已
+  收下、我们这边才失败」时是**正确**的幂等；改成每次换新事务 id 会让原本落地的那条被重发
+  成两条。A-10 路径上该键从未被用过，所以新的派活是一枚**全新**事件，不受此影响。是否为
+  上一条的竞态另立一条「强制重投」通道，建议与上一条一起裁。
+
+验证：`tests/task_orchestration/test_task_publication_translation.py` 9 例（对象通道拒收 /
+不可达 / 校验不过、文件通道写不进 / 正常透传 / 内容冲突不冒充 503，以及任务行留存、
+同键重放把包传上去且只有一行、上传没成功就不派活）+
+`tests/task_orchestration/test_plan_execution.py` 增 2 例（整批在上传处断掉后被下一次按钮
+接上、异键写的在飞任务不被本键碰）并改写 `test_start_is_idempotent` 的断言口径 +
+`tests/api/test_issue_materialize.py` 增 3 例（503 而非裸 500 且不含 `nothing was started`、
+同键重放接上、异键重放借 prefix 不分叉）。反证已做两次：撤掉组合根翻译 → 端点恢复
+`500 text/plain "Internal Server Error"`；撤掉 §8.2 这条 503 分流 → 同样恢复裸 500。
+
 ---
 
 ## 附录 A：两条既有勘误（**已批准并同批实施**，2026-08-12）
