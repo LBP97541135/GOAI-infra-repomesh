@@ -123,15 +123,24 @@ class ChangeSetSCMCoordinator:
             protection = await protection_reader(
                 parse_repository_ref(profile.url), command.base_branch
             )
-            missing = set(candidate.required_checks) - set(protection.required_checks)
-            if missing:
-                raise SCMConflict(
-                    f"base branch protection is missing required checks: {sorted(missing)}"
-                )
-            if protection.required_approvals < candidate.required_approvals:
-                raise SCMConflict("base branch protection allows too few approvals")
-            if candidate.required_approvals and not protection.dismisses_stale_reviews:
-                raise SCMConflict("base branch protection must dismiss stale reviews")
+            # An unprotected base branch is a legitimate state, not a refusal.
+            # This preflight only checks that a rule which *exists* is at least
+            # as strict as the candidate demands -- it is belt to the merge
+            # gate's braces. With no rule at all there is nothing to compare
+            # against, and opening a draft PR is harmless: RepoMesh still
+            # refuses to merge until it has itself observed every required
+            # check passing and enough approvals (RepositoryDelivery
+            # ._readiness_status), which no remote setting can relax.
+            if protection.protected:
+                missing = set(candidate.required_checks) - set(protection.required_checks)
+                if missing:
+                    raise SCMConflict(
+                        f"base branch protection is missing required checks: {sorted(missing)}"
+                    )
+                if protection.required_approvals < candidate.required_approvals:
+                    raise SCMConflict("base branch protection allows too few approvals")
+                if candidate.required_approvals and not protection.dismisses_stale_reviews:
+                    raise SCMConflict("base branch protection must dismiss stale reviews")
         observation = await self._adapter.create_draft_pull_request(
             CreateDraftPullRequestCommand(
                 repository=parse_repository_ref(profile.url),

@@ -25,6 +25,8 @@ from .contracts import (
     SCMReviewState,
 )
 
+_UNPROTECTED_BRANCH_MESSAGE = "branch not protected"
+
 
 class GitHubAdapter:
     """GitHub delivery adapter restricted to draft PRs and reconciliation."""
@@ -83,7 +85,22 @@ class GitHubAdapter:
     async def get_branch_protection(
         self, repository: RepositoryRef, branch: str
     ) -> BranchProtectionObservation:
-        payload = await self._request("GET", repository, f"/branches/{branch}/protection")
+        """Read the base branch's protection, or report it has none.
+
+        GitHub answers this endpoint with 404 when the branch simply has no
+        protection rule -- the same status it uses for a repository or branch
+        that does not exist. Its body is what separates them: an unprotected
+        branch says "Branch not protected", while a wrong repository says
+        "Not Found" and a wrong branch says "Branch not found". Only the first
+        is an answer; the other two stay SCMNotFound.
+        """
+
+        try:
+            payload = await self._request("GET", repository, f"/branches/{branch}/protection")
+        except SCMNotFound as error:
+            if error.detail.strip().lower() != _UNPROTECTED_BRANCH_MESSAGE:
+                raise
+            return BranchProtectionObservation.unprotected()
         checks = payload.get("required_status_checks") or {}
         contexts = tuple(
             sorted(
@@ -310,14 +327,23 @@ class GitHubAdapter:
                 retry_after_seconds=int(retry) if retry.isdigit() else None,
             )
         if response.status_code == 404:
-            raise SCMNotFound("GitHub repository or PR was not found")
+            raise SCMNotFound(
+                "GitHub repository or PR was not found",
+                detail=self._error_message(response),
+            )
         if response.status_code >= 400:
-            try:
-                message = str(response.json().get("message") or response.status_code)
-            except (json.JSONDecodeError, TypeError):
-                message = str(response.status_code)
-            raise SCMConflict(f"GitHub rejected the operation: {message}")
+            raise SCMConflict(f"GitHub rejected the operation: {self._error_message(response)}")
         return response.json()
+
+    @staticmethod
+    def _error_message(response: httpx.Response) -> str:
+        try:
+            body = response.json()
+        except (json.JSONDecodeError, ValueError):
+            return str(response.status_code)
+        if not isinstance(body, dict):
+            return str(response.status_code)
+        return str(body.get("message") or response.status_code)
 
     @staticmethod
     def _observation(repository: RepositoryRef, payload: dict[str, Any]) -> PullRequestObservation:
