@@ -29,6 +29,7 @@ from repomesh.modules.change_orchestration import (
     ExecutionPlaneUnavailable,
     StartedExecutionPlan,
 )
+from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
 from repomesh.modules.project.contracts import (
     CodeAccessLevel,
     HumanControlAction,
@@ -773,3 +774,155 @@ def test_a_repository_staffed_by_another_organization_is_a_409_not_a_500(
         # Refused before any side effect: no topology row, no execution plan.
         assert _topology(container, issue_id) is None
         assert starter.calls == []
+
+
+def test_a_team_without_a_room_is_a_503_not_a_500(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The execution plane's "no room yet" is a retry, not a server fault.
+
+    Found live by the final acceptance walk (2026-08-12): materialize answered
+    500 with a stack trace because the repository teams it had just
+    provisioned had no AgentTeams rooms. Nothing about the request was wrong
+    and nothing about the server was broken — the runtime had not caught up
+    with the topology — so the panel needs the same reading it gets when the
+    plane is missing entirely.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    class Roomless:
+        async def start_plan(self, **_kwargs):
+            raise CollaborationRouteUnavailable("AgentTeams room is not ready")
+
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: Roomless()
+    )
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain, key="roomless-attempt-key")
+
+        assert response.status_code == 503, response.text
+        detail = response.json()["detail"]
+        assert "AgentTeams room is not ready" in detail
+        assert "materialize again" in detail
+
+
+def test_a_retry_under_a_new_key_repairs_the_first_attempt(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A reloaded panel must finish the half-started round, not race it.
+
+    The console keeps one idempotency key per round, so the ordinary retry
+    reuses it — but a reload mints a new one, and under a new key every write
+    of the materialization would be made a second time: a duplicate
+    engineering spec, and a second execution plan alongside the one the failed
+    attempt stranded. The failed receipt lends its prefix to the retry, so the
+    second press repairs the first rather than competing with it.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+    starter = StubPlanStarter()
+
+    class RefusesOnce:
+        """Refuses the first plan, the way a team whose rooms arrive late does."""
+
+        def __init__(self) -> None:
+            self.refused = False
+
+        async def start_plan(self, **kwargs):
+            if self.refused:
+                return await starter.start_plan(**kwargs)
+            self.refused = True
+            starter.calls.append(
+                (kwargs["project_id"], kwargs["idempotency_key"], kwargs["batches"])
+            )
+            raise CollaborationRouteUnavailable("AgentTeams room is not ready")
+
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: RefusesOnce()
+    )
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        first = _materialize(chain, key="first-attempt-key")
+        assert first.status_code == 503, first.text
+
+        second = _materialize(chain, key="a-reloaded-panel-key")
+        assert second.status_code == 200, second.text
+
+    assert len(starter.calls) == 2
+    assert "first-attempt-key" in starter.calls[0][1]
+    # Same plan key both times: the retry lands on the plan the refusal
+    # stranded and finishes it instead of writing a second one.
+    assert starter.calls[1][1] == starter.calls[0][1]
+
+
+def test_a_retry_after_the_plan_changed_gets_its_own_keys(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Repairing the first attempt only makes sense while the work is the same.
+
+    Re-running step 3 produces a different plan, and writing it under the
+    failed attempt's keys would collide with rows describing the plan it
+    replaced — a conflict with no operator move. A plan that has moved on gets
+    a fresh prefix.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    replanned = INTEGRATION.replace("统一通知模板", "统一通知模板（返工后）")
+    container = replace(
+        application_container,
+        llm_client=ScriptedLLM(
+            ANALYSIS_OK,
+            CANDIDATES,
+            _confirmation("REQUIRED"),
+            _confirmation("REQUIRED"),
+            INTEGRATION,
+            replanned,
+        ),
+    )
+    starter = StubPlanStarter()
+
+    class RefusesOnce:
+        def __init__(self) -> None:
+            self.refused = False
+
+        async def start_plan(self, **kwargs):
+            if self.refused:
+                return await starter.start_plan(**kwargs)
+            self.refused = True
+            starter.calls.append(
+                (kwargs["project_id"], kwargs["idempotency_key"], kwargs["batches"])
+            )
+            raise CollaborationRouteUnavailable("AgentTeams room is not ready")
+
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: RefusesOnce()
+    )
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        assert _materialize(chain, key="stale-attempt-key").status_code == 503
+        # Step 3 again: a new integration overwrites the plan on the draft.
+        assert chain.run("plan")["status"] == "succeeded"
+        assert _materialize(chain, key="after-replan-key").status_code == 200
+
+    assert len(starter.calls) == 2
+    assert starter.calls[1][1] != starter.calls[0][1]
+    assert "after-replan-key" in starter.calls[1][1]

@@ -8,6 +8,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalView,
     AgentRole,
 )
+from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTeamRuntimeStatus,
@@ -62,6 +63,11 @@ class RecordingAssigner:
     def __init__(self, tasks: InMemoryTaskStore) -> None:
         self._tasks = tasks
         self.commands: list[tuple[AssignTaskCommand, str]] = []
+        #: Keys whose delivery fails once, the way a repository team with no
+        #: Matrix room does: the task row is written, the assignment message is
+        #: not, and the caller sees the refusal. Empty unless a test says
+        #: otherwise, so every other test keeps its old behaviour.
+        self.undeliverable: set[str] = set()
 
     async def assign(
         self,
@@ -72,6 +78,7 @@ class RecordingAssigner:
     ):
         self.commands.append((command, idempotency_key))
         if existing := await self._tasks.get_by_idempotency_key(idempotency_key):
+            self._deliver(idempotency_key)
             return existing[0].to_view()
         task = Task(
             organization_id=command.organization_id,
@@ -90,7 +97,13 @@ class RecordingAssigner:
             idempotency_key=idempotency_key,
             request_fingerprint="sha256:test",
         )
+        self._deliver(idempotency_key)
         return task.to_view()
+
+    def _deliver(self, idempotency_key: str) -> None:
+        if idempotency_key in self.undeliverable:
+            self.undeliverable.discard(idempotency_key)
+            raise CollaborationRouteUnavailable("AgentTeams room is not ready")
 
 
 @dataclass(frozen=True)
@@ -446,6 +459,88 @@ async def test_start_is_idempotent() -> None:
     replay = await environment.advancer.start(plan, idempotency_key="plan-start")
 
     assert replay == first
+    assert len(environment.assigner.commands) == assignments
+
+
+@pytest.mark.asyncio
+async def test_start_finishes_a_batch_the_execution_plane_refused() -> None:
+    """A replay repairs the plan the first attempt stranded.
+
+    ``start`` is two writes — the plan row, then the batch's assignments — and
+    only the second one talks to the execution plane, so it is the one that
+    fails. Recognising the key and handing the row back, which is what a replay
+    used to do, reported success for a round that had assigned nobody: the
+    console showed a materialised issue with no tasks and no rooms, and the
+    operator had no move left. Found live by the final acceptance walk
+    (2026-08-12).
+    """
+
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0, 1),))
+    environment.assigner.undeliverable = {
+        f"plan-start:b0:{environment.repository_ids[0]}"
+    }
+
+    with pytest.raises(CollaborationRouteUnavailable):
+        await environment.advancer.start(plan, idempotency_key="plan-start")
+    stranded = await environment.plans.get(plan.id)
+    assert stranded is not None
+    assert stranded.leader_task_ids(0) == ()
+
+    view = await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert view.status is ExecutionPlanStatus.IN_PROGRESS
+    assert all(planned.leader_task_id is not None for planned in view.batches[0])
+    for position in range(2):
+        leader_task_id = await environment.leader_task_id(plan.id, 0, position)
+        worker_task = await environment.worker_task_of(leader_task_id)
+        assert worker_task.assignee_agent_id == environment.worker_ids[position]
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_batch_reuses_the_repositories_that_got_through() -> None:
+    """Only the assignments that never happened are made on the replay."""
+
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0, 1),))
+    environment.assigner.undeliverable = {
+        f"plan-start:b0:{environment.repository_ids[1]}"
+    }
+
+    with pytest.raises(CollaborationRouteUnavailable):
+        await environment.advancer.start(plan, idempotency_key="plan-start")
+    survivor = await environment.tasks.get_by_idempotency_key(
+        f"plan-start:b0:{environment.repository_ids[0]}"
+    )
+    assert survivor is not None
+
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert await environment.leader_task_id(plan.id, 0, 0) == survivor[0].id
+    leader_tasks = [
+        task
+        for task in await environment.tasks.list_by_project(environment.project_id)
+        if task.parent_task_id is None
+    ]
+    assert len(leader_tasks) == 2
+
+
+@pytest.mark.asyncio
+async def test_replaying_a_failed_plan_does_not_reassign_its_batch() -> None:
+    """A plan that has already been settled is history, not unfinished work."""
+
+    environment = Environment()
+    plan = environment.plan(((0,),))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker_task = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker_task.id, TaskStatus.FAILED, "compile error")
+    await environment.advancer.on_task_terminal(worker_task.id)
+    assignments = len(environment.assigner.commands)
+
+    view = await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert view.status is ExecutionPlanStatus.FAILED
     assert len(environment.assigner.commands) == assignments
 
 
