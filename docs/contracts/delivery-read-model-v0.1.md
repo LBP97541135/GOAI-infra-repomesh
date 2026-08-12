@@ -456,7 +456,7 @@ agent 自己的 `summary` 开头写着 "I could not execute anything to verify i
 **本提案不动合并门禁**（`merge_gate` / delivery_auto 行为一字未改）：界面在审批点把话摆出来，
 不替人做决定。门禁语义是另一轮裁决。
 
-#### 5.4.1 失败的一趟也有证据；`commit_sha` 可空（【提案 · 待主脑裁决】，A-18 第四面）
+#### 5.4.1 失败的一趟也有证据；`commit_sha` 可空（【已裁决 · 2026-08-12】，A-18 第四面）
 
 缺陷事实：live plan `5b1cbfd1` / issue `74e9701e` 的两条失败任务，`result_summary` 里躺着
 完整的 Runner 文档——
