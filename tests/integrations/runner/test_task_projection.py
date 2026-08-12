@@ -160,6 +160,64 @@ def test_projection_rejects_a_different_immutable_base(tmp_path: Path) -> None:
         RunnerTaskProjector().project(request)
 
 
+# ---------------------------------------------------------------------------
+# Verification commands are resolved at dispatch time, not baked in (A-19)
+# ---------------------------------------------------------------------------
+
+
+def test_a_spec_that_states_its_tests_outranks_the_catalog(tmp_path: Path) -> None:
+    """Precedence, in the direction that protects deliberate scoping.
+
+    A task somebody narrowed to one suite must keep it. If the catalog could
+    override, correcting one repository's command would silently rewrite every
+    in-flight task that had been scoped on purpose — and it would rewrite them
+    at dispatch, where nobody is looking.
+    """
+
+    request, _package, _capabilities = scenario(tmp_path)
+    request = replace(request, catalog_test_commands=("python scripts/run_tests.py",))
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.test_commands == ("pytest tests/pricing",)
+
+
+def test_a_silent_spec_falls_back_to_the_catalogs_current_answer(tmp_path: Path) -> None:
+    """The rescue: a task row with no tests baked in still dispatches verified.
+
+    Every round materialized before A-19's first half carries an empty ``tests``
+    in its Specification, and re-dispatch replays that row verbatim. Resolving
+    here is what reaches them — and what lets an operator fix a wrong command
+    without re-materialising anything.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(
+        request,
+        package=replace(package, test_commands=()),
+        catalog_test_commands=("python scripts/run_tests.py",),
+    )
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.test_commands == ("python scripts/run_tests.py",)
+
+
+def test_neither_spec_nor_catalog_dispatches_honestly_empty(tmp_path: Path) -> None:
+    """No default is invented at the last moment either.
+
+    A command nobody has stated cannot be guessed here any more than it could
+    be guessed in the migration. The dispatch goes out with none, the Runner
+    runs none, and delivery refuses the unverified candidate — which is the
+    loop closing honestly rather than a green tick over nothing.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(request, package=replace(package, test_commands=()))
+
+    assert RunnerTaskProjector().project(request).test_commands == ()
+
+
 def test_context_materialization_is_idempotent(tmp_path: Path) -> None:
     request, package, capabilities = scenario(tmp_path)
     task = RunnerTaskProjector().project(request)
