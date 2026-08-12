@@ -461,8 +461,14 @@ class GitHubRevertDeliveryGateway:
         try:
             protection = await reader(repository, self._base_branch)
         except SCMNotFound:
-            # An unprotected base branch requires nothing of the revert.
+            # The GitHub adapter now answers "unprotected" itself, so a 404
+            # only reaches here from an adapter that does not read the 404
+            # body. Keep swallowing it: an unprotected base branch requires
+            # nothing of the revert, and the alternative -- stranding an
+            # already-approved rollback on a protection lookup -- is worse.
             return ()
+        # An unprotected branch and a rule that demands no check both require
+        # nothing here, so this reads required_checks without asking which.
         return protection.required_checks
 
     async def _revert_pull_request(

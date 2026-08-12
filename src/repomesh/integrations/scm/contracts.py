@@ -86,6 +86,25 @@ class BranchProtectionObservation:
     required_approvals: int
     dismisses_stale_reviews: bool
     requires_conversation_resolution: bool
+    protected: bool = True
+    """False when the base branch has no protection rule configured at all.
+
+    A branch with no protection and a branch protected by a rule that happens
+    to demand nothing both read as empty requirements, so the two need a flag
+    to stay apart: only the first means "the remote was never asked to enforce
+    anything", which the delivery preflight must not read as a misconfigured
+    gate.
+    """
+
+    @classmethod
+    def unprotected(cls) -> "BranchProtectionObservation":
+        return cls(
+            required_checks=(),
+            required_approvals=0,
+            dismisses_stale_reviews=False,
+            requires_conversation_resolution=False,
+            protected=False,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,4 +202,14 @@ class SCMRateLimited(SCMError):
 
 
 class SCMNotFound(SCMError):
-    pass
+    """A 404 from the provider.
+
+    ``detail`` carries the provider's own message for the 404, because the
+    status code alone cannot say *what* was not found: GitHub answers 404 both
+    for a repository that does not exist and for a branch that merely has no
+    protection rule, and only the body tells the two apart.
+    """
+
+    def __init__(self, message: str, *, detail: str = "") -> None:
+        super().__init__(message)
+        self.detail = detail
