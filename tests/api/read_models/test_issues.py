@@ -53,6 +53,7 @@ def _state(**overrides) -> str:
         "has_open_change_set": False,
         "has_draft": False,
         "has_rounds": False,
+        "latest_round_failed_and_unarchived": False,
     }
     return derive_issue_state(**{**kwargs, **overrides}).value
 
@@ -87,6 +88,23 @@ def test_paused_does_not_close_an_issue() -> None:
             has_rounds=True,
         )
         == "open"
+    )
+
+
+def test_unarchived_failed_round_keeps_issue_open() -> None:
+    """§2.1 rule 4b (A-22): a failure nobody archived still needs someone."""
+
+    assert _state(has_rounds=True, latest_round_failed_and_unarchived=True) == "open"
+    # Archived: the caller drops the flag (phase became ARCHIVED), rule 5 returns.
+    assert _state(has_rounds=True, latest_round_failed_and_unarchived=False) == "closed"
+    # Rule 1 still wins over 4b: cancelling is a human's terminal decision.
+    assert (
+        _state(
+            operational_status=ProjectOperationalStatus.CANCELLED,
+            has_rounds=True,
+            latest_round_failed_and_unarchived=True,
+        )
+        == "closed"
     )
 
 
@@ -226,13 +244,15 @@ class StubAgents:
         return ()
 
 
-def _issue_service(*, plans, snapshots, change_sets, topology=None, tasks=None, agents=None):
+def _issue_service(
+    *, plans, snapshots, change_sets, topology=None, tasks=None, agents=None, archived=()
+):
     return _service(
         StubPlans(*plans),
         StubSnapshots(*snapshots),
         StubTasks(*(tasks or ())),
         StubChangeSets(change_sets),
-        StubArchives(),
+        StubArchives(*archived),
         topology=topology,
         agents=agents,
     )
@@ -319,6 +339,74 @@ async def test_active_round_keeps_issue_open_and_drives_phase() -> None:
     assert issue["active_round_id"] == running.id
     assert issue["latest_round_id"] == running.id
     assert issue["updated_at"] == T0
+
+
+@pytest.mark.asyncio
+async def test_failed_round_closes_only_once_archived() -> None:
+    """§2.1 rule 4b end to end (A-22), across the four shapes that touch it.
+
+    The live reproduction: a round whose tasks all failed produces no ChangeSet
+    at all, so rule 3 never fires and rule 5 used to report
+    `Closed · 执行失败` — an issue whose only outcome is a failure, filed as
+    finished. Archiving the round is what makes that closure deliberate.
+    """
+
+    failed_project, archived_project = uuid4(), uuid4()
+    delivered_project, paused_project = uuid4(), uuid4()
+    repository_id = uuid4()
+    failed = _plan(failed_project, repository_id, uuid4(), ExecutionPlanStatus.FAILED)
+    archived = _plan(archived_project, repository_id, uuid4(), ExecutionPlanStatus.FAILED)
+    delivered_plan = _plan(delivered_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
+    running = _plan(paused_project, repository_id, uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+    worker = _worker(delivered_project, repository_id, uuid4())
+    delivered = replace(
+        _manual_intervention_change_set(delivered_plan, repository_id, worker.id),
+        status=ChangeSetStatus.DELIVERED,
+        recovery_plans=(),
+        updated_at=T0,
+    )
+
+    service = _issue_service(
+        plans=(failed, archived, delivered_plan, running),
+        snapshots=(
+            _snapshot(failed_project, failed.id),
+            _snapshot(archived_project, archived.id),
+            _snapshot(delivered_project, delivered_plan.id),
+            _snapshot(paused_project, running.id),
+        ),
+        change_sets={delivered_plan.id: delivered},
+        archived=(archived.id,),
+        topology=StubTopology(
+            {
+                paused_project: _topology(
+                    paused_project,
+                    repository_id,
+                    operational_status=ProjectOperationalStatus.PAUSED,
+                )
+            }
+        ),
+    )
+
+    issues = {i["issue_id"]: i for i in (await service.list_issues(state="all"))["issues"]}
+
+    # 1. Failed and unarchived: open, and the phase still names the failure.
+    assert issues[failed_project]["state"] == "open"
+    assert issues[failed_project]["phase"] == "failed"
+    # 2. The operator archived the failure: closed again, phase archived.
+    assert issues[archived_project]["state"] == "closed"
+    assert issues[archived_project]["phase"] == "archived"
+    # 3. Delivered round: unchanged.
+    assert issues[delivered_project]["state"] == "closed"
+    assert issues[delivered_project]["phase"] == "delivered"
+    # 4. Paused with work in flight: unchanged, and for the same reason as 4b.
+    assert issues[paused_project]["state"] == "open"
+    assert issues[paused_project]["operational_status"] == "paused"
+
+    # The default open filter now surfaces the failure it used to hide.
+    assert {i["issue_id"] for i in (await service.list_issues())["issues"]} == {
+        failed_project,
+        paused_project,
+    }
 
 
 @pytest.mark.asyncio

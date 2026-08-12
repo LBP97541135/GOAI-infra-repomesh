@@ -740,6 +740,13 @@ class DeliveryReadModelService:
             ),
             has_draft=draft is not None,
             has_rounds=bool(rounds),
+            # §2.1 rule 4b (A-22). `_round_facts` feeds `archived` into
+            # `derive_phase`, which returns ARCHIVED before it ever returns
+            # FAILED — so phase FAILED already means "failed and not yet
+            # archived" and needs no second archive lookup here.
+            latest_round_failed_and_unarchived=(
+                latest is not None and latest.phase is DeliveryPhase.FAILED
+            ),
         )
 
         repository_ids = {

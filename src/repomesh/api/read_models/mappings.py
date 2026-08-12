@@ -125,17 +125,30 @@ def derive_issue_state(
     has_open_change_set: bool,
     has_draft: bool,
     has_rounds: bool,
+    latest_round_failed_and_unarchived: bool,
 ) -> IssueState:
-    """v0.2 §2.1, evaluated strictly in the contract's order.
+    """v0.2 §2.1 (incl. the rule-4b erratum), in the contract's order.
 
     `paused` deliberately does not close an issue: state answers "does this
     still need a human or an agent", and paused work still does. Rules 2-4 all
     answer open, so they collapse into one branch without reordering.
+
+    Rule 4b applies the same argument to the shape §2.1 predates: a round that
+    ended FAILED left no change set to keep the issue open under rule 3, so
+    rule 5 used to close it — an issue reading `Closed · 执行失败` while its
+    only outcome is a failure still obviously needs someone. Archiving that
+    round is the operator saying the failure is acknowledged and final, and an
+    archived round falls back to rule 5. The caller collapses "failed" and
+    "not archived" into one flag because `derive_phase` already does: it
+    returns ARCHIVED before it can return FAILED, so phase FAILED *is* the
+    unarchived failure.
     """
 
     if operational_status is ProjectOperationalStatus.CANCELLED:
         return IssueState.CLOSED
     if has_active_round or has_open_change_set or has_draft:
+        return IssueState.OPEN
+    if latest_round_failed_and_unarchived:
         return IssueState.OPEN
     if has_rounds:
         return IssueState.CLOSED
