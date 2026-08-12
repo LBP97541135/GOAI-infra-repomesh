@@ -180,6 +180,14 @@ def _seed(container: ApplicationContainer) -> tuple[UUID, UUID, UUID, UUID]:
                     url=f"https://github.com/acme/{name}",
                     description=f"{name} 服务",
                     topics=("通知",),
+                    # Defect A-19: one repository has said how it is verified
+                    # and the other has not, because both are real states and
+                    # the materialize path has to be honest about each — the
+                    # first inherits its commands, the second still dispatches
+                    # with none and is refused by delivery later.
+                    test_commands=(
+                        ("python scripts/run_tests.py",) if name == "ts-notify" else ()
+                    ),
                     auto_card=AutoCard(
                         top_dirs=("src",),
                         recent_commits=("fix 通知邮件",),

@@ -1442,6 +1442,9 @@ class DeliveryReadModelService:
                     "description": profile.description,
                     "topics": list(profile.topics),
                     "languages": list(profile.languages),
+                    # Defect A-19: read-only, and empty is the answer that
+                    # explains why a repository's rounds verify nothing.
+                    "test_commands": list(profile.test_commands),
                     "profiled_at": profile.profiled_at,
                     "resident_team_count": len(teams_by_repository.get(profile.id, ())),
                     "open_issue_count": open_issues.get(profile.id, 0),

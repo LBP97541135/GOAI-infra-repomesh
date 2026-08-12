@@ -22,6 +22,16 @@ class RepositoryRecord(Base):
     description: Mapped[str] = mapped_column(Text)
     topics: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
     languages: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
+    test_commands: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, nullable=False, server_default="[]", default=list
+    )
+    """Defect A-19: how this repository verifies itself, source of truth.
+
+    A column rather than another key under ``metadata`` because it is read on
+    the materialize path of every round and is meant to be edited by an
+    operator; ``metadata`` carries the scanner's derived AutoCard, which is
+    rewritten wholesale by the next scan.
+    """
     profiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -293,6 +293,7 @@ class PlanExecutionBridge:
             name_to_repo_id=name_to_repo_id,
             teamed_repository_ids=set(repo_id_to_team),
             skipped=skipped,
+            verification=self._verification_commands(profiles),
         )
         if batches:
             started = await self._plans.start_plan(
@@ -806,6 +807,7 @@ class PlanExecutionBridge:
             name_to_repo_id=name_to_repo_id,
             teamed_repository_ids=set(repo_id_to_team),
             skipped=skipped,
+            verification=self._verification_commands(profiles),
         )
         # Keep only batches that touch an affected repository.
         affected_set = set(affected_repos)
@@ -855,6 +857,7 @@ class PlanExecutionBridge:
         name_to_repo_id: dict[str, UUID],
         teamed_repository_ids: set[UUID],
         skipped: list[str],
+        verification: dict[str, tuple[str, ...]] | None = None,
     ) -> tuple[tuple[PlannedRepositoryTaskView, ...], ...]:
         """Translate the batched task DAG into planned repository tasks.
 
@@ -862,6 +865,26 @@ class PlanExecutionBridge:
         without a repository team in the project topology) are logged and
         collected in *skipped* instead of entering the execution plan: an
         execution plan must only contain assignable work.
+
+        ``verification`` is the catalog's answer to defect A-19: how each
+        repository is checked. ``TaskNode.tests`` states that the integration
+        LLM does not emit verification commands and "the caller supplies them
+        when materialising a plan" — the script era's caller did, and the
+        console's supplied nothing, so every console round dispatched
+        ``testCommands: []`` and the Runner verified nothing under a green tick.
+
+        It is applied *here* rather than on the plan the console reads back,
+        and that placement is load-bearing: ``materialize`` writes the plan it
+        was handed into the draft's ``task_dag``, and that column is what §8's
+        retry fingerprints. A plan mutated before that write fingerprints
+        differently on the second attempt, so a retry under a new key would
+        stop inheriting the failed attempt's prefix and fork the round — the
+        exact failure A-5 exists to prevent. Injecting at the last translation
+        keeps the snapshot the LLM's and the execution plan verified.
+
+        A node that states its own tests keeps them, so the request body of
+        ``/bridge/materialize`` still outranks the catalog and the catalog only
+        fills what nobody stated.
         """
 
         batches: list[tuple[PlannedRepositoryTaskView, ...]] = []
@@ -899,13 +922,43 @@ class PlanExecutionBridge:
                         or f"Implement changes for {repo_name}",
                         acceptance=self._derive_task_acceptance(task_node),
                         leader_task_id=None,
-                        tests=task_node.tests,
+                        tests=task_node.tests or (verification or {}).get(repo_name, ()),
                     )
                 )
                 _logger.info("Planned repository task for %s (batch %d)", repo_name, batch_index)
             if planned:
                 batches.append(tuple(planned))
         return tuple(batches)
+
+    @staticmethod
+    def _verification_commands(profiles) -> dict[str, tuple[str, ...]]:
+        """Catalog verification commands by repository name (defect A-19).
+
+        ``repositories.name`` carries no unique constraint — two owners' ``api``
+        are both legitimate rows — so two rows of one name that disagree about
+        how they are tested resolve to nothing rather than to whichever came
+        last. Running another repository's test command is worse than running
+        none: it fails for a reason the operator cannot act on, and it would
+        fail as *verification*, which is the one signal delivery trusts.
+        """
+
+        commands: dict[str, tuple[str, ...]] = {}
+        ambiguous: set[str] = set()
+        for profile in profiles:
+            declared = tuple(getattr(profile, "test_commands", ()) or ())
+            if not declared:
+                continue
+            if profile.name in commands and commands[profile.name] != declared:
+                ambiguous.add(profile.name)
+            commands.setdefault(profile.name, declared)
+        for name in ambiguous:
+            _logger.warning(
+                "repository name %s has conflicting catalog test commands; "
+                "tasks for it will carry none",
+                name,
+            )
+            commands.pop(name, None)
+        return commands
 
     @staticmethod
     def _find_task(plan: IntegratedPlan, repo_name: str) -> TaskNode | None:
