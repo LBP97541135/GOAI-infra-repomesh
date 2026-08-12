@@ -73,8 +73,8 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
   "opened_by_agent_id": "uuid|null",    // 最早 PlanSnapshot.created_by_agent_id
   "opened_by_name": "string|null",      // **agent 资源名（rm-worker-01），非人名**；
                                         // 与 v0.1 §4.2 sender_name 同源同精度，解析不到为 null
-  "opened_at": "...",                   // 最早 PlanSnapshot.created_at
-  "updated_at": "..."                   // §2.3
+  "opened_at": "...|null",              // 最早 PlanSnapshot.created_at；无任何快照时 null
+  "updated_at": "...|null"              // §2.3；opened_at 为 null 且无其它时间源时同为 null
 } ],
   "open_count": 3,                      // 见 §2.5（2026-08-11 主脑追认）
   "closed_count": 12,
@@ -122,7 +122,9 @@ issue 的 phase 不是新映射，而是 v0.1 §2 八相在 issue 粒度上的**
 ### 2.3 `updated_at` 与排序
 
 `updated_at = max(所有轮次 ChangeSet.updated_at, 所有 PlanSnapshot.created_at)`；
-无任何时间源时回退 `opened_at`。列表默认按 `updated_at` 降序（GitHub 式）。
+无任何时间源时回退 `opened_at`。**`opened_at` 本身亦可为 `null`**（issue 有轮次但无任何
+快照），此时 `updated_at` 同为 `null`，该 issue 在默认排序里置末——实现的排序键已为此
+兜底，契约起草时漏写了这一层。列表默认按 `updated_at` 降序（GitHub 式）。
 沿用 v0.1 修复过的原则：**取不到时间戳时回退最近的持久化事实，不编造**。
 
 ### 2.4 归档与筛选
@@ -154,7 +156,8 @@ GitHub 式列表的两个标签页各带总数（`Open 3 | Closed 12`）。消�
 
 ```json
 { "rounds": [ { "round_id": "uuid", "phase": "...", "status": "...",
-                "plan_version": 1, "created_at": "...", "updated_at": "..." } ],
+                "plan_version": 1,          // nullable：该轮无 PlanSnapshot 时（同 created_at）
+                "created_at": "...", "updated_at": "..." } ],
   "repositories": [ { "repository_id": "uuid", "name": "string",
                       "team_id": "uuid|null", "role_in_issue": "string|null" } ],
   // teams / human_grants / required_checkpoints：未建团时为 []（非 null，非占位）
@@ -166,8 +169,9 @@ GitHub 式列表的两个标签页各带总数（`Open 3 | Closed 12`）。消�
   "required_checkpoints": ["specification", "delivery"] }
 ```
 
-`rounds` 按时间正序（第 1 轮在前），`created_at` 取该轮次 PlanSnapshot 的时间、无快照为
-`null`；`repositories` 是「该 issue 各轮次计划涉及的仓库 ∪ 拓扑驻扎仓库」的并集。
+`rounds` 按时间正序（第 1 轮在前），`created_at` 与 `plan_version` 均取自该轮次的
+PlanSnapshot，**无快照时两者同为 `null`**（出自同一个判空分支，起草时只写对了
+`created_at`）；`repositories` 是「该 issue 各轮次计划涉及的仓库 ∪ 拓扑驻扎仓库」的并集。
 
 `role_in_issue` nullable：拓扑不记录仓库在 issue 中的角色语义（生产者/消费者只存在于
 CONTRACT spec 的 scope），取不到时为 `null`。
@@ -177,7 +181,7 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 
 ## 4. 网格 / 团队 / 花名册（CONS-32）
 
-### 4.1 `GET /repositories`
+### 4.1 `GET /api/v1/console/repositories`
 
 ```json
 { "repositories": [ {
@@ -197,7 +201,7 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 **`auto_card` 不投影**（发现证据未按 project 存储，v0.1 §6.10），仓库卡片的「证据」
 一栏继续显「未接入」。
 
-### 4.2 `GET /teams`
+### 4.2 `GET /api/v1/console/teams`
 
 ```json
 { "teams": [ {
@@ -218,7 +222,7 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 `runtime_status`（拓扑记录的**建团结果**）与 `runtime.phase`（Controller 的**当前观测
 态**）是两个不同事实，**不得合并**：前者是历史，后者可能不可达。
 
-### 4.3 `GET /agents`
+### 4.3 `GET /api/v1/console/agents`
 
 ```json
 { "agents": [ {
@@ -304,8 +308,13 @@ Controller 请求**，`runtime` 字段仍在响应里、**恒为 `null`**（起�
   求快走 `with_runtime=false`，运行时区域一律不下结论；待发起真实探测的请求返回后，再按上一条
   区分 `null` 与 `{"reachable": false}`。
 
-补齐路径（本版不做）：若日后要让响应自述，可在顶层加 `runtime_probed: bool`，届时本节改为
-以该字段消歧，消费方不再依赖自己记住请求参数。
+**三义里有两义消费方永远分不开（2026-08-11 补记，诚实说明）**：上面的指引解决的是
+「未探测」那一义（靠请求参数）。但 **404「controller 说没有这个资源」与「AgentTeams 未配置」
+都产出 `null`，响应体与请求参数都无法区分**。二者的运维含义完全不同——前者是注册表与
+controller 漂移（有人得去查），后者是本环境根本没接。当前前端只能合并成一句「未接入」。
+补齐路径（本版不做）：给 404 一个可辨识的取值（如 `{"reachable": false, "present": false}`），
+成本低于本节这段消费方指引；顶层的 `runtime_probed: bool` **只能解第三义、解不了这两义**，
+不要误以为它是全解。
 
 ### 4.5 路径冲突与命名空间（**2026-08-11 主脑裁决，已生效**）
 
@@ -364,6 +373,11 @@ Controller 请求**，`runtime` 字段仍在响应里、**恒为 `null`**（起�
 } ], "next_cursor": "string|null" }
 ```
 
+**查询参数 `?cursor=&limit=`（2026-08-11 补记）**：语义与 §4.1 events 完全一致
+（`cursor` 不透明、内部为 offset；`limit` 默认 100、上限 500；非法 cursor → 422）。
+起草时只定义了响应里的 `next_cursor`，没写调用方怎么把它传回来。**注意与 v0.1 §4.2
+`/messages` 相反**——那个端点有意不分页，房间流才是需要翻页的那个。
+
 #### `source` 语义（**契约明文，Q4 裁决落地**）
 
 | `source` | 含义 | 是否房间内真实发生 | 前端渲染约束 |
@@ -397,7 +411,8 @@ Controller 请求**，`runtime` 字段仍在响应里、**恒为 `null`**（起�
 ```json
 { "issue_id": "uuid", "repository_id": "uuid", "plan_version": 1,
   "dag": {
-    "nodes": [ { "repository_id": "uuid", "name": "string",
+    "nodes": [ { "repository_id": "uuid|null",   // catalog 解析不到该批次名时为 null
+                 "name": "string",
                  "batch_index": 0, "is_focus": true } ],
     "edges": [ { "from_repository_id": "uuid", "to_repository_id": "uuid" } ],
     "granularity": "repository",       // 恒为 repository，见 §5.5
@@ -406,7 +421,7 @@ Controller 请求**，`runtime` 字段仍在响应里、**恒为 `null`**（起�
   "execution_batches": [["repo-a"], ["repo-b"]],
   "spec": {                            // 每仓 spec 投影，可 null
     "specification_id": "uuid", "kind": "repository|task",
-    "status": "draft|submitted|approved|frozen", "revision": 2,
+    "status": "approved|frozen", "revision": 2,        // 见下：本端点只可能出这两个
     "goal": "string", "acceptance": ["string"],
     "allowed_paths": ["src/**"], "forbidden_paths": ["legacy/**"],
     "tests": ["pytest"]
@@ -415,10 +430,23 @@ Controller 请求**，`runtime` 字段仍在响应里、**恒为 `null`**（起�
 }
 ```
 
+**`status` 枚举（2026-08-11 勘正，本节正文）**：起草写的 `draft|submitted|approved|frozen`
+错了两层——`submitted` **在枚举里根本不存在**（真实全集见 `specification/contracts.py`：
+`draft|in_review|approved|frozen|superseded`），而本端点的选取规则又只在 `FROZEN`/`APPROVED`
+里挑，所以 `draft` / `in_review` / `superseded` 在这里**恒不可达**。故本节正文取值为
+`approved|frozen`。§7.2 当时只勘正了勘误表、没动正文，是「同一事实出现在两节、只改一节」
+的**第三次复发**（前两次：`repository_name` nullable、v0.1 §4.2 直投影漏字段）。
+
 每仓 spec 选取规则：该 project 下 `kind ∈ {REPOSITORY, TASK}` 且 `repository_id` 匹配的
 specification，优先 `FROZEN`，其次 `APPROVED`，同级取最新 `revision`；无匹配为 `null`
 （前端显「本仓无独立 spec，适用项目工程契约」）。`ENGINEERING` kind 是项目级，走
 `engineering_contract`，不混入 `spec`。
+
+**节点与边的降级不对称（2026-08-11 补记）**：§7.2 只裁决了「无法解析的依赖名丢弃该边」。
+节点侧规则不同——`execution_batches` 存的是仓库**名**，catalog 解析不到时**节点保留、
+`repository_id` 为 `null`**（丢掉节点会让批次缺项，布局就错了）。消费方据此不得拿
+`nodes[].repository_id` 当列表 key 或跳转参数。**已知缺口**：节点侧目前不像边那样记
+warning，「N 个节点无法解析」不留痕，与 §7.2「不静默截断」的口径不齐，见 §6.1。
 
 ### 5.5 DAG 显式依赖边确认（**主脑点名问询项，结论：部分可得**）
 
@@ -471,7 +499,12 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | SSE 推送 | 房间刷新仍为轮询（Q5） | 先定「哪些事实值得推」，再复用 main 的 SSE 模式 |
 | 统一决策夹 | 治理决策与 ReviewRequest 并存两面（Q6） | 产品级整合，需先统一审批对象语义 |
 | 列表服务端筛选 | `/issues` 无 `?repository_id=` / `?phase=`（§7.1 裁决撤按钮） | issue 规模变大后再议：`repository_id` 需定义「issue 含该仓」的跨轮次包含语义 |
-| 运行时时长与醒睡 | `uptime_seconds` / `awake` 恒 null（§4.4） | AgentTeams Controller 在 status 暴露启动时间与观测态 |
+| 运行时时长与醒睡 | `uptime_seconds` / `awake` 恒 null（§4.4） | **2026-08-11 复审勘正**：起草把补齐路径写成「上游 CRD 变更、需与 AgentTeams 侧协调」，成本被高估——AgentTeams 是**本仓 fork**（`integrations/agentteams/upstream.toml`），CRD 已有 `lastHeartbeat`/`lastActiveAt`，`WorkerStatus` 亦有 `containerState`（观测态，非我们下发的期望态），缺的只是 fork 的 `WorkerResponse` DTO 与客户端解析。**⚠ 待验证**：本仓 vendored 镜像与部署中的 controller 存在已知漂移，落实前须对真实 controller 验证响应确实带这些字段，不得据 vendored 源码直接开工 |
+| 花名册规模 | Q3 只加了 `?with_runtime=` 开关且**默认 true**，默认路径的 N 次 HTTP 一次没减（§4.4） | 分页，或改默认值。**本行 2026-08-11 补记**：该缺口起草时被记成「已裁决·生效」而没进本表，等于没有任何条目会让它再被拿出来看 |
+| 探测并发上限 | `asyncio.gather` 扇出无上限，httpx 默认 `max_connections=100`，超出后连接池排队时间**计入每条自己的超时预算** → 规模上去后健康 controller 也可能被判 `reachable: false`（§4.4） | 加 `Semaphore` 限流或显式配 `httpx.Limits`；超时值提到 settings |
+| 运行时降级可观测性 | 探测失败一律 `{"reachable": false}` + 无细节 warning，**token 配错 / controller 宕机 / 适配器自身 bug 三者同形**，HTTP 200 之下无告警信号（§4.4） | 日志带 `exc_info` 与 status_code，按 kind 聚合 degraded 计数 |
+| 404 与未配置不可分辨 | 两者都返 `runtime: null`，运维含义不同却渲染成同一个「未接入」（§4.4） | 给 404 一个可辨识取值，如 `{"reachable": false, "present": false}` |
+| DAG 节点丢失不留痕 | 边有「丢弃 + warning」，节点只是 `repository_id: null` 且不记日志（§5.4） | 节点侧补 warning，与 §7.2 口径对齐 |
 
 ## 7. 裁决记录（2026-08-11，八项全部裁决 · 生效）
 
@@ -481,7 +514,7 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | --- | --- | --- | --- |
 | Q1 | 读端点鉴权：共享动作 token 还是 main 的本地会话票据 | **维持动作 token**；会话票据接入另立 backlog。main 的 `/auth/*` 是其自有端点鉴权，前端登录 UI 与本契约八端点互不影响，两者不混改 | §1、§6.1 |
 | Q2 | `/issues` 是否必须带 `organization_id` | **可选参数 + 响应逐条回显 `organization_id`**；工作区选择由前端持有，服务端不猜 | §2、§2.4 |
-| Q3 | 花名册实时代理规模（N agent = N 次 HTTP） | **加 `?with_runtime=`，默认 `true`**；**逐条超时隔离升格为契约硬性要求**（非实现建议） | §4.4 |
+| Q3 | 花名册实时代理规模（N agent = N 次 HTTP） | **加 `?with_runtime=`，默认 `true`**；**逐条超时隔离升格为契约硬性要求**（非实现建议）。**2026-08-11 复审加注：本裁决是缓解、不是解决**——问的是规模，答的是开关，而默认路径的 N 一次没减；规模缺口已补进 §6.1 | §4.4 |
 | Q4 | 治理决策投影进 leaderDM 混流是否可接受 | **接受方案 A（投影进 leaderDM）**，附加硬约束：`source != "message"` 必须以系统条目样式渲染（无头像气泡）；`source` 语义表升为契约明文 | §5.2 |
 | Q5 | 房间刷新机制 | **v0.2 轮询**；SSE 另立项 | §5.3、§6.1 |
 | Q6 | ReviewRequest 与治理决策统一决策夹 | **不统一**，v0.2 只含治理决策；ReviewRequest 走 main 既有面；issue 概览**保留 `required_checkpoints`** 供提示与跳转 | §3、§6 |
@@ -509,7 +542,7 @@ issue 级归档实体、SSE 推送、ReviewRequest 与治理决策的统一决�
 | 房间成员按类型 | teamRoom 成员 = 仓库 leader + workers；**leaderDM 成员 = 仓库 leader + 组织 leader**。leaderDM 列 workers 会误述「谁能读这个房间」 | §5.1 |
 | 未建团的 issue | `/issues/{id}/rooms` 返回 `{"rooms": []}` 且 **HTTP 200**（不是 404）；issue 本身不存在才 404 | §5.1 |
 | 无法解析的依赖名 | `task_dag[].depends_on` 中 catalog 查不到的仓库名**丢弃该边**，不产出带 null 端点的边 | §5.4 |
-| spec 状态枚举校正 | §5.4 原文写 `draft\|submitted\|approved\|frozen`，**实际枚举无 `submitted`**：`draft\|in_review\|approved\|frozen\|superseded`（`specification/contracts.py`）。读模型透传真实值 | §5.4 |
+| spec 状态枚举校正 | §5.4 原文写 `draft\|submitted\|approved\|frozen`，**实际枚举无 `submitted`**：`draft\|in_review\|approved\|frozen\|superseded`（`specification/contracts.py`）。读模型透传真实值。**2026-08-11 再修**：本行当时只改了勘误表、没动 §5.4 正文（第三次「只勘正一节」），正文已同步；且本端点选取规则决定取值只可能是 `approved\|frozen` | §5.4 |
 | 种子扩展 | 拓扑 + 双房间 + 4 仓库 leader/worker 注册 + A 两仓单仓 spec（frozen rev3 / approved rev2）；消息由占位房间迁入所属 teamRoom。**幂等，只动 5533** | 见 `scripts/seed-console-demo.py` |
 | 名称解析恢复 | 补注册 principals 后 `members[].name`、v0.1 `messages[].sender_name`、`tasks[].agent` 不再恒 null（值仍是 agent 资源名） | §5.1、v0.1 §4.2 |
 | live 锚点 | 派生自 in_progress 任务。**场景 C 的返工任务处于 in_progress，故 `!rm-team-c-billing` 与 `!rm-leader-c-billing` 实测 `live: true`**；A/B 任务全终态故 false。两个房间同属一仓，所以一仓在途时该仓两个房间都 live——这是 §5.3 原文「该房间所属仓库存在 in_progress 任务」的直接结果，不是 bug | §5.3 |
