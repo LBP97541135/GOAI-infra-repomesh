@@ -28,19 +28,24 @@ from repomesh.modules.task_orchestration.contracts import (
     PlannedTaskExecutionStatus,
     ProjectTaskProgress,
     PublishedTaskPackage,
+    RedispatchScope,
     ReportTaskCommand,
+    RoundRedispatch,
     SupersedeTaskCommand,
     TaskAssignmentGateway,
     TaskAssignmentPublisher,
     TaskOrigin,
+    TaskRedispatchGateway,
     TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
     WorkerTaskExecutionStatus,
 )
 from repomesh.modules.task_orchestration.domain import (
+    _REDOABLE_TASK_STATUSES,
     FINAL_TASK_STATUSES,
     ExecutionPlan,
+    RoundNotDispatchable,
     Task,
     TaskBlocked,
     TaskConflict,
@@ -51,6 +56,47 @@ from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskSt
 from repomesh.shared.idempotency import command_fingerprint
 
 _FAILED_TASK_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.CANCELLED})
+
+
+def _dispatch_message_key(key: str, attempt: str | None) -> str:
+    """The idempotency key of a dispatch's room message (contract v0.4 §8.7.4).
+
+    One function because the whole re-dispatch capability turns on this string,
+    and it is worth having somewhere to point at.
+
+    A collaboration message's idempotency key is used *verbatim* as the Matrix
+    ``transaction_id`` in the PUT (see ``SendCollaborationMessage._deliver`` and
+    ``AgentTeamsMatrixClient.send_task``), and Matrix deduplicates by
+    transaction id: re-sending under a key the homeserver has already seen
+    returns the original event and puts nothing new in the room. On top of that
+    ``SendCollaborationMessage.send`` short-circuits a key whose message is
+    already ``DELIVERED`` and never reaches the messenger at all. Two layers,
+    the same effect — a dispatch is a one-shot event, and the second press is
+    swallowed twice over.
+
+    Both layers key off this string, so versioning it is what makes an explicit
+    re-dispatch a genuinely new room event, and it is deliberately preferred to
+    bypassing either guard:
+
+    * ``attempt is None`` — every ordinary caller, including the replay in
+      ``AdvanceExecutionPlan._resume``. The key is unchanged, both guards still
+      hold, and a healthy batch re-run stays silent. Replay must not spam a
+      room, and after this change it still cannot: the code that would have
+      had to be weakened to allow it was never touched.
+    * ``attempt`` set — one explicit operator re-dispatch. A key no message
+      carries yet, so ``send`` writes a new row, hands the messenger a
+      transaction id the homeserver has not seen, and the mention lands as a
+      new event that a freshly-created container's sync can actually see.
+
+    Within one re-dispatch the attempt token is constant, so pressing the same
+    request twice is idempotent by exactly the machinery above — the second
+    call finds the DELIVERED message and stops. Idempotent per request,
+    genuinely new between requests, which is the whole specification.
+    """
+
+    if attempt is None:
+        return f"{key}:message"
+    return f"{key}:message:redispatch:{attempt}"
 
 
 class ObserveExecutionPlan:
@@ -182,7 +228,9 @@ class TaskOrchestrator:
         await self._deliver_assignment(task, key)
         return task.to_view()
 
-    async def _deliver_assignment(self, task: Task, key: str) -> None:
+    async def _deliver_assignment(
+        self, task: Task, key: str, *, dispatch_attempt: str | None = None
+    ) -> None:
         assignee = await self._required_agent(task.assignee_agent_id)
         published = None
         if assignee.role is AgentRole.WORKER:
@@ -211,10 +259,15 @@ class TaskOrchestrator:
                 assignee_resource_name=assignee.agentteams_resource_name,
                 idempotency_key=f"{key}:publication",
             )
-        await self._send_assignment(task, key, published)
+        await self._send_assignment(task, key, published, dispatch_attempt=dispatch_attempt)
 
     async def _send_assignment(
-        self, task: Task, key: str, published: PublishedTaskPackage | None
+        self,
+        task: Task,
+        key: str,
+        published: PublishedTaskPackage | None,
+        *,
+        dispatch_attempt: str | None = None,
     ) -> None:
         await self._collaboration.send(
             SendCollaborationMessageCommand(
@@ -229,8 +282,64 @@ class TaskOrchestrator:
                 body=self._assignment_body(task, published),
                 correlation_id=task.id,
             ),
-            idempotency_key=f"{key}:message",
+            idempotency_key=_dispatch_message_key(key, dispatch_attempt),
         )
+
+    async def redispatch(
+        self, task_id: UUID, *, attempt: str, redo: bool = False
+    ) -> TaskView:
+        """Dispatch an already-assigned task again, under a new attempt (§8.7.4).
+
+        Everything a first dispatch does except create the task: the package is
+        re-published and the room is told again. With ``redo`` false the task
+        row itself is left exactly as it is — this is a repeat of the
+        *telling*, not a second assignment, and a Worker that was already
+        working sees one duplicate notification rather than a rival task.
+
+        ``redo`` is the operator saying the result on file is wrong and the
+        work must happen again — the shape found live on 2026-08-12, where a
+        task reported SUCCEEDED without the evidence its delivery needed and
+        the refusal became a silent background loop. It is the only path here
+        that writes a task row, and it has to: ``report`` refuses a final task,
+        so a re-run whose task is still SUCCEEDED could never record its own
+        outcome. See :meth:`Task.redo` for what it will and will not reopen.
+
+        The key handed to :meth:`_deliver_assignment` is the task's *original*
+        assignment key, and that is not a convenience — it is forced. The
+        publisher writes the package to a path derived from the task id and
+        bakes ``idempotency_key`` into ``meta.json``, which feeds the content
+        hash; a re-publication under a fresh key would hash differently and the
+        store would refuse it as "conflicts with existing content" — a
+        ``ValueError`` that e8014fd deliberately does *not* translate to a
+        retryable 503, because retrying cannot change it. So the publication
+        must replay under the first attempt's key, and only the room message
+        may be versioned. ``attempt`` is what versions it; see
+        :func:`_dispatch_message_key`.
+        """
+
+        task = await self._required_task(task_id)
+        if task.status in FINAL_TASK_STATUSES:
+            if not redo:
+                raise TaskConflict(
+                    f"task {task.id} has already finished ({task.status.value}); "
+                    "there is nothing to dispatch again"
+                )
+            reopened = task.redo()
+            await self._tasks.update(reopened, expected_version=task.version)
+            task = reopened
+        key = await self._tasks.assignment_key(task.id)
+        if key is None:
+            # The row exists and nothing remembers how it was written. Nothing
+            # here can invent a key: the publication's content hash is derived
+            # from it, so a guess would be refused by the store rather than
+            # silently doing the wrong thing — but it would be refused as a
+            # 503, telling the operator to keep pressing. Say it plainly.
+            raise TaskConflict(
+                f"task {task.id} has no recorded assignment key, so its task "
+                "package cannot be republished"
+            )
+        await self._deliver_assignment(task, key, dispatch_attempt=attempt)
+        return task.to_view()
 
     async def start(self, task_id: UUID, *, agent_id: UUID) -> TaskView:
         task = await self._required_task(task_id)
@@ -829,3 +938,146 @@ class AdvanceExecutionPlan:
     async def _notify_plan_completed(self, plan: ExecutionPlanView) -> None:
         if self._on_plan_completed is not None:
             await self._on_plan_completed(plan)
+
+
+class RedispatchRound:
+    """Tell a round's idle Workers again (defect A-13, contract v0.4 §8.7.4).
+
+    The defect this exists for, stated as adjudicated: 派工是一次性事件、不是可
+    收敛的状态——agent 那一个回合没干成,控制台就永远停在 running,没有任何一层
+    会重试、报警或让人在 GUI 上重发。
+
+    A round's dispatch happens once: the package is written to shared storage
+    and a mention is posted to the room, and from there the Worker's single
+    react turn is the whole of the mechanism. If that turn does not finish the
+    work — the mention is consumed by a container that then dies, the pull of
+    the package is refused, the mention is delivered to a room whose recipient
+    does not exist yet — nothing downstream notices. The tasks stay ``running``
+    and the Workers stay idle, indefinitely, because "dispatched" was recorded
+    as an event that happened rather than as a state to be reached.
+
+    This is the operator's convergence handle, and deliberately only that:
+    there is no timer and no automatic retry in this iteration. A person who
+    can see that a round is stuck presses a button, and every non-terminal task
+    of the round is dispatched again — the same package, republished
+    idempotently, and the same mention, re-posted as a *new* Matrix event.
+
+    Two things it is careful not to be:
+
+    *Not a second assignment.* No task is created, no plan is advanced, no
+    status is written. A task that is genuinely in flight receives a duplicate
+    notification, which is the honest cost and is what the confirm dialog says.
+
+    *Not a judgement.* Nothing here decides whether a round is "stuck" — that
+    inference would be wrong the moment a Worker is merely slow. The capability
+    is offered whenever there is a non-terminal task to dispatch and refused
+    when there is not, and the operator supplies the judgement.
+    """
+
+    def __init__(
+        self,
+        plans: ExecutionPlanStore,
+        tasks: TaskStore,
+        dispatcher: TaskRedispatchGateway,
+    ) -> None:
+        self._plans = plans
+        self._tasks = tasks
+        self._dispatcher = dispatcher
+
+    async def execute(
+        self,
+        round_id: UUID,
+        *,
+        attempt: str,
+        scope: RedispatchScope = RedispatchScope.UNFINISHED,
+    ) -> RoundRedispatch:
+        token = attempt.strip()
+        if not token:
+            raise ValueError("attempt is required")
+        plan = await self._plans.get(round_id)
+        if plan is None:
+            raise TaskNotFound(f"round does not exist: {round_id}")
+
+        pending, settled = await self._partition(plan)
+        # ``rerun`` reaches the finished tasks too — the shape where the result
+        # on file is the problem. Only the ones that may be sent back to work:
+        # a CANCELLED or SUPERSEDED task is a decision, not a bad result, and
+        # ``Task.redo`` refuses it, so it must not be queued here either.
+        redoable = (
+            [task for task in settled if task.status in _REDOABLE_TASK_STATUSES]
+            if scope is RedispatchScope.RERUN
+            else []
+        )
+        if not pending and not redoable and not settled:
+            # A plan row with no task rows under it: materialization wrote the
+            # round and stopped before it wrote any work. Re-dispatch has
+            # nothing to re-send, and answering 200 would be a lie the operator
+            # would act on by waiting. The button that finishes this round is
+            # materialize, and the sentence says so.
+            raise RoundNotDispatchable(
+                f"round {round_id} has no tasks yet; it was never fully "
+                "materialised, so there is nothing to dispatch again — "
+                "materialize the issue instead"
+            )
+        if not pending and not redoable:
+            raise RoundNotDispatchable(
+                f"every task of round {round_id} has already finished "
+                f"({len(settled)} task(s)); a finished round is history, not "
+                "unfinished work — ask for scope=rerun if a result on file is "
+                "the thing that is wrong"
+            )
+
+        dispatched: list[UUID] = []
+        for task in pending:
+            await self._dispatcher.redispatch(task.id, attempt=token)
+            dispatched.append(task.id)
+        reopened: list[UUID] = []
+        for task in redoable:
+            await self._dispatcher.redispatch(task.id, attempt=token, redo=True)
+            dispatched.append(task.id)
+            reopened.append(task.id)
+        untouched = {task.id for task in settled} - set(reopened)
+        return RoundRedispatch(
+            round_id=round_id,
+            attempt=token,
+            scope=scope,
+            task_ids=tuple(dispatched),
+            reopened_task_ids=tuple(reopened),
+            settled_task_ids=tuple(task.id for task in settled if task.id in untouched),
+        )
+
+    async def _partition(self, plan: ExecutionPlan) -> tuple[list[Task], list[Task]]:
+        """The round's tasks, split into what may still be told and what is done.
+
+        Walked from the plan rather than from the project, because "this
+        round's tasks" is a question only the plan can answer: a project
+        accumulates rounds, and re-dispatching a previous round's stragglers
+        from this round's button would be a surprise.
+
+        Every batch is walked, not only the current one. Later batches have no
+        leader task ids yet and contribute nothing; earlier ones only advance
+        once they succeeded, so they contribute nothing either. Walking all of
+        them costs a few lookups and saves a special case that would be wrong
+        the first time a batch advanced over a partially-settled repository.
+
+        Leaders are included alongside their Workers. A leader task is
+        dispatched the same way — a room message it is expected to act on — and
+        the live billing specimen is precisely a leader whose mention never
+        arrived, so excluding them would leave one of the three shapes alive.
+        """
+
+        pending: list[Task] = []
+        settled: list[Task] = []
+        seen: set[UUID] = set()
+        for batch_index in range(len(plan.batches)):
+            for leader_task_id in plan.leader_task_ids(batch_index):
+                leader = await self._tasks.get(leader_task_id)
+                if leader is None:
+                    continue
+                for task in (leader, *await self._tasks.list_by_parent(leader.id)):
+                    if task.id in seen:
+                        continue
+                    seen.add(task.id)
+                    bucket = settled if task.status in FINAL_TASK_STATUSES else pending
+                    bucket.append(task)
+        return pending, settled

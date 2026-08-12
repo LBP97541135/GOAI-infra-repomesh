@@ -30,6 +30,8 @@ import type {
   RepositoryPlanView,
   RollbackReceipt,
   RollbackRequest,
+  RoundRedispatchReceipt,
+  RoundRedispatchRequest,
   RollbackScopeView,
   RoomListResponse,
   RoomStreamPage,
@@ -278,5 +280,12 @@ export function createApiClient(config: ApiClientConfig) {
      *  409 = 已有未完成的 recovery plan；detail 原文上抛。 */
     postRollback: (deliveryId: string, payload: RollbackRequest) =>
       request<RollbackReceipt>(config, "POST", `/deliveries/${deliveryId}/rollback`, payload),
+
+    /** §8.7.4 写：重发本轮任务包与点名（缺陷 A-13）。
+     *  404 = 无此轮次；409 = 本轮无可派工的任务（尚未物化 / 全部已完成，
+     *  两种 detail 措辞不同且都是可行动内容）；503 = 执行面暂时接不住。
+     *  一律 detail 原文上抛，由弹窗呈现。 */
+    postRoundRedispatch: (roundId: string, payload: RoundRedispatchRequest) =>
+      request<RoundRedispatchReceipt>(config, "POST", `/deliveries/${roundId}/redispatch`, payload),
   };
 }

@@ -121,6 +121,12 @@ class InMemoryTaskStore:
         task_id, fingerprint = binding
         return self.tasks[task_id], fingerprint
 
+    async def assignment_key(self, task_id: UUID) -> str | None:
+        for key, (bound_id, _) in self.idempotency.items():
+            if bound_id == task_id:
+                return key
+        return None
+
     async def update(self, task: Task, *, expected_version: int) -> None:
         current = self.tasks.get(task.id)
         if current is None or current.version != expected_version:
@@ -212,6 +218,12 @@ class PostgresTaskStore:
         if record is None:
             return None
         return self._to_domain(record), record.request_fingerprint
+
+    async def assignment_key(self, task_id: UUID) -> str | None:
+        async with self._database.transaction() as session:
+            return await session.scalar(
+                select(TaskRecord.idempotency_key).where(TaskRecord.id == task_id)
+            )
 
     async def update(self, task: Task, *, expected_version: int) -> None:
         async with self._database.transaction() as session:

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   DeliveryAggregate,
+  DeliveryTaskView,
   IssueDetailView,
   IssueRoundView,
+  RedispatchScope,
   RollbackScopeView,
   RoomListItemView,
 } from "../api/contract";
@@ -11,6 +13,7 @@ import {
   archiveRound,
   fetchDecisionDeck,
   fetchRoundDecisionHistory,
+  redispatchRound,
   resolveGovernanceAgent,
   submitGovernanceDecision,
   type GovernanceAgent,
@@ -21,6 +24,7 @@ import { ApiError } from "../api/client";
 import { resolveDataSourceMode } from "../api/source";
 import { submitRollback } from "../api/rollback";
 import { ApprovalModal } from "../components/ApprovalModal";
+import { RedispatchModal } from "../components/RedispatchModal";
 import { RollbackModal } from "../components/RollbackModal";
 import { EvidenceModal } from "../components/EvidenceModal";
 import type { PlanDagState } from "../components/PlanDagPanel";
@@ -82,6 +86,17 @@ export function IssueDetailContainer({
   const [rollbackScope, setRollbackScope] = useState<RollbackScopeView | null>(null);
   const [rollbackSubmitting, setRollbackSubmitting] = useState(false);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
+
+  /** 重新派工（§8.7.4，缺陷 A-13）：任务原文随轮次展开已经取到了，弹窗零额外取数。
+   *  与归档的两步内联确认不同，这里用弹窗——要说的三句话（重发什么、不重复建
+   *  什么、对在工作的 agent 是什么）塞不进一个按钮标签，而它们正是这个动作的全部。 */
+  const [redispatchOpen, setRedispatchOpen] = useState(false);
+  const [redispatchRoundView, setRedispatchRoundView] = useState<IssueRoundView | null>(null);
+  const [redispatchTasks, setRedispatchTasks] = useState<DeliveryTaskView[]>([]);
+  /** 默认永远是不写任务行的那个范围；每次开弹窗都复位，不让上一轮的选择粘住 */
+  const [redispatchScope, setRedispatchScope] = useState<RedispatchScope>("unfinished");
+  const [redispatchSubmitting, setRedispatchSubmitting] = useState(false);
+  const [redispatchError, setRedispatchError] = useState<string | null>(null);
 
   // B5：「确认归档？」不能永久驻留——用户点了第一步后转头看别的，几分钟后
   // 误触同一按钮就是真归档。8 秒无第二击自动复位回「归档本轮」。
@@ -325,7 +340,7 @@ export function IssueDetailContainer({
       const existing = roundsHistory[id];
       if (!willExpand || (existing && !existing.loading && !existing.error)) return;
       const epoch = roundsEpoch.current;
-      setRoundsHistory((prev) => ({ ...prev, [id]: { loading: true, error: null, pending: [], recorded: [], rollback: null, rollbackError: null } }));
+      setRoundsHistory((prev) => ({ ...prev, [id]: { loading: true, error: null, pending: [], recorded: [], rollback: null, rollbackError: null, tasks: [] } }));
       fetchRoundDecisionHistory(id)
         .then((data) => {
           if (epoch !== roundsEpoch.current) return; // A6：缓存已整体清空，旧响应不落桶
@@ -338,6 +353,7 @@ export function IssueDetailContainer({
               recorded: data.recorded,
               rollback: data.rollback,
               rollbackError: data.rollbackError,
+              tasks: data.tasks,
             },
           }));
         })
@@ -352,6 +368,7 @@ export function IssueDetailContainer({
               recorded: [],
               rollback: null,
               rollbackError: null,
+              tasks: [],
             },
           }));
         });
@@ -386,6 +403,47 @@ export function IssueDetailContainer({
     },
     [archiveConfirmId, onToast],
   );
+
+  const handleRedispatchRound = useCallback((round: IssueRoundView, tasks: DeliveryTaskView[]) => {
+    setRedispatchRoundView(round);
+    setRedispatchTasks(tasks);
+    setRedispatchScope("unfinished");
+    setRedispatchError(null);
+    setRedispatchOpen(true);
+  }, []);
+
+  /** 措辞与实际发生的事逐条对应：包重发了、点名重发了。
+   *  **不写「已恢复」「已唤醒」**——按下按钮的那一刻只有房间里多了一条消息，
+   *  agent 会不会理它不是控制台能知道的事。重发成功后刷页，让
+   *  `last_dispatched_at` 前移——那是唯一能给的事实级反馈。 */
+  const handleRedispatch = () => {
+    if (!redispatchRoundView) return;
+    setRedispatchSubmitting(true);
+    setRedispatchError(null);
+    redispatchRound(redispatchRoundView.round_id, redispatchScope)
+      .then((receipt) => {
+        setRedispatchOpen(false);
+        onToast(
+          `已重发 ${receipt.task_ids.length} 个任务的任务包与点名` +
+            (receipt.reopened_task_ids.length > 0
+              ? `，其中 ${receipt.reopened_task_ids.length} 个已完成任务被送回重做`
+              : "") +
+            (receipt.settled_task_ids.length > 0
+              ? `（另有 ${receipt.settled_task_ids.length} 个未动）`
+              : "") +
+            "；agent 是否响应看房间事件流。",
+        );
+        // 轮次缓存整体清空后重取：last_dispatched_at 变了
+        roundsEpoch.current += 1;
+        setRoundsHistory({});
+        setRoundsExpanded({});
+        setReload((n) => n + 1);
+      })
+      // 409（本轮无可派工的任务）/ 503（执行面接不住）detail 原文留在弹窗里，
+      // 不做成 toast——它会飘走，而这两条都是要读完才知道下一步的
+      .catch((err: unknown) => setRedispatchError(errText(err)))
+      .finally(() => setRedispatchSubmitting(false));
+  };
 
   const handleRollbackRound = useCallback((round: IssueRoundView, scope: RollbackScopeView) => {
     setRollbackRound(round);
@@ -552,6 +610,22 @@ export function IssueDetailContainer({
         archivingId={archivingId}
         onArchiveRound={handleArchiveRound}
         onRollbackRound={handleRollbackRound}
+        onRedispatchRound={handleRedispatchRound}
+      />
+      <RedispatchModal
+        open={redispatchOpen}
+        roundLabel={
+          redispatchRoundView
+            ? `第 ${detail.rounds.findIndex((r) => r.round_id === redispatchRoundView.round_id) + 1} 轮`
+            : ""
+        }
+        tasks={redispatchTasks}
+        scope={redispatchScope}
+        submitting={redispatchSubmitting}
+        errorText={redispatchError}
+        onScopeChange={setRedispatchScope}
+        onCancel={() => setRedispatchOpen(false)}
+        onConfirm={handleRedispatch}
       />
       <RollbackModal
         open={rollbackOpen}

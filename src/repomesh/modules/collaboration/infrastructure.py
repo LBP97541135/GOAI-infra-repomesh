@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, String, Text, UniqueConstraint, select
+from sqlalchemy import DateTime, String, Text, UniqueConstraint, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -78,6 +78,18 @@ class InMemoryCollaborationMessageStore:
     async def update(self, message: CollaborationMessage) -> None:
         self.messages[message.id] = message
 
+    async def last_assignment_at(self, project_id: UUID) -> dict[UUID, datetime]:
+        latest: dict[UUID, datetime] = {}
+        for message in self.messages.values():
+            if message.project_id != project_id or message.task_id is None:
+                continue
+            if message.kind is not CollaborationMessageKind.TASK_ASSIGNMENT:
+                continue
+            current = latest.get(message.task_id)
+            if current is None or message.created_at > current:
+                latest[message.task_id] = message.created_at
+        return latest
+
     async def list_failed(
         self, limit: int = 100
     ) -> tuple[tuple[CollaborationMessage, str], ...]:
@@ -148,6 +160,39 @@ class PostgresCollaborationMessageStore:
                 )
             ).all()
         return tuple(self._to_domain(record) for record in records)
+
+    async def last_assignment_at(self, project_id: UUID) -> dict[UUID, datetime]:
+        """When each task of this project was last dispatched (contract v0.4 §8.7.4).
+
+        Deliberately an aggregate rather than a filter over ``list_by_project``.
+        That method loads every message of the project including its full
+        ``body``, and the console asks this on every read of a round's tasks;
+        ``max(created_at) group by task_id`` returns one small row per task and
+        rides the ``project_id`` and ``kind`` indexes the table already has.
+
+        ``created_at`` is set when the message is written, so this is when the
+        dispatch was *sent*, not when the Worker read it — which is the honest
+        reading and the only one available: the row has no ``delivered_at``.
+        The console labels it accordingly.
+        """
+
+        async with self._database.transaction() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        CollaborationMessageRecord.task_id,
+                        func.max(CollaborationMessageRecord.created_at),
+                    )
+                    .where(
+                        CollaborationMessageRecord.project_id == project_id,
+                        CollaborationMessageRecord.kind
+                        == CollaborationMessageKind.TASK_ASSIGNMENT.value,
+                        CollaborationMessageRecord.task_id.is_not(None),
+                    )
+                    .group_by(CollaborationMessageRecord.task_id)
+                )
+            ).all()
+        return {task_id: at for task_id, at in rows if task_id is not None and at is not None}
 
     async def list_by_room(self, room_id: str) -> tuple[CollaborationMessage, ...]:
         """Every message delivered to one Matrix room, oldest first."""

@@ -1683,7 +1683,15 @@ class DeliveryReadModelService:
             if planned.leader_task_id is not None
         }
         worker_tasks = tuple(task for task in tasks if task.parent_task_id in leader_task_ids)
-        task_views = await self._task_views(worker_tasks, snapshot, change_set, catalog)
+        # §8.7.4: when each of these was last told to do its work. One
+        # aggregate query for the whole project, not one per task — see
+        # ``PostgresCollaborationMessageStore.last_assignment_at``. It is the
+        # context the console's re-dispatch entry needs and refuses to invent:
+        # "上次派工 HH:MM" is a fact, "this looks stuck" would not be.
+        dispatched_at = await self._messages.last_assignment_at(project_id)
+        task_views = await self._task_views(
+            worker_tasks, snapshot, change_set, catalog, dispatched_at
+        )
         merge_order = (
             [
                 item.repository_id
@@ -1762,6 +1770,7 @@ class DeliveryReadModelService:
         snapshot: PlanSnapshotData | None,
         change_set: ChangeSetView | None,
         catalog: dict,
+        dispatched_at: dict[UUID, datetime] | None = None,
     ) -> list[dict]:
         rework_by_key: dict[tuple[UUID, UUID | None], list[TaskView]] = {}
         for task in worker_tasks:
@@ -1855,6 +1864,13 @@ class DeliveryReadModelService:
                     "result_summary": task.result_summary,
                     "repair_timeline": repair_timeline,
                     "escalated_to_human": escalated,
+                    # §8.7.4. When the assignment message for this task was
+                    # last *written*, which is not when the Worker read it —
+                    # the row has no delivered_at and inventing one would be
+                    # the kind of judgement §3.1 forbids. ``null`` when no
+                    # assignment message was ever recorded, which is itself
+                    # worth seeing: it means the dispatch never happened.
+                    "last_dispatched_at": (dispatched_at or {}).get(task.id),
                 }
             )
         return views

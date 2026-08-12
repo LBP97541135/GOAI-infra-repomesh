@@ -231,6 +231,16 @@ class MessageSource(Protocol):
         """Messages delivered to one Matrix room, oldest first."""
         ...
 
+    async def last_assignment_at(self, project_id: UUID) -> dict[UUID, datetime]:
+        """When each task was last dispatched, by task id (§8.7.4).
+
+        Separate from ``for_project`` because it must stay cheap: a round's
+        task list is read on every console poll, and answering this by loading
+        every message body of the project would make an honest timestamp an
+        expensive one.
+        """
+        ...
+
 
 class ObservationSource(Protocol):
     async def for_change_set(

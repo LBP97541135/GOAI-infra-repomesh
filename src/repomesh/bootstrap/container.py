@@ -789,6 +789,9 @@ class ApplicationContainer:
                     message.to_view() for message in await message_store.list_by_room(room_id)
                 )
 
+            async def last_assignment_at(self, project_id: UUID):
+                return await message_store.last_assignment_at(project_id)
+
         class _Observations:
             async def for_change_set(self, change_set_id: UUID):
                 return tuple(
@@ -1312,6 +1315,33 @@ class ApplicationContainer:
         if self.task_report_gateway is None:
             return None
         return cast(TaskSupersederGateway, self.task_report_gateway)
+
+    def task_redispatch_gateway(self):
+        """The same composed TaskOrchestrator, in its re-dispatch role (§8.7.4).
+
+        ``TaskOrchestrator.redispatch`` is the fourth capability on the
+        instance that already backs assignment, reports and supersession, so
+        this is a cast rather than a construction — and it stays optional for
+        the same reason they do: without the AgentTeams messenger there is no
+        orchestrator, and a round with nowhere to dispatch to cannot be
+        dispatched again.
+        """
+
+        if self.task_report_gateway is None:
+            return None
+        from repomesh.modules.task_orchestration.contracts import TaskRedispatchGateway
+
+        return cast(TaskRedispatchGateway, self.task_report_gateway)
+
+    def round_redispatch_service(self):
+        """Contract v0.4 §8.7.4: the operator's handle on a stalled round."""
+
+        dispatcher = self.task_redispatch_gateway()
+        if dispatcher is None:
+            return None
+        from repomesh.modules.task_orchestration.application import RedispatchRound
+
+        return RedispatchRound(self.execution_plan_store(), self.task_store, dispatcher)
 
     def project_task_reader(self):
         """Expose task views through the TaskOrchestrator public read port."""
