@@ -1,0 +1,7 @@
+# Shell scripts keep LF even on Windows checkouts (core.autocrlf=true would
+# otherwise hand Git Bash a CRLF shebang line, which it refuses to run).
+*.sh text eol=lf
+
+# Files that are only ever read inside a Linux container.
+Dockerfile text eol=lf
+*.conf text eol=lf
