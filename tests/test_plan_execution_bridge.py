@@ -869,11 +869,15 @@ async def test_materialize_is_idempotent_for_the_same_prefix() -> None:
     environment = ExecutionEnvironment(["ts-a"])
 
     first = await environment.materialize([["ts-a"]], idempotency_prefix="tt-009")
-    assignments = len(environment.assigner.commands)
     replay = await environment.materialize([["ts-a"]], idempotency_prefix="tt-009")
 
     assert replay.plan_id == first.plan_id
-    assert len(environment.assigner.commands) == assignments
+    # Idempotent means "did not duplicate", not "did not try": since the A-10
+    # fix a same-key replay re-enters the batch (so publish/dispatch can be
+    # completed), and `assign` recognising its key and returning the existing
+    # row is the property under test. Counting assigner *calls* here is what
+    # let A-10 hide; counting distinct task rows is what actually matters.
+    assert sorted(t.id for t in replay.tasks) == sorted(t.id for t in first.tasks)
 
 
 # ---------------------------------------------------------------------------
