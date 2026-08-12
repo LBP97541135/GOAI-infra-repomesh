@@ -981,7 +981,8 @@ bridge 全是生产代码）。反证已做：拆掉就绪判定 → 三条 409 
 1. **投影的字段必须与脚本逐字段一致**（model / runtime / skills / MCP server）。控制器对
    已存在资源做**逐字段比对**，不一致答 409；一个仓库先被 `run_pipeline.py` 配过、后被
    控制台碰到，只要 skills 列表拼法不同就会冲突。因此 skills 常量与
-   task-control MCP 注入在两条路径上**共用同一份实现**。
+   task-control MCP 注入在两条路径上**共用同一份实现**。**`runtime` 自 §8.7.1 起不再靠
+   「抄一份」维持一致，改为两条路径读同一个设置**。
 2. **投影的幂等键不含本轮的 idempotency key**：注册键是
    `project:{project_id}:agent:{agent_id}:agentteams`，建队键沿用既有的
    `project:{project_id}:repository:{repository_id}:team`。所以异键重试、第二轮、第二个
@@ -1017,10 +1018,72 @@ bridge 内部），所以一轮被闸门挡下时房间可能已经建好。理�
 | 503 翻译 | `repository_intelligence/api/discovery_chain.py` |
 | 组装 + 错误族翻译 | `bootstrap/container.py::topology_runtime_projector` |
 | 控制器地址 | `REPOMESH_AGENTTEAMS_CONTROLLER_URL`（`settings.agentteams_controller_url`），无硬编码 |
+| 运行时取值 | `REPOMESH_AGENTTEAMS_{MANAGER,WORKER}_RUNTIME`（`settings.agentteams_{manager,worker}_runtime`），默认 `copaw`，见下方 §8.7.1 |
 
 验证：`tests/integrations/agentteams/test_runtime_projection.py`（5 例，控制平面是记录型
 替身，零网络）+ `tests/api/test_issue_materialize.py` 新增 4 例（顺序、503、异键重试修复、
 未配置控制平面时组装出的真投影仍拒绝）。反证已做，见落点分支的施工记录。
+
+### 8.7.1 运行时不是我们能替控制器决定的（**提案 · 待主脑裁决** · 2026-08-12，A-6）
+
+> 分支 `feat/dispatch-identity-fix`。本节只改 §8.7 的 `runtime` 一个字段，其余三点
+> （幂等键、两个房间、先写后拒）不动。
+
+核实事实（A-6，2026-08-12 活体）：§8.7 落地后房间确实建出来了，轮次也确实开工了，
+但**第一次派活就失败**——`matrix.py` 在投递前向控制器要收件人的 Matrix 身份，拿到空值，
+抛 `AgentTeamsUnavailable`。原因不在房间，在容器：控制台建的那批 worker 容器全部
+`Exited(1)`，入口脚本 `worker-entrypoint.sh` 要 `HICLAW_WORKER_NAME` 而这台控制器从不传，
+于是 worker 从未起来，也就从未拿到 Matrix 身份。
+
+再往上一层：**`runtime` 与镜像是控制器侧成对的配置**。这台控制器
+`AGENTTEAMS_COPAW_WORKER_IMAGE` 指向本地可用镜像，而 openclaw 那半边
+（`AGENTTEAMS_WORKER_IMAGE`）指向的镜像在本环境跑不起来。我们的两条路径却都把
+`OPENCLAW` **写死在代码里**——`scripts/run_pipeline.py` 与
+`integrations/agentteams/runtime_projection.py` 各写一份。这是个我们无权做的决定：
+**一个 runtime 能不能用，是控制器的属性，不是代码的常量。**
+
+裁决请求：
+
+1. **`runtime` 升为设置**：`REPOMESH_AGENTTEAMS_MANAGER_RUNTIME` /
+   `REPOMESH_AGENTTEAMS_WORKER_RUNTIME`（`settings.agentteams_manager_runtime` /
+   `settings.agentteams_worker_runtime`），**默认 `copaw`**——这是本部署实际具备的配对，
+   `repomesh-gh-*` 那批 copaw worker 已连续运行两天并跑完过一整轮活体交付。
+2. **两条路径读同一个设置**，于是 §8.7 三点之一的「逐字段一致」对 `runtime` 而言
+   **由结构保证，不再由抄写保证**：没有第二个值可漂。`ProjectRuntimeProjection` 由
+   composition root 注入（integrations 一律不读 `settings`），`run_pipeline.py` 直接
+   `get_settings()`。
+3. **设置按 wire enum 定型**（`ManagerRuntime` / `WorkerRuntime`），未知取值在**启动时**
+   报错，而不是拖到第一次派活才炸；允许值也因此只有一份。
+
+**已知代价，需一并裁决**：`ensure_worker` / `ensure_manager` 对已存在资源是
+**create-or-verify，不是 update**——`control_plane.py:111` 先 GET，命中就拿现有资源逐字段
+比对，`runtime` 不一致直接 `AgentTeamsConflict`（`control_plane.py:335-340`），**既不发
+POST，客户端也没有 PUT/DELETE**。因此本节生效后，**存量 `openclaw` 资源不会自动收敛**，
+而会在下一轮物化时冲突——且该冲突经 `topology_runtime_projector` 会被译成
+`RuntimeProjectionUnavailable` → 503「materialize again once AgentTeams answers」，
+是一个**重试永远不会好**的 503。这条误导本身值得单独裁一次。
+
+收敛手段（已在部署态控制器上核实，非 mirror 推断）：`agt update worker --runtime` 与
+`agt update manager --runtime` **都存在**，容器内 `agt` 经 `AGENTTEAMS_AUTH_TOKEN_FILE`
+自动鉴权，因此**无需删除**即可就地改 spec。本环境需收敛的只有 4 个 Worker
+（`rm-{leader,worker}-{b-checkout,c-billing}`）与 1 个 Manager（`console-demo-org-leader`）。
+`repomesh-gh-*` 与 `e2e-remote` 的 `bohan-*` 均不在其中，不得触碰。
+
+未核实项：改 `runtime` 后控制器是否会用 copaw 镜像重建容器（当前 `containerState=stopped`），
+需收敛后实测。本提案**不含**收敛动作本身，只把取值变成设置。
+
+补充勘误（同批）：`AgentTeamsUnavailable` 此前在物化路径上**无人翻译**，裸奔成
+`500 text/plain "Internal Server Error"`。已按 §8.2 既有读法并入 503 家族，翻译点在
+`bootstrap/container.py::collaboration_routed_messenger`（与
+`topology_runtime_projector` 同一个理由：业务模块不得 import integration）。仅翻译
+`AgentTeamsUnavailable`；`AgentTeamsResponseError` / `AgentTeamsConflict` 是「答了但答错」，
+仍应是故障而非重试。
+
+验证：`tests/integrations/agentteams/test_runtime_projection.py` 增 3 例（默认值即 `copaw`、
+未知取值启动即拒、两条路径都不再自带 `runtime` 字面量）+
+`tests/collaboration/test_dispatch_identity_translation.py` 4 例 +
+`tests/api/test_issue_materialize.py` 增 2 例（503 而非裸 500、派活中途断掉的轮次可被下一次
+重放接上）。反证已做：撤掉翻译后端点恢复 `500 text/plain "Internal Server Error"`。
 
 ---
 

@@ -17,9 +17,11 @@ them is visible from the outside:
 Nothing reaches the network: the control plane is a recording double.
 """
 
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from repomesh.integrations.agentteams.runtime_projection import (
     AgentTeamsRoomsPending,
@@ -47,8 +49,18 @@ from repomesh.modules.project import (
 )
 from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
+from repomesh.settings import Settings
 
 MODEL = "deepseek-chat"
+
+#: What the composition root injects, read from the same defaults production
+#: reads. Not literals: the point of A-6's fix is that the runtime has exactly
+#: one source, and a test that spelled it out here would be a second one.
+_DEFAULTS = Settings()
+_RUNTIMES = {
+    "manager_runtime": _DEFAULTS.agentteams_manager_runtime,
+    "worker_runtime": _DEFAULTS.agentteams_worker_runtime,
+}
 
 
 class RecordingControlPlane:
@@ -152,7 +164,7 @@ async def test_every_agent_is_registered_and_every_team_gets_its_rooms() -> None
 
     control_plane = RecordingControlPlane()
     view = await ProjectRuntimeProjection(
-        directory, store, control_plane, model=MODEL  # type: ignore[arg-type]
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
     ).project(project_id)
 
     # One Manager (the organization leader) and four Workers (a leader and a
@@ -184,19 +196,20 @@ async def test_the_projections_match_the_pipeline_script() -> None:
         store,
         control_plane,  # type: ignore[arg-type]
         model=MODEL,
+        **_RUNTIMES,
         worker_task_control_url="http://task-control.internal/mcp",
     ).project(project_id)
 
     manager = control_plane.managers[0]
     assert manager.model == MODEL
-    assert manager.runtime.value == "openclaw"
+    assert manager.runtime is _RUNTIMES["manager_runtime"]
     assert manager.skills == ("planning", "coordination")
 
     by_skills = {worker.skills: worker for worker in control_plane.workers}
     assert set(by_skills) == {("code-review", "planning"), ("coding",)}
     for worker in control_plane.workers:
         assert worker.model == MODEL
-        assert worker.runtime.value == "openclaw"
+        assert worker.runtime is _RUNTIMES["worker_runtime"]
         assert worker.state.value == "Running"
         # The task-control MCP server, injected the one way `RegisterNativeAgent`
         # injects it — a second spelling would make the two paths conflict.
@@ -218,13 +231,13 @@ async def test_projecting_twice_asks_for_the_same_side_effects() -> None:
     store = InMemoryProjectTopologyStore()
     project_id = await _console_project(directory, store)
     projection = ProjectRuntimeProjection(
-        directory, store, RecordingControlPlane(), model=MODEL  # type: ignore[arg-type]
+        directory, store, RecordingControlPlane(), model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
     )
     await projection.project(project_id)
 
     second = RecordingControlPlane()
     view = await ProjectRuntimeProjection(
-        directory, store, second, model=MODEL  # type: ignore[arg-type]
+        directory, store, second, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
     ).project(project_id)
 
     assert len(second.keys) == len(set(second.keys))
@@ -250,6 +263,7 @@ async def test_teams_without_rooms_are_refused_rather_than_reported_ready() -> N
             store,
             RecordingControlPlane(rooms=False),  # type: ignore[arg-type]
             model=MODEL,
+            **_RUNTIMES,
         ).project(project_id)
 
 
@@ -260,5 +274,57 @@ async def test_a_project_with_no_topology_is_a_violation_not_a_silent_success() 
 
     with pytest.raises(ProjectTopologyViolation):
         await ProjectRuntimeProjection(
-            directory, store, RecordingControlPlane(), model=MODEL  # type: ignore[arg-type]
+            directory, store, RecordingControlPlane(), model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
         ).project(uuid4())
+
+
+# ---------------------------------------------------------------------------
+# The runtime is one value, not two (defect A-6)
+# ---------------------------------------------------------------------------
+
+
+def test_the_runtime_default_is_this_deployment_s_pairing() -> None:
+    """``copaw``, and it is a decision about the *controller*, not a taste.
+
+    The controller pairs each runtime with its own image env. Asking for
+    ``openclaw`` where only the copaw image is configured spawns workers that
+    exit(1) on boot, so they never obtain a Matrix identity and every dispatch
+    fails — the root cause under A-6, seen live 2026-08-12.
+    """
+
+    assert Settings().agentteams_manager_runtime.value == "copaw"
+    assert Settings().agentteams_worker_runtime.value == "copaw"
+
+
+def test_an_unknown_runtime_is_refused_at_startup_not_at_first_dispatch() -> None:
+    """Typing the setting as the wire enum is what buys this."""
+
+    with pytest.raises(ValidationError):
+        Settings(agentteams_worker_runtime="clawpo")
+
+
+def test_neither_projection_path_writes_a_runtime_of_its_own() -> None:
+    """§8.7's field-for-field rule, held structurally instead of by copying.
+
+    The console and ``scripts/run_pipeline.py`` must ask the controller for
+    field-identical resources. For ``runtime`` that used to mean the literal
+    ``OPENCLAW`` written out in both files — two places to keep in step, and
+    the pair silently drifts into a 409 the moment one is edited. Now there is
+    one setting and no second value, and this is the test that keeps it that
+    way.
+    """
+
+    roots = Path(__file__).parents[3]
+    sources = {
+        "runtime_projection.py": (
+            roots / "src/repomesh/integrations/agentteams/runtime_projection.py"
+        ),
+        "run_pipeline.py": roots / "scripts/run_pipeline.py",
+    }
+    for label, path in sources.items():
+        body = path.read_text(encoding="utf-8")
+        # Only the prose may name it; no projection may construct one.
+        assert "runtime=ManagerRuntime." not in body, label
+        assert "runtime=WorkerRuntime." not in body, label
+        assert "agentteams_manager_runtime" in body or "_manager_runtime" in body, label
+        assert "agentteams_worker_runtime" in body or "_worker_runtime" in body, label

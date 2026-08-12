@@ -89,6 +89,62 @@ def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReade
     return _Adapter()
 
 
+def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMessenger:
+    """Adapt the AgentTeams messenger to the refusal the collaboration port owns.
+
+    ``AgentTeamsUnavailable`` is the integration's word for "the execution
+    plane cannot take this message *yet*" — the recipient's Matrix identity has
+    not appeared, or Matrix itself did not answer. The collaboration port
+    already has a name for exactly that, ``CollaborationRouteUnavailable``, and
+    every caller up the chain is written against it: the API layer turns it
+    into a retryable 503 and the round stays materialisable.
+
+    Untranslated, it escaped the whole stack as a bare 500 with no body — the
+    console told the operator to file a bug about a plan that only needed the
+    button pressed again (defect A-6, found live 2026-08-12). This is the same
+    move ``topology_runtime_projector`` makes for the projection's taxonomy,
+    made in the same place and for the same reason: the business module must
+    not import the integration, so the composition root is where the two
+    vocabularies are allowed to meet.
+
+    Only ``AgentTeamsUnavailable`` is translated. Its siblings
+    ``AgentTeamsResponseError`` and ``AgentTeamsConflict`` mean the plane
+    answered and the answer was wrong, which is a fault to report rather than a
+    wait to retry, and dressing them as 503 would tell the operator to keep
+    pressing a button that cannot work.
+    """
+
+    from repomesh.integrations.agentteams import AgentTeamsUnavailable
+    from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
+
+    class _Messenger:
+        async def send_task(
+            self,
+            room_id: str,
+            body: str,
+            *,
+            transaction_id: str,
+            recipient_resource_name: str | None = None,
+        ) -> str:
+            try:
+                return await messenger.send_task(
+                    room_id,
+                    body,
+                    transaction_id=transaction_id,
+                    recipient_resource_name=recipient_resource_name,
+                )
+            except AgentTeamsUnavailable as error:
+                raise CollaborationRouteUnavailable(str(error)) from error
+
+        def __getattr__(self, name: str):
+            # The concrete client is also a Matrix gateway (whoami, sync_once,
+            # close). Only delivery is being retold, so everything else is the
+            # object itself.
+            return getattr(messenger, name)
+
+    return _Messenger()
+
+
 def cached_service(factory):
     """Cache a zero-argument container factory for the process lifetime."""
 
@@ -219,6 +275,8 @@ class ApplicationContainer:
                         store,
                         control_plane,
                         model=settings.deepseek_model,
+                        manager_runtime=settings.agentteams_manager_runtime,
+                        worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
                     ).project(project_id)
                 except AgentTeamsError as error:
