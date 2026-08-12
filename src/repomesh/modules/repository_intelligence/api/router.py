@@ -1,5 +1,8 @@
+import logging
 from dataclasses import asdict
+from secrets import compare_digest
 from typing import Annotated
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -66,6 +69,8 @@ from .models import (
     WorkerTaskStatusView,
 )
 
+_logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["repository-intelligence"])
 
 
@@ -88,23 +93,64 @@ def _build_auto_card(body_card) -> AutoCard | None:  # noqa: ANN001
     )
 
 
-def _authorize_intake(request: Request) -> None:
-    """Bearer action-token check (contract v0.3 §3, same scheme as the
-    delivery write endpoints). The RI router is otherwise unauthenticated;
-    the write path must not be."""
+def require_action_token(request: Request) -> None:
+    """Bearer action-token check for every write on this router.
+
+    It started life guarding only ``POST /issues`` (contract v0.3 §3), which
+    left the eight other writes here — including the manual approval gate and
+    the org scanner — reachable with no credential at all. The check now hangs
+    off each write route instead of one handler. It is deliberately not a
+    router-level dependency: nine reads share this router, and closing a read
+    that is open today is a scope call for whoever owns those consumers, not
+    part of stopping the bleeding on the writes.
+
+    Missing configuration fails closed (503). An unset token must not read as
+    "no authentication required" — that is how a deployment ends up open.
+    """
 
     from repomesh.settings import get_settings
 
     expected = get_settings().agent_action_token
     if not expected:
-        raise HTTPException(
-            status_code=503, detail="issue intake authentication is not configured"
-        )
-    if request.headers.get("Authorization") != f"Bearer {expected}":
-        raise HTTPException(status_code=401, detail="invalid issue intake credentials")
+        raise HTTPException(status_code=503, detail="write authentication is not configured")
+    presented = request.headers.get("Authorization") or ""
+    if not compare_digest(presented, f"Bearer {expected}"):
+        raise HTTPException(status_code=401, detail="invalid credentials")
 
 
-@router.post("/issues")
+#: Applied to every write route below; reads on this router stay open.
+ACTION_TOKEN = Depends(require_action_token)
+
+
+def _require_scannable_host(url: str) -> None:
+    """Refuse org URLs whose host is not on the configured allowlist.
+
+    ``detect_platform`` treats every non-github.com git URL as a self-hosted
+    GitLab and the fetcher derives its API base from that same URL, so an
+    arbitrary host in the request body becomes an outbound request from this
+    server. The allowlist keeps that reachable set to hosts an operator has
+    named. Default is github.com only; extend with
+    ``REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS`` (comma separated).
+    """
+
+    from repomesh.settings import get_settings
+
+    host = (urlsplit(url).hostname or "").lower()
+    allowed = {
+        item.strip().lower()
+        for item in (get_settings().repository_scan_allowed_hosts or "").split(",")
+        if item.strip()
+    }
+    if host in allowed:
+        return
+    _logger.warning("rejected org scan for host outside the allowlist: %s", host)
+    raise HTTPException(
+        status_code=400,
+        detail="organization host is not on the configured scan allowlist",
+    )
+
+
+@router.post("/issues", dependencies=[ACTION_TOKEN])
 async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONResponse:
     """Contract v0.3 §1: create an issue (= first draft PlanSnapshot).
 
@@ -112,7 +158,6 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     v0.2 §2 single-issue projection produced by the read model (no second
     serializer). Method-disjoint with the read model's GET /issues."""
 
-    _authorize_intake(request)
     service = request.app.state.container.issue_intake_service()
     try:
         receipt = await service.execute(
@@ -141,7 +186,9 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     )
 
 
-@router.post("/repositories", response_model=RepositoryView, status_code=201)
+@router.post(
+    "/repositories", response_model=RepositoryView, status_code=201, dependencies=[ACTION_TOKEN]
+)
 async def register_repository(
     body: RepositoryCreate, catalog: CatalogDependency
 ) -> RepositoryProfile:
@@ -162,7 +209,7 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
     return await catalog.list()
 
 
-@router.post("/repositories/scan-org", response_model=OrgScanResult)
+@router.post("/repositories/scan-org", response_model=OrgScanResult, dependencies=[ACTION_TOKEN])
 async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) -> OrgScanResult:
     """Batch-scan all repos under a GitHub/GitLab organization.
 
@@ -181,6 +228,7 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
     platform = detect_platform(url)
     if platform.value == "local":
         raise HTTPException(400, "URL must be a GitHub/GitLab organization URL")
+    _require_scannable_host(url)
 
     fetcher = make_fetcher(
         platform,
@@ -191,7 +239,10 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
     try:
         profiles = await scan_org(url, fetcher, max_workers=body.max_workers)
     except Exception as exc:
-        raise HTTPException(502, f"Scan failed: {exc}") from exc
+        # The message used to be echoed back, which handed the caller whatever
+        # the outbound request saw. Operators read it in the log instead.
+        _logger.warning("org scan failed for %s", url, exc_info=exc)
+        raise HTTPException(502, "organization scan failed") from exc
 
     register = RegisterRepository(catalog)
     registered: list[RepositoryView] = []
@@ -220,7 +271,7 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
     )
 
 
-@router.post("/discovery", response_model=list[DiscoveryCandidate])
+@router.post("/discovery", response_model=list[DiscoveryCandidate], dependencies=[ACTION_TOKEN])
 async def discover_repositories(
     body: DiscoveryRequest, catalog: CatalogDependency, request: Request
 ) -> list[DiscoveryCandidate]:
@@ -246,7 +297,9 @@ async def discover_repositories(
     ]
 
 
-@router.post("/requirement-analysis", response_model=RequirementAnalysisView)
+@router.post(
+    "/requirement-analysis", response_model=RequirementAnalysisView, dependencies=[ACTION_TOKEN]
+)
 async def analyze_requirement(
     body: RequirementAnalysisRequest, request: Request
 ) -> RequirementAnalysisView:
@@ -280,7 +333,7 @@ def _confirmation_summary_to_view(
     )
 
 
-@router.post("/confirmation", response_model=ConfirmationSummaryView)
+@router.post("/confirmation", response_model=ConfirmationSummaryView, dependencies=[ACTION_TOKEN])
 async def confirm_repositories(
     body: ConfirmationRequest, request: Request
 ) -> ConfirmationSummaryView:
@@ -341,7 +394,7 @@ def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
     )
 
 
-@router.post("/integration", response_model=IntegratedPlanView)
+@router.post("/integration", response_model=IntegratedPlanView, dependencies=[ACTION_TOKEN])
 async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
     """Phase 3: Leader integrates per-repo plans into a project-level plan."""
     container = request.app.state.container
@@ -377,7 +430,7 @@ async def integrate_plan(body: IntegrationRequest, request: Request) -> Integrat
     )
 
 
-@router.post("/bridge/materialize", response_model=MaterializeResponse)
+@router.post("/bridge/materialize", response_model=MaterializeResponse, dependencies=[ACTION_TOKEN])
 async def materialize_plan(body: MaterializeRequest, request: Request) -> MaterializeResponse:
     """Create Engineering Spec + Contract Specs + an execution plan from an IntegratedPlan."""
     container = request.app.state.container
@@ -439,7 +492,7 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
     )
 
 
-@router.post("/bridge/replan", response_model=ReplanResponse)
+@router.post("/bridge/replan", response_model=ReplanResponse, dependencies=[ACTION_TOKEN])
 async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
     """Trigger a partial replan based on TM feedback.
 
@@ -546,7 +599,9 @@ async def get_handoff_doc_markdown(doc_id: UUID, request: Request) -> PlainTextR
     return PlainTextResponse(render_markdown(doc))
 
 
-@router.post("/handoff-docs/{doc_id}/decision", response_model=HandoffDocView)
+@router.post(
+    "/handoff-docs/{doc_id}/decision", response_model=HandoffDocView, dependencies=[ACTION_TOKEN]
+)
 async def decide_handoff_doc(
     doc_id: UUID, body: HandoffDocDecisionRequest, request: Request
 ) -> HandoffDocView:

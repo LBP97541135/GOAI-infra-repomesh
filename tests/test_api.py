@@ -52,9 +52,7 @@ def test_local_account_bootstrap_login_and_session_authentication(
         )
         assert login.status_code == 200
         token = login.json()["access_token"]
-        authenticated = client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
+        authenticated = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert authenticated.status_code == 200
         assert authenticated.json()["username"] == "admin"
         assert client.get("/api/v1/auth/me").status_code == 200
@@ -63,9 +61,10 @@ def test_local_account_bootstrap_login_and_session_authentication(
             "/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"}
         )
         assert logged_out.status_code == 204
-        assert client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-        ).status_code == 401
+        assert (
+            client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code
+            == 401
+        )
 
 
 def test_authenticated_project_mode_and_checkpoint_decision_api(
@@ -84,9 +83,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
             ),
             idempotency_key="human-api-org-leader",
         )
-        team = await CreateRepositoryAgentTeam(
-            application_container.agent_directory
-        ).execute(
+        team = await CreateRepositoryAgentTeam(application_container.agent_directory).execute(
             CreateRepositoryAgentTeamRequest(
                 organization_id=organization_id,
                 organization_leader_id=leader.principal.id,
@@ -141,7 +138,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
                 "human_grants": [
                     {
                         "human_principal_id": reviewer["id"],
-                            "role": "project_supervisor",
+                        "role": "project_supervisor",
                         "code_access": "read",
                         "control_actions": [
                             "approve_checkpoint",
@@ -150,8 +147,8 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
                             "resume_project",
                             "cancel_project",
                         ],
-                            "repository_id": None,
-                            "path_patterns": [],
+                        "repository_id": None,
+                        "path_patterns": [],
                     }
                 ],
                 "idempotency_key": "human-api-project",
@@ -174,9 +171,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
             },
         )
         assert pending_gate.json()["reason"] == "human_checkpoint_pending"
-        reviewer_headers = {
-            "Authorization": f"Bearer {reviewer_login['access_token']}"
-        }
+        reviewer_headers = {"Authorization": f"Bearer {reviewer_login['access_token']}"}
         agents_response = client.get("/api/v1/agents", headers=reviewer_headers)
         assert agents_response.status_code == 200
         assert {item["id"] for item in agents_response.json()} == {
@@ -184,9 +179,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
             str(team.leader.id),
             str(team.workers[0].id),
         }
-        inbox = client.get(
-            "/api/v1/review-requests?status=pending", headers=reviewer_headers
-        )
+        inbox = client.get("/api/v1/review-requests?status=pending", headers=reviewer_headers)
         assert inbox.status_code == 200
         assert inbox.json()[0]["evidence_version"] == "task:example:v1"
         decision_payload = {
@@ -201,9 +194,10 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
         )
         assert approved.status_code == 200
         assert approved.json()["human_principal_id"] == reviewer["id"]
-        assert client.get(
-            "/api/v1/review-requests?status=pending", headers=reviewer_headers
-        ).json() == []
+        assert (
+            client.get("/api/v1/review-requests?status=pending", headers=reviewer_headers).json()
+            == []
+        )
         duplicate_decision = client.post(
             f"/api/v1/projects/{project_id}/checkpoint-decisions",
             headers=reviewer_headers,
@@ -231,10 +225,27 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
         assert cannot_resume.status_code == 403
 
 
-def test_register_and_discover_repository(application_container: ApplicationContainer) -> None:
+def test_register_and_discover_repository(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    # These writes used to take no credential; they now share the action token
+    # with the rest of this router, so the happy path has to present it.
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        _register_and_discover(application_container, headers)
+    finally:
+        get_settings.cache_clear()
+
+
+def _register_and_discover(
+    application_container: ApplicationContainer, headers: dict[str, str]
+) -> None:
     with TestClient(create_app(application_container)) as client:
         created = client.post(
             "/api/v1/repositories",
+            headers=headers,
             json={
                 "name": "billing-api",
                 "url": "https://github.com/example/billing",
@@ -246,7 +257,9 @@ def test_register_and_discover_repository(application_container: ApplicationCont
         assert created.status_code == 201
 
         discovered = client.post(
-            "/api/v1/discovery", json={"requirement": "Add payment invoice support"}
+            "/api/v1/discovery",
+            headers=headers,
+            json={"requirement": "Add payment invoice support"},
         )
         assert discovered.status_code == 200
         assert discovered.json()[0]["repository_name"] == "billing-api"
@@ -280,9 +293,7 @@ def test_delivery_reconciliation_requires_token_and_configured_scm(
     get_settings.cache_clear()
     try:
         with TestClient(create_app(application_container)) as client:
-            unauthorized = client.post(
-                f"/api/v1/delivery/change-sets/{uuid4()}/reconcile"
-            )
+            unauthorized = client.post(f"/api/v1/delivery/change-sets/{uuid4()}/reconcile")
             unavailable = client.post(
                 f"/api/v1/delivery/change-sets/{uuid4()}/reconcile",
                 headers={"Authorization": "Bearer internal-secret"},
@@ -307,9 +318,7 @@ def test_worker_mcp_initializes_with_gateway_token(
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
             )
         assert response.status_code == 200
-        assert response.json()["result"]["serverInfo"]["name"] == (
-            "repomesh-task-control"
-        )
+        assert response.json()["result"]["serverInfo"]["name"] == ("repomesh-task-control")
     finally:
         get_settings.cache_clear()
 
@@ -385,3 +394,111 @@ def test_worker_mcp_direct_mode_is_forbidden_in_production(
         assert response.status_code == 503
     finally:
         get_settings.cache_clear()
+
+
+def test_repository_intelligence_writes_all_require_the_action_token(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Every write on this router, not just POST /issues.
+
+    The check used to live inside the intake handler, so the other eight — the
+    manual approval gate and the org scanner among them — took no credential.
+    Sampling one endpoint would not have caught that, so this asserts the whole
+    set and the reads it must not have locked.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    doc_id = uuid4()
+    writes = [
+        ("/api/v1/issues", {}),
+        ("/api/v1/repositories", {}),
+        ("/api/v1/repositories/scan-org", {}),
+        ("/api/v1/discovery", {}),
+        ("/api/v1/requirement-analysis", {}),
+        ("/api/v1/confirmation", {}),
+        ("/api/v1/integration", {}),
+        ("/api/v1/bridge/materialize", {}),
+        ("/api/v1/bridge/replan", {}),
+        (f"/api/v1/handoff-docs/{doc_id}/decision", {}),
+    ]
+    try:
+        with TestClient(create_app(application_container)) as client:
+            unauthorized = {path: client.post(path, json=body).status_code for path, body in writes}
+            wrong_token = client.post(
+                "/api/v1/discovery",
+                headers={"Authorization": "Bearer wrong"},
+                json={"requirement": "x"},
+            )
+            reads_still_open = client.get("/api/v1/repositories")
+    finally:
+        get_settings.cache_clear()
+
+    assert set(unauthorized.values()) == {401}, unauthorized
+    assert wrong_token.status_code == 401
+    # The reads share this router and stay open: this change stops the bleeding
+    # on the writes without altering behaviour anyone reads today.
+    assert reads_still_open.status_code == 200
+
+
+def test_org_scan_refuses_hosts_outside_the_allowlist(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A host in the request body used to become an outbound request.
+
+    Anything that is not github.com is treated as a self-hosted GitLab and the
+    fetcher derives its API base from the submitted URL, so the body chose who
+    this server talked to. 400 means the refusal happened before any egress.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            metadata = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "http://169.254.169.254/latest/meta-data/"},
+            )
+            internal = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://gitlab.internal.example/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert metadata.status_code == 400
+    assert internal.status_code == 400
+    assert "allowlist" in internal.json()["detail"]
+
+
+def test_org_scan_failures_do_not_echo_the_underlying_error(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """502 used to carry the outbound failure's text back to the caller."""
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("connect to 10.0.0.7:5432 refused")
+
+    monkeypatch.setattr(scan_remote, "scan_org", _explode)
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.post(
+                "/api/v1/repositories/scan-org",
+                headers={"Authorization": "Bearer internal-secret"},
+                json={"org_url": "https://github.com/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "organization scan failed"
+    assert "10.0.0.7" not in response.text

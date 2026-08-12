@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import uuid
@@ -31,13 +32,24 @@ import requests
 DEFAULT_URL = "http://localhost:8000/api/v1"
 
 
+def _auth_headers() -> dict[str, str]:
+    """The repository-intelligence writes now require the action token.
+
+    They used to be reachable with no credential at all; this script was the
+    one in-repo caller relying on that. Export REPOMESH_AGENT_ACTION_TOKEN to
+    match the server, or every POST here comes back 401/503.
+    """
+    token = os.environ.get("REPOMESH_AGENT_ACTION_TOKEN", "")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def _post(url: str, payload: dict, label: str) -> dict:
     """POST JSON and return parsed response, with timing + error handling."""
     print(f"\n{'='*60}")
     print(f"[{label}] POST {url}")
     print(f"  payload keys: {list(payload.keys())}")
     t0 = time.time()
-    resp = requests.post(url, json=payload, timeout=120)
+    resp = requests.post(url, json=payload, timeout=120, headers=_auth_headers())
     elapsed = time.time() - t0
     print(f"  status: {resp.status_code}  ({elapsed:.1f}s)")
 

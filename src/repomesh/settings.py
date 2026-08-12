@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     agentteams_matrix_access_token: str | None = None
     runner_control_token: str | None = None
     agent_action_token: str | None = None
+    #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
+    #: else is refused before a request leaves this process.
+    repository_scan_allowed_hosts: str = "github.com"
     worker_task_control_url: str | None = None
     agentteams_storage_root: Path = Path(".agentteams-storage")
     agentteams_storage_endpoint: str | None = None
