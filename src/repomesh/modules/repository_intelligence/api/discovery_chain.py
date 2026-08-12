@@ -36,6 +36,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from repomesh.modules.agent_directory.contracts import AgentHierarchyViolation
 from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application.discovery_chain import (
     DiscoveryActorNotFound,
@@ -232,6 +233,13 @@ def _translate(error: Exception) -> HTTPException:
     if isinstance(error, DiscoveryLLMUnavailable):
         return HTTPException(status_code=503, detail=str(error))
     if isinstance(error, DiscoveryPreconditionFailed | DiscoveryEvidenceStale):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, AgentHierarchyViolation):
+        # The repository-team provisioner's honest refusal: the repository's
+        # leader singleton is global, so a repository already staffed by
+        # another organization cannot be converged on. A legitimate business
+        # rejection, not a server fault — it used to leak out as a 500 (found
+        # live by the final acceptance walk, 2026-08-12).
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, ValueError):
         return HTTPException(status_code=422, detail=str(error))

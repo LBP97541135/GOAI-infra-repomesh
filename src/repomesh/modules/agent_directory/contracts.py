@@ -4,6 +4,20 @@ from typing import Protocol
 from uuid import UUID
 
 
+class AgentDirectoryError(RuntimeError):
+    """Base of this module's refusals; declared here (not in domain) so
+    consumers of the contracts can catch them without importing the domain
+    layer — importing ``domain`` from here would be circular, since the
+    domain package itself imports these contracts."""
+
+
+class AgentHierarchyViolation(AgentDirectoryError):
+    """A repository's leader singleton is global: converging on a repository
+    already staffed by another organization (or another leader) raises this.
+    Callers translate it into their own refusal shape — the discovery
+    materialize endpoint maps it to 409 (it used to leak as a 500)."""
+
+
 class AgentRole(StrEnum):
     ORGANIZATION_LEADER = "organization_leader"
     REPOSITORY_LEADER = "repository_leader"

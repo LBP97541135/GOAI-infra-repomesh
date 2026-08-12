@@ -713,3 +713,63 @@ def test_a_failed_materialize_does_not_become_a_replayable_receipt(
         second = _materialize(chain, key="doomed-attempt-key")
         assert second.status_code == 503, second.text
         assert Exploding.calls == 2
+
+
+def test_a_repository_staffed_by_another_organization_is_a_409_not_a_500(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The provisioner's cross-organization refusal must reach the caller.
+
+    A repository's leader singleton is global, so a repository already staffed
+    by another organization cannot be converged on. That is an honest business
+    rejection — and it used to leak out of this endpoint as a 500, found live
+    by the final acceptance walk (2026-08-12): a fresh workspace's issue
+    covering a seed-staffed repository blew up instead of being refused.
+    """
+
+    from repomesh.modules.agent_directory.application import (
+        CreateAgent,
+        CreateAgentRequest,
+        ProvisionRepositoryAgentTeam,
+    )
+    from repomesh.modules.agent_directory.contracts import AgentRole
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    async def staff_elsewhere() -> None:
+        rival_org = uuid4()
+        rival = await CreateAgent(container.agent_directory).execute(
+            CreateAgentRequest(
+                organization_id=rival_org,
+                role=AgentRole.ORGANIZATION_LEADER,
+                agentteams_resource_name="rival-org-leader",
+            ),
+            idempotency_key="rival-org-leader",
+        )
+        profiles = await container.repository_catalog.list()
+        repository_id = next(p.id for p in profiles if p.name == "ts-notify")
+        await ProvisionRepositoryAgentTeam(container.agent_directory).provision(
+            organization_id=rival_org,
+            organization_leader_id=rival.principal.id,
+            repository_id=repository_id,
+            idempotency_key="rival-staffs-ts-notify",
+        )
+
+    asyncio.run(staff_elsewhere())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain)
+
+        assert response.status_code == 409, response.text
+        assert "another organization" in response.json()["detail"]
+        # Refused before any side effect: no topology row, no execution plan.
+        assert _topology(container, issue_id) is None
+        assert starter.calls == []
