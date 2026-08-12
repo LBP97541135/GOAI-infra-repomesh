@@ -275,6 +275,8 @@ class ApplicationContainer:
                         store,
                         control_plane,
                         model=settings.deepseek_model,
+                        manager_runtime=settings.agentteams_manager_runtime,
+                        worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
                     ).project(project_id)
                 except AgentTeamsError as error:

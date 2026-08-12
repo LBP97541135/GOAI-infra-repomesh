@@ -310,14 +310,13 @@ def _ensure_topology(
         from repomesh.modules.agent_runtime.ports.agent_team import (
             DesiredRuntimeState,
             ManagerProjection,
-            ManagerRuntime,
             WorkerProjection,
-            WorkerRuntime,
         )
         from repomesh.modules.project.domain import (
             ProjectAgentTopology,
             RepositoryTeam,
         )
+        from repomesh.settings import get_settings
         from repomesh.shared.domain import new_id
 
         container = build_default_container()
@@ -353,6 +352,11 @@ def _ensure_topology(
 
         org_id = new_id()
         model = "deepseek-chat"
+        # The same source the console's ProjectRuntimeProjection reads. These
+        # two paths must ask for field-identical resources (contract §8.7) and
+        # `runtime` used to be OPENCLAW written out in both; one setting means
+        # there is no second value left to drift.
+        runtimes = get_settings()
         teams = []
 
         # --- Register Org Leader (Manager) ---
@@ -361,7 +365,7 @@ def _ensure_topology(
         manager_proj = ManagerProjection(
             name=org_leader_name,
             model=model,
-            runtime=ManagerRuntime.OPENCLAW,
+            runtime=runtimes.agentteams_manager_runtime,
             skills=("planning", "coordination"),
         )
         org_result = await registrar.execute(
@@ -406,7 +410,7 @@ def _ensure_topology(
                     worker=WorkerProjection(
                         name=repo_leader_name,
                         model=model,
-                        runtime=WorkerRuntime.OPENCLAW,
+                        runtime=runtimes.agentteams_worker_runtime,
                         skills=("code-review", "planning"),
                         state=DesiredRuntimeState.RUNNING,
                     ),
@@ -432,7 +436,7 @@ def _ensure_topology(
                     worker=WorkerProjection(
                         name=worker_name,
                         model=model,
-                        runtime=WorkerRuntime.OPENCLAW,
+                        runtime=runtimes.agentteams_worker_runtime,
                         skills=("coding",),
                         state=DesiredRuntimeState.RUNNING,
                     ),

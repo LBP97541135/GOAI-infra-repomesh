@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from repomesh.modules.agent_runtime.ports.agent_team import ManagerRuntime, WorkerRuntime
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="REPOMESH_", extra="ignore")
@@ -19,6 +21,18 @@ class Settings(BaseSettings):
     agentteams_controller_token: str | None = None
     agentteams_matrix_url: str = "http://localhost:6167"
     agentteams_matrix_access_token: str | None = None
+    #: Which runtime the projected Manager/Worker resources ask the controller
+    #: for. Not a free choice: the controller pairs each runtime with its own
+    #: image env (``AGENTTEAMS_COPAW_WORKER_IMAGE`` vs ``AGENTTEAMS_WORKER_IMAGE``
+    #: for openclaw), so asking for a runtime whose image that controller has
+    #: not been given spawns containers that exit(1) on boot, never obtain a
+    #: Matrix identity, and fail every dispatch — the root cause under defect
+    #: A-6. Hardcoded ``openclaw`` on both projection paths before this;
+    #: ``copaw`` is the pairing this deployment actually has. Typed as the wire
+    #: enums so an unknown value fails at startup rather than at first
+    #: dispatch, and so the allowed set is not copied here.
+    agentteams_manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
+    agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     runner_control_token: str | None = None
     agent_action_token: str | None = None
     #: Hosts POST /repositories/scan-org may reach, comma separated. Anything

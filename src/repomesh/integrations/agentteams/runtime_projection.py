@@ -24,6 +24,14 @@ on a mismatch, so a repository first staffed by ``run_pipeline.py`` and later
 reached by the console would conflict on nothing more than a different skill
 list. The values below are the script's.
 
+``runtime`` is the one field that is no longer copied. It used to be
+``OPENCLAW`` written out here *and* in the script, which is two places to keep
+in step and a value neither of them could be right about: whether a runtime
+works is a property of the controller, which pairs each runtime with its own
+image env. Both paths now read
+``REPOMESH_AGENTTEAMS_{MANAGER,WORKER}_RUNTIME``, so the parity is structural —
+there is no second value left to drift (defect A-6).
+
 Everything here is ensure-shaped, and has to be: materialize is re-entrant, so
 a retry of a half-executed round runs this again from the top.
 """
@@ -80,12 +88,21 @@ class ProjectRuntimeProjection:
         control_plane: AgentTeamControlPlane,
         *,
         model: str,
+        manager_runtime: ManagerRuntime,
+        worker_runtime: WorkerRuntime,
         worker_task_control_url: str | None = None,
     ) -> None:
         self._directory = directory
         self._store = store
         self._control_plane = control_plane
         self._model = model
+        # Injected, not read: this package never touches ``settings`` — the
+        # composition root owns configuration. Required rather than defaulted,
+        # so the value cannot quietly disagree with the one
+        # ``scripts/run_pipeline.py`` uses; both take it from
+        # ``REPOMESH_AGENTTEAMS_{MANAGER,WORKER}_RUNTIME``.
+        self._manager_runtime = manager_runtime
+        self._worker_runtime = worker_runtime
         self._worker_task_control_url = worker_task_control_url
         self._reconcile = ReconcileProjectAgentTopology(directory, store, control_plane)
 
@@ -122,7 +139,7 @@ class ProjectRuntimeProjection:
                 ManagerProjection(
                     name=name,
                     model=self._model,
-                    runtime=ManagerRuntime.OPENCLAW,
+                    runtime=self._manager_runtime,
                     skills=_SKILLS[AgentRole.ORGANIZATION_LEADER],
                 ),
                 idempotency_key=f"{key}:agentteams",
@@ -133,7 +150,7 @@ class ProjectRuntimeProjection:
                 WorkerProjection(
                     name=name,
                     model=self._model,
-                    runtime=WorkerRuntime.OPENCLAW,
+                    runtime=self._worker_runtime,
                     skills=_SKILLS[principal.role],
                     state=DesiredRuntimeState.RUNNING,
                 ),
