@@ -257,6 +257,28 @@ export function IssueDetailContainer({
     planReload,
   ]);
 
+  /** 物化确认弹窗（C-3）里的 M。设计定稿写死「**每仓一队**」，所以数的是计划里的
+   *  **仓库**——`execution_batches` 去重后的仓库名数，不是 `dag.nodes.length`
+   *  （同一仓库在多个批次里出现就会被数两遍），也不是候选数。
+   *
+   *  计划纸面没取到时为 null：弹窗照实说「取不到」，不拿别的数顶替一个看着像的数字。 */
+  const planRepositoryCount =
+    planState.status === "ready" ? new Set(planState.plan.execution_batches.flat()).size : null;
+
+  /** catalog 查无仓库的节点数。>0 时上面那个 M 与服务端实际建队数可能不等
+   *  （要不要为一个查无此仓的名字建队是服务端的判断），弹窗里如实旁注。 */
+  const planUnresolvedCount =
+    planState.status === "ready"
+      ? planState.plan.dag.nodes.filter((n) => n.repository_id === null).length
+      : 0;
+
+  /** 物化成功后刷整页：轮次、房间、关联仓库、DAG 着色全在这一次写里变了，
+   *  只刷发现面板会让页面上半截是新事实、下半截还是物化前的旧图。 */
+  const handleMaterialized = useCallback(() => {
+    setReload((n) => n + 1);
+    setPlanReload((n) => n + 1);
+  }, []);
+
   /** 计划纸面重取。**必须是稳定引用**：发现面板把它存进 ref 之外还会随 issue 变化
    *  重建轮询，内联箭头函数每次 render 换 identity 会让下游的 effect 白白重跑。 */
   const handlePlanReload = useCallback(() => setPlanReload((n) => n + 1), []);
@@ -433,6 +455,12 @@ export function IssueDetailContainer({
         onRetryPlan={handlePlanReload}
         onPlanGenerated={handlePlanReload}
         onCandidateAnchor={handleCandidateAnchor}
+        materialize={{
+          roundCount: detail.rounds.length,
+          planRepositoryCount,
+          planUnresolvedCount,
+        }}
+        onMaterialized={handleMaterialized}
         onBack={onBack}
         onOpenRoom={onOpenRoom}
         onToast={onToast}

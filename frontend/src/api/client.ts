@@ -12,6 +12,8 @@ import type {
   DiscoveryAnalysisRequest,
   DiscoveryApprovalRequest,
   DiscoveryCandidatesRequest,
+  DiscoveryMaterializeRequest,
+  DiscoveryMaterializeResult,
   DiscoveryStepRequest,
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
@@ -214,6 +216,13 @@ export function createApiClient(config: ApiClientConfig) {
      *  写完一律重取读投影。 */
     postDiscoveryApproval: (issueId: string, payload: DiscoveryApprovalRequest) =>
       request<DiscoveryWriteReceipt>(config, "POST", `/issues/${issueId}/discovery/approval`, payload),
+
+    /** 批次 C-3 物化开工（**同步** 200，无任务句柄可轮询）。409 的原因不止一种
+     *  （受控项目的 REPOSITORY_SCOPE 检查点未过、计划尚未生成…），detail 原文
+     *  一律原样呈现——把它们归并成一句「物化失败」会把可自助解决的前置问题
+     *  伪装成系统故障。 */
+    postDiscoveryMaterialize: (issueId: string, payload: DiscoveryMaterializeRequest) =>
+      request<DiscoveryMaterializeResult>(config, "POST", `/issues/${issueId}/discovery/materialize`, payload),
 
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),

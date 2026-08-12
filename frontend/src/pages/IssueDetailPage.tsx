@@ -1,7 +1,7 @@
 import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { Decision, PlanAnchor } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
-import { DiscoveryPanel } from "../components/DiscoveryPanel";
+import { DiscoveryPanel, type MaterializeContext } from "../components/DiscoveryPanel";
 import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
 import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, eventTime, openedBy, shortId } from "../display";
@@ -85,6 +85,8 @@ export function IssueDetailPage({
   onRetryPlan,
   onPlanGenerated,
   onCandidateAnchor,
+  materialize,
+  onMaterialized,
   onBack,
   onOpenRoom,
   onToast,
@@ -113,6 +115,9 @@ export function IssueDetailPage({
   /** 锚点回退：发现面板把候选块里的仓库报给容器，容器据此给计划 DAG 面板兜底取数。
    *  本页只做管道——两个面板分属两个取数容器，不许互相 import。 */
   onCandidateAnchor: (anchor: PlanAnchor | null) => void;
+  /** 物化开工（C-3）：轮次数与计划里的仓库数由容器派生（见 MaterializeContext） */
+  materialize: MaterializeContext;
+  onMaterialized: () => void;
   onBack: () => void;
   onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
@@ -196,6 +201,8 @@ export function IssueDetailPage({
         onToast={onToast}
         onPlanGenerated={onPlanGenerated}
         onCandidateAnchor={onCandidateAnchor}
+        materialize={materialize}
+        onMaterialized={onMaterialized}
       />
 
       <div className="microlabel pt-4 pb-2">关联仓库 · 团队</div>

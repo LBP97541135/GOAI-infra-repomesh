@@ -951,6 +951,32 @@ export interface DiscoveryStepRequest {
   idempotency_key: string;
 }
 
+/** 批次 C-3 `POST /issues/{issue_id}/discovery/materialize`：把已生成的计划快照
+ *  变成执行计划、任务与团队。请求体与四个触发同形（主体 + 幂等键）。
+ *
+ *  它**不是发现链的第五步**：发现四步改的都是同一份草稿快照，本端点建的是执行面的
+ *  实体，是整条链的**第二个不可逆动作**（第一个是 merge 审批）。所以步进器仍只有四格。 */
+export interface DiscoveryMaterializeRequest {
+  created_by_agent_id: string;
+  /** §4.1 同款：随弹窗生成的随机 UUID，重试沿用同键 */
+  idempotency_key: string;
+}
+
+/** C-3 的 **200 同步回执**。与发现四步的三字段回执（202 + 任务句柄）**有意不同形**：
+ *  这里没有后台任务可轮询，回的是产物清单本身。
+ *
+ *  ⚠ `repositories[]` 的元素语义（仓库 id 还是仓库名）主脑给的形状里没有写死，
+ *  故本前端**只用它的长度、不解读元素**——把 id 当名字显示出去就是编造一个仓库名。
+ *  未决项已上报，定稿后再消费。 */
+export interface DiscoveryMaterializeResult {
+  plan_id: string;
+  task_ids: string[];
+  team_count: number;
+  repositories: string[];
+  /** 重放必须可分辨：否则重试会让人以为又建了一批任务 */
+  status: "materialized" | "replayed";
+}
+
 /** §5.2 分档审批（同步端点，200）。`adjustments` 与 `decision` **一次提交**：
  *  拆成两个写会造出「改了但没批」的中间态。 */
 export interface DiscoveryApprovalRequest {
