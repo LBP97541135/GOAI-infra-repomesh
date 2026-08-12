@@ -361,6 +361,8 @@ class ApplicationContainer:
                         task_dag=tuple(record.task_dag),
                         execution_plan_id=record.execution_plan_id,
                         created_by_agent_id=record.created_by_agent_id,
+                        contracts=tuple(record.contracts or ()),
+                        discovery=record.discovery,
                     )
                     for record in await snapshot_store.list_all(project_id)
                 )
@@ -588,6 +590,14 @@ class ApplicationContainer:
                         return None
                     raise
 
+        class _DiscoveryTasks:
+            def running(self, issue_id: UUID):
+                from repomesh.modules.repository_intelligence.api.discovery_chain import (  # noqa: PLC0415
+                    running_task,
+                )
+
+                return running_task(issue_id)
+
         return DeliveryReadModelService(
             plans=_Plans(),
             snapshots=_Snapshots(),
@@ -607,6 +617,11 @@ class ApplicationContainer:
                 if self.agent_team_control_plane is not None
                 else None
             ),
+            # v0.4 §3.1: "is a step in flight" is process memory owned by the
+            # writing module. Adapted here rather than imported there, the same
+            # way the AgentTeams runtime probe is — the read model depends on
+            # the protocol, not on where the dict lives.
+            discovery_tasks=_DiscoveryTasks(),
             probe_timeout=get_settings().runtime_probe_timeout_seconds,
             probe_concurrency=get_settings().runtime_probe_concurrency,
         )
@@ -695,6 +710,31 @@ class ApplicationContainer:
             _LeaderRegistrar(),
             _AgentCounter(),
             PostgresDeliveryAuditLog(self.database),
+        )
+
+    def discovery_chain_service(self):
+        """Contract v0.4 §4: the discovery chain's write side.
+
+        Same audit sink and the same directory the issue intake uses — the
+        acting subject rule is one rule (an active organization leader of the
+        issue's workspace), so it is satisfied from one place.
+        """
+
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.repository_intelligence.application.discovery_chain import (
+            DiscoveryChainService,
+            DiscoveryPipeline,
+        )
+
+        return DiscoveryChainService(
+            self.plan_snapshot_store(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+            DiscoveryPipeline(
+                self.repository_catalog,
+                self.llm_client,
+                self.requirement_analyzer(),
+            ),
         )
 
     def issue_intake_service(self):

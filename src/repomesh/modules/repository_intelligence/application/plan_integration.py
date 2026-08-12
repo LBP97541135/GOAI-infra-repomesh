@@ -53,6 +53,21 @@ class ContractSpec:
     interface: str
     agreement: str
 
+    def to_dict(self) -> dict:
+        """Serialise for a JSON column or an API body.
+
+        These are slotted frozen dataclasses, so ``dict(spec)`` raises — every
+        caller that needs a mapping needs this method, and callers that guessed
+        otherwise persisted nothing at all for a while.
+        """
+
+        return {
+            "producer": self.producer,
+            "consumer": self.consumer,
+            "interface": self.interface,
+            "agreement": self.agreement,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class TaskNode:
@@ -70,6 +85,22 @@ class TaskNode:
     them yet, so the caller supplies them when materialising a plan.
     """
 
+    def to_dict(self) -> dict:
+        """Serialise for a JSON column or an API body.
+
+        Tuples become lists: the value that goes into JSONB comes back as an
+        array, and matching that here keeps the in-process value equal to the
+        persisted one instead of subtly different.
+        """
+
+        return {
+            "repository": self.repository,
+            "instruction": self.instruction,
+            "depends_on": list(self.depends_on),
+            "parallelizable_with": list(self.parallelizable_with),
+            "tests": list(self.tests),
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class IntegratedPlan:
@@ -85,25 +116,8 @@ class IntegratedPlan:
 
         return {
             "engineering_spec": self.engineering_spec,
-            "contracts": [
-                {
-                    "producer": c.producer,
-                    "consumer": c.consumer,
-                    "interface": c.interface,
-                    "agreement": c.agreement,
-                }
-                for c in self.contracts
-            ],
-            "task_dag": [
-                {
-                    "repository": t.repository,
-                    "instruction": t.instruction,
-                    "depends_on": list(t.depends_on),
-                    "parallelizable_with": list(t.parallelizable_with),
-                    "tests": list(t.tests),
-                }
-                for t in self.task_dag
-            ],
+            "contracts": [c.to_dict() for c in self.contracts],
+            "task_dag": [t.to_dict() for t in self.task_dag],
             "execution_batches": [list(b) for b in self.execution_batches],
         }
 

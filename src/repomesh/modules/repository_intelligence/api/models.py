@@ -443,3 +443,146 @@ class PlanSnapshotSummaryView(BaseModel):
     created_at: datetime
     integration_method: str | None = None
     execution_plan_id: UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# Discovery chain (contract v0.4 §4 / §5)
+# ---------------------------------------------------------------------------
+
+
+class DiscoveryAnswer(BaseModel):
+    """One answer to one follow-up question raised by Step 0."""
+
+    question: str = Field(min_length=1, max_length=2000)
+    answer: str = Field(min_length=1, max_length=20_000)
+
+
+class DiscoveryAnalysisRequest(BaseModel):
+    """Step 0. No ``requirement`` field, deliberately (§4.3).
+
+    The text of record is the draft snapshot's ``requirement_text``. Accepting
+    it here would let the browser submit something other than what is on
+    screen, and would make two places the requirement lives.
+    """
+
+    created_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    answers: list[DiscoveryAnswer] = Field(default_factory=list)
+    force_continue: bool = Field(
+        default=False,
+        description=(
+            "Record 'continuing, ignoring N follow-up questions' against the "
+            "existing analysis. Does not call the model again — the user is "
+            "not asking for a new opinion, they are overriding the one on file."
+        ),
+    )
+
+
+class DiscoveryCandidatesRequest(BaseModel):
+    """Step 1."""
+
+    created_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    limit: int = Field(default=10, ge=1, le=50)
+    entry_point: str | None = Field(default=None, max_length=200)
+
+
+class DiscoveryClassificationRequest(BaseModel):
+    """Step 2. Candidates and evidence are read from the snapshot (§4.3).
+
+    The scripted ``POST /confirmation`` takes ``candidate_repos`` and
+    ``discovery_evidence`` from its caller. This one must not: a browser that
+    hands back the candidate set becomes the source of truth for it, and the
+    set it sends can differ from the one the user was looking at.
+    """
+
+    created_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+class DiscoveryPlanRequest(BaseModel):
+    """Step 3."""
+
+    created_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=200)
+
+
+class DiscoveryTierAdjustment(BaseModel):
+    """One inline retier made by the approver."""
+
+    repository: str = Field(min_length=1, max_length=200)
+    tier: Literal["required", "maybe", "excluded"]
+
+
+class DiscoveryApprovalRequest(BaseModel):
+    """§5.2. Adjustments and decision arrive together on purpose.
+
+    Splitting them would persist a "retiered but not decided" state that
+    nothing displays and that a second approver could race.
+    """
+
+    decided_by_agent_id: UUID
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    decision: Literal["approved", "changes_requested"]
+    reason: str = Field(default="", max_length=20_000)
+    adjustments: list[DiscoveryTierAdjustment] = Field(default_factory=list)
+    evidence_version: str = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "The classification fingerprint the approver actually read, from "
+            "GET /issues/{id}/discovery. A mismatch is a 409: the tiering has "
+            "been re-run since, and approving it now would release something "
+            "nobody reviewed."
+        ),
+    )
+
+
+class DiscoveryTriggerView(BaseModel):
+    """The answer to a step trigger.
+
+    202 with a ``task_id`` when work was started; 200 with ``status`` of
+    ``replayed`` and no task when the same idempotency key already produced a
+    result. A replay carries no task id on purpose — the original task record
+    is in-process and may be long gone, and inventing one would promise a poll
+    that cannot answer. Either way the panel's next move is the same: re-read
+    ``GET /issues/{id}/discovery``.
+    """
+
+    task_id: UUID | None = None
+    step: int = Field(description="GUI stepper cell 1..4 (contract §3.2)")
+    status: Literal["accepted", "replayed"]
+
+
+class DiscoveryTaskProgress(BaseModel):
+    done: int = 0
+    total: int = 1
+    label: str | None = Field(
+        default=None,
+        description="Most recently finished candidate, not the one in flight",
+    )
+
+
+class DiscoveryTaskView(BaseModel):
+    """A discovery step in flight, or the record of one that finished.
+
+    In-process and lost on restart, like the console's scan tasks — but the
+    consequence is milder here: the *result* is in the snapshot, so a lost task
+    costs the caller a re-read, not a re-run.
+
+    It never projects the step's result. That would be a second serialisation
+    of data the discovery projection already owns; once ``status`` is
+    ``succeeded`` the panel re-reads ``GET /issues/{id}/discovery``.
+    """
+
+    task_id: UUID
+    issue_id: UUID
+    step: int
+    status: Literal["running", "succeeded", "failed"]
+    progress: DiscoveryTaskProgress = Field(default_factory=DiscoveryTaskProgress)
+    error: str | None = Field(
+        default=None,
+        description="Failure text, the same one recorded on the step in the snapshot",
+    )
+    started_at: datetime
+    finished_at: datetime | None = None
