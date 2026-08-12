@@ -144,9 +144,13 @@ degradation notes, the seed script, and the data-source switch.
 ## Team entry points
 
 - Documentation index: `docs/README.md`
-- Team handoff and next development: `docs/development/team-handoff.md`
-- Parallel work plan: `docs/development/parallel-work-plan.md`
+- Current phase plan (full GUI loop, construction complete):
+  `docs/development/full-loop-plan-20260812.md`
+- Team handoff (architecture sections; status sections superseded):
+  `docs/development/team-handoff.md`
 - Public contracts: `docs/contracts/public-contracts-v0.1.md`
+- Delivery read model contract: `docs/contracts/delivery-read-model-v0.1.md`
+  (v0.2–v0.4 are increments, all in force)
 
 - Module owners and responsibilities: `docs/architecture/module-map.md`
 - Dependency rules: `docs/architecture/dependency-rules.md`

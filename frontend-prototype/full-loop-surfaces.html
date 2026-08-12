@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全流程缺失界面原型 · Variant D</title>
+<style>
+  :root {
+    --ink: #16130d; --ink-deep: #131009; --panel: #201b12; --panel-2: #262013;
+    --line: #3b3323; --amber: #c99e52; --amber-hi: #e3c078; --cream: #e9dec2;
+    --kraft: #dcc99c; --salmon: #c26d51; --olive: #94a35a; --bluegray: #8aa0b4;
+    --tx: #d8cdb2; --tx2: #93876c; --tx3: #6b6046;
+    --paper: #e9dec2; --paper-ink: #221c10; --paper-dim: #6d6349;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--ink); color: var(--tx); font: 14px/1.6 "Segoe UI", system-ui, sans-serif; padding: 32px 24px 80px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 18px; color: var(--amber-hi); letter-spacing: .08em; margin-bottom: 4px; }
+  .sub { color: var(--tx2); font-size: 12px; margin-bottom: 28px; }
+  .surface { margin-bottom: 40px; }
+  .surface > h2 { font-size: 13px; color: var(--tx2); letter-spacing: .15em; text-transform: uppercase; border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); padding: 16px 18px; }
+  .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+  button { background: transparent; border: 1px solid var(--amber); color: var(--amber); font: 13px inherit; padding: 6px 14px; cursor: pointer; }
+  button:hover { color: var(--amber-hi); border-color: var(--amber-hi); }
+  button.primary { background: var(--amber); color: var(--ink); font-weight: 600; }
+  button.primary:hover { background: var(--amber-hi); }
+  button.danger { border-color: var(--salmon); color: var(--salmon); }
+  input[type=text] { width: 100%; background: var(--ink-deep); border: 1px solid var(--line); color: var(--cream); padding: 8px 10px; font: 13px "Cascadia Mono", Consolas, monospace; }
+  input[type=text]:focus { outline: none; border-color: var(--amber); }
+  select { background: var(--ink-deep); border: 1px solid var(--line); color: var(--tx); font: 12px inherit; padding: 3px 6px; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 10px; border: 1px solid; }
+  .badge.amber { color: var(--amber-hi); border-color: var(--amber); background: rgba(201,158,82,.12); }
+  .badge.olive { color: var(--olive); border-color: var(--olive); background: rgba(148,163,90,.1); }
+  .badge.dim { color: var(--tx3); border-color: var(--line); }
+  .badge.salmon { color: var(--salmon); border-color: var(--salmon); background: rgba(194,109,81,.1); }
+  .hint { font-size: 12px; color: var(--tx2); }
+  .fine { font-size: 11px; color: var(--tx3); }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .grow { flex: 1; }
+  .scorebar { width: 110px; height: 5px; background: var(--ink-deep); border: 1px solid var(--line); }
+  .scorebar > i { display: block; height: 100%; background: var(--amber); }
+  .cand { border: 1px solid var(--line); background: var(--panel-2); padding: 10px 12px; margin-top: 8px; }
+  .paper { background: var(--paper); color: var(--paper-ink); padding: 18px 20px; border: 1px solid var(--kraft); }
+  .paper .ph { font-size: 11px; letter-spacing: .2em; color: var(--paper-dim); border-bottom: 1px solid var(--paper-dim); padding-bottom: 4px; margin-bottom: 12px; display: flex; justify-content: space-between; }
+  .dagcol { display: flex; gap: 0; }
+  .lane { flex: 1; padding: 8px 12px; }
+  .lane + .lane { border-left: 1px dashed var(--paper-dim); }
+  .lane h4 { font-size: 10px; letter-spacing: .2em; color: var(--paper-dim); margin-bottom: 10px; }
+  .node { border: 1.5px solid; padding: 7px 10px; margin-bottom: 10px; font-size: 12px; background: rgba(255,255,255,.35); }
+  .node .nm { font-family: "Cascadia Mono", Consolas, monospace; font-weight: 600; }
+  .node .st { font-size: 10px; letter-spacing: .1em; }
+  .node.done { border-color: #6d7a3a; } .node.done .st { color: #6d7a3a; }
+  .node.run { border-color: #a4762a; } .node.run .st { color: #a4762a; }
+  .node.wait { border-color: #a99c7d; color: #7c7157; } .node.wait .st { color: #a99c7d; }
+  .node.ambig { border-style: dashed; border-color: #a25438; } .node.ambig .st { color: #a25438; }
+  .dep { font-size: 10px; color: var(--paper-dim); margin: -6px 0 10px 2px; }
+  .modalbg { background: rgba(10,8,4,.72); padding: 36px; display: flex; justify-content: center; }
+  .modal { background: var(--panel); border: 1px solid var(--amber); width: 460px; padding: 18px 20px; }
+  table.scope { width: 100%; border-collapse: collapse; font-size: 12px; margin: 10px 0; }
+  table.scope td { padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .warnbox { border: 1px solid var(--amber); background: rgba(201,158,82,.08); color: var(--amber-hi); font-size: 12px; padding: 8px 12px; margin: 10px 0; }
+  .steps { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .clarify { border: 1px dashed var(--salmon); padding: 10px 12px; margin-top: 10px; font-size: 12px; }
+  .clarify b { color: var(--salmon); font-weight: 600; }
+  a.jump { color: var(--bluegray); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>REPOMESH · 全流程缺失界面原型</h1>
+  <p class="sub">Variant D 皮肤 · 2026-08-12 设计定稿（四裁决：整体重扫 / 强行继续留痕 / DAG 只读 / 回滚整 change set）· 设计文档：docs/development/full-loop-gui-design-20260812.md</p>
+
+  <!-- ① 添加仓库 -->
+  <section class="surface">
+    <h2>① 仓库页 · 添加备选仓库（批次 A）</h2>
+    <div class="card">
+      <div class="row" style="margin-bottom:12px;">
+        <span style="color:var(--cream); font-weight:600;">仓库</span>
+        <span class="grow"></span>
+        <button onclick="document.getElementById('addbox').style.display='block'">+ 添加仓库</button>
+      </div>
+      <div id="addbox" style="border:1px solid var(--line); background:var(--panel-2); padding:14px 16px;">
+        <p style="color:var(--cream); font-size:13px; margin-bottom:2px;">添加备选仓库</p>
+        <p class="hint" style="margin-bottom:10px;">贴组织链接批量扫描，或贴单个仓库链接。私有仓 token 由服务端配置，此处不收。</p>
+        <input type="text" id="urlin" value="https://github.com/acme-corp" oninput="detect()">
+        <div class="row" style="margin-top:10px;">
+          <span class="badge amber" id="urltype">识别为组织 · 将批量扫描</span>
+          <span class="grow"></span>
+          <button class="primary" onclick="scanDemo()">扫描并添加</button>
+        </div>
+        <div id="scanprog" style="display:none; border-top:1px solid var(--line); margin-top:12px; padding-top:10px;" class="hint">
+          扫描中 <span class="mono" id="pn">0</span>/12 … 已注册 <span class="mono" id="pr">0</span> · 跳过 <span class="mono">2</span>（已存在）· 失败 <span class="mono">0</span>
+          <div class="fine" style="margin-top:4px;">失败处置=整体重扫（幂等，已存在自动跳过）——裁决 1</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ② 发现面板 -->
+  <section class="surface">
+    <h2>② issue 详情页 · 发现面板（批次 B）</h2>
+    <div class="card">
+      <div class="steps">
+        <span class="badge olive">1 需求分析 ✓</span>
+        <span class="badge amber">2 候选评分 ◀ 当前</span>
+        <span class="badge dim">3 分档审批</span>
+        <span class="badge dim">4 生成计划</span>
+      </div>
+      <div class="clarify">
+        <b>需求判定：不充分（confidence 0.62）</b> — 2 条追问：<br>
+        1. 「通知」指站内信还是邮件？&nbsp; 2. 是否涉及历史数据迁移？
+        <div class="row" style="margin-top:8px;">
+          <button style="font-size:12px;">回答追问并重新分析</button>
+          <button style="font-size:12px;" onclick="this.parentNode.parentNode.innerHTML='<b>已强行继续</b> — 决策记录留痕：「忽略 2 条追问继续」（裁决 2）'">忽略追问，强行继续</button>
+        </div>
+      </div>
+      <div class="cand">
+        <div class="row">
+          <span class="mono grow" style="color:var(--cream);">payments-api</span>
+          <span class="scorebar"><i style="width:86%"></i></span>
+          <span class="hint mono">0.86</span>
+          <select><option>required</option><option>maybe</option><option>excluded</option></select>
+        </div>
+        <p class="fine" style="margin-top:5px;">LLM 理由原样：依赖清单含 stripe-sdk，近 30 天有支付路由改动，README 提及 notification hooks</p>
+      </div>
+      <div class="cand">
+        <div class="row">
+          <span class="mono grow" style="color:var(--cream);">notify-service</span>
+          <span class="scorebar"><i style="width:41%"></i></span>
+          <span class="hint mono">0.41</span>
+          <select><option>maybe</option><option>required</option><option>excluded</option></select>
+        </div>
+        <p class="fine" style="margin-top:5px;">LLM 理由原样：名称语义相关；无直接依赖证据</p>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <span class="fine">审批主体：org leader（花名册派生）· 幂等键随表单生成 · 分档改动即时保存草稿</span>
+        <span class="grow"></span>
+        <button class="primary">确认分档，生成计划</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ③ DAG 纸面 -->
+  <section class="surface">
+    <h2>③ DAG · 计划纸面 + 物化开工（批次 C，含原 #22）</h2>
+    <div class="paper">
+      <div class="ph"><span>EXECUTION PLAN · DLV-DRAFT</span><span>SPEC v1 · 3 REPOS · 2 BATCHES</span></div>
+      <div class="dagcol">
+        <div class="lane">
+          <h4>BATCH 1</h4>
+          <div class="node done"><div class="nm">payments-api</div><div class="st">DELIVERED ✓</div></div>
+          <div class="node run"><div class="nm">billing-core</div><div class="st">CI RUNNING</div></div>
+        </div>
+        <div class="lane">
+          <h4>BATCH 2</h4>
+          <div class="node wait"><div class="nm">notify-service</div><div class="st">WAITING UPSTREAM</div></div>
+          <div class="dep">← depends_on: payments-api, billing-core</div>
+          <div class="node ambig"><div class="nm">legacy-api?</div><div class="st">名称歧义 · 未连边（留痕）</div></div>
+        </div>
+      </div>
+      <div class="row" style="border-top:1px solid var(--paper-dim); margin-top:8px; padding-top:10px;">
+        <span style="font-size:11px; color:var(--paper-dim);">v1 只读（裁决 3）：调整走「返回分档重新生成」· 边=depends_on，解析不了的名字不算边</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <a class="jump" href="#">查看完整 spec（1.0 目标验收 / 2.0 变更范围 / 4.0 执行计划 / 5.0 回滚预案）</a>
+      <span class="grow"></span>
+      <button>返回分档调整</button>
+      <button class="primary" onclick="alert('确认弹窗：将创建 5 个任务，组建 3 个团队（每仓一队 + teamRoom/leaderDM 双房间）。此操作开始真实执行。')">物化并开工</button>
+    </div>
+  </section>
+
+  <!-- ④ 回滚对话框 -->
+  <section class="surface">
+    <h2>④ 回滚对话框（批次 E · 挂轮次面板交付卡）</h2>
+    <div class="modalbg">
+      <div class="modal">
+        <p style="color:var(--cream); font-weight:600; margin-bottom:2px;">回滚 change set <span class="mono">#cs-91f2</span></p>
+        <p class="hint">已 merge 2/3 仓。整 change set 一体回滚（裁决 4），按 merge 逆序执行，需治理审批。</p>
+        <table class="scope">
+          <tr><td class="mono" style="color:var(--cream);">notify-service</td><td class="hint">未 merge</td><td style="text-align:right; color:var(--olive);">withhold · 免费撤回</td></tr>
+          <tr><td class="mono" style="color:var(--cream);">billing-core</td><td class="hint">已 merge</td><td style="text-align:right; color:var(--amber-hi);">revert PR · 第 1 步</td></tr>
+          <tr><td class="mono" style="color:var(--cream);">payments-api</td><td class="hint">已 merge</td><td style="text-align:right; color:var(--amber-hi);">revert PR · 第 2 步</td></tr>
+        </table>
+        <div class="warnbox">revert PR 仍需过 CI 与门禁；冲突时自动开冲突处理任务，不会静默失败。</div>
+        <div class="row" style="justify-content:flex-end; gap:8px;">
+          <button>取消</button>
+          <button class="danger" onclick="this.textContent='已提交 · merge gate 已封锁'; this.disabled=true;">提交回滚决策（ROLLBACK_REQUIRED）</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="fine">交互约定：弹窗走统一 Modal 壳（Esc+焦点陷阱）· 写请求幂等键+花名册主体 · 错误显示服务器 detail 原文 · 状态映射禁前端派生</p>
+</div>
+<script>
+function detect() {
+  var v = document.getElementById('urlin').value;
+  var seg = v.replace(/^https?:\/\//,'').split('/').filter(Boolean);
+  var t = document.getElementById('urltype');
+  if (seg.length >= 3) { t.textContent = '识别为单仓 · 将扫描该仓库'; }
+  else { t.textContent = '识别为组织 · 将批量扫描'; }
+}
+function scanDemo() {
+  var p = document.getElementById('scanprog'); p.style.display = 'block';
+  var n = 0, timer = setInterval(function () {
+    n += 1;
+    document.getElementById('pn').textContent = Math.min(n, 12);
+    document.getElementById('pr').textContent = Math.max(0, Math.min(n, 12) - 2);
+    if (n >= 12) { clearInterval(timer); }
+  }, 220);
+}
+</script>
+</body>
+</html>
