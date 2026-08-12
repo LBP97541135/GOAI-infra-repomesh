@@ -94,6 +94,7 @@ class DispatchWorkerTask:
                     # place that holds both the package and the catalog row, and
                     # a second reader would be a second source of truth.
                     catalog_test_commands=tuple(repository.test_commands),
+                    catalog_test_paths=tuple(repository.test_paths),
                     attempt=command.attempt,
                     permission_mode=RunnerPermissionMode(command.permission_mode),
                     resume_session_id=command.resume_session_id,

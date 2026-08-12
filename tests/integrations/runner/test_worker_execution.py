@@ -24,6 +24,7 @@ from repomesh.modules.agent_runtime.runner_store import (
     ACTIVE_DISPATCH_STATUSES,
     PostgresRunnerGatewayStore,
 )
+from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.task_orchestration.contracts import TaskStatus, TaskView
 from repomesh.persistence import Database
 from repomesh.persistence.base import ALL_SCHEMAS
@@ -157,8 +158,25 @@ class CapabilitiesStub:
 
 
 class RepositoriesStub:
+    """Answers with a real ``RepositoryProfile``, not a type minted on the spot.
+
+    It used to be an anonymous class carrying the one attribute the code under
+    test happened to read. The bundle build now also reads ``test_paths``
+    (defect A-21), and a double shaped by yesterday's reads is a double that
+    goes green while production raises ``AttributeError`` — which is exactly
+    what it did.
+    """
+
+    def __init__(self, *, test_paths: tuple[str, ...] = ()) -> None:
+        self.test_paths = test_paths
+
     async def get(self, repository_id):
-        return type("Repository", (), {"url": "https://example.test/pricing.git"})()
+        return RepositoryProfile(
+            id=repository_id,
+            name="pricing",
+            url="https://example.test/pricing.git",
+            test_paths=self.test_paths,
+        )
 
 
 class WorkspacesStub:
@@ -211,7 +229,9 @@ class AssignedTaskHarness:
         )
 
 
-def assigned_task_harness(tmp_path: Path) -> AssignedTaskHarness:
+def assigned_task_harness(
+    tmp_path: Path, *, catalog_test_paths: tuple[str, ...] = ()
+) -> AssignedTaskHarness:
     projection, package, capabilities = scenario(tmp_path)
     runner_task = RunnerTaskProjector().project(projection)
     task_view = TaskView(
@@ -240,7 +260,7 @@ def assigned_task_harness(tmp_path: Path) -> AssignedTaskHarness:
             TasksStub(task_view),
             PackagesStub(package),
             CapabilitiesStub(capabilities),
-            RepositoriesStub(),
+            RepositoriesStub(test_paths=catalog_test_paths),
             workspaces,
             bundles,
             execution,
@@ -432,3 +452,46 @@ async def test_repository_leader_cannot_start_coding_execution() -> None:
                 adapter_id="claude-code",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_the_context_grant_covers_the_repositorys_test_paths(tmp_path: Path) -> None:
+    """Defect A-21: widening the payload without the grant only moves the refusal.
+
+    The projector validates every path in the dispatch against the execution
+    grant, so a payload carrying ``tests/**`` that the grant does not name is
+    denied — "package paths exceed the execution grant" instead of
+    ``changed_path_denied``, which is a different message for the same dead
+    round. The bundle is built fresh on every run, including a re-dispatch, so
+    it is where the catalog's current answer has to land.
+
+    The Specification's own paths are still there and still first: the grant is
+    widened, never rewritten.
+
+    The catalog path here is deliberately one the fixture package does NOT
+    already carry. Asserting with ``tests/**`` — which the scenario's own
+    ``allowed_paths`` already contains — would pass identically with the union
+    deleted, and a test that cannot fail is not evidence of anything.
+    """
+
+    harness = assigned_task_harness(tmp_path, catalog_test_paths=("integration-tests/**",))
+
+    await harness.service.execute(harness.command())
+
+    assert len(harness.bundles.published) == 1
+    granted = harness.bundles.published[0].allowed_paths
+    assert granted == ("src/**", "tests/**", "integration-tests/**")
+
+
+@pytest.mark.asyncio
+async def test_a_grant_for_a_repository_that_declared_no_test_paths_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    """No directory is granted to a repository that never named one."""
+
+    harness = assigned_task_harness(tmp_path)
+
+    await harness.service.execute(harness.command())
+
+    assert harness.bundles.published[0].allowed_paths == ("src/**", "tests/**")
+

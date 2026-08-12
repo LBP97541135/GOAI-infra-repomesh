@@ -169,7 +169,17 @@ class StartAssignedWorkerTask:
                 allowed_tools=tuple(
                     dict.fromkeys(("read", "edit", "test", *capabilities.tool_allowlist))
                 ),
-                allowed_paths=package.allowed_paths,
+                # Defect A-21: the grant has to cover the test paths too, or
+                # the projector's own guard refuses the very dispatch this is
+                # trying to make possible ("package paths exceed the execution
+                # grant"). Built fresh on every run — including a re-dispatch —
+                # so the catalog's current answer reaches a round materialized
+                # long before anyone recorded where its tests live.
+                allowed_paths=tuple(
+                    dict.fromkeys(
+                        (*package.allowed_paths, *(repository.test_paths or ()))
+                    )
+                ),
                 denied_paths=(".git/**", ".github/workflows/**"),
                 network_policy=(),
                 expires_at=datetime.now(UTC) + timedelta(hours=4),
