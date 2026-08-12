@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 
 from repomesh.modules.agent_directory.contracts import AgentHierarchyViolation
 from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
+from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
 from repomesh.modules.repository_intelligence.application.discovery_chain import (
     DiscoveryActorNotFound,
     DiscoveryChainService,
@@ -232,6 +233,21 @@ def _translate(error: Exception) -> HTTPException:
         return HTTPException(status_code=403, detail=str(error))
     if isinstance(error, DiscoveryLLMUnavailable):
         return HTTPException(status_code=503, detail=str(error))
+    if isinstance(error, CollaborationRouteUnavailable):
+        # The execution plane has no Matrix room for the team the plan wants to
+        # assign to. Nothing about the request is wrong and nothing about the
+        # server is broken — the runtime has not caught up with the topology —
+        # so this reads like the ExecutionPlaneUnavailable 503 above: press the
+        # button again once the rooms exist. It used to leak out as a 500,
+        # which told the operator to file a bug instead of to retry (found live
+        # by the final acceptance walk, 2026-08-12).
+        return HTTPException(
+            status_code=503,
+            detail=(
+                f"the execution plane is not ready to take this plan ({error}); "
+                "materialize again once the repository teams have their rooms"
+            ),
+        )
     if isinstance(error, DiscoveryPreconditionFailed | DiscoveryEvidenceStale):
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, AgentHierarchyViolation):

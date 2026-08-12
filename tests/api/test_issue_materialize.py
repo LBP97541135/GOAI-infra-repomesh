@@ -29,6 +29,7 @@ from repomesh.modules.change_orchestration import (
     ExecutionPlaneUnavailable,
     StartedExecutionPlan,
 )
+from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
 from repomesh.modules.project.contracts import (
     CodeAccessLevel,
     HumanControlAction,
@@ -773,3 +774,42 @@ def test_a_repository_staffed_by_another_organization_is_a_409_not_a_500(
         # Refused before any side effect: no topology row, no execution plan.
         assert _topology(container, issue_id) is None
         assert starter.calls == []
+
+
+def test_a_team_without_a_room_is_a_503_not_a_500(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The execution plane's "no room yet" is a retry, not a server fault.
+
+    Found live by the final acceptance walk (2026-08-12): materialize answered
+    500 with a stack trace because the repository teams it had just
+    provisioned had no AgentTeams rooms. Nothing about the request was wrong
+    and nothing about the server was broken — the runtime had not caught up
+    with the topology — so the panel needs the same reading it gets when the
+    plane is missing entirely.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    class Roomless:
+        async def start_plan(self, **_kwargs):
+            raise CollaborationRouteUnavailable("AgentTeams room is not ready")
+
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: Roomless()
+    )
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain, key="roomless-attempt-key")
+
+        assert response.status_code == 503, response.text
+        detail = response.json()["detail"]
+        assert "AgentTeams room is not ready" in detail
+        assert "materialize again" in detail
+

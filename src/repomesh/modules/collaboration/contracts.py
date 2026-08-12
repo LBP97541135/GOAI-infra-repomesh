@@ -87,3 +87,32 @@ class MatrixInboundResult(StrEnum):
 
 class MatrixInboundProcessor(Protocol):
     async def execute(self, message: InboundMatrixMessage) -> MatrixInboundResult: ...
+
+
+class CollaborationError(Exception):
+    """Base of every refusal this module hands back to a caller.
+
+    The hierarchy lives in ``contracts`` rather than ``domain`` because other
+    modules' API layers have to map these onto status codes, and an API layer
+    reaching into a foreign module's ``domain`` would be importing its
+    internals to read its refusals. ``domain`` re-exports them, so nothing
+    inside the module has to change where it imports from.
+    """
+
+
+class CollaborationDenied(CollaborationError):
+    pass
+
+
+class CollaborationConflict(CollaborationError):
+    pass
+
+
+class CollaborationRouteUnavailable(CollaborationError):
+    """No usable Matrix room for this pair of agents — yet.
+
+    Not a malformed request and not a server fault: the topology names a team
+    whose AgentTeams room has not been provisioned, so the message has nowhere
+    to go until the execution plane catches up. Callers translate it as
+    retryable (503), never as a 500.
+    """
