@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -872,3 +874,190 @@ async def test_materialize_is_idempotent_for_the_same_prefix() -> None:
 
     assert replay.plan_id == first.plan_id
     assert len(environment.assigner.commands) == assignments
+
+
+# ---------------------------------------------------------------------------
+# Plan snapshots: what materialize records, and on which row (contract v0.4 §2.4)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _SnapshotRow:
+    id: UUID
+    project_id: UUID
+    plan_version: int
+    engineering_spec: str = ""
+    contracts: list = field(default_factory=list)
+    task_dag: list = field(default_factory=list)
+    execution_batches: list = field(default_factory=list)
+    graph_edges: list = field(default_factory=list)
+    execution_plan_id: UUID | None = None
+    created_by_agent_id: UUID | None = None
+    requirement_text: str | None = None
+    integration_method: str | None = None
+    discovery: dict | None = None
+
+
+class RecordingSnapshotStore:
+    """In-memory ``PlanSnapshotWriter`` that keeps rows the way the table does."""
+
+    def __init__(self, rows: list[_SnapshotRow] | None = None) -> None:
+        self.rows = rows if rows is not None else []
+
+    async def next_version(self, project_id: UUID) -> int:
+        versions = [r.plan_version for r in self.rows if r.project_id == project_id]
+        return max(versions) + 1 if versions else 1
+
+    async def current_draft(self, project_id: UUID) -> _SnapshotRow | None:
+        drafts = [
+            r
+            for r in self.rows
+            if r.project_id == project_id and r.execution_plan_id is None
+        ]
+        return max(drafts, key=lambda r: r.plan_version) if drafts else None
+
+    async def set_integration(
+        self,
+        snapshot_id: UUID,
+        *,
+        engineering_spec: str,
+        contracts: list,
+        task_dag: list,
+        execution_batches: list,
+        integration_method: str | None = None,
+    ) -> None:
+        row = next(r for r in self.rows if r.id == snapshot_id)
+        row.engineering_spec = engineering_spec
+        row.contracts = contracts
+        row.task_dag = task_dag
+        row.execution_batches = execution_batches
+        if integration_method is not None:
+            row.integration_method = integration_method
+
+    async def link_execution_plan(
+        self, snapshot_id: UUID, execution_plan_id: UUID
+    ) -> None:
+        row = next(r for r in self.rows if r.id == snapshot_id)
+        row.execution_plan_id = execution_plan_id
+
+    async def save(self, **kwargs) -> _SnapshotRow:
+        row = _SnapshotRow(id=uuid4(), **kwargs)
+        self.rows.append(row)
+        return row
+
+
+class TestMaterializeSnapshot:
+    def setup_method(self):
+        self.org_id = uuid4()
+        self.project_id = uuid4()
+        self.leader_id = uuid4()
+        self.repo_id = uuid4()
+        self.topology = _make_topology(
+            self.org_id, self.project_id, self.leader_id, [(self.repo_id, uuid4())]
+        )
+        self.catalog = StubCatalog({"ts-order-service": self.repo_id})
+
+    async def _materialize(self, store: RecordingSnapshotStore):
+        bridge = PlanExecutionBridge(
+            StubSpecService(),
+            StubPlanStarter(),
+            StubTopologyReader(self.topology),
+            self.catalog,
+            snapshot_store=store,
+        )
+        return await bridge.materialize(
+            plan=_make_plan(
+                ["ts-order-service"],
+                contracts=[
+                    ContractSpec(
+                        producer="ts-order-service",
+                        consumer="ts-billing",
+                        interface="POST /orders",
+                        agreement="201 carries the order id",
+                    )
+                ],
+            ),
+            requirement="fix order bug",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="snap-001",
+        )
+
+    async def test_the_snapshot_is_actually_written_and_is_json_serialisable(self):
+        """Regression: materialize reported success having saved nothing.
+
+        ``ContractSpec`` and ``TaskNode`` are frozen slotted dataclasses, so the
+        old ``dict(item)`` conversion raised ``TypeError`` for every plan that
+        contained either — which is every real plan. The enclosing ``except
+        Exception`` downgraded that to a log line, so the call returned 200,
+        the tasks were created, and the row the DAG panel reads was never
+        written. Asserting the row exists is not enough by itself: these are
+        JSON columns, so this also pins that what went in can come back out.
+        """
+
+        store = RecordingSnapshotStore()
+
+        await self._materialize(store)
+
+        assert len(store.rows) == 1
+        row = store.rows[0]
+        # Read back the way the read model gets it — out of a JSON column, not
+        # out of this process. Tuples come back as lists, which is why the
+        # assertions below are on the restored value rather than on the object
+        # that was handed to the store.
+        task_dag = json.loads(json.dumps(row.task_dag))
+        contracts = json.loads(json.dumps(row.contracts))
+        # The read model reads nodes by these keys; a payload that serialised
+        # but lost them would draw an empty DAG just as convincingly.
+        assert task_dag[0]["repository"] == "ts-order-service"
+        assert task_dag[0]["depends_on"] == []
+        assert contracts[0]["producer"] == "ts-order-service"
+        assert contracts[0]["interface"] == "POST /orders"
+        assert row.execution_batches == [["ts-order-service"]]
+
+    async def test_materialize_consumes_the_draft_instead_of_opening_a_version(self):
+        """v0.4 §2.4 Q3(b): the round's own draft is the row that gets filled.
+
+        A console round always arrives here with a draft already open — issue
+        intake wrote it and the discovery chain has been writing into it. If
+        materialize allocated a fresh version instead, one round would leave
+        two rows: the discovery archive on v1 and the plan it produced on v2,
+        with ``rounds[].plan_version`` starting at 2.
+        """
+
+        draft = _SnapshotRow(
+            id=uuid4(),
+            project_id=self.project_id,
+            plan_version=1,
+            requirement_text="fix order bug",
+            discovery={"schema_version": 1, "analysis": {"sufficient": True}},
+        )
+        store = RecordingSnapshotStore([draft])
+
+        result = await self._materialize(store)
+
+        assert len(store.rows) == 1
+        assert store.rows[0] is draft
+        assert draft.plan_version == 1
+        assert draft.execution_plan_id == result.plan_id
+        assert draft.task_dag[0]["repository"] == "ts-order-service"
+        assert draft.integration_method == "llm_only"
+        # The discovery archive rides along on the row rather than being left
+        # behind on a version nothing else points at.
+        assert draft.discovery == {"schema_version": 1, "analysis": {"sufficient": True}}
+
+    async def test_materialize_without_a_draft_still_opens_a_new_version(self):
+        """The scripted path has no draft and must keep inserting."""
+
+        consumed = _SnapshotRow(
+            id=uuid4(),
+            project_id=self.project_id,
+            plan_version=1,
+            execution_plan_id=uuid4(),
+        )
+        store = RecordingSnapshotStore([consumed])
+
+        await self._materialize(store)
+
+        assert [row.plan_version for row in store.rows] == [1, 2]
+        assert store.rows[1].requirement_text == "fix order bug"
