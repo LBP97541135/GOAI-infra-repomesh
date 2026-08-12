@@ -9,6 +9,7 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskEvidenceView,
     TaskOrigin,
     TaskStatus,
+    TaskTestResultView,
     TaskView,
 )
 from repomesh.shared.domain import new_id
@@ -85,13 +86,69 @@ def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
     )
     base_sha = document.get("baseSha")
     workspace_path = document.get("workspacePath")
+    summary_text = document.get("summary")
+    test_command = document.get("testCommand")
     return TaskEvidenceView(
         commit_sha=commit_sha,
         run_id=run_id,
         changed_files=changed_files,
         base_sha=str(base_sha) if base_sha else None,
         workspace_path=str(workspace_path) if workspace_path else None,
+        summary_text=str(summary_text) if isinstance(summary_text, str) else None,
+        blockers=_parse_blockers(document.get("blockers")),
+        test_command=str(test_command) if isinstance(test_command, str) else None,
+        test_results=_parse_test_results(document.get("testResults")),
+        artifact_count=(
+            len(document["artifacts"]) if isinstance(document.get("artifacts"), list) else 0
+        ),
     )
+
+
+def _parse_blockers(raw: object) -> tuple[str, ...]:
+    """Agent-declared blockers, verbatim, and only if declared as a list.
+
+    Deliberately shallow: strings pass through untouched, anything else is not
+    a blocker list and yields ``()``. There is no fallback that reads the prose
+    summary -- see ``TaskEvidenceView.blockers`` for why inventing one would
+    reproduce the defect this field exists to fix.
+    """
+
+    if not isinstance(raw, list):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str) and item.strip())
+
+
+def _parse_test_results(raw: object) -> tuple[TaskTestResultView, ...]:
+    """Executed test commands as the Runner reported them.
+
+    A malformed entry is dropped rather than defaulted: an entry with no exit
+    code invented as ``0`` would read as a pass, and ``-1`` would read as a
+    failure the Runner never reported. Neither is a fact, so the entry is not
+    evidence. Delivery's own stricter read (which *raises* on a malformed
+    entry rather than publishing a candidate) is unchanged and still lives in
+    ``plan_delivery``.
+    """
+
+    if not isinstance(raw, list):
+        return ()
+    results: list[TaskTestResultView] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        command = str(entry.get("command") or "").strip()
+        exit_code = entry.get("exitCode")
+        if not command or not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            continue
+        results.append(
+            TaskTestResultView(
+                command=command,
+                exit_code=exit_code,
+                summary=str(
+                    entry.get("stderr") or entry.get("stdout") or entry.get("summary") or ""
+                ),
+            )
+        )
+    return tuple(results)
 
 
 @dataclass(frozen=True, slots=True)

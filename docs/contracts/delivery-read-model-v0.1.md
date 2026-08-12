@@ -124,6 +124,14 @@ ExecutionPlan 之前的阶段（需求澄清、契约起草、范围确认）尚
       "attempt": 1,                            // 1 + 同仓 rework 链长度（§5.2）
       "depends_on": ["task_id"],               // plan snapshot task_dag
       "result_summary": "string|null",
+      "evidence": {                            // 【提案 · 待主脑裁决】A-18，见 §5.4；无结构化证据时整块为 null
+        "verified": false,                     // 派生自下面两个结构化字段，不读散文（§5.4）
+        "blockers": ["string"],                // agent 结构化声明的 blocker，逐字；未声明即 []
+        "summary_text": "string|null",         // Runner summary 原文，逐字，不摘要不截断
+        "test_command": "string|null",
+        "test_results": [{ "command": "string", "exit_code": 0, "summary": "string" }],
+        "artifact_count": 0                    // 只报有无/几件：产物本身尚无可取端点
+      },
       "repair_timeline": [                     // rework task + recovery action 合成，可为空
         { "at": "...", "what": "string" }
       ],
@@ -405,6 +413,39 @@ recovery planner 里，读模型只是把同一个 planner 跑在预览模式上
 | pr_open / ci_pending / review_pending / compensation_pending / compensated | running |
 | pending | waiting |
 
+### 5.4 `tasks[].evidence`：agent 自述的验证状态（【提案 · 待主脑裁决】，A-18）
+
+缺陷事实：live 任务 `6ba476ab`（run `d261dbb4`）以 `runner.completed` 收尾、`succeeded`、
+GUI 画绿「已交付」；而同一份载荷里 `testResults: []`、`testCommand: null`、`artifacts: []`，
+agent 自己的 `summary` 开头写着 "I could not execute anything to verify it"、
+"Please re-run before merging."。这些字都在读模型的数据里（`result_summary` 那个 JSON
+字符串），**没有一个字段装它们**，所以界面全页 grep 不到「blocker/未执行」——而这块不可见
+正好压在整条链第一个不可逆动作（merge 审批）之前，delivery_auto 开启时 CI 绿即自动合。
+
+本节是把已有事实**转述**出来，不新增判断：
+
+| 字段 | 取自 | 规则 |
+| --- | --- | --- |
+| `verified` | `test_results` | **至少一条**已记录的测试命令，且每条 `exit_code == 0`。空列表 = 未验证。终态 `succeeded` 只说明进程跑完了，从不说明它检查过自己。 |
+| `blockers` | 载荷的 `blockers` 列表 | 逐字透传；**仅当载荷把它声明为字符串列表时**。 |
+| `summary_text` | 载荷的 `summary` | 逐字，不摘要、不截断、不重述。 |
+| `test_command` / `test_results` / `artifact_count` | 同名载荷键 | 直投影；`artifact_count` 只报件数。 |
+
+三条边界，都是有意的：
+
+1. **不从散文里挖 blocker。** live 那条把 blocker 写成了 markdown 小节，标题是 agent 自拟的
+   「## Blockers and gaps — read before accepting」。按标题匹配就会对下一个写「## Caveats」
+   的 agent 报「0 条 blocker」——一个凭空造出来的区别，正是 A-18 本身的缺陷形态。故今天
+   `blockers` 对所有存量行恒 `[]`，agent 的原话由 `summary_text` 逐字呈现。补齐路径见 6.12。
+2. **`evidence: null` ≠ `verified: false`。** 前者是「没有任何结构化证据」（superseded、纯散文
+   回报、Runner 之前的行），后者是「它自己说没验证」。压成一个，等于给从没做过声明的行扣帽子。
+3. **`skipped_tests` 未纳入本提案。** Runner 的 `TestCommandResult` 只有 `command` + `exit_code`，
+   没有 skip 语义；live 那条的「跳过的跨仓一致性测试」写在散文里。可派生的结构化来源不存在，
+   加一个恒空字段只是摆一个永不亮的灯。补齐路径见 6.13。
+
+**本提案不动合并门禁**（`merge_gate` / delivery_auto 行为一字未改）：界面在审批点把话摆出来，
+不替人做决定。门禁语义是另一轮裁决。
+
 ## 6. 已知缺口与降级约定
 
 | # | 缺口 | v0.1 行为 | 补齐路径 |
@@ -420,6 +461,8 @@ recovery planner 里，读模型只是把同一个 planner 跑在预览模式上
 | 6.9 | 无 Project 实体/注册表 | `project_key: null`，title 用 requirement 截断 | project 模块落地后切换 |
 | 6.10 | 发现证据未按 project 存储 | `repositories[].evidence: null` | repository_intelligence 证据关联 |
 | 6.11 | 多团队时 Matrix 房间歧义 | 仅单仓/单团队时给 `matrix_room_id`，否则 null | 团队↔交付关联建模 |
+| 6.12 | Runner 不声明 blocker（【提案】A-18） | `tasks[].evidence.blockers` 对存量行恒 `[]`；agent 原话由 `summary_text` 逐字呈现，界面从那里显示 | `RunnerExecutionResult` 增 `blockers: tuple[str,...]`，网关已预留透传（§5.4） |
+| 6.13 | Runner 不声明 skip（【提案】A-18） | 不投影 `skipped_tests`——`TestCommandResult` 只有 `command`/`exit_code`，无 skip 语义 | `TestCommandResult` 增 skip 语义后另提 |
 
 ## 7. 字段来源速查
 

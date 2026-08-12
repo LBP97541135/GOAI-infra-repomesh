@@ -1853,6 +1853,7 @@ class DeliveryReadModelService:
                     "attempt": (2 + chain.index(task)) if is_rework else 1,
                     "depends_on": depends_on,
                     "result_summary": task.result_summary,
+                    "evidence": _task_evidence(task),
                     "repair_timeline": repair_timeline,
                     "escalated_to_human": escalated,
                 }
@@ -2160,6 +2161,44 @@ def _title(requirement_text: str | None, project_id: UUID) -> str:
     if text:
         return text if len(text) <= 80 else text[:77] + "..."
     return f"Project {str(project_id)[:8]}"
+
+
+def _task_evidence(task: TaskView) -> dict | None:
+    """§3 tasks[].evidence: what the coding agent said about its own run (A-18).
+
+    All of this was already in ``result_summary`` -- as a JSON string the GUI
+    received and never opened -- so a task whose agent wrote "Nothing was
+    executed ... Please re-run before merging" rendered as a green success, and
+    with delivery_auto on, nobody read it before the merge.
+
+    This block only transcribes ``TaskEvidenceView``. In particular ``verified``
+    is the producing module's property, not a judgement made here: the read
+    model has no second opinion about whether a run checked its own work.
+
+    ``None`` when the task carries no structured evidence, which is a real
+    shape (superseded tasks, plain-prose reports, anything pre-Runner) and must
+    not be flattened into ``verified: false`` -- "we do not know" and "it did
+    not verify" are different claims and the GUI shows them differently.
+    """
+
+    evidence = task.evidence
+    if evidence is None:
+        return None
+    return {
+        "verified": evidence.verified,
+        "blockers": list(evidence.blockers),
+        "summary_text": evidence.summary_text,
+        "test_command": evidence.test_command,
+        "test_results": [
+            {
+                "command": result.command,
+                "exit_code": result.exit_code,
+                "summary": result.summary,
+            }
+            for result in evidence.test_results
+        ],
+        "artifact_count": evidence.artifact_count,
+    }
 
 
 def _diffs(worker_tasks: tuple[TaskView, ...]) -> list[dict]:
