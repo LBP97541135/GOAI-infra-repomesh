@@ -6,7 +6,7 @@ no duplicate audit), and the honest-draft shape (empty DAG, phase=plan).
 """
 
 import asyncio
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -14,6 +14,9 @@ from sqlalchemy import func, select
 from repomesh.bootstrap.app import create_app
 from repomesh.bootstrap.container import ApplicationContainer
 from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.repository_intelligence.application.issue_intake import (
+    ISSUE_INTAKE_NAMESPACE,
+)
 from repomesh.persistence.models.platform import AuditEventRecord
 from repomesh.settings import get_settings
 
@@ -27,6 +30,7 @@ def _seed_agents(container: ApplicationContainer):
     )
 
     organization_id = uuid4()
+    second_organization_id = uuid4()
 
     async def seed():
         creator = CreateAgent(container.agent_directory)
@@ -51,10 +55,25 @@ def _seed_agents(container: ApplicationContainer):
             ),
             idempotency_key="intake-repo-leader",
         )
-        return leader.principal.id, repo_leader.principal.id
+        # A second workspace's leader for the keyspace-scoping cases (S-5).
+        second_leader = await creator.execute(
+            CreateAgentRequest(
+                organization_id=second_organization_id,
+                role=AgentRole.ORGANIZATION_LEADER,
+                agentteams_resource_name="intake-second-org-leader",
+            ),
+            idempotency_key="intake-second-org-leader",
+        )
+        return leader.principal.id, repo_leader.principal.id, second_leader.principal.id
 
-    leader_id, repo_leader_id = asyncio.run(seed())
-    return organization_id, leader_id, repo_leader_id
+    leader_id, repo_leader_id, second_leader_id = asyncio.run(seed())
+    return (
+        organization_id,
+        leader_id,
+        repo_leader_id,
+        second_organization_id,
+        second_leader_id,
+    )
 
 
 def _audit_count(container: ApplicationContainer) -> int:
@@ -76,12 +95,20 @@ def test_issue_intake_over_http(
     monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     get_settings.cache_clear()
     try:
-        organization_id, leader_id, non_leader_id = _seed_agents(application_container)
+        (
+            organization_id,
+            leader_id,
+            non_leader_id,
+            second_organization_id,
+            second_leader_id,
+        ) = _seed_agents(application_container)
         with TestClient(create_app(application_container)) as client:
             payload = {
                 "requirement_text": "结算页支持满额免运费门槛",
                 "created_by_agent_id": str(leader_id),
                 "idempotency_key": "intake-test-key-1",
+                # Optional cross-check field (S-4): matching org passes.
+                "organization_id": str(organization_id),
             }
 
             # Auth is required on the write path.
@@ -104,6 +131,22 @@ def test_issue_intake_over_http(
             assert (
                 client.post("/api/v1/issues", json=blank, headers=HEADERS).status_code
                 == 422
+            )
+
+            # S-5: single-character keys are rejected at the model layer.
+            short_key = {**payload, "idempotency_key": "1"}
+            assert (
+                client.post("/api/v1/issues", json=short_key, headers=HEADERS).status_code
+                == 422
+            )
+
+            # S-4: a body organization_id that disagrees with the actor's
+            # workspace is a cross-organization subject — rejected, not
+            # silently attributed.
+            cross_org = {**payload, "organization_id": str(second_organization_id)}
+            assert (
+                client.post("/api/v1/issues", json=cross_org, headers=HEADERS).status_code
+                == 403
             )
 
             # First creation: 201 with the §2 issue projection (honest draft).
@@ -143,5 +186,55 @@ def test_issue_intake_over_http(
                 issue["issue_id"],
                 second.json()["issue_id"],
             }
+
+            # S-5: the same key in another workspace is a different issue —
+            # the keyspace is organization-scoped, so a guessed or reused key
+            # can never replay (and read back) another workspace's issue.
+            other_ws = client.post(
+                "/api/v1/issues",
+                json={
+                    "requirement_text": "另一工作区的同键需求",
+                    "created_by_agent_id": str(second_leader_id),
+                    "idempotency_key": payload["idempotency_key"],
+                },
+                headers=HEADERS,
+            )
+            assert other_ws.status_code == 201
+            assert other_ws.json()["issue_id"] != issue["issue_id"]
+            assert other_ws.json()["organization_id"] == str(second_organization_id)
+
+            # S-5 replay-ownership guard: a snapshot sitting where this
+            # workspace's derivation lands but created by another workspace
+            # (legacy global-namespace row) must not be replayable — 403 and
+            # no projection in the body.
+            legacy_key = "legacy-shared-key"
+            legacy_project = uuid5(
+                ISSUE_INTAKE_NAMESPACE, f"{second_organization_id}:{legacy_key}"
+            )
+            asyncio.run(
+                application_container.plan_snapshot_store().save(
+                    project_id=legacy_project,
+                    plan_version=1,
+                    engineering_spec="",
+                    contracts=[],
+                    task_dag=[],
+                    execution_batches=[],
+                    graph_edges=[],
+                    created_by_agent_id=leader_id,  # owned by the first workspace
+                    execution_plan_id=None,
+                    requirement_text="遗留全局键行",
+                )
+            )
+            foreign_replay = client.post(
+                "/api/v1/issues",
+                json={
+                    "requirement_text": "尝试重放他人 issue",
+                    "created_by_agent_id": str(second_leader_id),
+                    "idempotency_key": legacy_key,
+                },
+                headers=HEADERS,
+            )
+            assert foreign_replay.status_code == 403
+            assert "issue_id" not in foreign_replay.json()
     finally:
         get_settings.cache_clear()

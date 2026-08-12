@@ -18,13 +18,17 @@ class IssueIntakeCommand:
 
     The intake owns no new entity: an issue *is* a project_id, and creating one
     means persisting the earliest PlanSnapshot (plan_version=1, no execution
-    plan). ``organization_id`` and ``title`` are intentionally absent — both
-    derive from the actor and the requirement text (single source of truth).
+    plan). ``title`` is intentionally absent — it derives from the requirement
+    text (single source of truth). ``organization_id`` is an optional
+    cross-check only (v0.3 §6 S-4): the workspace of record still derives from
+    the actor; when the field is present and disagrees with the actor's
+    organization the request is rejected instead of silently trusting either.
     """
 
     requirement_text: str
     created_by_agent_id: UUID
     idempotency_key: str
+    organization_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)

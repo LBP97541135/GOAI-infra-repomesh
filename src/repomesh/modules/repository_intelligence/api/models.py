@@ -33,13 +33,18 @@ class RepositoryCreate(BaseModel):
 
 
 class IssueIntakeCreate(BaseModel):
-    """Contract v0.3 §1.2. No organization_id / title on purpose: the workspace
-    derives from the actor's organization and the title from requirement_text —
-    accepting either would create a second source of truth."""
+    """Contract v0.3 §1.2. No title on purpose: it derives from
+    requirement_text — accepting it would create a second source of truth.
+    ``organization_id`` is an optional cross-check (v0.3 §6 S-4), never a
+    source of truth: the workspace of record still derives from the actor,
+    and a mismatch is rejected with 403. Key minimum is 8 (§6 S-5): the key
+    seeds the workspace-scoped project_id derivation, so one-character keys
+    invite collisions; clients send random UUIDs anyway."""
 
     requirement_text: str = Field(min_length=1, max_length=20000)
     created_by_agent_id: UUID
-    idempotency_key: str = Field(min_length=1, max_length=200)
+    idempotency_key: str = Field(min_length=8, max_length=200)
+    organization_id: UUID | None = None
 
 
 class OrgScanRequest(BaseModel):

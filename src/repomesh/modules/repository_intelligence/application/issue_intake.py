@@ -6,11 +6,13 @@ means persisting the earliest PlanSnapshot: ``plan_version=1``,
 model needs (state rule 4 "virtual draft → open", phase rule 3, the
 organization chain's third level) derives from that single row.
 
-Idempotency: ``project_id`` is a UUIDv5 of the client-supplied key, so a
-replay lands on the same ``(project_id, plan_version=1)`` unique constraint
-and returns the existing issue instead of creating a second one. Key
-generation responsibility is the client's (fresh random key per logical
-create, same key on retry) — see contract §1.3.
+Idempotency: ``project_id`` is a UUIDv5 of the actor's organization plus the
+client-supplied key (v0.3 §6 S-5 — the keyspace is scoped per workspace, so a
+guessed or low-entropy key can never land on another workspace's issue), and a
+replay hits the same ``(project_id, plan_version=1)`` unique constraint and
+returns the existing issue instead of creating a second one. Key generation
+responsibility is the client's (fresh random key per logical create, same key
+on retry) — see contract §1.3.
 """
 
 from __future__ import annotations
@@ -84,8 +86,24 @@ class IssueIntakeService:
             raise IssueIntakeDenied(
                 "issue intake requires an active organization leader"
             )
+        # S-4 (v0.3 §6): the caller may state which workspace it thinks it is
+        # acting in; a mismatch with the actor's organization means the leader
+        # id was taken from another workspace's roster — reject instead of
+        # silently attributing the issue to the actor's workspace.
+        if (
+            command.organization_id is not None
+            and command.organization_id != actor.organization_id
+        ):
+            raise IssueIntakeDenied(
+                "created_by_agent_id belongs to a different organization"
+            )
 
-        project_id = uuid5(ISSUE_INTAKE_NAMESPACE, key)
+        # S-5: scope the derivation by the actor's organization (a server-side
+        # fact, never the request body) so idempotency keys collide only
+        # within one workspace.
+        project_id = uuid5(
+            ISSUE_INTAKE_NAMESPACE, f"{actor.organization_id}:{key}"
+        )
         try:
             await self._snapshots.save(
                 project_id=project_id,
@@ -100,7 +118,22 @@ class IssueIntakeService:
                 requirement_text=text,
             )
         except PlanSnapshotAlreadyExists:
-            # Same key replay: the original snapshot (and its text) stands.
+            # Same key replay: the original snapshot (and its text) stands —
+            # but only for the workspace that owns it (S-5). The org-scoped
+            # derivation above already makes cross-workspace hits structurally
+            # impossible for keys minted after the fix; this check covers rows
+            # minted under the old global namespace, where a guessed key would
+            # otherwise read back another workspace's full issue projection.
+            existing = await self._snapshots.get_by_version(project_id, 1)
+            creator = (
+                None
+                if existing is None or existing.created_by_agent_id is None
+                else await self._directory.get_view(existing.created_by_agent_id)
+            )
+            if creator is None or creator.organization_id != actor.organization_id:
+                raise IssueIntakeDenied(
+                    "idempotency key replays an issue outside the actor's workspace"
+                ) from None
             return IssueIntakeReceipt(project_id=project_id, created=False)
 
         # Audit only the actual creation — a replay is a no-op (§1.5).

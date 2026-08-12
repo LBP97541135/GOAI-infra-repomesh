@@ -156,7 +156,18 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
 
     201 on first creation, 200 on idempotent replay (Q5) — both bodies are the
     v0.2 §2 single-issue projection produced by the read model (no second
-    serializer). Method-disjoint with the read model's GET /issues."""
+    serializer). Method-disjoint with the read model's GET /issues.
+
+    Authorization status quo, spelled out (v0.3 §6 S-4): the action token is
+    a single shared secret carrying no subject and no tenant — the acting
+    subject comes from the body's ``created_by_agent_id``, the workspace from
+    that agent's directory row. Containment applied: the service rejects a
+    body ``organization_id`` that disagrees with the actor's organization
+    (403), the idempotency keyspace is workspace-scoped, and a key replay is
+    only answered within the owning workspace. Subject-carrying credentials
+    (per-principal token / session ticket) are an adopted backlog item shared
+    with the delivery write endpoints — an architecture change, not part of
+    this containment."""
 
     service = request.app.state.container.issue_intake_service()
     try:
@@ -165,6 +176,7 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
                 requirement_text=body.requirement_text,
                 created_by_agent_id=body.created_by_agent_id,
                 idempotency_key=body.idempotency_key,
+                organization_id=body.organization_id,
             )
         )
     except IssueIntakeActorNotFound as error:
