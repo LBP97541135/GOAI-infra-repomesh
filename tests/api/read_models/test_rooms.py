@@ -422,6 +422,12 @@ async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None
     # as a complete one.
     assert "dropped 1 unresolvable DAG edge" in caplog.text
     assert "unknown-repo" in caplog.text
+    # The log is for operators; the counts are for the person looking at the
+    # picture, who cannot see the log (v0.2 §7.2's reserved self-report
+    # fields, taken up now that a DAG panel actually renders this).
+    assert payload["dag"]["unresolved_node_count"] == 0
+    assert payload["dag"]["dropped_edge_unresolved_count"] == 1
+    assert payload["dag"]["dropped_edge_off_batch_count"] == 0
     assert payload["execution_batches"] == [["repomesh-e2e-api"], ["repomesh-e2e-client"]]
     assert payload["spec"]["status"] == "frozen"
     assert payload["spec"]["revision"] == 3
@@ -432,6 +438,75 @@ async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None
     # read spec:null as "no spec of its own", so the wrong page rendered as a
     # perfectly normal one.
     assert await service.repository_plan(project_id, uuid4()) is None
+
+
+@pytest.mark.asyncio
+async def test_the_dag_counts_separate_the_two_reasons_an_edge_is_dropped() -> None:
+    """Two causes, two counts — they need different responses.
+
+    An endpoint the catalog cannot resolve means a missing catalog row. An
+    endpoint that is in no batch means the planning output disagrees with
+    itself: nodes come from ``execution_batches``, edges from ``task_dag``,
+    and nothing makes them agree. Collapsing both into one number leaves "why
+    is an edge missing" unanswerable, which is the question the count exists
+    to answer.
+
+    An unresolved *node* is also counted, and is a third thing again: unlike a
+    dropped edge it stays in the picture, drawn with a null id.
+    """
+
+    project_id = uuid4()
+    api, client = uuid4(), uuid4()
+    plan = _plan(project_id, api, uuid4(), ExecutionPlanStatus.COMPLETED)
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(
+            _snapshot(
+                project_id,
+                plan.id,
+                # "ghost-repo" is batched but has no catalog row; "off-batch"
+                # is in the catalog but in no batch.
+                batches=(("repomesh-e2e-api", "ghost-repo"), ("repomesh-e2e-client",)),
+                dag=(
+                    {"repository": "repomesh-e2e-api", "depends_on": []},
+                    {
+                        "repository": "repomesh-e2e-client",
+                        "depends_on": [
+                            "repomesh-e2e-api",
+                            "unknown-repo",
+                            "off-batch",
+                        ],
+                    },
+                ),
+            )
+        ),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        repositories=StubRepositories(
+            {
+                api: "repomesh-e2e-api",
+                client: "repomesh-e2e-client",
+                uuid4(): "off-batch",
+            }
+        ),
+    )
+
+    payload = await service.repository_plan(project_id, client)
+
+    assert payload["dag"]["edges"] == [
+        {"from_repository_id": api, "to_repository_id": client}
+    ]
+    assert payload["dag"]["unresolved_node_count"] == 1
+    assert payload["dag"]["dropped_edge_unresolved_count"] == 1
+    assert payload["dag"]["dropped_edge_off_batch_count"] == 1
+    # The unresolved node is still drawn — dropping it would leave a hole in
+    # the batch — so the count is not derivable from the node list length.
+    assert [node["name"] for node in payload["dag"]["nodes"]] == [
+        "repomesh-e2e-api",
+        "ghost-repo",
+        "repomesh-e2e-client",
+    ]
 
 
 @pytest.mark.asyncio

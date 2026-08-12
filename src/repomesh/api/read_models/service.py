@@ -1295,6 +1295,8 @@ class DeliveryReadModelService:
             )
         edges = []
         dropped: list[str] = []
+        dropped_unresolved = 0
+        dropped_off_batch = 0
         for node in snapshot.task_dag:
             target_name = str(node.get("repository", ""))
             target = id_by_name.get(target_name)
@@ -1304,6 +1306,7 @@ class DeliveryReadModelService:
                     # A name the catalog cannot resolve is not an edge; an edge
                     # with a null endpoint would draw a line to nowhere.
                     dropped.append(f"{dependency} -> {target_name}")
+                    dropped_unresolved += 1
                     continue
                 if source not in drawn or target not in drawn:
                     # nodes come from execution_batches and edges from task_dag;
@@ -1311,6 +1314,7 @@ class DeliveryReadModelService:
                     # An endpoint the layout never drew is a line to an empty
                     # spot on the canvas.
                     dropped.append(f"{dependency} -> {target_name} (not in any batch)")
+                    dropped_off_batch += 1
                     continue
                 edges.append({"from_repository_id": source, "to_repository_id": target})
         if dropped:
@@ -1334,6 +1338,26 @@ class DeliveryReadModelService:
                 "edges": edges,
                 "granularity": "repository",
                 "edge_source": "task_dag.depends_on",
+                # v0.2 §7.2 left the door open for self-reporting fields and
+                # C-2 walked through it: the DAG panel's own contract note
+                # says it may be drawing an incomplete graph and must not
+                # claim otherwise — but until now nothing gave it a way to
+                # tell the user. The drops only reached the log, which the
+                # person looking at the picture cannot see.
+                #
+                # Two edge counts rather than one, because the two causes need
+                # different responses: an endpoint the catalog cannot resolve
+                # means a missing catalog row, while an endpoint that is in no
+                # batch means the planning output disagrees with itself
+                # (nodes come from execution_batches, edges from task_dag, and
+                # nothing constrains them to agree). A single number would
+                # leave "why is an edge missing" unanswerable.
+                #
+                # Additive and optional for consumers: existing renderers keep
+                # working without reading them.
+                "unresolved_node_count": len(unresolved_nodes),
+                "dropped_edge_unresolved_count": dropped_unresolved,
+                "dropped_edge_off_batch_count": dropped_off_batch,
             },
             "execution_batches": [list(batch) for batch in snapshot.execution_batches],
             "spec": (
