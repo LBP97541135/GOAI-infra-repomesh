@@ -1140,6 +1140,7 @@ class ApplicationContainer:
                 self.repository_catalog,
                 self.scm_adapter,
                 command_service=self.scm_command_service(),
+                base_branch=get_settings().delivery_base_branch,
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
@@ -1160,6 +1161,7 @@ class ApplicationContainer:
                 token_provider=self.scm_token_provider,
             ),
             command_service=self.scm_command_service(),
+            base_branch=get_settings().delivery_base_branch,
         )
 
     def ci_rework_task_gateway(self):

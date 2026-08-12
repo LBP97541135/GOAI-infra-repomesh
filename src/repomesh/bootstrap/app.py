@@ -217,6 +217,7 @@ def build_default_container() -> ApplicationContainer:
             repository_catalog,
             scm_adapter,
             command_service=commands,
+            base_branch=settings.delivery_base_branch,
         )
         # A failed candidate needs a Worker to repair it; without AgentTeams the
         # CI failure only changes delivery state and waits to be noticed.
@@ -292,6 +293,7 @@ def build_default_container() -> ApplicationContainer:
                     repository_catalog,
                     scm_adapter,
                     command_service=commands,
+                    base_branch=settings.delivery_base_branch,
                 ),
                 interval_seconds=settings.delivery_reconcile_interval_seconds,
             ),
