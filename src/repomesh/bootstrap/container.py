@@ -802,6 +802,7 @@ class ApplicationContainer:
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
+            rework_tasks=self.ci_rework_task_gateway(),
         )
 
     def changeset_scm_coordinator(self):
@@ -819,6 +820,21 @@ class ApplicationContainer:
             ),
             command_service=self.scm_command_service(),
         )
+
+    def ci_rework_task_gateway(self):
+        """Route a failed delivery candidate back to the repository Worker.
+
+        Same shape as ``recovery_conflict_task_gateway``: task assignment
+        travels over AgentTeams, so without a messenger a CI failure can only
+        change state and wait to be noticed.
+        """
+
+        from repomesh.integrations.scm.rework import CIReworkTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return CIReworkTaskCreator(tasks, self.topology_reader())
 
     def recovery_conflict_task_gateway(self):
         """Route revert conflicts to the repository Worker, when there is one.

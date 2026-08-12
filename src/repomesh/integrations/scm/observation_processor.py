@@ -3,6 +3,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import UUID
 
 from repomesh.modules.delivery import (
@@ -15,6 +16,7 @@ from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     MergeObservationCommand,
     PullRequestObservationCommand,
+    RepositoryDeliveryStatus,
 )
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
@@ -36,6 +38,12 @@ class ProcessedSCMObservation:
     change_set: ChangeSetView | None = None
 
 
+class CIReworkTaskGateway(Protocol):
+    async def create_for_failed_candidate(
+        self, change_set: ChangeSetView, repository_id: UUID
+    ) -> UUID: ...
+
+
 class GitHubObservationProcessor:
     """Project one durable GitHub fact into Delivery state."""
 
@@ -50,6 +58,7 @@ class GitHubObservationProcessor:
         *,
         auto_merge: bool = False,
         on_observed: Callable[[ChangeSetView], Awaitable[None]] | None = None,
+        rework_tasks: "CIReworkTaskGateway | None" = None,
     ) -> None:
         self._observations = observations
         self._delivery = delivery
@@ -59,6 +68,9 @@ class GitHubObservationProcessor:
         # Notified with the resulting ChangeSet view after each processed
         # observation (e.g. to re-evaluate batch advancement after a merge).
         self._on_observed = on_observed
+        # Turns a failed candidate into a Worker repair task. Without it a
+        # CI failure only ever changes state and waits for a human to notice.
+        self._rework_tasks = rework_tasks
 
     async def process(self, observation_id: UUID) -> ProcessedSCMObservation:
         claimed = await self._observations.claim(observation_id)
@@ -87,6 +99,7 @@ class GitHubObservationProcessor:
                 result = await self._coordinator.record_github_ci(
                     change_set_id, repository_id, parsed
                 )
+                await self._request_rework(result, repository_id)
             elif claimed.event_type == "pull_request":
                 current = await self._delivery.get(change_set_id)
                 candidate = next(
@@ -133,6 +146,43 @@ class GitHubObservationProcessor:
         except Exception as error:
             await self._observations.fail(observation_id, f"{type(error).__name__}: {error}")
             raise
+
+    async def _request_rework(self, result: ChangeSetView | None, repository_id: UUID) -> None:
+        """Ask the repository's Worker to repair a candidate its CI just failed.
+
+        Creation is keyed on the failed head SHA, so every replay of the same
+        failure reuses one task instead of flooding the Worker, and a later
+        candidate gets its own.
+
+        Best effort on purpose: the CI fact is already durably recorded by the
+        time we get here, and losing that projection because AgentTeams is down
+        or a repository has no Worker would be the worse failure. The problem is
+        logged rather than raised.
+        """
+
+        if self._rework_tasks is None or result is None:
+            return
+        candidate = next(
+            (item for item in result.repositories if item.repository_id == repository_id),
+            None,
+        )
+        if candidate is None or candidate.status is not RepositoryDeliveryStatus.CI_FAILED:
+            return
+        try:
+            task_id = await self._rework_tasks.create_for_failed_candidate(result, repository_id)
+        except Exception:
+            logger.exception(
+                "could not create a CI rework task",
+                extra={
+                    "change_set_id": str(result.id),
+                    "repository_id": str(repository_id),
+                },
+            )
+            return
+        logger.info(
+            "CI rework task created",
+            extra={"task_id": str(task_id), "repository_id": str(repository_id)},
+        )
 
     async def _route(
         self,

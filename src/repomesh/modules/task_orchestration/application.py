@@ -619,9 +619,36 @@ class AdvanceExecutionPlan:
                 return
             leader_task = parent
         plan = await self._plans.find_by_leader_task(leader_task.id)
-        if plan is None or plan.status is not ExecutionPlanStatus.IN_PROGRESS:
+        if plan is None:
+            return
+        if plan.status is ExecutionPlanStatus.FAILED:
+            reopened = await self._reopen_if_repaired(plan)
+            if reopened is None:
+                return
+            plan = reopened
+        elif plan.status is not ExecutionPlanStatus.IN_PROGRESS:
             return
         await self._advance_if_ready(plan)
+
+    async def _reopen_if_repaired(self, plan: ExecutionPlan) -> ExecutionPlan | None:
+        """Reopen a failed plan whose current batch now succeeds, else None.
+
+        A plan fails on the first non-succeeded leader task of its batch. When
+        a repair (a rework task) later carries that leader to SUCCEEDED, the
+        plan is the only thing still holding the batch back, so the same
+        re-evaluation entry point that handles delivery observations lets it
+        continue instead of stranding the repaired work.
+
+        The batch check comes first: reopening a plan whose batch still has a
+        failed leader would only fail it again on the next event.
+        """
+
+        if not await self._batch_succeeded(plan):
+            return None
+        reopened = plan.reopen()
+        if not await self._settle(plan, reopened):
+            return None
+        return reopened
 
     async def _advance_if_ready(self, plan: ExecutionPlan) -> None:
         """Advance the plan only when the batch succeeded and delivery merged.

@@ -31,6 +31,7 @@ from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
     PlannedRepositoryTask,
     Task,
+    TaskConflict,
     TaskDenied,
 )
 from repomesh.modules.task_orchestration.infrastructure import (
@@ -538,6 +539,86 @@ async def test_worker_failure_fails_the_plan_and_stops_the_next_batch() -> None:
         command.repository_id != environment.repository_ids[1]
         for command, _ in environment.assigner.commands
     )
+
+
+async def failed_plan_with_a_replanned_leader(environment, plan):
+    """Fail a plan on batch 0, then point that batch at a fresh leader task.
+
+    Rewriting leader task ids is the one mutation a failed plan already allows,
+    and it is how a replan re-staffs the batch that died.
+    """
+
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker_task = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker_task.id, TaskStatus.FAILED, "Verification failed.")
+    await environment.advancer.on_task_terminal(worker_task.id)
+
+    replacement = await environment.assign_repository_task(0, key="repair-repository-task")
+    failed = await environment.plans.get(plan.id)
+    assert failed is not None and failed.status is ExecutionPlanStatus.FAILED
+    await environment.plans.update(
+        failed.with_leader_tasks(0, (replacement.id,)), expected_version=failed.version
+    )
+    return replacement
+
+
+@pytest.mark.asyncio
+async def test_a_repaired_batch_reopens_its_failed_plan_and_carries_on() -> None:
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+    replacement = await failed_plan_with_a_replanned_leader(environment, plan)
+
+    await environment.finish(replacement.id, TaskStatus.SUCCEEDED, "Repaired.")
+    await environment.advancer.reconsider_task(replacement.id)
+
+    reopened = await environment.plans.get(plan.id)
+    assert reopened is not None
+    assert reopened.status is ExecutionPlanStatus.IN_PROGRESS
+    # Reopening is not progress by itself; the ordinary advance path moved it.
+    assert reopened.current_batch_index == 1
+    assert any(
+        command.repository_id == environment.repository_ids[1]
+        for command, _ in environment.assigner.commands
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_plan_whose_batch_is_still_failed_does_not_reopen() -> None:
+    """Reopening on an unrepaired batch would only fail again on the next event."""
+
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+    replacement = await failed_plan_with_a_replanned_leader(environment, plan)
+
+    # The replacement leader has not succeeded yet.
+    await environment.advancer.reconsider_task(replacement.id)
+
+    still_failed = await environment.plans.get(plan.id)
+    assert still_failed is not None
+    assert still_failed.status is ExecutionPlanStatus.FAILED
+    assert still_failed.current_batch_index == 0
+    assert all(
+        command.repository_id != environment.repository_ids[1]
+        for command, _ in environment.assigner.commands
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_completed_plan_is_history_and_is_never_reopened() -> None:
+    environment = Environment(repository_count=1)
+    plan = environment.plan(((0,),))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker_task = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker_task.id, TaskStatus.SUCCEEDED, "Done.")
+    await environment.advancer.on_task_terminal(worker_task.id)
+
+    completed = await environment.plans.get(plan.id)
+    assert completed is not None and completed.status is ExecutionPlanStatus.COMPLETED
+    with pytest.raises(TaskConflict, match="only a failed execution plan"):
+        completed.reopen()
 
 
 @pytest.mark.asyncio

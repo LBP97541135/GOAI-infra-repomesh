@@ -40,7 +40,7 @@ from .contracts import (
 from .delivery import parse_repository_ref
 from .git_branch import github_credential_environment, is_safe_branch_name
 from .github import GitHubAdapter
-from .recovery import RecoveryExecutionContext, RevertConflict
+from .recovery import RecoveryExecutionContext, RecoveryWaiting, RevertConflict
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ZERO_SHA = "0" * 40
@@ -313,8 +313,8 @@ class GitHubRevertDeliveryGateway:
                 title=f"Revert: {context.change_set.title}",
                 body=self._revert_body(context, candidate, merge_sha),
                 idempotency_key=self._idempotency_key(context, "revert"),
-                # Not a draft: a revert PR has to collect its own CI and review
-                # evidence before the Saga is allowed to merge it.
+                # Not a draft: a revert PR has to collect its own CI evidence
+                # before the Saga is allowed to merge it.
                 draft=False,
             )
         )
@@ -347,6 +347,7 @@ class GitHubRevertDeliveryGateway:
             )
         if observation.draft:
             raise SCMConflict(f"revert PR #{observation.number} is still a draft")
+        await self._require_revert_checks(repository, observation)
         result = await self._adapter.merge_pull_request(
             MergePullRequestCommand(
                 repository=repository,
@@ -404,6 +405,65 @@ class GitHubRevertDeliveryGateway:
         if not lines:
             return "no delivered repository needed a rollback"
         return "; ".join(lines)
+
+    async def _require_revert_checks(
+        self, repository: RepositoryRef, observation: PullRequestObservation
+    ) -> None:
+        """Hold the merge until the revert PR has passed its own CI.
+
+        A revert is a real commit on the base branch and can break the build
+        just as the delivery it undoes did, so it earns its own evidence rather
+        than inheriting the trust of the rollback decision.
+
+        Scope: CI only. Review and governance approval are deliberately not
+        gated here -- the human decision to roll back is taken *before* the Saga
+        starts (the console submits a ROLLBACK_REQUIRED decision), so demanding
+        a second approval on the revert PR would stall an already-approved
+        rollback behind the same reviewers who asked for it.
+
+        A check that has not reported yet is a wait, not a failure: it raises
+        RecoveryWaiting so the action is retried, while a check that reported
+        failure is an SCMConflict the Saga must not paper over.
+        """
+
+        head = observation.head_sha.lower()
+        checks = {
+            check.check_name: check
+            for check in await self._adapter.list_check_runs(repository, head)
+            if check.head_sha == head
+        }
+        failed = sorted(
+            check.check_name for check in checks.values() if check.terminal and not check.passed
+        )
+        if failed:
+            raise SCMConflict(
+                f"revert PR #{observation.number} failed its own checks: {failed}"
+            )
+        required = await self._required_checks(repository)
+        # Branch protection is the only thing that can tell "this repository has
+        # no CI" apart from "CI has not posted a check run yet"; without a
+        # required check to wait for, an empty result means the former.
+        missing = sorted(name for name in required if name not in checks)
+        if missing:
+            raise RecoveryWaiting(
+                f"revert PR #{observation.number} is missing required checks: {missing}"
+            )
+        running = sorted(check.check_name for check in checks.values() if not check.terminal)
+        if running:
+            raise RecoveryWaiting(
+                f"revert PR #{observation.number} still has checks running: {running}"
+            )
+
+    async def _required_checks(self, repository: RepositoryRef) -> tuple[str, ...]:
+        reader = getattr(self._adapter, "get_branch_protection", None)
+        if reader is None:
+            return ()
+        try:
+            protection = await reader(repository, self._base_branch)
+        except SCMNotFound:
+            # An unprotected base branch requires nothing of the revert.
+            return ()
+        return protection.required_checks
 
     async def _revert_pull_request(
         self, repository: RepositoryRef, branch: str

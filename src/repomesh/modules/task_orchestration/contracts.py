@@ -43,6 +43,10 @@ class TaskEvidenceView:
     run_id: UUID | None  # null when the Runner reported no run id
     changed_files: tuple[str, ...]
     base_sha: str | None
+    # The on-disk Runner worktree the frozen candidate commit is pushed from.
+    # Declared here because delivery cannot publish a candidate without it and
+    # was otherwise re-parsing ``result_summary`` to get it.
+    workspace_path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

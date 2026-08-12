@@ -16,6 +16,7 @@ from repomesh.integrations.scm.recovery import (
     GovernedRecoveryActionHandler,
     RecoveryExecutionContext,
     RecoverySagaExecutor,
+    RecoveryWaiting,
     RevertConflict,
 )
 from repomesh.integrations.scm.revert import (
@@ -86,6 +87,47 @@ def pull_payload(
         "base": {"ref": "main", "sha": "b" * 40},
         "mergeable": mergeable,
     }
+
+
+def check_runs_payload(
+    *,
+    name: str = "ci",
+    status: str = "completed",
+    conclusion: str = "success",
+    sha: str = REVERT_SHA,
+) -> dict:
+    return {
+        "check_runs": [
+            {
+                "id": 7,
+                "name": name,
+                "head_sha": sha,
+                "status": status,
+                "conclusion": conclusion,
+                "output": {"summary": f"{name} {conclusion}"},
+            }
+        ]
+    }
+
+
+PROTECTED_MAIN = {
+    "required_status_checks": {"contexts": ["ci"]},
+    "required_pull_request_reviews": {"required_approving_review_count": 1},
+}
+
+
+def revert_gate_response(
+    request: httpx.Request, *, checks: dict | None = None, protection: dict | None = None
+) -> httpx.Response | None:
+    """Answer the two reads the revert CI gate makes, or None if unrelated."""
+
+    if request.url.path.endswith("/check-runs"):
+        return httpx.Response(200, json=checks if checks is not None else check_runs_payload())
+    if request.url.path.endswith("/protection"):
+        return httpx.Response(
+            200, json=protection if protection is not None else PROTECTED_MAIN
+        )
+    return None
 
 
 async def delivered_change_set(*, merged: bool):
@@ -309,6 +351,9 @@ async def test_merging_a_revert_guards_on_the_revert_head_sha() -> None:
         requests.append(request)
         if request.method == "PUT":
             return httpx.Response(200, json={"merged": True, "sha": "c" * 40, "message": "ok"})
+        gate = revert_gate_response(request)
+        if gate is not None:
+            return gate
         return httpx.Response(
             200, json=[pull_payload(number=43, sha=REVERT_SHA, branch=branch)]
         )
@@ -319,9 +364,9 @@ async def test_merging_a_revert_guards_on_the_revert_head_sha() -> None:
         context_for(change_set, RecoveryActionKind.MERGE_REVERT_PULL_REQUEST)
     )
 
-    assert [request.method for request in requests] == ["GET", "PUT"]
-    assert f'"sha":"{REVERT_SHA}"'.encode() in requests[1].content
-    assert requests[1].url.path.endswith("/pulls/43/merge")
+    assert [request.method for request in requests] == ["GET", "GET", "GET", "PUT"]
+    assert f'"sha":"{REVERT_SHA}"'.encode() in requests[-1].content
+    assert requests[-1].url.path.endswith("/pulls/43/merge")
     assert "rolled back" in detail
     await client.aclose()
 
@@ -343,6 +388,179 @@ async def test_unmergeable_revert_pull_request_becomes_a_revert_conflict() -> No
         await gateway.merge_revert_pull_request(
             context_for(change_set, RecoveryActionKind.MERGE_REVERT_PULL_REQUEST)
         )
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_revert_is_not_merged_while_its_own_checks_are_still_running() -> None:
+    _, change_set, repository_id = await delivered_change_set(merged=True)
+    branch = revert_branch_of(change_set, repository_id)
+    writes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET":
+            writes.append(request.method)
+        gate = revert_gate_response(
+            request, checks=check_runs_payload(status="in_progress", conclusion="")
+        )
+        if gate is not None:
+            return gate
+        return httpx.Response(
+            200, json=[pull_payload(number=43, sha=REVERT_SHA, branch=branch)]
+        )
+
+    gateway, client = build_gateway(repository_id, handler)
+
+    with pytest.raises(RecoveryWaiting, match="checks running"):
+        await gateway.merge_revert_pull_request(
+            context_for(change_set, RecoveryActionKind.MERGE_REVERT_PULL_REQUEST)
+        )
+    assert writes == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_revert_waits_when_a_required_check_has_not_reported_at_all() -> None:
+    """An empty check list is a wait only because protection demands a check."""
+
+    _, change_set, repository_id = await delivered_change_set(merged=True)
+    branch = revert_branch_of(change_set, repository_id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        gate = revert_gate_response(request, checks={"check_runs": []})
+        if gate is not None:
+            return gate
+        return httpx.Response(
+            200, json=[pull_payload(number=43, sha=REVERT_SHA, branch=branch)]
+        )
+
+    gateway, client = build_gateway(repository_id, handler)
+
+    with pytest.raises(RecoveryWaiting, match="missing required checks"):
+        await gateway.merge_revert_pull_request(
+            context_for(change_set, RecoveryActionKind.MERGE_REVERT_PULL_REQUEST)
+        )
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_revert_whose_own_checks_failed_is_a_conflict_not_a_wait() -> None:
+    _, change_set, repository_id = await delivered_change_set(merged=True)
+    branch = revert_branch_of(change_set, repository_id)
+    writes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method != "GET":
+            writes.append(request.method)
+        gate = revert_gate_response(request, checks=check_runs_payload(conclusion="failure"))
+        if gate is not None:
+            return gate
+        return httpx.Response(
+            200, json=[pull_payload(number=43, sha=REVERT_SHA, branch=branch)]
+        )
+
+    gateway, client = build_gateway(repository_id, handler)
+
+    with pytest.raises(SCMConflict, match="failed its own checks"):
+        await gateway.merge_revert_pull_request(
+            context_for(change_set, RecoveryActionKind.MERGE_REVERT_PULL_REQUEST)
+        )
+    assert writes == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unprotected_base_branch_does_not_strand_a_rollback() -> None:
+    """No protection and no checks means nothing to wait for, so the revert merges."""
+
+    _, change_set, repository_id = await delivered_change_set(merged=True)
+    branch = revert_branch_of(change_set, repository_id)
+    merged_revert = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal merged_revert
+        if request.method == "PUT":
+            merged_revert = True
+            return httpx.Response(200, json={"merged": True, "sha": "c" * 40, "message": "ok"})
+        if request.url.path.endswith("/protection"):
+            return httpx.Response(404, json={"message": "Branch not protected"})
+        if request.url.path.endswith("/check-runs"):
+            return httpx.Response(200, json={"check_runs": []})
+        return httpx.Response(
+            200, json=[pull_payload(number=43, sha=REVERT_SHA, branch=branch)]
+        )
+
+    gateway, client = build_gateway(repository_id, handler)
+
+    detail = await gateway.merge_revert_pull_request(
+        context_for(change_set, RecoveryActionKind.MERGE_REVERT_PULL_REQUEST)
+    )
+
+    assert merged_revert
+    assert "rolled back" in detail
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_saga_retries_a_waiting_revert_instead_of_failing_the_plan() -> None:
+    """The gate and the Saga agree: a running check parks nothing permanently."""
+
+    service, change_set, repository_id = await delivered_change_set(merged=True)
+    branch = revert_branch_of(change_set, repository_id)
+    ci_done = False
+    merged_revert = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal merged_revert
+        if request.method == "PUT":
+            merged_revert = True
+            return httpx.Response(200, json={"merged": True, "sha": "c" * 40, "message": "ok"})
+        gate = revert_gate_response(
+            request,
+            checks=check_runs_payload()
+            if ci_done
+            else check_runs_payload(status="in_progress", conclusion=""),
+        )
+        if gate is not None:
+            return gate
+        if request.url.params.get("head") == f"acme:{branch}":
+            if merged_revert:
+                return httpx.Response(
+                    200,
+                    json=[
+                        pull_payload(
+                            number=43,
+                            sha=REVERT_SHA,
+                            branch=branch,
+                            state="closed",
+                            merged=True,
+                        )
+                    ],
+                )
+            return httpx.Response(
+                200, json=[pull_payload(number=43, sha=REVERT_SHA, branch=branch)]
+            )
+        return httpx.Response(200, json=[])
+
+    gateway, client = build_gateway(repository_id, handler, Reverter(created=True))
+    saga = RecoverySagaExecutor(service, GovernedRecoveryActionHandler(gateway))
+
+    await saga.run_once()  # opens the revert PR
+    await saga.run_once()  # checks still running -> waits, does not merge
+    waiting = await service.get(change_set.id)
+    merge_action = waiting.recovery_plans[-1].actions[1]
+    assert merge_action.status.value == "pending"
+    assert waiting.status.value == "compensating"
+    assert not merged_revert
+
+    ci_done = True
+    await saga.run_once()  # same action retried, now green
+    await saga.run_once()  # revalidate
+    completed = await service.get(change_set.id)
+    assert merged_revert
+    actions = completed.recovery_plans[-1].actions
+    assert all(action.status.value == "succeeded" for action in actions)
+    assert completed.status.value == "compensated"
     await client.aclose()
 
 
@@ -416,6 +634,9 @@ async def test_saga_rolls_a_merged_changeset_back_through_github() -> None:
         if request.method == "PUT":
             merged_revert = True
             return httpx.Response(200, json={"merged": True, "sha": "c" * 40, "message": "ok"})
+        gate = revert_gate_response(request)
+        if gate is not None:
+            return gate
         if request.url.params.get("head") == f"acme:{branch}":
             if merged_revert:
                 return httpx.Response(

@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from repomesh.modules.delivery.contracts import ChangeSetView, RepositoryDeliveryView
 from repomesh.modules.project.contracts import ProjectTopologyReader
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
@@ -13,11 +14,68 @@ from repomesh.shared.git import normalize_full_sha
 from .recovery import RecoveryExecutionContext
 
 
-class CIReworkTaskCreator:
-    """Create an idempotent Worker task for a failed candidate revision."""
+def _failure_summary(candidate: RepositoryDeliveryView) -> str:
+    """Name the checks that actually failed, not just that something did."""
 
-    def __init__(self, tasks: TaskAssignmentGateway) -> None:
+    failed = [check for check in candidate.ci_checks if not check.passed]
+    if failed:
+        return "; ".join(f"{check.check_name}: {check.summary}" for check in failed)
+    return candidate.ci_summary or "CI reported the candidate as failed"
+
+
+class CIReworkTaskCreator:
+    """Create an idempotent Worker task for a failed candidate revision.
+
+    ``create`` takes a fully resolved command. ``create_for_failed_candidate``
+    is the observation-side entry point: it resolves the repository's team from
+    project topology the same way ``RecoveryConflictTaskCreator`` does, so the
+    CI path does not have to know who owns a repository.
+    """
+
+    def __init__(
+        self, tasks: TaskAssignmentGateway, topology: ProjectTopologyReader | None = None
+    ) -> None:
         self._tasks = tasks
+        self._topology = topology
+
+    async def create_for_failed_candidate(
+        self, change_set: ChangeSetView, repository_id: UUID
+    ) -> UUID:
+        if self._topology is None:
+            raise ValueError("CI rework needs project topology to find the repository Worker")
+        candidate = next(
+            (item for item in change_set.repositories if item.repository_id == repository_id),
+            None,
+        )
+        if candidate is None:
+            raise ValueError(f"repository not in ChangeSet: {repository_id}")
+        view = await self._topology.get_view(change_set.project_id)
+        if view is None:
+            raise ValueError(f"project topology is unavailable: {change_set.project_id}")
+        team = next(
+            (item for item in view.repository_teams if item.repository_id == repository_id),
+            None,
+        )
+        if team is None or not team.worker_agent_ids:
+            raise ValueError(f"repository {repository_id} has no Worker to repair a candidate")
+        task = await self.create(
+            CreateCIReworkTaskCommand(
+                organization_id=change_set.organization_id,
+                project_id=change_set.project_id,
+                change_set_id=change_set.id,
+                repository_id=repository_id,
+                repository_manager_agent_id=team.leader_agent_id,
+                worker_agent_id=team.worker_agent_ids[0],
+                parent_task_id=candidate.task_id,
+                failed_head_sha=candidate.commit_sha,
+                failure_summary=_failure_summary(candidate),
+                acceptance=(
+                    "The failing checks pass on the repaired candidate.",
+                    "The repaired candidate keeps the ChangeSet's agreed scope.",
+                ),
+            )
+        )
+        return task.id
 
     async def create(self, command: CreateCIReworkTaskCommand) -> TaskView:
         sha = normalize_full_sha(command.failed_head_sha, field="failed_head_sha")
