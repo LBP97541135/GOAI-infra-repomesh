@@ -436,3 +436,8 @@ async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None
     assert payload["spec"]["revision"] == 3
     assert payload["engineering_contract"] is None
     assert await service.repository_plan(uuid4(), client) is None
+    # A repository that belongs to a different issue is a 404, not this
+    # issue's sheet with is_focus false everywhere: §5.4 tells the frontend to
+    # read spec:null as "no spec of its own", so the wrong page rendered as a
+    # perfectly normal one.
+    assert await service.repository_plan(project_id, uuid4()) is None

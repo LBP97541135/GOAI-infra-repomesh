@@ -527,7 +527,11 @@ def test_rework_chain_drives_attempt_repairing_and_escalation(
         by_title = {task["title"]: task for task in body["tasks"]}
         original_view = by_title["Implement repo-a scope"]
         rework_view = by_title[REWORK_TASK_TITLE]
-        assert original_view["attempt"] == 2
+        # attempt is a number in a sequence, so the two rows cannot share one.
+        # This used to assert 2 and 2: the original reported the total while
+        # the rework reported its position, and the collision was written down
+        # as the expected result.
+        assert original_view["attempt"] == 1
         assert original_view["display_status"] == "failed"
         assert rework_view["attempt"] == 2
         assert rework_view["display_status"] == "repairing"
