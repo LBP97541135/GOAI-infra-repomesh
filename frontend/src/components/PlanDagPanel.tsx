@@ -1,5 +1,7 @@
 import type { RepositoryPlanView, TaskDisplayStatus } from "../api/contract";
 import type { DagExecutionView } from "../types";
+import { unverifiedMarkerLabel } from "../display";
+import { UnverifiedMarker } from "./AgentVerificationBlock";
 
 /** 图形化 DAG 面板（批次 C-2，设计定稿 `full-loop-gui-design-20260812.md` ③）。
  *
@@ -109,6 +111,20 @@ function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutio
   const status = execution && node.repository_id ? (execution.byRepository[node.repository_id] ?? null) : null;
   const colored = !unresolved && status !== null;
 
+  /** A-18：本仓有几条任务是 agent 自述「未验证」的。
+   *
+   *  **不换颜色，另加标记**：succeeded 且未验证是一条任务的两个事实（live 的
+   *  6ba476ab 正是），把节点从橄榄绿改成琥珀等于用「在跑」的皮肤讲「没验证」，
+   *  既丢了执行态又借了一个不属于它的语义。琥珀标记贴在节点上，两件事各说各的。 */
+  const unverified =
+    execution && node.repository_id
+      ? (execution.unverifiedCountByRepository[node.repository_id] ?? 0)
+      : 0;
+  const blockerCount =
+    execution && node.repository_id
+      ? (execution.blockerCountByRepository[node.repository_id] ?? 0)
+      : 0;
+
   // 未解析永远是虚线赭红：它没有 repository_id，也就没有任何执行态事实可谈。
   // 其余节点：有执行态就走 EXEC_SKIN，没有就退回结构三视觉（锚点仓 / 普通）。
   const skin = unresolved
@@ -119,11 +135,15 @@ function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutio
         ? "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-cream))] text-paper-ink"
         : "border-paper-dim/60 bg-cream text-paper-ink";
 
-  const title = unresolved
+  const baseTitle = unresolved
     ? `${node.name}：catalog 中查无此仓库——名字未注册，或在本 issue 域外重名歧义（域内优先后仍无唯一解），服务端不猜。`
     : colored
       ? `${node.name} · 本轮任务展示态 ${status}（读模型 §5.1 算出的 display_status，界面只上色）`
       : node.name;
+  const title =
+    unverified > 0
+      ? `${baseTitle}\n${unverifiedMarkerLabel(blockerCount)}：本仓 ${unverified} 条任务没有可核验的执行记录（agent 自述，契约 §5.4）。原话在「查看证据」里。`
+      : baseTitle;
 
   return (
     <div
@@ -141,6 +161,14 @@ function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutio
         {/* 颜色是皮肤，**字面值才是事实**：服务端给的 display_status 原样印在节点上，
             这样读者不必反查配色表，将来加了新态也不会被静默归到某个颜色里。 */}
         {colored && <span className="truncate font-bold lowercase">{status}</span>}
+        {/* A-18：与 display_status 并排，不覆盖它——「跑成了」和「没验证」都是真的 */}
+        {unverified > 0 && (
+          <UnverifiedMarker
+            compact
+            blockerCount={blockerCount}
+            title={`${unverified} 条任务未验证（agent 自述）`}
+          />
+        )}
         {!unresolved && execution && taskCount === 0 && (
           <span className="truncate font-bold">本轮无任务</span>
         )}
@@ -278,6 +306,11 @@ function Legend({ execution }: { execution: DagExecutionView | null }) {
           {swatch(EXEC_SKIN.pending, "等待 pending / blocked")}
           {swatch(EXEC_SKIN.failed, "失败 failed")}
           {swatch("border-dashed border-salmon bg-cream", "未解析（catalog 无此仓）")}
+          {/* A-18：不是第五个执行态，是贴在任何一个态上的标记，所以图例里也另起一说 */}
+          <span className="flex items-center gap-1">
+            <i className="inline-block size-[9px] rounded-[1px] border border-amber bg-amber" />
+            未验证（标记，非状态）
+          </span>
         </>
       ) : (
         <>
@@ -367,6 +400,18 @@ function PlanDagSheet({
 }) {
   const unresolved = plan.dag.nodes.filter((n) => n.repository_id === null);
 
+  // A-18：图上有未验证标记的那些节点，图脚按名字点出来。去重按 name+batch 的节点身份，
+  // 与 `nodeKey` 同一套（repository_id 可为 null，不能拿它当键）。
+  const unverifiedNodes = execution
+    ? plan.dag.nodes
+        .filter((n) => n.repository_id !== null)
+        .filter((n) => (execution.unverifiedCountByRepository[n.repository_id!] ?? 0) > 0)
+        .map((n) => ({
+          label: n.name,
+          blockers: execution.blockerCountByRepository[n.repository_id!] ?? 0,
+        }))
+    : [];
+
   return (
     <div className="rounded-hard bg-cream px-4 py-3.5 text-paper-ink">
       <div className="flex items-baseline gap-2.5 border-b-2 border-paper-ink pb-2">
@@ -416,6 +461,16 @@ function PlanDagSheet({
           <div className="text-salmon">
             {unresolved.length} 个节点在 catalog 中查无仓库（{unresolved.map((n) => n.name).join("、")}）——名字未注册，
             或在本 issue 域外重名歧义（域内优先后仍无唯一解）；服务端不猜，节点按虚线如实留痕、不隐藏。
+          </div>
+        )}
+        {/* A-18：图上缩写成了「未验证」，整句在这里写全——缩写不能把事实缩没 */}
+        {execution && unverifiedNodes.length > 0 && (
+          <div className="text-amber">
+            {unverifiedNodes.map((n) => n.label).join("、")}：
+            {unverifiedMarkerLabel(unverifiedNodes.reduce((sum, n) => sum + n.blockers, 0))}
+            ——这些任务跑完了、也产出了 commit，但载荷里没有任何测试记录可核验（契约 v0.1 §5.4
+            的 `tasks[].evidence`，agent 自述、读模型转述）。<b>展示态不因此改变</b>：它确实
+            succeeded，只是没验证过自己。agent 的原话在决策夹的「查看证据」里逐字可读。
           </div>
         )}
         {execution ? (

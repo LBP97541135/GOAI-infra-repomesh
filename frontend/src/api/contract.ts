@@ -573,6 +573,26 @@ export interface RepositoryDeliveryView {
  *  ⚠ **同一个 repository_id 可以对应多条**：CI rework task 与父任务同仓（§5.2 的
  *  attempt 就是这么数出来的）。所以按仓消费时必须自己面对「多条各说各话」这一形态，
  *  不能默认 find 出第一条当成该仓的状态。 */
+/** v0.1 §5.4【提案 · 待主脑裁决】`tasks[].evidence`：Runner 载荷里 agent 自述的验证状态。
+ *
+ *  全部是**转述**，读模型不加判断：`verified` 由 `test_results` 派生（至少一条已记录
+ *  的命令、且每条 exit_code 为 0），不读散文；`blockers` 仅当载荷把它声明为字符串
+ *  列表时才有值——今天的 Runner 不声明，故存量行恒 `[]`，agent 的原话在 `summary_text`
+ *  里逐字保留（契约 6.12）。前端照此渲染：**有 blocker 才数 blocker**，没有就只说
+ *  「未验证」并把原话摆出来，不去替 agent 数它没数过的东西。 */
+export interface TaskEvidenceView {
+  /** false = 这一趟没有可核验的执行记录。终态 succeeded 只说明进程跑完了。 */
+  verified: boolean;
+  /** agent 结构化声明的 blocker，逐字。未声明即 `[]`（不是「没有 blocker」） */
+  blockers: string[];
+  /** Runner summary 原文，逐字。**不得摘要、截断或重述** */
+  summary_text: string | null;
+  test_command: string | null;
+  test_results: Array<{ command: string; exit_code: number; summary: string }>;
+  /** 只报件数：产物本身尚无可取端点 */
+  artifact_count: number;
+}
+
 export interface DeliveryTaskView {
   task_id: string;
   /** 无 Project 注册表，恒 null（同 issue_key 的降级） */
@@ -589,6 +609,16 @@ export interface DeliveryTaskView {
   /** plan snapshot task_dag，装的是 task_id */
   depends_on: string[];
   result_summary: string | null;
+  /** §5.4【提案 · 待主脑裁决】coding agent 对自己这一趟的自述（A-18）。
+   *
+   *  这些字**一直**在 `result_summary` 里——一个 GUI 收到了但从没打开过的 JSON
+   *  字符串。live 那条 `runner.completed` 的任务写着 "I could not execute anything
+   *  to verify it"、"Please re-run before merging."，界面画的是绿色「已交付」。
+   *
+   *  `null` **不等于** `verified: false`：前者是「没有任何结构化证据」（superseded、
+   *  纯散文回报、Runner 之前的行），后者是「它自己说没验证」。消费方必须分开处理，
+   *  把没做过声明的行也标上「未验证」是同一个谎的反面。 */
+  evidence: TaskEvidenceView | null;
   /** rework task 创建事件 + recovery action 状态变化合成，可为空 */
   repair_timeline: Array<{ at: string | null; what: string }>;
   /** §5.2：**读模型不做升级判断**，仅转述 recovery plan 里未终态的 MANUAL_INTERVENTION */

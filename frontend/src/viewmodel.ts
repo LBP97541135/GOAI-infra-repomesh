@@ -8,8 +8,51 @@ import type {
   RepositoryDeliveryView,
   TaskDisplayStatus,
 } from "./api/contract";
-import type { ApprovalInfo, DagExecutionView, Decision, EvidenceView, RepositoryEnv } from "./types";
+import type {
+  ApprovalInfo,
+  DagExecutionView,
+  Decision,
+  EvidenceView,
+  RepositoryEnv,
+  TaskAgentReport,
+} from "./types";
 import { shortId } from "./display";
+
+/** A-18：把 `tasks[].evidence` 改成 camelCase，别的什么都不做。
+ *
+ *  这里**没有**任何派生：`verified` 是读模型按契约 §5.4 算好的，blockers 与
+ *  summary_text 是 agent 的原话。前端要是在这里补一句「大概是没跑测试」，就又成了
+ *  一层没人核对过的转述——A-18 本来就是转述丢失造成的。
+ *
+ *  `evidence === null` 的任务不产出记录：它没有做过任何声明，标它「未验证」是替它
+ *  发言。三种「没有」互不相同（没有证据 / 声明了未验证 / 验证过了），压成一种就撒谎。 */
+export function agentReportsFromAggregate(
+  agg: DeliveryAggregate,
+  repositoryId?: string,
+): TaskAgentReport[] {
+  return agg.tasks
+    // `!= null` 而非 `!== null` 是有意的（X6 运行时兜底）：本字段是【提案】，服务端
+    // 尚未部署时 `evidence` 是 **undefined** 而不是 null。用严格比较会让 undefined
+    // 通过筛选、随后在 `.verified` 上炸掉整页——把一个「后端还没跟上」渲染成白屏。
+    // 两种「没有」在这里是同一件事：没有做过声明。
+    .filter((task) => task.evidence != null)
+    .filter((task) => repositoryId === undefined || task.repository_id === repositoryId)
+    .map((task) => ({
+      taskId: task.task_id,
+      repositoryId: task.repository_id,
+      title: task.title,
+      verified: task.evidence!.verified,
+      blockers: task.evidence!.blockers,
+      summaryText: task.evidence!.summary_text,
+      testCommand: task.evidence!.test_command,
+      testResults: task.evidence!.test_results.map((r) => ({
+        command: r.command,
+        exitCode: r.exit_code,
+        summary: r.summary,
+      })),
+      artifactCount: task.evidence!.artifact_count,
+    }));
+}
 
 /** 用 Record<DecisionAction,…> 而非 Record<string,…>：契约新增动作枚举时，
  *  这里缺一项就是编译错误，而不是运行期渲染出 undefined。 */
@@ -69,6 +112,9 @@ export function approvalForDecision(
     changeSetId: cs?.change_set_id ?? null,
     repositoryId: decision.repositoryId,
     headSha: decision.headSha,
+    // A-18：授权单绑的是**这个仓**这一次合并，所以只摆这个仓的未验证声明。
+    // 摆整轮的会把别人的话算到这次授权头上——授权单说什么就得是它签什么。
+    unverified: agentReportsFromAggregate(agg, decision.repositoryId).filter((r) => !r.verified),
   };
 }
 
@@ -127,7 +173,25 @@ export function dagExecutionFromAggregate(agg: DeliveryAggregate, roundLabel: st
     taskCountByRepository[task.repository_id] = (taskCountByRepository[task.repository_id] ?? 0) + 1;
   }
 
-  return { byRepository, taskCountByRepository, roundLabel };
+  // A-18：未验证是**另加一层**，不参与上面的态归拢。一条任务可以同时是 succeeded
+  // 和未验证（live 的 6ba476ab 正是），把它并进态里就得二选一，那就又丢一个事实。
+  const unverifiedCountByRepository: Record<string, number> = {};
+  const blockerCountByRepository: Record<string, number> = {};
+  for (const report of agentReportsFromAggregate(agg)) {
+    if (report.verified) continue;
+    unverifiedCountByRepository[report.repositoryId] =
+      (unverifiedCountByRepository[report.repositoryId] ?? 0) + 1;
+    blockerCountByRepository[report.repositoryId] =
+      (blockerCountByRepository[report.repositoryId] ?? 0) + report.blockers.length;
+  }
+
+  return {
+    byRepository,
+    taskCountByRepository,
+    unverifiedCountByRepository,
+    blockerCountByRepository,
+    roundLabel,
+  };
 }
 
 /** 证据面（B-3 最小版）：把决策指向的仓库在本轮聚合里的全部既有证据切出来。
@@ -167,5 +231,6 @@ export function evidenceFromAggregate(agg: DeliveryAggregate, repositoryId: stri
           expiresAt: agg.validation_snapshot.expires_at,
         }
       : null,
+    agentReports: agentReportsFromAggregate(agg, repositoryId),
   };
 }
