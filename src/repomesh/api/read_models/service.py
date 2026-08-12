@@ -115,7 +115,21 @@ class _IssueBundle:
 
 
 def _round_order(round_facts: _RoundFacts) -> tuple:
-    """Chronological order; rounds with no timestamp at all sort first."""
+    """Order rounds as they happened: §3 wants round 1 first.
+
+    Keyed on plan_version and creation, never on updated_at. One sort used to
+    serve both this and "which round is the latest" (§2.2, which is defined on
+    updated_at), and the two disagree exactly when an older round's ChangeSet
+    keeps moving after a newer round opens — a rework or a compensation, which
+    is the most ordinary reason to open another round in the first place.
+    """
+
+    at = round_facts.created_at
+    return (at is not None, at or _EPOCH, round_facts.plan_version or 0)
+
+
+def _round_recency(round_facts: _RoundFacts) -> tuple:
+    """§2.2's separate question: which round moved most recently."""
 
     at = round_facts.updated_at or round_facts.created_at
     return (at is not None, at or _EPOCH, round_facts.plan_version or 0)
@@ -525,7 +539,9 @@ class DeliveryReadModelService:
             ),
             None,
         )
-        latest = rounds[-1] if rounds else None
+        # §3 order and §2.2 recency are different questions; asking the
+        # sorted-by-order list for its last element answered the wrong one.
+        latest = max(rounds, key=_round_recency) if rounds else None
         draft_phase = (
             derive_phase(
                 archived=False,

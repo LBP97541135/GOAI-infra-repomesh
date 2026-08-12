@@ -119,9 +119,7 @@ def test_phase_selection_prefers_active_then_latest_then_draft() -> None:
     )
     # No round and no draft: requirement exists but was never planned.
     assert (
-        select_issue_phase(
-            active_round_phase=None, latest_round_phase=None, draft_phase=None
-        )
+        select_issue_phase(active_round_phase=None, latest_round_phase=None, draft_phase=None)
         is DeliveryPhase.PLAN
     )
 
@@ -167,8 +165,7 @@ class StubTopology:
     async def find_by_room(self, room_id: str):
         for topology in self.mapping.values():
             if any(
-                room_id in {team.room_id, team.leader_room_id}
-                for team in topology.repository_teams
+                room_id in {team.room_id, team.leader_room_id} for team in topology.repository_teams
             ):
                 return topology
         return None
@@ -228,9 +225,7 @@ class StubAgents:
         return ()
 
 
-def _issue_service(
-    *, plans, snapshots, change_sets, topology=None, tasks=None, agents=None
-):
+def _issue_service(*, plans, snapshots, change_sets, topology=None, tasks=None, agents=None):
     return _service(
         StubPlans(*plans),
         StubSnapshots(*snapshots),
@@ -248,12 +243,8 @@ async def test_list_issues_derives_state_phase_and_default_open_filter() -> None
 
     closed_project, open_project, draft_project = uuid4(), uuid4(), uuid4()
     repository_id = uuid4()
-    delivered_plan = _plan(
-        closed_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED
-    )
-    delivering_plan = _plan(
-        open_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED
-    )
+    delivered_plan = _plan(closed_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
+    delivering_plan = _plan(open_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
     worker = _worker(open_project, repository_id, uuid4())
     delivered = replace(
         _manual_intervention_change_set(delivered_plan, repository_id, worker.id),
@@ -365,9 +356,7 @@ async def test_opened_by_name_resolves_the_agent_resource_name() -> None:
 
     named_project, anonymous_project = uuid4(), uuid4()
     named_plan = _plan(named_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS)
-    anonymous_plan = _plan(
-        anonymous_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS
-    )
+    anonymous_plan = _plan(anonymous_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS)
     service = _issue_service(
         plans=(named_plan, anonymous_plan),
         snapshots=(
@@ -379,9 +368,7 @@ async def test_opened_by_name_resolves_the_agent_resource_name() -> None:
         agents=StubAgents(),
     )
 
-    by_issue = {
-        item["issue_id"]: item for item in (await service.list_issues())["issues"]
-    }
+    by_issue = {item["issue_id"]: item for item in (await service.list_issues())["issues"]}
 
     assert by_issue[named_project]["opened_by_name"] == "leader-01"
     assert by_issue[anonymous_project]["opened_by_name"] is None
@@ -421,9 +408,7 @@ async def test_tab_counts_ignore_state_and_paging_but_honour_the_workspace() -> 
         organization_id = organization_id or plan.organization_id
         plan = replace(plan, organization_id=organization_id)
         plans.append(plan)
-        snapshots.append(
-            _snapshot(project_id, plan.id, created_at=T0.replace(hour=10 + index))
-        )
+        snapshots.append(_snapshot(project_id, plan.id, created_at=T0.replace(hour=10 + index)))
     closed_plan = replace(
         _plan(closed_project, uuid4(), uuid4(), ExecutionPlanStatus.COMPLETED),
         organization_id=organization_id,
@@ -431,9 +416,7 @@ async def test_tab_counts_ignore_state_and_paging_but_honour_the_workspace() -> 
     plans.append(closed_plan)
     snapshots.append(_snapshot(closed_project, closed_plan.id))
     # A second workspace must not bleed into the first workspace's counts.
-    foreign_plan = _plan(
-        other_workspace_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS
-    )
+    foreign_plan = _plan(other_workspace_project, uuid4(), uuid4(), ExecutionPlanStatus.IN_PROGRESS)
     plans.append(foreign_plan)
     snapshots.append(_snapshot(other_workspace_project, foreign_plan.id))
 
@@ -448,9 +431,7 @@ async def test_tab_counts_ignore_state_and_paging_but_honour_the_workspace() -> 
     assert first["closed_count"] == 1  # unaffected by state=open
     assert first["next_cursor"] == "2"
 
-    second = await service.list_issues(
-        organization_id=organization_id, limit=2, offset=2
-    )
+    second = await service.list_issues(organization_id=organization_id, limit=2, offset=2)
     assert len(second["issues"]) == 1
     assert second["next_cursor"] is None
     assert (second["open_count"], second["closed_count"]) == (3, 1)
@@ -462,9 +443,7 @@ async def test_tab_counts_ignore_state_and_paging_but_honour_the_workspace() -> 
     ]
     assert paged == whole
 
-    closed_tab = await service.list_issues(
-        state="closed", organization_id=organization_id
-    )
+    closed_tab = await service.list_issues(state="closed", organization_id=organization_id)
     assert [item["issue_id"] for item in closed_tab["issues"]] == [closed_project]
     assert (closed_tab["open_count"], closed_tab["closed_count"]) == (3, 1)
 
@@ -501,9 +480,7 @@ async def test_organization_filter_and_unknown_issue() -> None:
         change_sets={},
     )
 
-    filtered = await service.list_issues(
-        state="all", organization_id=my_plan.organization_id
-    )
+    filtered = await service.list_issues(state="all", organization_id=my_plan.organization_id)
 
     assert [item["issue_id"] for item in filtered["issues"]] == [mine]
     assert await service.get_issue(uuid4()) is None
@@ -551,3 +528,38 @@ async def test_issue_overview_adds_rounds_repositories_teams_and_grants() -> Non
     assert overview["human_grants"][0]["code_access"] == "read"
     assert overview["required_checkpoints"] == ["delivery", "specification"]
     assert overview["contract"] is None  # no engineering spec in this stub
+
+
+@pytest.mark.asyncio
+async def test_round_order_survives_an_older_round_being_touched_later() -> None:
+    """§3 order and §2.2 recency are separate questions.
+
+    Round 1's ChangeSet keeps moving after round 2 opens — a rework or a
+    compensation, which is the ordinary reason a second round exists at all.
+    Ordering the array by updated_at then put round 2 first, so the frontend's
+    "round 1" was the second round. latest_round_id is unaffected: §2.2 defines
+    it on updated_at, and round 1 genuinely moved most recently.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    first = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.FAILED)
+    second = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.FAILED)
+    touched_late = replace(
+        _manual_intervention_change_set(first, repository_id, uuid4()),
+        updated_at=T0.replace(hour=18),
+    )
+    service = _issue_service(
+        plans=(first, second),
+        snapshots=(
+            _snapshot(project_id, first.id, version=1, created_at=T0),
+            _snapshot(project_id, second.id, version=2, created_at=T0.replace(hour=12)),
+        ),
+        change_sets={first.id: touched_late},
+    )
+
+    overview = await service.get_issue(project_id)
+
+    assert [r["plan_version"] for r in overview["rounds"]] == [1, 2]
+    assert [r["round_id"] for r in overview["rounds"]] == [first.id, second.id]
+    assert overview["latest_round_id"] == first.id
