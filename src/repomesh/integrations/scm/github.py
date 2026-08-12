@@ -47,7 +47,7 @@ class GitHubAdapter:
         self, command: CreateDraftPullRequestCommand
     ) -> PullRequestObservation:
         self._validate(command)
-        existing = await self._find_by_head(command.repository, command.head_branch)
+        existing = await self.find_pull_request_by_head(command.repository, command.head_branch)
         if existing is not None:
             if (
                 existing.head_sha != command.expected_head_sha.lower()
@@ -254,9 +254,16 @@ class GitHubAdapter:
             message=str(payload.get("message") or "merged"),
         )
 
-    async def _find_by_head(
+    async def find_pull_request_by_head(
         self, repository: RepositoryRef, branch: str
     ) -> PullRequestObservation | None:
+        """Resolve the PR opened from ``branch``, or None when there is none.
+
+        A deterministic head branch is the only durable handle RepoMesh keeps
+        on a pull request it created, so replaying a delivery or a rollback
+        step re-finds the same PR without any locally stored number.
+        """
+
         payload = await self._request(
             "GET",
             repository,
