@@ -303,6 +303,76 @@ IN_PROGRESS）；活跃交付返回 409。归档不删数据，列表默认过�
 即上面那句「列表默认过滤 archived」；置 `true` 时归档交付一并返回。起草时只写了默认
 行为、没写这个开关，于是契约里读不到「如何看已归档交付」的路径，而实现一直有。
 
+### 4.6 回滚：`GET .../rollback-scope` + `POST .../rollback`（**2026-08-12 新增，批次 E-1**）
+
+GUI 设计定稿 ④ 的回滚对话框需要两件事：**回滚会撤销什么**（范围表）与**提交回滚决策**。
+两者都不让前端自己算——「哪个仓走 revert PR、排第几步」的规则在 delivery 的
+recovery planner 里，读模型只是把同一个 planner 跑在预览模式上（`preview_recovery`，
+不落盘）后转述结果。
+
+**读：`GET /deliveries/{delivery_id}/rollback-scope`**
+
+```json
+{ "delivery_id": "uuid",
+  "change_set_id": "uuid|null",
+  "available": true,                       // false = 没有可撤销的东西，入口不显示
+  "unavailable_reason": "no_change_set|nothing_delivered|null",
+  "recovery_in_progress": false,           // 已有未完成 recovery plan，再提交必 409
+  "repositories": [
+    { "repository_id": "uuid", "name": "string",
+      "state": "merged|unmerged",                    // merge_sha 有无
+      "action": "revert_pull_request|withhold|none", // 该仓在计划里的第一个动作
+      "step": 1,                                     // 逆序动作序号；action=none 时 null
+      "merge_sha": "string|null", "pull_request_number": 1 } ] }
+```
+
+- **无 ChangeSet 返 200**（`available:false` + `no_change_set`），不是 404——
+  「本轮还没有发布过候选」是对话框要讲的一种状态，同 §5.1 空房间清单的口径；
+  只有交付本身不存在才是 404。
+- `state` / `action` 是**机器口径的枚举**，中文措辞（免费撤回 / revert PR 第 k 步）
+  由前端 `display.ts` 渲染，与 §5.3 `gate_display` 同一分工；读模型不出中文。
+- `action` 只有两种取值来自计划：`CLOSE_PULL_REQUEST → withhold`、
+  `CREATE_REVERT_PULL_REQUEST → revert_pull_request`。`MERGE_REVERT_PULL_REQUEST`
+  是同一仓 revert 的后半段、`REVALIDATE_CHANGESET` 属于整个 ChangeSet，都不开行。
+
+**写：`POST /deliveries/{delivery_id}/rollback`**
+
+```json
+{ "change_set_id": "uuid", "reason": "string",
+  "requested_by_agent_id": "uuid", "idempotency_key": "string" }
+```
+
+**无 `repository_id`、无 `head_sha`**：粒度＝GUI 裁决 4「只做整 change set」，
+给出仓库字段等于承诺一个不存在的选择；各仓当前 head 由服务端自己读，不信浏览器枚举。
+
+一次调用两个写，因为它们必须同生共死：
+
+1. 每个候选一条 **head-bound `ROLLBACK_REQUIRED` 治理决策**——这才是真正堵死 merge
+   gate 的东西（§4.4 同一实体，gate 消费见 `evaluate_merge_gate`）；
+2. 一个 `OPERATOR_REQUESTED` **recovery plan**——恢复 saga 下一轮（默认 30s，
+   `delivery_recovery_interval_seconds`）接管执行。
+
+响应体：
+
+```json
+{ "delivery_id": "uuid", "change_set_id": "uuid",
+  "decisions": [ /* §4.4 的 GovernanceDecisionView，每仓一条 */ ],
+  "recovery_plan": { "id": "uuid", "trigger": "operator_requested", "reason": "...",
+                     "created_at": "...", "actions": [ /* RecoveryActionView */ ] },
+  "replayed": false }
+```
+
+- 主体必须是同组织**活跃 ORGANIZATION_LEADER**——§4.4 允许的 repository leader
+  分支在这里没有：这条命令替**所有**仓库说话，仓库 leader 不能。否则 403。
+- 幂等：同 `reason`、同主体、且已存在同 reason 的 operator-requested plan → 200
+  且 `replayed: true`，**零写入、版本不涨**（与 §4.4 的内容重放去重同一风格）。
+- **已有未完成 recovery plan 且 reason 不同 → 409**，且**一条决策都不写**：
+  半写的 409 会留下一个「gate 已堵死、计划却没建」的状态。
+- 404 = 交付不存在或从未建过 ChangeSet；409 = `change_set_id` 不属于该交付；
+  422 = `reason` 或 `idempotency_key` 为空。
+- **不承诺干净还原**：revert PR 仍要过自己的 CI（`_require_revert_checks`），
+  冲突由 saga 自动开冲突处理任务。界面文案与本条一致，实现不得反过来暗示别的。
+
 ## 5. 状态映射（读模型内唯一实现，禁止前端另行映射）
 
 ### 5.1 Task：后端 7 态 → 展示 6 态
