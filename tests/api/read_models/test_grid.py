@@ -74,11 +74,7 @@ class StubRoster:
 
     async def name(self, agent_id: UUID):
         return next(
-            (
-                item.agentteams_resource_name
-                for item in self.principals
-                if item.id == agent_id
-            ),
+            (item.agentteams_resource_name for item in self.principals if item.id == agent_id),
             None,
         )
 
@@ -363,9 +359,7 @@ async def test_runtime_failures_are_isolated_to_their_own_row(monkeypatch) -> No
 
     payload = await service.list_agents()
 
-    runtimes = {
-        item["agentteams_resource_name"]: item["runtime"] for item in payload["agents"]
-    }
+    runtimes = {item["agentteams_resource_name"]: item["runtime"] for item in payload["agents"]}
     assert runtimes["healthy"]["reachable"] is True
     assert runtimes["healthy"]["phase"] == "Running"
     # A hang is bounded per item and degrades only itself.
@@ -425,3 +419,39 @@ async def test_runtime_is_null_when_agentteams_is_not_configured() -> None:
     payload = await service.list_agents()
 
     assert payload["agents"][0]["runtime"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_row_whose_snapshot_breaks_the_shape_degrades_alone() -> None:
+    """Isolation has to cover the whole block, not just the await.
+
+    The probe call sat inside a try while the attribute lookup before it and
+    the shape() call after it did not, so a snapshot the shape function cannot
+    read took the entire page down — exactly the wholesale failure §4.4
+    forbids, and the kind of thing an adapter change introduces quietly.
+    """
+
+    healthy = _principal(AgentRole.WORKER, "healthy", repository_id=uuid4())
+    malformed = _principal(AgentRole.WORKER, "malformed", repository_id=uuid4())
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        agents=StubRoster(healthy, malformed),
+        runtime=StubRuntime(
+            {
+                "healthy": RuntimeSnapshot(phase="Running"),
+                # Not None, not an exception: an object the shape cannot read.
+                "malformed": object(),
+            }
+        ),
+    )
+
+    payload = await service.list_agents()
+
+    runtimes = {item["agentteams_resource_name"]: item["runtime"] for item in payload["agents"]}
+    assert runtimes["healthy"]["reachable"] is True
+    assert runtimes["malformed"] == {"reachable": False}
+    assert len(payload["agents"]) == 2  # the page survived

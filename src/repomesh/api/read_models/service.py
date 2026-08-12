@@ -84,9 +84,7 @@ _TERMINAL_ACTION_STATUSES = frozenset(
     {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
 )
 
-_ACTIVE_TASK_STATUSES = frozenset(
-    {TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED}
-)
+_ACTIVE_TASK_STATUSES = frozenset({TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED})
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 """Sort floor for rounds whose only timestamp source is missing entirely."""
@@ -178,9 +176,7 @@ class DeliveryReadModelService:
             }
             deliveries = []
             for plan in plans_by_project.get(project_id, ()):
-                summary = await self._delivery_summary(
-                    plan, snapshot_by_plan.get(plan.id)
-                )
+                summary = await self._delivery_summary(plan, snapshot_by_plan.get(plan.id))
                 if summary["phase"] == DeliveryPhase.ARCHIVED.value and not include_archived:
                     continue
                 deliveries.append(summary)
@@ -223,9 +219,7 @@ class DeliveryReadModelService:
             phase=phase,
             plan_version=snapshot.plan_version if snapshot is not None else None,
             created_at=created_at,
-            updated_at=(
-                change_set.updated_at if change_set is not None else created_at
-            ),
+            updated_at=(change_set.updated_at if change_set is not None else created_at),
             change_set=change_set,
             pending_decision_count=pending,
         )
@@ -321,12 +315,9 @@ class DeliveryReadModelService:
             )
             awaiting_governance = False
             if repository.status not in MERGE_GATE_MOOT_STATUSES:
-                gate = await self._change_sets.merge_gate(
-                    change_set.id, repository.repository_id
-                )
+                gate = await self._change_sets.merge_gate(change_set.id, repository.repository_id)
                 awaiting_governance = bool(gate.reasons) and all(
-                    reason == MERGE_GATE_GOVERNANCE_MISSING_REASON
-                    for reason in gate.reasons
+                    reason == MERGE_GATE_GOVERNANCE_MISSING_REASON for reason in gate.reasons
                 )
             recovery_open = any(
                 action.repository_id == repository.repository_id
@@ -394,9 +385,7 @@ class DeliveryReadModelService:
 
         scoped = []
         for project_id in sorted(project_ids, key=str):
-            bundle = await self._issue_bundle(
-                project_id, plans_by_project.get(project_id, ())
-            )
+            bundle = await self._issue_bundle(project_id, plans_by_project.get(project_id, ()))
             issue = bundle.summary
             if organization_id is not None and issue["organization_id"] != organization_id:
                 continue
@@ -404,9 +393,7 @@ class DeliveryReadModelService:
 
         open_count = sum(1 for issue in scoped if issue["state"] == IssueState.OPEN.value)
         issues = (
-            scoped
-            if state == "all"
-            else [issue for issue in scoped if issue["state"] == state]
+            scoped if state == "all" else [issue for issue in scoped if issue["state"] == state]
         )
         issues.sort(key=_issue_recency, reverse=True)
         page = issues[offset : offset + limit]
@@ -414,9 +401,7 @@ class DeliveryReadModelService:
             "issues": page,
             "open_count": open_count,
             "closed_count": len(scoped) - open_count,
-            "next_cursor": (
-                str(offset + limit) if offset + limit < len(issues) else None
-            ),
+            "next_cursor": (str(offset + limit) if offset + limit < len(issues) else None),
         }
 
     async def issue_summary(self, issue_id: UUID) -> dict | None:
@@ -524,21 +509,14 @@ class DeliveryReadModelService:
         }
         topology = await self._topology.get_view(project_id)
         rounds = sorted(
-            [
-                await self._round_facts(plan, snapshot_by_plan.get(plan.id))
-                for plan in plans
-            ],
+            [await self._round_facts(plan, snapshot_by_plan.get(plan.id)) for plan in plans],
             key=_round_order,
         )
 
         # §0: title, requirement text and creation time all come from the
         # earliest snapshot; `for_project` returns newest plan_version first.
         earliest = snapshots[-1] if snapshots else None
-        draft = (
-            snapshots[0]
-            if snapshots and snapshots[0].execution_plan_id is None
-            else None
-        )
+        draft = snapshots[0] if snapshots and snapshots[0].execution_plan_id is None else None
         active = next(
             (
                 facts
@@ -592,20 +570,14 @@ class DeliveryReadModelService:
             for planned in batch
         }
         if topology is not None:
-            repository_ids |= {
-                team.repository_id for team in topology.repository_teams
-            }
+            repository_ids |= {team.repository_id for team in topology.repository_teams}
 
         opened_at = earliest.created_at if earliest is not None else None
-        opened_by_agent_id = (
-            earliest.created_by_agent_id if earliest is not None else None
-        )
+        opened_by_agent_id = earliest.created_by_agent_id if earliest is not None else None
         # Same source and precision as v0.1's messages sender_name: an
         # AgentTeams resource name, never a human name.
         opened_by_name = (
-            await self._agents.name(opened_by_agent_id)
-            if opened_by_agent_id is not None
-            else None
+            await self._agents.name(opened_by_agent_id) if opened_by_agent_id is not None else None
         )
         # §2.3: the latest persisted fact across every round and snapshot.
         timestamps = [facts.updated_at for facts in rounds if facts.updated_at] + [
@@ -615,15 +587,13 @@ class DeliveryReadModelService:
         # issue has neither round nor topology, so it falls back to the
         # organization of the agent that opened it — without this the workspace
         # filter would silently drop every un-materialized issue.
-        organization_id = next(
-            (facts.plan.organization_id for facts in rounds), None
-        ) or (topology.organization_id if topology else None)
+        organization_id = next((facts.plan.organization_id for facts in rounds), None) or (
+            topology.organization_id if topology else None
+        )
         if organization_id is None and (
             earliest is not None and earliest.created_by_agent_id is not None
         ):
-            organization_id = await self._agents.organization_id(
-                earliest.created_by_agent_id
-            )
+            organization_id = await self._agents.organization_id(earliest.created_by_agent_id)
 
         summary = {
             "issue_id": project_id,
@@ -632,25 +602,19 @@ class DeliveryReadModelService:
             "title": _title(
                 earliest.requirement_text if earliest is not None else None, project_id
             ),
-            "requirement_text": (
-                earliest.requirement_text if earliest is not None else None
-            ),
+            "requirement_text": (earliest.requirement_text if earliest is not None else None),
             "state": state.value,
             "phase": phase.value,
             "phase_note": phase_note,
             "round_count": len(rounds),
             "active_round_id": active.plan.id if active is not None else None,
             "latest_round_id": latest.plan.id if latest is not None else None,
-            "pending_decision_count": sum(
-                facts.pending_decision_count for facts in rounds
-            ),
+            "pending_decision_count": sum(facts.pending_decision_count for facts in rounds),
             "repository_count": len(repository_ids),
             "team_count": len(topology.repository_teams) if topology else 0,
             # Topology-only facts degrade to null rather than a fabricated
             # default when the issue never formed a team.
-            "operational_status": (
-                topology.operational_status.value if topology else None
-            ),
+            "operational_status": (topology.operational_status.value if topology else None),
             "execution_mode": topology.execution_mode.value if topology else None,
             "opened_by_agent_id": opened_by_agent_id,
             "opened_by_name": opened_by_name,
@@ -706,9 +670,7 @@ class DeliveryReadModelService:
             if planned.leader_task_id is not None
         }
         tasks = await self._tasks.list_by_project(project_id)
-        worker_task_ids = {
-            task.id for task in tasks if task.parent_task_id in leader_task_ids
-        }
+        worker_task_ids = {task.id for task in tasks if task.parent_task_id in leader_task_ids}
         change_set = await self._change_sets.for_delivery(delivery_id)
 
         items: list[dict] = []
@@ -790,9 +752,7 @@ class DeliveryReadModelService:
             if planned.leader_task_id is not None
         }
         tasks = await self._tasks.list_by_project(plan.project_id)
-        worker_task_ids = {
-            task.id for task in tasks if task.parent_task_id in leader_task_ids
-        }
+        worker_task_ids = {task.id for task in tasks if task.parent_task_id in leader_task_ids}
         items = []
         for message in await self._messages.for_project(plan.project_id):
             if message.task_id is not None and message.task_id not in worker_task_ids:
@@ -846,9 +806,7 @@ class DeliveryReadModelService:
         catalog = {item.id: item for item in await self._repositories.list()}
         tasks = await self._tasks.list_by_project(issue_id)
         live_repositories = {
-            task.repository_id
-            for task in tasks
-            if task.status is TaskStatus.IN_PROGRESS
+            task.repository_id for task in tasks if task.status is TaskStatus.IN_PROGRESS
         }
         rooms: list[dict] = []
         for team in topology.repository_teams:
@@ -858,15 +816,10 @@ class DeliveryReadModelService:
             # leader. Listing workers in the DM would misdescribe who can read it.
             members_by_kind = {
                 "team_room": [leader]
-                + [
-                    await self._member(worker_id, "worker")
-                    for worker_id in team.worker_agent_ids
-                ],
+                + [await self._member(worker_id, "worker") for worker_id in team.worker_agent_ids],
                 "leader_dm": [
                     leader,
-                    await self._member(
-                        topology.organization_leader_id, "organization_leader"
-                    ),
+                    await self._member(topology.organization_leader_id, "organization_leader"),
                 ],
             }
             for room_id, kind in (
@@ -914,9 +867,7 @@ class DeliveryReadModelService:
             "role": role,
         }
 
-    async def room_stream(
-        self, room_id: str, *, offset: int = 0, limit: int = 100
-    ) -> dict | None:
+    async def room_stream(self, room_id: str, *, offset: int = 0, limit: int = 100) -> dict | None:
         """Contract v0.2 §5.2: one room's real messages plus console projections.
 
         Only `source == "message"` happened inside the room. Governance
@@ -972,9 +923,7 @@ class DeliveryReadModelService:
                             at=decision.decided_at,
                             source="governance",
                             room_id=room_id,
-                            text=(
-                                f"治理决策 {decision.decision.value}: {decision.reason}"
-                            ),
+                            text=(f"治理决策 {decision.decision.value}: {decision.reason}"),
                             repository_id=decision.repository_id,
                             payload_ref=f"governance-decision:{decision.id}",
                         )
@@ -1002,9 +951,7 @@ class DeliveryReadModelService:
                 change_set = await self._change_sets.for_delivery(plan.id)
                 if change_set is None:
                     continue
-                for observation in await self._observations.for_change_set(
-                    change_set.id
-                ):
+                for observation in await self._observations.for_change_set(change_set.id):
                     if observation.repository_id != team.repository_id:
                         continue
                     items.append(
@@ -1021,14 +968,10 @@ class DeliveryReadModelService:
         items.sort(key=lambda item: (item["at"], item["payload_ref"]))
         return {
             "items": items[offset : offset + limit],
-            "next_cursor": (
-                str(offset + limit) if offset + limit < len(items) else None
-            ),
+            "next_cursor": (str(offset + limit) if offset + limit < len(items) else None),
         }
 
-    async def repository_plan(
-        self, issue_id: UUID, repository_id: UUID
-    ) -> dict | None:
+    async def repository_plan(self, issue_id: UUID, repository_id: UUID) -> dict | None:
         """Contract v0.2 §5.4: the DAG / PLAN / SPEC sheet for one repository.
 
         The DAG is repository-grained: nodes are the planned repositories,
@@ -1070,9 +1013,7 @@ class DeliveryReadModelService:
                     # with a null endpoint would draw a line to nowhere.
                     dropped.append(f"{dependency} -> {target_name}")
                     continue
-                edges.append(
-                    {"from_repository_id": source, "to_repository_id": target}
-                )
+                edges.append({"from_repository_id": source, "to_repository_id": target})
         if dropped:
             # Never truncate silently: a DAG that is quietly missing edges reads
             # as a complete one.
@@ -1156,9 +1097,7 @@ class DeliveryReadModelService:
         active_tasks: dict[UUID, int] = {}
         for task in await self._tasks.list_all():
             if task.status in _ACTIVE_TASK_STATUSES:
-                active_tasks[task.repository_id] = (
-                    active_tasks.get(task.repository_id, 0) + 1
-                )
+                active_tasks[task.repository_id] = active_tasks.get(task.repository_id, 0) + 1
 
         return {
             "repositories": [
@@ -1208,9 +1147,7 @@ class DeliveryReadModelService:
                         "runtime_status": team.runtime_status.value,
                         "team_room_id": team.room_id,
                         "leader_room_id": team.leader_room_id,
-                        "leader": await self._member(
-                            team.leader_agent_id, "repository_leader"
-                        ),
+                        "leader": await self._member(team.leader_agent_id, "repository_leader"),
                         "workers": [
                             await self._member(worker_id, "worker")
                             for worker_id in team.worker_agent_ids
@@ -1278,23 +1215,31 @@ class DeliveryReadModelService:
             await self._attach_runtime(agents, probes, _agent_runtime_fields)
         return {"agents": agents}
 
-    async def _attach_runtime(
-        self, rows: list[dict], probes: list[tuple[str, str]], shape
-    ) -> None:
+    async def _attach_runtime(self, rows: list[dict], probes: list[tuple[str, str]], shape) -> None:
         """Probe every row concurrently and fill its runtime block in place.
 
         Concurrency is not a micro-optimisation here: probes are bounded by a
         timeout, so running them one after another makes an offline controller
         cost `rows x timeout` — a roster of nine agents took 18s before this,
         which is indistinguishable from an outage even though every row
-        degrades correctly. Isolation is unchanged: _runtime_block absorbs its
-        own failures, so gather never propagates one row's problem to another.
+        degrades correctly.
+
+        Isolation is belt and braces. _runtime_block absorbs the failures it
+        can see, but it used to claim more than it delivered: the docstring
+        said gather could never propagate one row's problem to another while
+        two of its lines sat outside the try. gather now also collects
+        exceptions instead of cancelling its siblings, so a row that fails in
+        a way nobody anticipated still costs one row.
         """
 
         blocks = await asyncio.gather(
-            *(self._runtime_block(kind, name, shape) for kind, name in probes)
+            *(self._runtime_block(kind, name, shape) for kind, name in probes),
+            return_exceptions=True,
         )
         for row, block in zip(rows, blocks, strict=True):
+            if isinstance(block, BaseException):
+                _logger.warning("runtime block failed unexpectedly", exc_info=block)
+                block = {"reachable": False}
             row["runtime"] = block
 
     async def _runtime_block(self, kind: str, name: str, shape) -> dict | None:
@@ -1308,19 +1253,24 @@ class DeliveryReadModelService:
 
         if self._runtime is None:
             return None  # AgentTeams is not configured: no fact to report
-        probe = getattr(self._runtime, kind)
         try:
-            snapshot = await asyncio.wait_for(
-                probe(name), timeout=_RUNTIME_PROBE_TIMEOUT
-            )
-        except Exception:
+            probe = getattr(self._runtime, kind)
+            snapshot = await asyncio.wait_for(probe(name), timeout=_RUNTIME_PROBE_TIMEOUT)
+            if snapshot is None:
+                return None  # 404: the controller has no such resource
+            return {"reachable": True, **shape(snapshot)}
+        except Exception as error:
+            # exc_info because the three ways this fires — a misconfigured
+            # token, a controller that is down, and a bug in the adapter —
+            # produce the same reachable:false and nobody could tell them
+            # apart from the old message alone.
             _logger.warning(
-                "runtime probe failed for %s %s; degrading this row only", kind, name
+                "runtime probe failed for %s %s; degrading this row only",
+                kind,
+                name,
+                exc_info=error,
             )
             return {"reachable": False}
-        if snapshot is None:
-            return None  # 404: the controller has no such resource
-        return {"reachable": True, **shape(snapshot)}
 
     async def _issue_bundles(self) -> list[_IssueBundle]:
         plans_by_project = await self._plans_by_project()
@@ -1343,27 +1293,21 @@ class DeliveryReadModelService:
             return None
         project_id = plan.project_id
         snapshots = await self._snapshots.for_project(project_id)
-        snapshot = next(
-            (item for item in snapshots if item.execution_plan_id == delivery_id), None
-        )
+        snapshot = next((item for item in snapshots if item.execution_plan_id == delivery_id), None)
         change_set = await self._change_sets.for_delivery(delivery_id)
         validation = await self._find_validation(project_id, delivery_id, change_set)
         contract = await self._specifications.engineering_contract(project_id)
         catalog = {item.id: item for item in await self._repositories.list()}
         tasks = await self._tasks.list_by_project(project_id)
 
-        plan_repository_ids = {
-            planned.repository_id for batch in plan.batches for planned in batch
-        }
+        plan_repository_ids = {planned.repository_id for batch in plan.batches for planned in batch}
         leader_task_ids = {
             planned.leader_task_id
             for batch in plan.batches
             for planned in batch
             if planned.leader_task_id is not None
         }
-        worker_tasks = tuple(
-            task for task in tasks if task.parent_task_id in leader_task_ids
-        )
+        worker_tasks = tuple(task for task in tasks if task.parent_task_id in leader_task_ids)
         task_views = await self._task_views(worker_tasks, snapshot, change_set, catalog)
         merge_order = (
             [
@@ -1381,9 +1325,7 @@ class DeliveryReadModelService:
                 "title": _title(
                     snapshot.requirement_text if snapshot is not None else None, project_id
                 ),
-                "requirement_text": (
-                    snapshot.requirement_text if snapshot is not None else None
-                ),
+                "requirement_text": (snapshot.requirement_text if snapshot is not None else None),
                 "created_at": snapshots[-1].created_at if snapshots else None,
             },
             "contract": _contract_block(contract),
@@ -1419,9 +1361,7 @@ class DeliveryReadModelService:
                 "merge_order": merge_order,
             },
             "tasks": task_views,
-            "change_set": self._change_set_block(change_set)
-            if change_set is not None
-            else None,
+            "change_set": self._change_set_block(change_set) if change_set is not None else None,
             "validation_snapshot": (
                 {
                     "id": validation.id,
@@ -1451,9 +1391,7 @@ class DeliveryReadModelService:
         rework_by_key: dict[tuple[UUID, UUID | None], list[TaskView]] = {}
         for task in worker_tasks:
             if task.title == REWORK_TASK_TITLE:
-                rework_by_key.setdefault(
-                    (task.repository_id, task.parent_task_id), []
-                ).append(task)
+                rework_by_key.setdefault((task.repository_id, task.parent_task_id), []).append(task)
 
         name_to_task: dict[str, UUID] = {}
         for task in worker_tasks:
@@ -1483,12 +1421,8 @@ class DeliveryReadModelService:
         for task in worker_tasks:
             chain = rework_by_key.get((task.repository_id, task.parent_task_id), [])
             is_rework = task.title == REWORK_TASK_TITLE
-            active_rework = any(
-                item.status in _ACTIVE_TASK_STATUSES for item in chain
-            )
-            repairing = is_rework or (
-                active_rework and task.status is TaskStatus.IN_PROGRESS
-            )
+            active_rework = any(item.status in _ACTIVE_TASK_STATUSES for item in chain)
+            repairing = is_rework or (active_rework and task.status is TaskStatus.IN_PROGRESS)
             display = task_display_status(task.status, has_active_rework=repairing)
             if display is None:
                 continue
@@ -1508,9 +1442,7 @@ class DeliveryReadModelService:
                 if at is None:
                     # No persisted fact anywhere to date this entry with.
                     continue
-                repair_timeline.append(
-                    {"at": at, "what": f"返工任务 {item.status.value}"}
-                )
+                repair_timeline.append({"at": at, "what": f"返工任务 {item.status.value}"})
             escalated = False
             if change_set is not None:
                 for recovery in change_set.recovery_plans:
