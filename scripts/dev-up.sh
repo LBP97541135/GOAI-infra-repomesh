@@ -88,6 +88,18 @@ port_busy() {
   (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
 }
 
+# Same question, asked three times: a component that is up but momentarily
+# reloading would otherwise be mistaken for a stranger holding its port, and
+# that mistake aborts the run.
+http_serving_settled() {
+  local attempt
+  for attempt in 1 2 3; do
+    http_serving "$1" && return 0
+    sleep 1
+  done
+  return 1
+}
+
 # True when the URL answers with any HTTP status (404 still proves "serving").
 http_serving() {
   local code
@@ -114,7 +126,7 @@ have curl || fail "找不到 curl。" "本脚本用 curl 做就绪探测。Git B
 # ---------------------------------------------------------------- 1. 后端
 step "[1/4] 后端 API（127.0.0.1:${API_PORT}）"
 
-if http_serving "http://127.0.0.1:${API_PORT}/docs"; then
+if http_serving_settled "http://127.0.0.1:${API_PORT}/docs"; then
   backend_skipped=1
   skip "8100 已经在提供服务，跳过数据库、依赖安装、迁移与 uvicorn 启动。"
   info "（这一跳过是有意的：既有实例的库和迁移状态由起它的人负责。"
@@ -224,7 +236,11 @@ step "[2/4] 演示数据"
 if [[ "${seed}" != "1" ]]; then
   skip "未加 --seed，不灌演示数据（新库首屏会是空态，属正常）。"
 elif [[ "${own_database}" != "1" && "${DSN_EXPLICIT}" != "1" ]]; then
-  warn "跳过灌种子：本次运行没有起数据库，脚本无从确认既有后端连的是哪个库。"
+  if [[ "${backend_skipped}" == "1" ]]; then
+    warn "跳过灌种子：后端是既有实例，脚本无从确认它连的是哪个库，不敢往默认 DSN 写。"
+  else
+    warn "跳过灌种子：本次运行没有起数据库，脚本不往不是自己起的库写数据。"
+  fi
   info "确认之后显式指定同一个库再灌："
   info "  REPOMESH_DATABASE_URL=<后端在用的 DSN> uv run python scripts/seed-console-demo.py --database-url <同一个 DSN>"
 else
@@ -239,7 +255,7 @@ fi
 
 # ---------------------------------------------------------------- 3. 前端
 step "[3/4] 前端开发服务器（127.0.0.1:${WEB_PORT}）"
-if http_serving "${CONSOLE_URL}/"; then
+if http_serving_settled "${CONSOLE_URL}/"; then
   skip "${WEB_PORT} 已经在提供服务，跳过 npm install 与 vite 启动。"
 elif port_busy "${WEB_PORT}"; then
   fail "${WEB_PORT} 端口被占用，但打不开页面。" \

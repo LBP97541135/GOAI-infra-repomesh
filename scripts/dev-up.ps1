@@ -91,6 +91,18 @@ function Test-HttpServing {
     }
 }
 
+# Same question, asked three times: a component that is up but momentarily
+# reloading would otherwise be mistaken for a stranger holding its port, and
+# that mistake aborts the run.
+function Test-HttpServingSettled {
+    param([string] $Url)
+    foreach ($attempt in 1..3) {
+        if (Test-HttpServing $Url) { return $true }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
 function Invoke-Checked {
     param([string] $File, [string[]] $Arguments, [string] $Reason, [string[]] $Guidance = @())
     & $File @Arguments
@@ -107,7 +119,7 @@ Write-Host ("数据库：$Dsn" + $(if ($DsnExplicit) { '（来自 REPOMESH_DATAB
 Write-Step "[1/4] 后端 API（127.0.0.1:$ApiPort）"
 
 $backendSkipped = $false
-if (Test-HttpServing "http://127.0.0.1:$ApiPort/docs") {
+if (Test-HttpServingSettled "http://127.0.0.1:$ApiPort/docs") {
     $backendSkipped = $true
     Write-Skip "$ApiPort 已经在提供服务，跳过数据库、依赖安装、迁移与 uvicorn 启动。"
     Write-Info '（这一跳过是有意的：既有实例的库和迁移状态由起它的人负责。'
@@ -236,7 +248,11 @@ Write-Step '[2/4] 演示数据'
 if (-not $Seed) {
     Write-Skip '未加 -Seed，不灌演示数据（新库首屏会是空态，属正常）。'
 } elseif (-not $script:OwnDatabase -and -not $DsnExplicit) {
-    Write-Note '跳过灌种子：本次运行没有起数据库，脚本无从确认既有后端连的是哪个库。'
+    if ($backendSkipped) {
+        Write-Note '跳过灌种子：后端是既有实例，脚本无从确认它连的是哪个库，不敢往默认 DSN 写。'
+    } else {
+        Write-Note '跳过灌种子：本次运行没有起数据库，脚本不往不是自己起的库写数据。'
+    }
     Write-Info '确认之后显式指定同一个库再灌：'
     Write-Info '  uv run python scripts/seed-console-demo.py --database-url <后端在用的 DSN>'
 } else {
@@ -252,7 +268,7 @@ if (-not $Seed) {
 
 # ---------------------------------------------------------------- 3. 前端
 Write-Step "[3/4] 前端开发服务器（127.0.0.1:$WebPort）"
-if (Test-HttpServing "$ConsoleUrl/") {
+if (Test-HttpServingSettled "$ConsoleUrl/") {
     Write-Skip "$WebPort 已经在提供服务，跳过 npm install 与 vite 启动。"
 } elseif (Test-PortBusy $WebPort) {
     Stop-WithGuidance "$WebPort 端口被占用，但打不开页面。" @(
