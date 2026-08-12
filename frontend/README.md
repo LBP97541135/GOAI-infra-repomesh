@@ -3,6 +3,11 @@
 Variant D「融合工作台 · 复古未来主义」的正式实现，设计定稿见
 `frontend-prototype/DESIGN-DECISION.md`。React + Vite + TypeScript + Tailwind v4。
 
+> **只想把界面跑起来**：仓库根 `scripts/dev-up.ps1` / `scripts/dev-up.sh` 一条命令
+> 起全套（库→迁移→8100→5280→开浏览器，已在跑的组件自动跳过），或者只装 Docker 走
+> `docker compose --profile console up -d --build`（同源托管，开 8100）。见根 README
+> 「Open the console」。下面是这条命令背后的手工步骤，排障和改脚本时看。
+
 ## 运行
 
 ```bash
