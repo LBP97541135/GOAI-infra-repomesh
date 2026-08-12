@@ -17,6 +17,7 @@ from repomesh.shared.events import ActorType, EventEnvelope
 from .contracts import (
     MERGE_GATE_GOVERNANCE_MISSING_REASON,
     AppendCandidatesCommand,
+    ChangeSetRollbackView,
     ChangeSetStatus,
     ChangeSetView,
     CIObservationCommand,
@@ -37,9 +38,12 @@ from .contracts import (
     RecordSCMObservationCommand,
     RecoveryActionKind,
     RecoveryActionStatus,
+    RecoveryActionView,
+    RecoveryPlanView,
     RecoveryTrigger,
     RepositoryCandidateInput,
     RepositoryDeliveryStatus,
+    RequestChangeSetRollbackCommand,
     ReviewObservationCommand,
     SCMCommandStatus,
     SCMCommandView,
@@ -615,6 +619,20 @@ class DeliveryService:
         await self._store.update(updated, expected_version=change_set.version)
         return updated.to_view()
 
+    async def preview_recovery(
+        self, command: PlanRecoveryCommand
+    ) -> tuple[RecoveryActionView, ...]:
+        """The actions ``plan_recovery`` would create, without creating them.
+
+        The console's rollback dialog has to show which repository gets a
+        revert PR and in which position, and that answer must be the plan the
+        Saga will actually run — so it comes from the same generator rather
+        than from a second implementation of the reverse-merge-order rule.
+        """
+
+        change_set = await self._required(command.change_set_id)
+        return tuple(action.to_view() for action in self._recovery_actions(change_set, command))
+
     async def get(self, change_set_id: UUID) -> ChangeSetView:
         return (await self._required(change_set_id)).to_view()
 
@@ -903,6 +921,192 @@ class DeliveryGovernanceService:
             existing.decision is command.decision
             and existing.decided_by_agent_id == command.decided_by_agent_id
             and existing.reason == command.reason.strip()
+        )
+
+
+_TERMINAL_RECOVERY_STATUSES = frozenset(
+    {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+)
+
+
+class DeliveryRollbackService:
+    """Console face for rolling a whole ChangeSet back (GUI batch E-1).
+
+    The console does not execute anything. It records the human decision and
+    lets the machine take over, which is two writes that belong together:
+
+    1. one head-bound ROLLBACK_REQUIRED governance decision per candidate,
+       which is what actually closes the merge gate (see
+       ``evaluate_merge_gate``) so nothing else merges while the rollback runs;
+    2. one OPERATOR_REQUESTED recovery plan, whose actions the recovery Saga
+       picks up on its next interval.
+
+    Doing this from the browser as N+1 separate calls would leave the gate half
+    closed whenever one of them failed, and would put the reverse-merge-order
+    rule in the front end. Hence one endpoint, one service, one audit event.
+
+    This is not a promise of a clean restore: revert PRs still have to pass
+    their own CI, and a conflicting revert is handed to a Worker task. The
+    console's wording says so; this service only makes sure the wording is not
+    contradicted by the machine.
+    """
+
+    def __init__(
+        self,
+        delivery: DeliveryService,
+        directory: AgentPrincipalReader,
+        audit: DeliveryAuditLog,
+    ) -> None:
+        self._delivery = delivery
+        self._directory = directory
+        self._audit = audit
+
+    async def request(
+        self,
+        delivery_id: UUID,
+        command: RequestChangeSetRollbackCommand,
+        *,
+        idempotency_key: str,
+    ) -> ChangeSetRollbackView:
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
+        reason = command.reason.strip()
+        if not reason:
+            raise ValueError("reason is required")
+        change_set = await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+        if change_set is None:
+            raise DeliveryNotFound(f"delivery has no ChangeSet: {delivery_id}")
+        if change_set.id != command.change_set_id:
+            raise DeliveryConflict("change set does not belong to this delivery")
+        actor = await self._authorized_actor(command, change_set)
+
+        # Decide what to do with the recovery plan *before* writing any
+        # decision: a request that ends in 409 must not leave the merge gate
+        # closed by decisions whose plan never got created.
+        existing = change_set.recovery_plans[-1] if change_set.recovery_plans else None
+        replaying = (
+            existing is not None
+            and existing.trigger is RecoveryTrigger.OPERATOR_REQUESTED
+            and existing.reason == reason
+        )
+        if not replaying and existing is not None and self._incomplete(existing):
+            raise DeliveryConflict(
+                "a recovery plan is already running for this ChangeSet; "
+                "wait for it to finish or resolve it before requesting another rollback"
+            )
+
+        candidates = tuple(sorted(change_set.repositories, key=lambda item: item.merge_order))
+        wrote_decision = False
+        for candidate in candidates:
+            # §4.4's decisions are stored against the lower-cased head; look up
+            # and write against the same form so a replay is recognised.
+            head = candidate.commit_sha.strip().lower()
+            recorded = self._latest_decision(change_set, candidate.repository_id, head)
+            if (
+                recorded is not None
+                and recorded.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED
+                and recorded.decided_by_agent_id == actor.id
+                and recorded.reason == reason
+            ):
+                continue
+            change_set = await self._delivery.record_governance_decision(
+                RecordGovernanceDecisionCommand(
+                    change_set_id=change_set.id,
+                    repository_id=candidate.repository_id,
+                    head_sha=head,
+                    decision=GovernanceDecisionKind.ROLLBACK_REQUIRED,
+                    decided_by_agent_id=actor.id,
+                    reason=reason,
+                )
+            )
+            wrote_decision = True
+
+        if replaying:
+            plan = change_set.recovery_plans[-1]
+        else:
+            change_set = await self._delivery.plan_recovery(
+                PlanRecoveryCommand(
+                    change_set_id=change_set.id,
+                    trigger=RecoveryTrigger.OPERATOR_REQUESTED,
+                    reason=reason,
+                )
+            )
+            plan = change_set.recovery_plans[-1]
+
+        decisions = tuple(
+            decision
+            for candidate in candidates
+            if (
+                decision := self._latest_decision(
+                    change_set,
+                    candidate.repository_id,
+                    candidate.commit_sha.strip().lower(),
+                )
+            )
+            is not None
+        )
+        replayed = replaying and not wrote_decision
+        if not replayed:
+            await self._audit.append(
+                EventEnvelope(
+                    event_type="DeliveryRollbackRequested",
+                    actor_type=ActorType.AGENT,
+                    actor_id=str(actor.id),
+                    aggregate_type="ChangeSet",
+                    aggregate_id=change_set.id,
+                    aggregate_version=change_set.version,
+                    correlation_id=new_id(),
+                    organization_id=change_set.organization_id,
+                    project_id=change_set.project_id,
+                    payload={
+                        "deliveryId": str(delivery_id),
+                        "recoveryPlanId": str(plan.id),
+                        "repositoryIds": [str(item.repository_id) for item in candidates],
+                        "reason": reason,
+                        "idempotencyKey": idempotency_key.strip(),
+                    },
+                )
+            )
+        return ChangeSetRollbackView(
+            delivery_id=delivery_id,
+            change_set_id=change_set.id,
+            decisions=decisions,
+            recovery_plan=plan,
+            replayed=replayed,
+        )
+
+    async def _authorized_actor(
+        self, command: RequestChangeSetRollbackCommand, change_set: ChangeSetView
+    ):
+        actor = await self._directory.get_view(command.requested_by_agent_id)
+        if actor is None or actor.status is not AgentPrincipalStatus.ACTIVE:
+            raise DeliveryDenied("rollback requires an active agent principal")
+        if actor.organization_id != change_set.organization_id:
+            raise DeliveryDenied("rollback agent belongs to another organization")
+        # No repository-leader branch here, unlike §4.4's per-repository
+        # decision: this command speaks for every repository in the set, and a
+        # repository leader does not.
+        if actor.role is not AgentRole.ORGANIZATION_LEADER:
+            raise DeliveryDenied("whole-ChangeSet rollback requires an organization leader")
+        return actor
+
+    @staticmethod
+    def _incomplete(plan: RecoveryPlanView) -> bool:
+        return any(action.status not in _TERMINAL_RECOVERY_STATUSES for action in plan.actions)
+
+    @staticmethod
+    def _latest_decision(
+        change_set: ChangeSetView, repository_id: UUID, head_sha: str
+    ) -> GovernanceDecisionView | None:
+        return next(
+            (
+                item
+                for item in reversed(change_set.governance_decisions)
+                if item.repository_id == repository_id and item.head_sha == head_sha
+            ),
+            None,
         )
 
 

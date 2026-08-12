@@ -404,6 +404,20 @@ class ApplicationContainer:
             async def merge_gate(self, change_set_id: UUID, repository_id: UUID):
                 return await delivery.evaluate_merge_gate(change_set_id, repository_id)
 
+            async def recovery_preview(self, change_set_id: UUID):
+                from repomesh.modules.delivery.contracts import (
+                    PlanRecoveryCommand,
+                    RecoveryTrigger,
+                )
+
+                return await delivery.preview_recovery(
+                    PlanRecoveryCommand(
+                        change_set_id=change_set_id,
+                        trigger=RecoveryTrigger.OPERATOR_REQUESTED,
+                        reason="rollback scope preview",
+                    )
+                )
+
         class _Validations:
             async def for_project(self, project_id: UUID):
                 return tuple(
@@ -802,6 +816,18 @@ class ApplicationContainer:
         )
 
         return DeliveryGovernanceService(
+            self.delivery_service(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def delivery_rollback_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryRollbackService,
+            PostgresDeliveryAuditLog,
+        )
+
+        return DeliveryRollbackService(
             self.delivery_service(),
             self.agent_directory,
             PostgresDeliveryAuditLog(self.database),

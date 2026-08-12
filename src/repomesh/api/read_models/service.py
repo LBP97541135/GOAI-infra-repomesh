@@ -19,6 +19,7 @@ from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     RecoveryActionKind,
     RecoveryActionStatus,
+    RecoveryActionView,
     RepositoryDeliveryStatus,
 )
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
@@ -97,6 +98,15 @@ null instead of a factually wrong 'blocked' answer."""
 _TERMINAL_ACTION_STATUSES = frozenset(
     {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
 )
+
+_ROLLBACK_ACTION_KINDS = {
+    RecoveryActionKind.CLOSE_PULL_REQUEST: "withhold",
+    RecoveryActionKind.CREATE_REVERT_PULL_REQUEST: "revert_pull_request",
+}
+"""§4.6: the two planned action kinds a rollback scope row can report.
+
+MERGE_REVERT_PULL_REQUEST is the second half of the same repository's revert
+and REVALIDATE_CHANGESET belongs to the whole set, so neither opens a row."""
 
 _ACTIVE_TASK_STATUSES = frozenset({TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED})
 
@@ -1906,6 +1916,88 @@ class DeliveryReadModelService:
                 }
                 for plan in change_set.recovery_plans
             ],
+        }
+
+    # -------------------------------------------------------- rollback scope
+
+    async def rollback_scope(self, delivery_id: UUID) -> dict | None:
+        """Contract v0.1 §4.6: what a whole-ChangeSet rollback would undo.
+
+        One row per repository, in the order the recovery Saga will act — which
+        is reverse merge order, and which this projection does not compute: it
+        asks delivery's own recovery planner for the plan it *would* create and
+        reads the answer off it. Two implementations of "which repository is
+        revert step k" is exactly the drift the read-model rule exists to stop.
+
+        `action` is the machine's word, not the operator's: `withhold` for a
+        candidate that never merged (its PR is closed, nothing lands in the
+        base branch) and `revert_pull_request` for one that did (a revert PR
+        that still has to pass its own CI). Labels are the console's business.
+        """
+
+        plan = await self._plans.get(delivery_id)
+        if plan is None:
+            return None
+        change_set = await self._change_sets.for_delivery(delivery_id)
+        if change_set is None:
+            return {
+                "delivery_id": delivery_id,
+                "change_set_id": None,
+                "available": False,
+                "unavailable_reason": "no_change_set",
+                "recovery_in_progress": False,
+                "repositories": [],
+            }
+        actions = await self._change_sets.recovery_preview(change_set.id)
+        catalog = await self._catalog()
+        # A merged repository is planned twice (create then merge the revert
+        # PR); the row reports the first of the pair, so `step` is the position
+        # at which that repository's rollback starts.
+        planned: dict[UUID, RecoveryActionView] = {}
+        for action in sorted(actions, key=lambda item: item.sequence):
+            if action.repository_id is None or action.kind not in _ROLLBACK_ACTION_KINDS:
+                continue
+            planned.setdefault(action.repository_id, action)
+        repositories = [
+            {
+                "repository_id": item.repository_id,
+                "name": (
+                    catalog[item.repository_id].name
+                    if item.repository_id in catalog
+                    else str(item.repository_id)[:8]
+                ),
+                "state": (
+                    "merged"
+                    if item.status is RepositoryDeliveryStatus.MERGED
+                    else "unmerged"
+                ),
+                "action": (
+                    _ROLLBACK_ACTION_KINDS[planned[item.repository_id].kind]
+                    if item.repository_id in planned
+                    else "none"
+                ),
+                "step": (
+                    planned[item.repository_id].sequence
+                    if item.repository_id in planned
+                    else None
+                ),
+                "merge_sha": item.merge_sha,
+                "pull_request_number": item.pull_request_number,
+            }
+            for item in sorted(change_set.repositories, key=lambda r: r.merge_order)
+        ]
+        active = change_set.recovery_plans[-1] if change_set.recovery_plans else None
+        in_progress = active is not None and any(
+            action.status not in _TERMINAL_ACTION_STATUSES for action in active.actions
+        )
+        available = any(row["action"] != "none" for row in repositories)
+        return {
+            "delivery_id": delivery_id,
+            "change_set_id": change_set.id,
+            "available": available,
+            "unavailable_reason": None if available else "nothing_delivered",
+            "recovery_in_progress": in_progress,
+            "repositories": repositories,
         }
 
     async def attach_merge_gates(self, payload: dict) -> dict:
