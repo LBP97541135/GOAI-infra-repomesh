@@ -2,6 +2,8 @@
  *  docs/contracts/ 交付读模型契约 v0.1/v0.2/v0.3 全部消费端点。 */
 import type {
   ConsoleAgentsResponse,
+  ConsoleOrgScanRequest,
+  ConsoleRepoScanRequest,
   ConsoleRepositoriesResponse,
   ConsoleTeamsResponse,
   DecisionsResponse,
@@ -19,6 +21,8 @@ import type {
   RepositoryPlanView,
   RoomListResponse,
   RoomStreamPage,
+  ScanTaskView,
+  UrlIdentification,
 } from "./contract";
 
 export class ApiError extends Error {
@@ -135,6 +139,34 @@ export function createApiClient(config: ApiClientConfig) {
         config,
         "GET",
         `/console/agents${opts?.withRuntime === false ? "?with_runtime=false" : ""}`,
+      ),
+
+    /** 添加仓库 A-0：**无鉴权、纯解析、无出站**（后端与读端点同一 router），
+     *  所以可以随用户输入防抖直调，不必怕它打到平台上去。裸路径而非 console
+     *  命名空间——它不是 console 专属的写面，是一次字符串判定。 */
+    identifyRepositoryUrl: (url: string) =>
+      request<UrlIdentification>(
+        config,
+        "GET",
+        `/repositories/url-type?url=${encodeURIComponent(url)}`,
+      ),
+
+    /** A-1：**202** + 任务对象（不是结果），进度靠 `getScanTask` 轮询。
+     *  能提前拒的（本地路径 / allowlist 外 host）仍在 202 之前以 400 拒掉。 */
+    scanOrganization: (payload: ConsoleOrgScanRequest) =>
+      request<ScanTaskView>(config, "POST", `/console/repositories/scan-org`, payload),
+
+    /** A-1：同上，单仓面。组织 URL 发到这里 → 400（服务端复核徽标判定，不轻信）。 */
+    scanRepository: (payload: ConsoleRepoScanRequest) =>
+      request<ScanTaskView>(config, "POST", `/console/repositories/scan-repo`, payload),
+
+    /** A-2：轮询进度。**404 = 任务状态随进程重启丢失**（端点 detail 自述），
+     *  不是坏 id，调用方据此提示「重扫安全」而不是「找不到该任务」。 */
+    getScanTask: (taskId: string) =>
+      request<ScanTaskView>(
+        config,
+        "GET",
+        `/console/repositories/scan-tasks/${encodeURIComponent(taskId)}`,
       ),
 
     getDelivery: (deliveryId: string) =>

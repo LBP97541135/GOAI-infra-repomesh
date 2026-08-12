@@ -388,6 +388,68 @@ export interface ConsoleAgentsResponse {
   agents: ConsoleAgentView[];
 }
 
+/* ------------------------------------------- 添加仓库（批次 A · 扫描三端点）
+ *
+ * 形状唯一来源：`repository_intelligence/api/models.py` 的 UrlIdentification /
+ * ScanTaskView / ConsoleOrgScanRequest / ConsoleRepoScanRequest。 */
+
+/** `GET /repositories/url-type`（无鉴权、纯解析、无出站，故可随输入防抖直调）。
+ *
+ *  判定的**唯一事实源在后端**（detect_platform 是 Python）：前端不镜像这套规则，
+ *  徽标只回显本响应——镜像一份 TS 判定必然与 Python 漂移，而漂移的那天两边都
+ *  自认为对。
+ *
+ *  ⚠ 它**不兼做可扫描性探测**：allowlist 之外的 host 照样被判成 group /
+ *  single_repo。让一个不收凭据的端点兼当 allowlist 神谕，等于把运维配置泄给
+ *  任何人；「能不能扫」由提交后的 400 回答。 */
+export interface UrlIdentification {
+  url: string;
+  url_type: "single_repo" | "group" | "unknown";
+  platform: "github" | "gitlab" | "local";
+  /** 单仓时=将注册的仓库名；group / unknown 时为 null */
+  repository_name: string | null;
+}
+
+/** 扫描任务（`POST scan-org|scan-repo` 的 202 体 = `GET scan-tasks/{id}` 的体）。
+ *
+ *  **进程内记录，不落库**：API 一重启就没了，轮询到 404 不是「坏 id」而是
+ *  「状态丢了」（端点 detail 自述），重扫幂等所以这不致命。 */
+export interface ScanTaskView {
+  task_id: string;
+  kind: "organization" | "repository";
+  url: string;
+  status: "running" | "succeeded" | "failed";
+  /** 组织扫描在平台枚举返回前**恒 0**：显示「n / ?」，不编一个没人数过的总数 */
+  total: number;
+  scanned: number;
+  /** 最近**完成**的仓库，不是正在扫的那个 */
+  last_scanned_repository: string | null;
+  /** running 期间恒 0（全部读完才写 catalog），失败态同样恒 0 ——
+   *  三个计数只在 `succeeded` 后是终值，其余状态下不得当结果展示 */
+  registered: number;
+  skipped: number;
+  /** **计数，不是清单**：哪些失败、为什么只在服务端日志里。回显出站失败详情是
+   *  本仓已经修过一次的洞（S-2），不为便利开倒车；重试粒度=整次扫描（裁决 1）。 */
+  failed: number;
+  /** 整次扫描失败的原因，措辞与 502 同级的通用文案（有意不回显出站细节） */
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** console 面的请求体是**白名单**（`extra="forbid"`）：没有 `github_token` /
+ *  `gitlab_token`，多送任何字段 → 422 具名报错。凭据只走服务端 env
+ *  （REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN / _GITLAB_TOKEN），浏览器不持有。 */
+export interface ConsoleOrgScanRequest {
+  org_url: string;
+  /** 1..20，缺省 5。GUI 不暴露，交给服务端缺省。 */
+  max_workers?: number;
+}
+
+export interface ConsoleRepoScanRequest {
+  repo_url: string;
+}
+
 /* ------------------------------------------------------------ §3 全貌聚合 */
 
 export interface DeliveryProjectInfo {
