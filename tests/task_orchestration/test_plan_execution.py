@@ -25,6 +25,7 @@ from repomesh.modules.task_orchestration.contracts import (
     DeliveryStatePort,
     ExecutionPlanStatus,
     TaskOrigin,
+    TaskPublicationUnavailable,
     TaskStatus,
     TaskView,
 )
@@ -68,6 +69,15 @@ class RecordingAssigner:
         #: not, and the caller sees the refusal. Empty unless a test says
         #: otherwise, so every other test keeps its old behaviour.
         self.undeliverable: set[str] = set()
+        #: The same position in the sequence, a different refusal: the task row
+        #: is written and the *package* never reaches the store (defect A-10).
+        #: Kept apart from ``undeliverable`` so a test says which of the two
+        #: halves of delivery it is breaking.
+        self.unpublishable: set[str] = set()
+        #: Every key this assigner was asked to deliver, in order — including
+        #: the replays that found an existing row. Delivery is what A-10 broke,
+        #: so it has to be observable separately from row creation.
+        self.delivered: list[str] = []
 
     async def assign(
         self,
@@ -101,6 +111,13 @@ class RecordingAssigner:
         return task.to_view()
 
     def _deliver(self, idempotency_key: str) -> None:
+        if idempotency_key in self.unpublishable:
+            self.unpublishable.discard(idempotency_key)
+            raise TaskPublicationUnavailable(
+                "S3 operation failed; code: InvalidAccessKeyId, message: The "
+                "Access Key Id you provided does not exist in our records."
+            )
+        self.delivered.append(idempotency_key)
         if idempotency_key in self.undeliverable:
             self.undeliverable.discard(idempotency_key)
             raise CollaborationRouteUnavailable("AgentTeams room is not ready")
@@ -451,15 +468,35 @@ async def test_start_assigns_and_decomposes_the_first_batch() -> None:
 
 @pytest.mark.asyncio
 async def test_start_is_idempotent() -> None:
+    """A replay creates nothing twice — asserted over the rows, not the calls.
+
+    This used to assert that a replay made no further ``assign`` calls, and
+    that assertion is what let defect A-10 through: it made "did not try" the
+    definition of idempotent, when the property that matters is "did not
+    duplicate". A replay now *does* re-drive the batch, deliberately — that is
+    how a round whose task package upload was refused ever gets published — and
+    every write it drives is keyed, so the second pass finds the first pass's
+    rows instead of writing new ones. Counting attempts cannot tell those two
+    apart; counting tasks can.
+    """
+
     environment = Environment()
     plan = environment.plan(((0,),))
 
     first = await environment.advancer.start(plan, idempotency_key="plan-start")
-    assignments = len(environment.assigner.commands)
+    tasks_after_first = await environment.tasks.list_by_project(environment.project_id)
+
     replay = await environment.advancer.start(plan, idempotency_key="plan-start")
 
     assert replay == first
-    assert len(environment.assigner.commands) == assignments
+    tasks_after_replay = await environment.tasks.list_by_project(environment.project_id)
+    assert {task.id for task in tasks_after_replay} == {task.id for task in tasks_after_first}
+    # One repository task and the one Worker task under it, both times.
+    assert len(tasks_after_replay) == 2
+    # And the replay re-drove exactly the keys the first pass used, which is
+    # what makes the re-drive a lookup rather than a second round.
+    keys = [key for _, key in environment.assigner.commands]
+    assert keys[2:] == keys[:2]
 
 
 @pytest.mark.asyncio
@@ -523,6 +560,75 @@ async def test_resuming_a_batch_reuses_the_repositories_that_got_through() -> No
         if task.parent_task_id is None
     ]
     assert len(leader_tasks) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_batch_whose_package_upload_failed_is_finished_by_the_replay() -> None:
+    """Defect A-10, the acceptance criterion: the next press completes the round.
+
+    This refusal lands further down the chain than the room one above, and that
+    is the whole difficulty. ``_assign_batch`` writes the leader tasks, records
+    them on the plan, and only *then* decomposes each into the Worker task whose
+    package is uploaded — so a refused upload leaves a plan whose batch is fully
+    assigned, and the replay's old "is every leader task assigned?" test said
+    yes and did nothing at all. Live, that was a materialize answering 200 over
+    an empty bucket, with no move left for the operator.
+    """
+
+    environment = Environment()
+    plan = environment.plan(((0,),))
+    worker_key = (
+        f"plan-start:b0:{environment.repository_ids[0]}:decompose"
+        f":worker:{environment.worker_ids[0]}"
+    )
+    environment.assigner.unpublishable = {worker_key}
+
+    with pytest.raises(TaskPublicationUnavailable):
+        await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    # The state the failure leaves: the batch *looks* finished, and the Worker
+    # task exists with nothing published for it.
+    stranded = await environment.plans.get(plan.id)
+    assert stranded is not None
+    assert len(stranded.leader_task_ids(0)) == len(stranded.batches[0])
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker_task = await environment.worker_task_of(leader_task_id)
+    assert worker_key not in environment.assigner.delivered
+
+    view = await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    assert view.status is ExecutionPlanStatus.IN_PROGRESS
+    # The replay drove the delivery the refusal ate.
+    assert worker_key in environment.assigner.delivered
+    # Duplication proof, over rows rather than call counts: the same Worker
+    # task, still the only one, still under the same repository task.
+    assert (await environment.worker_task_of(leader_task_id)).id == worker_task.id
+    tasks = await environment.tasks.list_by_project(environment.project_id)
+    assert len(tasks) == 2
+    assert await environment.leader_task_id(plan.id, 0, 0) == leader_task_id
+
+
+@pytest.mark.asyncio
+async def test_a_replay_does_not_touch_a_worker_task_another_attempt_owns() -> None:
+    """The decomposer's guard survives: only a task *this* key wrote is re-driven.
+
+    A replay under a prefix that never created the in-flight Worker task must
+    not assign a second one beside it. That guard used to be unconditional,
+    which is what stopped A-10's round from ever being published; narrowing it
+    to "someone else's task" keeps its point and drops its damage.
+    """
+
+    environment = Environment()
+    repository_task = await environment.assign_repository_task()
+    first = await environment.decomposer.execute(repository_task.id, idempotency_key="decompose-1")
+
+    second = await environment.decomposer.execute(repository_task.id, idempotency_key="decompose-2")
+
+    assert second == first
+    children = await environment.tasks.list_by_parent(repository_task.id)
+    assert len(children) == 1
+    # A different prefix's Worker task is not re-delivered under this key.
+    assert f"decompose-2:worker:{environment.worker_ids[0]}" not in environment.assigner.delivered
 
 
 @pytest.mark.asyncio
