@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AuthError, authApi, type Account } from "./api/auth";
-import { LoginPage } from "./components/LoginPage";
 import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListResponse, OrganizationView } from "./api/contract";
@@ -16,13 +14,15 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TeamsPage } from "./pages/TeamsPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 
-/** v2 控制台外壳（CONS-40）：身份门 → 侧栏导航 → 主区页面。
- *  路由用 hash（#/issues 等），不引入路由库。 */
+/** v2 控制台外壳：侧栏导航 → 主区页面。
+ *  路由用 hash（#/issues 等），不引入路由库。
+ *
+ *  **无登录门**（裁决 2026-08-12）：打开即进控制台，身份恒为默认管理员。
+ *  数据面本来就不靠登录会话——读模型与写端点全走 `Authorization: Bearer`
+ *  动作 token（vite env 注入），原先那道 /auth/me 四态门只是 UX 层的门。
+ *  后端 /auth/* 端点仍在（脚本与后续多用户立项可用），前端不再依赖。 */
 
 export default function ConsoleShell() {
-  const [account, setAccount] = useState<Account | null>(null);
-  const [authState, setAuthState] = useState<"checking" | "anonymous" | "authenticated" | "unreachable">("checking");
-  const [authNote, setAuthNote] = useState<string | null>(null);
   const [route, setRoute] = useState<Route>(readRoute);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -54,36 +54,12 @@ export default function ConsoleShell() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    authApi
-      .me()
-      .then((acc) => {
-        if (cancelled) return;
-        setAccount(acc);
-        setAuthState("authenticated");
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        // 401 = 未登录（正常）；0/5xx = 身份服务不可达（可见失败态，不静默）
-        if (err instanceof AuthError && err.status === 401) setAuthState("anonymous");
-        else {
-          setAuthNote(errText(err));
-          setAuthState("unreachable");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     const onHash = () => setRoute(readRoute());
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
   useEffect(() => {
-    if (authState !== "authenticated") return;
     let cancelled = false;
     fetchWorkspaces()
       .then((list) => {
@@ -99,10 +75,9 @@ export default function ConsoleShell() {
     return () => {
       cancelled = true;
     };
-  }, [authState, workspacesReload]);
+  }, [workspacesReload]);
 
   useEffect(() => {
-    if (authState !== "authenticated") return;
     let cancelled = false;
     // A3：换 tab/工作区即换代——在途「加载更多」响应按代际丢弃，不污染新列表
     issuesEpoch.current += 1;
@@ -122,7 +97,7 @@ export default function ConsoleShell() {
     return () => {
       cancelled = true;
     };
-  }, [authState, issueTab, issuesReload, workspaceId]);
+  }, [issueTab, issuesReload, workspaceId]);
 
   const loadMoreIssues = () => {
     const cursor = issues?.next_cursor;
@@ -173,53 +148,9 @@ export default function ConsoleShell() {
     setWorkspaceId(created.organization_id);
   };
 
-  const handleLogout = () => {
-    authApi
-      .logout()
-      .catch(() => undefined)
-      .finally(() => {
-        setAccount(null);
-        setAuthState("anonymous");
-      });
-  };
-
-  if (authState === "checking") {
-    return (
-      <div className="grid h-screen place-items-center bg-ink">
-        <p className="microlabel">校验会话…</p>
-      </div>
-    );
-  }
-
-  if (authState === "unreachable") {
-    return (
-      <div className="grid h-screen place-items-center bg-ink px-6">
-        <div className="max-w-[520px] rounded-hard border border-salmon/60 bg-salmon/10 px-5 py-4">
-          <div className="eyebrow mb-1.5 text-salmon">身份服务不可达</div>
-          <p className="text-[12.5px] text-salmon">{authNote}</p>
-          <p className="mt-2 text-[12px] text-tx2">
-            控制平面需要本地身份服务（/api/v1/auth）。确认后端已启动后刷新页面。
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (authState === "anonymous" || !account) {
-    return (
-      <LoginPage
-        onAuthenticated={(acc) => {
-          setAccount(acc);
-          setAuthState("authenticated");
-        }}
-      />
-    );
-  }
-
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
       <SidebarV2
-        account={account}
         nav={route.nav}
         issueCount={issues?.open_count ?? null}
         workspaces={workspaces}
@@ -229,7 +160,6 @@ export default function ConsoleShell() {
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
         onNewIssue={() => setNewIssueOpen(true)}
-        onLogout={handleLogout}
         onToast={showToast}
       />
 
@@ -270,7 +200,7 @@ export default function ConsoleShell() {
         {route.nav === "repositories" && <RepositoriesPage onOpenIssue={openIssue} />}
         {route.nav === "teams" && <TeamsPage onOpenIssue={openIssue} onOpenRoom={openRoom} />}
         {route.nav === "agents" && <AgentsPage onOpenIssue={openIssue} />}
-        {route.nav === "settings" && <SettingsPage account={account} />}
+        {route.nav === "settings" && <SettingsPage />}
       </main>
 
       <NewIssueModal
