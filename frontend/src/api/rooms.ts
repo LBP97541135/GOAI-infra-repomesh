@@ -9,8 +9,9 @@ import type {
   RoomStreamPage,
 } from "./contract";
 import type { RepositoryEnv } from "../types";
-import { createApiClient } from "./client";
+import { defaultClient } from "./client";
 import { resolveDataSourceMode } from "./source";
+import { shortId } from "../display";
 import { repositoryEnvFromAggregate } from "../viewmodel";
 import {
   deliveryAggregateFixture,
@@ -34,19 +35,12 @@ export const ROOM_EVENTS_LIMIT = 6;
 
 const EMPTY_STREAM: RoomStreamPage = { items: [], next_cursor: null };
 
-function client() {
-  return createApiClient({
-    baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
-  });
-}
-
 export async function fetchIssueDetail(issueId: string): Promise<IssueDetailView> {
   if (resolveDataSourceMode() === "replay") {
-    if (issueId !== issueDetailFixture.issue_id) throw new Error(`replay 夹具未覆盖 issue ${issueId.slice(0, 8)}`);
+    if (issueId !== issueDetailFixture.issue_id) throw new Error(`replay 夹具未覆盖 issue ${shortId(issueId)}`);
     return issueDetailFixture;
   }
-  return client().getIssueDetail(issueId);
+  return defaultClient().getIssueDetail(issueId);
 }
 
 /** §5.1：未建团的 issue 返回空清单且 HTTP 200——空态不是错误，调用方渲染空态。 */
@@ -54,7 +48,7 @@ export async function fetchRooms(issueId: string): Promise<RoomListItemView[]> {
   if (resolveDataSourceMode() === "replay") {
     return issueId === issueDetailFixture.issue_id ? roomsFixture : [];
   }
-  const res = await client().listRooms(issueId);
+  const res = await defaultClient().listRooms(issueId);
   return res.rooms;
 }
 
@@ -62,12 +56,12 @@ export async function fetchRoomStream(roomId: string, cursor?: string): Promise<
   if (resolveDataSourceMode() === "replay") {
     return roomStreamFixtures[roomId] ?? EMPTY_STREAM;
   }
-  return client().getRoomStream(roomId, { cursor, limit: ROOM_STREAM_LIMIT });
+  return defaultClient().getRoomStream(roomId, { cursor, limit: ROOM_STREAM_LIMIT });
 }
 
 export async function fetchRepositoryPlan(issueId: string, repositoryId: string): Promise<RepositoryPlanView> {
   if (resolveDataSourceMode() === "replay") return repositoryPlanFixture;
-  return client().getRepositoryPlan(issueId, repositoryId);
+  return defaultClient().getRepositoryPlan(issueId, repositoryId);
 }
 
 /** 该 issue 的当前轮次。环境窗与事件时间线都是**轮次粒度**的消费面，先解析一次
@@ -77,7 +71,7 @@ export async function fetchRoundId(issueId: string): Promise<string | null> {
   if (resolveDataSourceMode() === "replay") {
     return issueDetailFixture.active_round_id ?? issueDetailFixture.latest_round_id;
   }
-  const detail = await client().getIssueDetail(issueId);
+  const detail = await defaultClient().getIssueDetail(issueId);
   return detail.active_round_id ?? detail.latest_round_id;
 }
 
@@ -90,7 +84,7 @@ export async function fetchRepositoryEnv(
   if (resolveDataSourceMode() === "replay") {
     return repositoryEnvFromAggregate(deliveryAggregateFixture, repositoryId);
   }
-  return repositoryEnvFromAggregate(await client().getDelivery(roundId), repositoryId);
+  return repositoryEnvFromAggregate(await defaultClient().getDelivery(roundId), repositoryId);
 }
 
 /** 本轮事件时间线（§4.1）。`kind` 是**服务端**单值过滤（全量语义），
@@ -107,5 +101,5 @@ export async function fetchRoundEvents(
       next_cursor: null,
     };
   }
-  return client().getEvents(roundId, { ...opts, limit: ROOM_EVENTS_LIMIT });
+  return defaultClient().getEvents(roundId, { ...opts, limit: ROOM_EVENTS_LIMIT });
 }

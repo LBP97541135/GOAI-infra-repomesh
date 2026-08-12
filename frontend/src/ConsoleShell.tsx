@@ -6,6 +6,7 @@ import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListResponse, OrganizationView } from "./api/contract";
 import { createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
 import { createWorkspace, fetchWorkspaces } from "./api/workspaces";
+import { errText, shortId } from "./display";
 import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
@@ -66,7 +67,7 @@ export default function ConsoleShell() {
         // 401 = 未登录（正常）；0/5xx = 身份服务不可达（可见失败态，不静默）
         if (err instanceof AuthError && err.status === 401) setAuthState("anonymous");
         else {
-          setAuthNote(err instanceof Error ? err.message : String(err));
+          setAuthNote(errText(err));
           setAuthState("unreachable");
         }
       });
@@ -93,7 +94,7 @@ export default function ConsoleShell() {
       .catch((err: unknown) => {
         if (cancelled) return;
         setWorkspaces(null);
-        setWorkspaceNote(`工作区取用失败：${err instanceof Error ? err.message : String(err)}`);
+        setWorkspaceNote(`工作区取用失败：${errText(err)}`);
       });
     return () => {
       cancelled = true;
@@ -115,7 +116,7 @@ export default function ConsoleShell() {
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setIssuesError(err instanceof Error ? err.message : String(err));
+        setIssuesError(errText(err));
         setIssuesLoading(false);
       });
     return () => {
@@ -134,7 +135,7 @@ export default function ConsoleShell() {
         // 续读只追加条目；计数是全量值，以最新一页为准即可
         setIssues((prev) => (prev ? { ...page, issues: [...prev.issues, ...page.issues] } : page));
       })
-      .catch((err: unknown) => showToast(`加载更多失败：${err instanceof Error ? err.message : String(err)}`))
+      .catch((err: unknown) => showToast(`加载更多失败：${errText(err)}`))
       .finally(() => setIssuesMore(false));
   };
 
@@ -159,7 +160,7 @@ export default function ConsoleShell() {
   const handleCreateIssue = async (text: string, idempotencyKey: string) => {
     const issue = await createIssue(text, workspaceId, idempotencyKey);
     setNewIssueOpen(false);
-    showToast(`issue 已创建：#${issue.issue_id.slice(0, 8)}（虚拟草稿，等待规划）`);
+    showToast(`issue 已创建：#${shortId(issue.issue_id)}（虚拟草稿，等待规划）`);
     setIssuesReload((n) => n + 1);
     openIssue(issue.issue_id);
   };

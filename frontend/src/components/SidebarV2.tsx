@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account } from "../api/auth";
 import type { OrganizationView } from "../api/contract";
+import { errText } from "../display";
 
 /** v2 侧栏（CONS-40 → B-2 接线）：工作区切换器 → 新建 issue → 四导航 → 设置底锚 → 用户块。
  *  信息架构见 frontend-prototype/DESIGN-DECISION-V2.md §2、原型 redesign-issue-centric.html。
@@ -122,7 +123,7 @@ export function SidebarV2({
         setDropOpen(false);
       })
       .catch((err: unknown) => {
-        onToast(`创建失败：${err instanceof Error ? err.message : String(err)}`);
+        onToast(`创建失败：${errText(err)}`);
       })
       .finally(() => setCreateSubmitting(false));
   };

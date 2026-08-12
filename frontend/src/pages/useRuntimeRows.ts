@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invalidateGridCache } from "../api/grid";
-import type { RuntimePhase } from "../display";
+import { errText, type RuntimePhase } from "../display";
 
 /** 团队页与花名册页共用的**两段式取数**（CONS-44 选型，见 api/grid.ts 头注）。
  *
@@ -55,13 +55,13 @@ export function useRuntimeRows<T>(fetcher: (withRuntime: boolean) => Promise<T[]
           })
           .catch((err: unknown) => {
             if (cancelled) return;
-            setProbeError(err instanceof Error ? err.message : String(err));
+            setProbeError(errText(err));
             setPhase("failed");
           });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errText(err));
         setPhase("failed");
       });
 

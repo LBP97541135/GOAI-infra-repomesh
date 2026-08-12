@@ -4,7 +4,7 @@
  *  live 打契约 v0.2 §2 的 `GET /issues`；replay 走本地夹具。两侧返回**同一个契约类型**，
  *  页面无分支。 */
 import type { IssueListItemView, IssueListResponse } from "./contract";
-import { createApiClient } from "./client";
+import { defaultClient } from "./client";
 import { resolveGovernanceAgent } from "./decisions";
 import { resolveDataSourceMode, type DataSourceMode } from "./source";
 import { issuesFixture } from "../data/issues";
@@ -52,11 +52,7 @@ export async function createIssue(
   if (!principal) {
     throw new Error("处理者未接入：花名册里找不到该工作区的活跃 Org Leader");
   }
-  const client = createApiClient({
-    baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
-  });
-  return client.createIssue({
+  return defaultClient().createIssue({
     requirement_text: requirementText,
     created_by_agent_id: principal.agentId,
     idempotency_key: idempotencyKey,
@@ -66,11 +62,7 @@ export async function createIssue(
 export async function fetchIssues(q: IssuesQuery): Promise<IssueListResponse> {
   if (issuesSourceMode() === "replay") return replayPage(q);
 
-  const client = createApiClient({
-    baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
-  });
-  return client.listIssues({
+  return defaultClient().listIssues({
     state: q.state,
     organizationId: q.organizationId,
     cursor: q.cursor,

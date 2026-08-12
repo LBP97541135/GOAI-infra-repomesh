@@ -1,4 +1,4 @@
-import type { IssueListItemView, Phase, RuntimeBlock } from "./api/contract";
+import type { GovernanceDecisionView, IssueListItemView, Phase, RuntimeBlock } from "./api/contract";
 
 /** issue 与网格页的展示辅助。**纯格式化**，不含任何状态派生——state/phase/
  *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。 */
@@ -39,10 +39,47 @@ export function shortId(id: string | null | undefined): string {
   return id ? id.slice(0, 8) : "—";
 }
 
+/** 错误 → 展示文案。全仓 catch 分支的同一句三元收在这一处。 */
+export function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** agent 展示名：资源名有值直用，否则 AGENT + id 短版（与 §4.2 sender_name
+ *  的诚实降级同款——不编造名字）。 */
+export function agentLabel(name: string | null, agentId: string): string {
+  return name ?? `AGENT ${shortId(agentId)}`;
+}
+
+/** 治理决策徽标措辞唯一表。Record 收窄到契约枚举：新增决策值时缺项即编译错误；
+ *  运行时兜底 toUpperCase 只服务尚未收窄的字符串消费方（EvidenceView.governance）。 */
+const GOVERNANCE_LABEL: Record<GovernanceDecisionView["decision"], string> = {
+  ready: "READY",
+  blocked: "BLOCKED",
+  rollback_required: "ROLLBACK_REQUIRED",
+};
+
+export function governanceLabel(decision: string): string {
+  return GOVERNANCE_LABEL[decision as GovernanceDecisionView["decision"]] ?? decision.toUpperCase();
+}
+
+/** 治理决策徽标皮肤：ready 橄榄，其余（blocked/rollback_required）赭红。展示皮肤，
+ *  不是状态映射。 */
+export function governanceSkin(decision: string): string {
+  return decision === "ready" ? "border-olive text-olive" : "border-salmon text-salmon";
+}
+
 /** ISO 时间戳 → MM-DD。取不到格式时原样回显，不猜。 */
 export function dayLabel(at: string): string {
   const m = at.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[2]}-${m[3]}` : at;
+}
+
+/** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。
+ *  防御：联调发现后端 repair_timeline.at 可为 null（契约写 string，已报后端），空值渲染 "—"。 */
+export function eventTime(at: string | null | undefined): string {
+  if (!at) return "—";
+  const m = at.match(/T(\d{2}:\d{2}:\d{2})/);
+  return m ? m[1] : at;
 }
 
 /** 发起人恒为 **agent**（最早 PlanSnapshot 的 created_by_agent_id）。

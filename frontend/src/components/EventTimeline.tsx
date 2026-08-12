@@ -1,5 +1,5 @@
 import type { DeliveryEventItem, DeliveryEventKind } from "../api/contract";
-import { eventTime } from "../viewmodel";
+import { eventTime } from "../display";
 
 /** 环境窗「事件时间线」段（CONS-14，契约 §4.1）。kind/text 直投影不做映射。
  *  deny 契约上 live 恒不产出（§6.6）：live 收到即渲染契约违约警示（不静默吞掉）；

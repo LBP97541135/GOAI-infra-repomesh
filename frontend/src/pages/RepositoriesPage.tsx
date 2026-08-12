@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { ConsoleRepositoryView } from "../api/contract";
 import { fetchConsoleRepositories, gridSourceMode } from "../api/grid";
-import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, shortId } from "../display";
+import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, errText, shortId } from "../display";
+import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 
 /** 仓库网格页（CONS-44 / 契约 v0.2 §4.1）。
  *
@@ -84,7 +85,7 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
     setError(null);
     fetchConsoleRepositories()
       .then((rows) => !cancelled && setRepos(rows))
-      .catch((err: unknown) => !cancelled && setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => !cancelled && setError(errText(err)));
     return () => {
       cancelled = true;
     };
@@ -104,18 +105,9 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
       </div>
 
       {error ? (
-        <div className="mt-4 rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
-          <div className="eyebrow mb-1 text-salmon">仓库网格加载失败</div>
-          <p className="text-[12px] text-salmon">{error}</p>
-          <button
-            className="mt-2 rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={() => setReload((n) => n + 1)}
-          >
-            重试
-          </button>
-        </div>
+        <ErrorPanel title="仓库网格加载失败" message={error} onRetry={() => setReload((n) => n + 1)} />
       ) : repos === null ? (
-        <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
+        <LoadingLine />
       ) : repos.length === 0 ? (
         <div className="py-8 text-center text-[12.5px] text-tx3">
           catalog 里还没有仓库画像（repository_intelligence 未采集）
@@ -131,7 +123,7 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
       <p className="pt-4 text-[11px] text-tx3">
         团队按「issue × 仓库」自动组建（rm-team-*，teamRoom + leaderDM 双房间）。
         仓库的「发现证据」（auto_card）未按 project 存储，本页不投影 ——
-        数据源：{gridSourceMode() === "live" ? "live · GET /console/repositories（契约 v0.2 §4.1）" : "replay 夹具"}
+        <ProbeNote sourceNote={gridSourceMode() === "live" ? "live · GET /console/repositories（契约 v0.2 §4.1）" : "replay 夹具"} />
       </p>
     </div>
   );

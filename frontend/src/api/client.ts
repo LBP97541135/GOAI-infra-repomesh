@@ -69,6 +69,15 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
   return (await res.json()) as T;
 }
 
+/** 环境默认配置的 client：baseUrl/token 取 Vite 环境变量。各数据源模块共用这一处，
+ *  避免每个文件抄一份同样的工厂。 */
+export function defaultClient() {
+  return createApiClient({
+    baseUrl: import.meta.env.VITE_API_BASE ?? "",
+    token: import.meta.env.VITE_API_TOKEN ?? "",
+  });
+}
+
 export function createApiClient(config: ApiClientConfig) {
   return {
     /** §2.4：state 默认 open；organization_id 由前端持有并传参（Q2，服务端不猜）；

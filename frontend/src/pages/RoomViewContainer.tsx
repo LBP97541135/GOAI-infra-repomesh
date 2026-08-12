@@ -17,6 +17,8 @@ import {
   fetchRoundId,
 } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
+import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
+import { errText } from "../display";
 import { RoomView } from "./RoomView";
 
 /** 房间视图取数容器（§5.1 元数据 + §5.2 流 + §5.4 纸面 + 环境窗切片）。
@@ -92,7 +94,7 @@ export function RoomViewContainer({
         fetchRepositoryPlan(issueId, found.repository_id)
           .then((p) => !cancelled && setPlan(p))
           .catch((err: unknown) => {
-            if (!cancelled) onToast(`DAG·PLAN·SPEC 取用失败：${err instanceof Error ? err.message : String(err)}`);
+            if (!cancelled) onToast(`DAG·PLAN·SPEC 取用失败：${errText(err)}`);
           });
 
         // 轮次解析一次，环境窗与事件时间线共用——两者都是轮次粒度的消费面
@@ -109,7 +111,7 @@ export function RoomViewContainer({
             fetchRepositoryEnv(rid, found.repository_id)
               .then((e) => !cancelled && setEnv(e))
               .catch((err: unknown) => {
-                if (!cancelled) onToast(`环境窗取用失败：${err instanceof Error ? err.message : String(err)}`);
+                if (!cancelled) onToast(`环境窗取用失败：${errText(err)}`);
               });
             fetchRoundEvents(rid)
               .then((page) => {
@@ -119,16 +121,16 @@ export function RoomViewContainer({
               .catch((err: unknown) => {
                 if (cancelled) return;
                 setEvents((prev) => ({ ...prev, loading: false }));
-                onToast(`事件时间线取用失败：${err instanceof Error ? err.message : String(err)}`);
+                onToast(`事件时间线取用失败：${errText(err)}`);
               });
           })
           .catch((err: unknown) => {
-            if (!cancelled) onToast(`轮次解析失败：${err instanceof Error ? err.message : String(err)}`);
+            if (!cancelled) onToast(`轮次解析失败：${errText(err)}`);
           });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errText(err));
         setLoading(false);
       });
 
@@ -156,7 +158,7 @@ export function RoomViewContainer({
         })
         .catch((err: unknown) => {
           // 刷新失败保留已有内容，只标注新鲜度——不把正在读的消息清空
-          if (!cancelled) setStaleNote(err instanceof Error ? err.message : String(err));
+          if (!cancelled) setStaleNote(errText(err));
         })
         .finally(() => {
           inFlight.current = false;
@@ -184,7 +186,7 @@ export function RoomViewContainer({
         .catch((err: unknown) => {
           if (epoch !== eventsEpoch.current) return;
           setEvents((prev) => ({ ...prev, loading: false }));
-          onToast(`事件过滤失败：${err instanceof Error ? err.message : String(err)}`);
+          onToast(`事件过滤失败：${errText(err)}`);
         });
     },
     [roundId, onToast],
@@ -211,11 +213,11 @@ export function RoomViewContainer({
       .catch((err: unknown) => {
         if (epoch !== eventsEpoch.current) return;
         setEvents((cur) => ({ ...cur, loading: false }));
-        onToast(`加载后续事件失败：${err instanceof Error ? err.message : String(err)}`);
+        onToast(`加载后续事件失败：${errText(err)}`);
       });
   }, [roundId, events.nextCursor, events.loading, events.kind, onToast]);
 
-  if (loading) return <p className="py-8 text-center text-[12.5px] text-tx2">加载房间…</p>;
+  if (loading) return <LoadingLine text="加载房间…" />;
 
   if (error || !room || !stream) {
     return (
@@ -223,16 +225,12 @@ export function RoomViewContainer({
         <button className="pb-3 text-[11.5px] text-tx2 hover:text-tx" onClick={onBack}>
           ‹ 返回 issue
         </button>
-        <div className="rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
-          <div className="eyebrow mb-1 text-salmon">房间加载失败</div>
-          <p className="text-[12px] text-salmon">{error ?? "未取到房间"}</p>
-          <button
-            className="mt-2 rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={() => setReload((n) => n + 1)}
-          >
-            重试
-          </button>
-        </div>
+        <ErrorPanel
+          className=""
+          title="房间加载失败"
+          message={error ?? "未取到房间"}
+          onRetry={() => setReload((n) => n + 1)}
+        />
       </div>
     );
   }

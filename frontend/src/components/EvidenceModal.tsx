@@ -1,5 +1,5 @@
 import type { EvidenceView } from "../types";
-import { eventTime } from "../viewmodel";
+import { eventTime, governanceLabel, governanceSkin, shortId } from "../display";
 import { Modal } from "./Modal";
 
 /** 证据面弹窗（验收缺陷 B-3 最小版）。
@@ -98,11 +98,9 @@ export function EvidenceModal({
             {evidence.governance.map((g, i) => (
               <div key={i} className="flex flex-wrap items-baseline gap-x-2 py-0.5 text-[11.5px]">
                 <span
-                  className={`rounded-hard border px-1.5 font-mono text-[10px] ${
-                    g.decision === "ready" ? "border-olive text-olive" : "border-salmon text-salmon"
-                  }`}
+                  className={`rounded-hard border px-1.5 font-mono text-[10px] ${governanceSkin(g.decision)}`}
                 >
-                  {g.decision.toUpperCase()}
+                  {governanceLabel(g.decision)}
                 </span>
                 <span className="font-mono text-[10.5px] text-tx2">head {g.headSha.slice(0, 12)}</span>
                 <span className="text-[10.5px] text-tx3">{eventTime(g.decidedAt)}</span>
@@ -140,7 +138,7 @@ export function EvidenceModal({
             <div className="microlabel pb-1.5">验证快照</div>
             {evidence.snapshot ? (
               <div className="font-mono text-[11.5px] text-tx2">
-                {evidence.snapshot.id.slice(0, 8)} · {evidence.snapshot.status} · env{" "}
+                {shortId(evidence.snapshot.id)} · {evidence.snapshot.status} · env{" "}
                 {evidence.snapshot.environmentHash.slice(0, 12)} · 有效至 {eventTime(evidence.snapshot.expiresAt)}
               </div>
             ) : (

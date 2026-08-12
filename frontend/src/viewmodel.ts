@@ -8,6 +8,7 @@ import type {
   RepositoryDeliveryView,
 } from "./api/contract";
 import type { ApprovalInfo, Decision, EvidenceView, RepositoryEnv } from "./types";
+import { shortId } from "./display";
 
 /** 用 Record<DecisionAction,…> 而非 Record<string,…>：契约新增动作枚举时，
  *  这里缺一项就是编译错误，而不是运行期渲染出 undefined。 */
@@ -92,7 +93,7 @@ export function repositoryEnvFromAggregate(agg: DeliveryAggregate, repositoryId:
     commitShas: runs.map((r) => shortSha(r.commit_sha)),
     validationSnapshotId: agg.validation_snapshot?.id ?? null,
     siblings: csRepos.map((r) => ({
-      name: agg.repositories.find((x) => x.repository_id === r.repository_id)?.name ?? r.repository_id.slice(0, 8),
+      name: agg.repositories.find((x) => x.repository_id === r.repository_id)?.name ?? shortId(r.repository_id),
       gate: r.gate_display,
       isCurrent: r.repository_id === repositoryId,
     })),
@@ -109,7 +110,7 @@ export function evidenceFromAggregate(agg: DeliveryAggregate, repositoryId: stri
   const runs = agg.diffs.filter((d) => d.repository_id === repositoryId);
 
   return {
-    repositoryName: info?.name ?? repositoryId.slice(0, 8),
+    repositoryName: info?.name ?? shortId(repositoryId),
     headSha: mine.head_sha,
     baseSha: mine.base_sha,
     branchName: mine.branch_name,
@@ -137,12 +138,4 @@ export function evidenceFromAggregate(agg: DeliveryAggregate, repositoryId: stri
         }
       : null,
   };
-}
-
-/** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。
- *  防御：联调发现后端 repair_timeline.at 可为 null（契约写 string，已报后端），空值渲染 "—"。 */
-export function eventTime(at: string | null | undefined): string {
-  if (!at) return "—";
-  const m = at.match(/T(\d{2}:\d{2}:\d{2})/);
-  return m ? m[1] : at;
 }

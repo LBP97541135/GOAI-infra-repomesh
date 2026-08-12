@@ -14,6 +14,8 @@ import { fetchIssueDetail, fetchRooms } from "../api/rooms";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
 import { EvidenceModal } from "../components/EvidenceModal";
+import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
+import { errText, shortId } from "../display";
 import { approvalForDecision, evidenceFromAggregate } from "../viewmodel";
 import { IssueDetailPage } from "./IssueDetailPage";
 
@@ -93,7 +95,7 @@ export function IssueDetailContainer({
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : String(err));
+        setError(errText(err));
         setLoading(false);
       });
     return () => {
@@ -130,7 +132,7 @@ export function IssueDetailContainer({
     let cancelled = false;
     const replay = resolveDataSourceMode() === "replay";
     const roundIndex = detail.rounds.findIndex((r) => r.round_id === roundId);
-    const roundLabel = roundIndex >= 0 ? `第 ${roundIndex + 1} 轮` : `轮次 ${roundId.slice(0, 8)}`;
+    const roundLabel = roundIndex >= 0 ? `第 ${roundIndex + 1} 轮` : `轮次 ${shortId(roundId)}`;
 
     fetchDecisionDeck(roundId)
       .then((data) => {
@@ -149,7 +151,7 @@ export function IssueDetailContainer({
         setDeck([]);
         setApproval(null);
         setDeckAggregate(null);
-        setDeckNote(`${roundLabel} · 决策取用失败：${err instanceof Error ? err.message : String(err)}`);
+        setDeckNote(`${roundLabel} · 决策取用失败：${errText(err)}`);
       });
     return () => {
       cancelled = true;
@@ -186,7 +188,7 @@ export function IssueDetailContainer({
             ...p,
             [id]: {
               loading: false,
-              error: err instanceof Error ? err.message : String(err),
+              error: errText(err),
               pending: [],
               recorded: [],
             },
@@ -217,7 +219,7 @@ export function IssueDetailContainer({
         .catch((err: unknown) => {
           // 409 = 活跃轮次拒绝归档等，原因原样呈现，不静默
           setArchiveConfirmId(null);
-          onToast(`归档失败：${err instanceof Error ? err.message : String(err)}`);
+          onToast(`归档失败：${errText(err)}`);
         })
         .finally(() => setArchivingId(null));
     },
@@ -280,7 +282,7 @@ export function IssueDetailContainer({
       })
       .catch((err: unknown) => {
         // 409 = head 漂移，必须显示在弹窗内，不静默失败
-        setApprovalError(err instanceof Error ? err.message : String(err));
+        setApprovalError(errText(err));
       })
       .finally(() => setApprovalSubmitting(false));
   };
@@ -291,7 +293,7 @@ export function IssueDetailContainer({
         <button className="pb-3 text-[11.5px] text-tx2 hover:text-tx" onClick={onBack}>
           ‹ issue
         </button>
-        <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
+        <LoadingLine />
       </div>
     );
   }
@@ -302,16 +304,12 @@ export function IssueDetailContainer({
         <button className="pb-3 text-[11.5px] text-tx2 hover:text-tx" onClick={onBack}>
           ‹ issue
         </button>
-        <div className="rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
-          <div className="eyebrow mb-1 text-salmon">issue 详情加载失败</div>
-          <p className="text-[12px] text-salmon">{error ?? "未取到详情"}</p>
-          <button
-            className="mt-2 rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={() => setReload((n) => n + 1)}
-          >
-            重试
-          </button>
-        </div>
+        <ErrorPanel
+          className=""
+          title="issue 详情加载失败"
+          message={error ?? "未取到详情"}
+          onRetry={() => setReload((n) => n + 1)}
+        />
       </div>
     );
   }

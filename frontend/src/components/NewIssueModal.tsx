@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { resolveGovernanceAgent, type GovernanceAgent } from "../api/decisions";
+import { errText } from "../display";
 import { Modal } from "./Modal";
 
 /** 新建 issue 弹窗（CONS-41 → B-1 接线）：处理者芯片 / 需求文本 / Ctrl+Enter 提交。
@@ -76,7 +77,7 @@ export function NewIssueModal({
         keyRef.current = crypto.randomUUID(); // 本次逻辑创建已完成，下一次换新键
       })
       .catch((err: unknown) => {
-        onToast(`创建失败：${err instanceof Error ? err.message : String(err)}`);
+        onToast(`创建失败：${errText(err)}`);
       })
       .finally(() => setSubmitting(false));
   }, [text, mode, submitting, onToast, onCreate]);

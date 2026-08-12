@@ -10,10 +10,11 @@ import type {
   GovernanceDecisionRequest,
   GovernanceDecisionView,
 } from "./contract";
-import { createApiClient } from "./client";
+import { defaultClient } from "./client";
 import { fetchConsoleAgents } from "./grid";
 import { resolveDataSourceMode } from "./source";
 import { decisionsFromContract } from "../viewmodel";
+import { shortId } from "../display";
 import { decisionsFixture, deliveryAggregateFixture } from "../data/issueDetail";
 
 export interface DecisionDeckData {
@@ -21,13 +22,6 @@ export interface DecisionDeckData {
   /** 本轮聚合原文：授权单（S1，按点击的卡构建）与证据面（B-3）都从中切，
    *  点击时零额外取数 */
   aggregate: DeliveryAggregate;
-}
-
-function client() {
-  return createApiClient({
-    baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
-  });
 }
 
 export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckData> {
@@ -38,7 +32,7 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
       aggregate: deliveryAggregateFixture,
     };
   }
-  const api = client();
+  const api = defaultClient();
   const [agg, decisions] = await Promise.all([api.getDelivery(roundId), api.getDecisions(roundId)]);
   return {
     deck: decisionsFromContract(decisions.items),
@@ -60,14 +54,14 @@ export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundD
   if (resolveDataSourceMode() === "replay") {
     // 夹具只覆盖当前轮；历史轮次没有数据就说没有，不编造空集冒充「无决策」
     if (roundId !== deliveryAggregateFixture.delivery_id) {
-      throw new Error(`replay 夹具未覆盖轮次 ${roundId.slice(0, 8)}`);
+      throw new Error(`replay 夹具未覆盖轮次 ${shortId(roundId)}`);
     }
     return {
       pending: decisionsFromContract(decisionsFixture.items),
       recorded: deliveryAggregateFixture.change_set?.governance_decisions ?? [],
     };
   }
-  const api = client();
+  const api = defaultClient();
   const [agg, decisions] = await Promise.all([api.getDelivery(roundId), api.getDecisions(roundId)]);
   return {
     pending: decisionsFromContract(decisions.items),
@@ -83,7 +77,7 @@ export async function archiveRound(roundId: string): Promise<void> {
     // 回放模式不写后端；与治理批准的回放行为同一风格，由调用方 toast 说明
     return;
   }
-  await client().archiveDelivery(roundId);
+  await defaultClient().archiveDelivery(roundId);
 }
 
 /** §4.4 写回路。head-bound：SHA 漂移即 409，错误原样上抛给弹窗显示，不静默。
@@ -109,7 +103,7 @@ export async function submitGovernanceDecision(
     // 不可通过重提改写，「改意见重提被去重丢弃」是审计完整性而非缺陷。
     idempotency_key: `console-${info.changeSetId}-${info.repositoryId}-${info.headSha.slice(0, 12)}-ready`,
   };
-  return client().postGovernanceDecision(roundId, payload);
+  return defaultClient().postGovernanceDecision(roundId, payload);
 }
 
 /** 治理决策主体从花名册派生（主脑 2026-08-11 裁决，乙案）：决策主体的语义即
@@ -139,7 +133,7 @@ export function resolveGovernanceAgent(organizationId: string | null): Promise<G
 
   const pending = (async (): Promise<GovernanceAgent | null> => {
     const override = import.meta.env.VITE_GOVERNANCE_AGENT_ID ?? "";
-    if (override) return { agentId: override, label: `覆盖配置 ${override.slice(0, 8)}`, source: "env" };
+    if (override) return { agentId: override, label: `覆盖配置 ${shortId(override)}`, source: "env" };
 
     // 运行时对「谁能批」没有影响，故不请求探测（首屏两段式的同一个理由）
     const agents = await fetchConsoleAgents(false);

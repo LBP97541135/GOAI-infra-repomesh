@@ -10,16 +10,9 @@
  *  并发探测（后端 15d9a76）解决了失败传播与串行等待，但 2s 的**有界等待**仍在，
  *  只有把它挪出首屏才真正兑现。 */
 import type { ConsoleAgentView, ConsoleRepositoryView, ConsoleTeamView } from "./contract";
-import { createApiClient } from "./client";
+import { defaultClient } from "./client";
 import { resolveDataSourceMode, type DataSourceMode } from "./source";
 import { consoleAgentsFixture, consoleRepositoriesFixture, consoleTeamsFixture } from "../data/grid";
-
-function client() {
-  return createApiClient({
-    baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
-  });
-}
 
 export function gridSourceMode(): DataSourceMode {
   return resolveDataSourceMode();
@@ -51,17 +44,17 @@ export function invalidateGridCache(): void {
 /** §4.1：本端点没有运行时代理，一次取全，无需两段式。 */
 export async function fetchConsoleRepositories(): Promise<ConsoleRepositoryView[]> {
   if (gridSourceMode() === "replay") return consoleRepositoriesFixture;
-  return (await client().listConsoleRepositories()).repositories;
+  return (await defaultClient().listConsoleRepositories()).repositories;
 }
 
 export async function fetchConsoleTeams(withRuntime: boolean): Promise<ConsoleTeamView[]> {
   if (gridSourceMode() === "replay") return replayRuntime(consoleTeamsFixture, withRuntime);
-  return cached(`teams:${withRuntime}`, async () => (await client().listConsoleTeams({ withRuntime })).teams);
+  return cached(`teams:${withRuntime}`, async () => (await defaultClient().listConsoleTeams({ withRuntime })).teams);
 }
 
 export async function fetchConsoleAgents(withRuntime: boolean): Promise<ConsoleAgentView[]> {
   if (gridSourceMode() === "replay") return replayRuntime(consoleAgentsFixture, withRuntime);
-  return cached(`agents:${withRuntime}`, async () => (await client().listConsoleAgents({ withRuntime })).agents);
+  return cached(`agents:${withRuntime}`, async () => (await defaultClient().listConsoleAgents({ withRuntime })).agents);
 }
 
 /** ⚠ **两段式加载的关键陷阱**：`with_runtime=false` 的响应里 `runtime` 也是 `null`

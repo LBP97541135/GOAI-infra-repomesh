@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import type { AgentRole, ConsoleAgentView } from "../api/contract";
 import { fetchConsoleAgents, gridSourceMode } from "../api/grid";
 import { runtimeDisplay, shortId, type RuntimePhase } from "../display";
+import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 import { useRuntimeRows } from "./useRuntimeRows";
 
 /** 智能体花名册（CONS-44 / 契约 v0.2 §4.3）。
@@ -102,18 +103,9 @@ export function AgentsPage({ onOpenIssue }: { onOpenIssue: (issueId: string) => 
       </div>
 
       {error ? (
-        <div className="mt-4 rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
-          <div className="eyebrow mb-1 text-salmon">花名册加载失败</div>
-          <p className="text-[12px] text-salmon">{error}</p>
-          <button
-            className="mt-2 rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={retry}
-          >
-            重试
-          </button>
-        </div>
+        <ErrorPanel title="花名册加载失败" message={error} onRetry={retry} />
       ) : rows === null ? (
-        <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
+        <LoadingLine />
       ) : rows.length === 0 ? (
         <div className="py-8 text-center text-[12.5px] text-tx3">agent_directory 里还没有注册的智能体</div>
       ) : (
@@ -145,9 +137,12 @@ export function AgentsPage({ onOpenIssue }: { onOpenIssue: (issueId: string) => 
         agent_directory 的启用态，<b className="text-tx2">不是醒睡观测态</b>
         ——醒睡与时长在 Controller 的响应里没有字段，补齐路径是 AgentTeams 在
         worker/manager status 中暴露启动时间戳与观测态。
-        {phase === "loading" && rows !== null && " 运行时探测进行中（首屏不等它）。"}
-        {phase === "failed" && probeError && ` 运行时探测请求失败：${probeError.slice(0, 60)}`}
-        {" "}数据源：{gridSourceMode() === "live" ? "live · GET /console/agents（契约 v0.2 §4.3）" : "replay 夹具"}
+        <ProbeNote
+          phase={phase}
+          showProbing={rows !== null}
+          probeError={probeError}
+          sourceNote={gridSourceMode() === "live" ? "live · GET /console/agents（契约 v0.2 §4.3）" : "replay 夹具"}
+        />
       </p>
     </div>
   );

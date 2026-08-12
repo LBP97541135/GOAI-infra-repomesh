@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { IssueListItemView, IssueListResponse } from "../api/contract";
-import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, openedBy } from "../display";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, openedBy, shortId } from "../display";
+import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 
 /** issue 列表页：GitHub 式扁平列表 + Open/Closed 二元 + 行内徽标。
  *  设计定稿 DESIGN-DECISION-V2.md §1.4：流程感只存在于徽标，不存在于结构。
@@ -18,7 +19,7 @@ function IssueRow({ item, onOpen }: { item: IssueListItemView; onOpen: (item: Is
 
   const meta = [
     // issue_key 恒 null（无 Project 注册表）→ 显 issue_id 短版，不造 GitHub 式编号
-    `#${item.issue_id.slice(0, 8)}`,
+    `#${shortId(item.issue_id)}`,
     `${openedBy(item)} 发起于 ${dayLabel(item.opened_at)}`,
     // 无 closed_at 这一持久化来源，closed 只能报最后更新，不能冒充关闭时间
     item.state === "closed" ? `最后更新 · ${dayLabel(item.updated_at)}` : `第 ${item.round_count} 轮交付`,
@@ -114,18 +115,9 @@ export function IssueListPage({
       </div>
 
       {error ? (
-        <div className="mt-4 rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
-          <div className="eyebrow mb-1 text-salmon">issue 列表加载失败</div>
-          <p className="text-[12px] text-salmon">{error}</p>
-          <button
-            className="mt-2 rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={onRetry}
-          >
-            重试
-          </button>
-        </div>
+        <ErrorPanel title="issue 列表加载失败" message={error} onRetry={onRetry} />
       ) : loading ? (
-        <p className="px-1.5 py-8 text-center text-[12.5px] text-tx2">加载中…</p>
+        <LoadingLine className="px-1.5" />
       ) : rows.length === 0 ? (
         <div className="px-1.5 py-8 text-center text-[12.5px] text-tx3">
           {pendingOnly ? "本页没有待决策的 issue" : tab === "open" ? "没有进行中的 issue" : "没有已完结的 issue"}

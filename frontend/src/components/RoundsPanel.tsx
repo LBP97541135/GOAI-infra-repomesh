@@ -1,7 +1,6 @@
 import type { GovernanceDecisionView, IssueDetailView, IssueRoundView } from "../api/contract";
 import type { Decision } from "../types";
-import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, shortId } from "../display";
-import { eventTime } from "../viewmodel";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, dayLabel, eventTime, governanceLabel, governanceSkin, shortId } from "../display";
 
 /** 轮次索引 + 跨轮决策查看（验收缺陷 B-6）。
  *
@@ -13,13 +12,7 @@ import { eventTime } from "../viewmodel";
  *  待决策条目在这里是**只读信息**——批准动作只存在于上方决策夹（当前轮），历史轮
  *  没有授权单语义，放一个不能点的「批准」按钮比不放更糟。 */
 
-// X2：八相皮肤用 display.ts 唯一表
-
-const DECISION_LABEL: Record<GovernanceDecisionView["decision"], string> = {
-  ready: "READY",
-  blocked: "BLOCKED",
-  rollback_required: "ROLLBACK_REQUIRED",
-};
+// X2：八相皮肤用 display.ts 唯一表；治理决策徽标措辞与皮肤同源 display.ts
 
 export interface RoundHistoryState {
   loading: boolean;
@@ -150,11 +143,9 @@ export function RoundsPanel({
                           {state.recorded.map((g) => (
                             <div key={g.id} className="flex flex-wrap items-baseline gap-x-2 py-0.5">
                               <span
-                                className={`rounded-hard border px-1.5 font-mono text-[10px] ${
-                                  g.decision === "ready" ? "border-olive text-olive" : "border-salmon text-salmon"
-                                }`}
+                                className={`rounded-hard border px-1.5 font-mono text-[10px] ${governanceSkin(g.decision)}`}
                               >
-                                {DECISION_LABEL[g.decision]}
+                                {governanceLabel(g.decision)}
                               </span>
                               <span className="font-mono text-[11px] text-tx">{repoName(g.repository_id)}</span>
                               <span className="font-mono text-[10.5px] text-tx2">head {g.head_sha.slice(0, 12)}</span>

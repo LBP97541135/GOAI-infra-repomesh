@@ -9,8 +9,7 @@ import type {
 } from "../api/contract";
 import type { RepositoryEnv } from "../types";
 import { EventTimeline, type EventsTimelineState } from "../components/EventTimeline";
-import { repositoryLabel } from "../display";
-import { eventTime } from "../viewmodel";
+import { agentLabel, eventTime, repositoryLabel, shortId } from "../display";
 
 /** 活体房间视图（CONS-43 骨架）。版式按原型 `#v-room`：
  *  房间头（成员 + LIVE + 刷新机制标注）→ 双视图切换（房间聊天 ↔ DAG·PLAN·SPEC）
@@ -35,7 +34,7 @@ function MessageBubble({ item }: { item: RoomStreamItemView }) {
   const m = item.message;
   if (!m) return null;
   // sender_name 可能为 null（§4.2 诚实降级）：退到 agent id 短版，不编造名字
-  const who = m.sender_name ?? `AGENT ${m.sender_agent_id.slice(0, 8)}`;
+  const who = agentLabel(m.sender_name, m.sender_agent_id);
   const initial = m.sender_name ? m.sender_name.slice(0, 2).toUpperCase() : "AG";
 
   return (
@@ -285,7 +284,7 @@ function EnvFloat({
             <div className="flex items-baseline gap-2 px-1 pb-1 font-mono text-[11px]">
               <span className="text-tx2">基线快照</span>
               <span className="ml-auto truncate text-[10.5px] text-tx3">
-                {env.validationSnapshotId ? env.validationSnapshotId.slice(0, 8) : "未接入"}
+                {env.validationSnapshotId ? shortId(env.validationSnapshotId) : "未接入"}
               </span>
             </div>
             </div>
@@ -365,7 +364,7 @@ export function RoomView({
 }) {
   const [view, setView] = useState<"chat" | "plan">("chat");
 
-  const members = room.members.map((m) => m.name ?? `AGENT ${m.agent_id.slice(0, 8)}`).join("，");
+  const members = room.members.map((m) => agentLabel(m.name, m.agent_id)).join("，");
   const tabBase = "px-3 py-[5px] text-[11.5px]";
 
   return (

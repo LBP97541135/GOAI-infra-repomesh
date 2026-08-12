@@ -3,6 +3,7 @@ import type { ConsoleTeamView } from "../api/contract";
 import { fetchConsoleTeams, gridSourceMode } from "../api/grid";
 import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, repositoryLabel, shortId, type RuntimePhase } from "../display";
 import { RuntimeBadge } from "../components/RuntimeBadge";
+import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 import { useRuntimeRows } from "./useRuntimeRows";
 
 /** 团队页（CONS-44 / 契约 v0.2 §4.2）。
@@ -119,18 +120,9 @@ export function TeamsPage({
       </div>
 
       {error ? (
-        <div className="mt-4 rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
-          <div className="eyebrow mb-1 text-salmon">团队清单加载失败</div>
-          <p className="text-[12px] text-salmon">{error}</p>
-          <button
-            className="mt-2 rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-amber hover:text-amber-hi"
-            onClick={retry}
-          >
-            重试
-          </button>
-        </div>
+        <ErrorPanel title="团队清单加载失败" message={error} onRetry={retry} />
       ) : rows === null ? (
-        <p className="py-8 text-center text-[12.5px] text-tx2">加载中…</p>
+        <LoadingLine />
       ) : rows.length === 0 ? (
         <div className="py-8 text-center text-[12.5px] text-tx3">
           还没有任何团队 · 团队在 issue 范围确认时按「issue × 仓库」组建
@@ -152,9 +144,12 @@ export function TeamsPage({
       <p className="pt-4 text-[11px] text-tx3">
         「建团结果」来自拓扑持久化，「运行时」是 AgentTeams Controller 的当前观测 ——
         两者是不同事实，故分列两个徽标。
-        {phase === "loading" && rows !== null && " 运行时探测进行中（首屏不等它）。"}
-        {phase === "failed" && probeError && ` 运行时探测请求失败：${probeError.slice(0, 60)}`}
-        {" "}数据源：{gridSourceMode() === "live" ? "live · GET /console/teams（契约 v0.2 §4.2）" : "replay 夹具"}
+        <ProbeNote
+          phase={phase}
+          showProbing={rows !== null}
+          probeError={probeError}
+          sourceNote={gridSourceMode() === "live" ? "live · GET /console/teams（契约 v0.2 §4.2）" : "replay 夹具"}
+        />
       </p>
     </div>
   );

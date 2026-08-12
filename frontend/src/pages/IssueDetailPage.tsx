@@ -2,8 +2,7 @@ import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/c
 import type { Decision } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
-import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, openedBy, shortId } from "../display";
-import { eventTime } from "../viewmodel";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, eventTime, openedBy, shortId } from "../display";
 
 /** issue 详情页（CONS-42）。版式按原型 redesign-issue-centric.html 的 `#v-detail`：
  *  标题+元数据+徽标 → 原始需求卡 → 关联仓库·团队芯片 → 房间区（每仓 teamRoom + leaderDM）。
