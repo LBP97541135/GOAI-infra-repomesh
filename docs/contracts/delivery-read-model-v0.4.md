@@ -887,6 +887,77 @@ bridge 全是生产代码）。反证已做：拆掉就绪判定 → 三条 409 
 证明「不重建」那组断言（`start_plan` 调用计数、拓扑行 id 与队数、principal 集合）
 真的咬得住，而不是只在数数。
 
+### 8.7 运行时投影：建完队还要给队一个能说话的地方（**提案 · 待主脑裁决**，B-11）
+
+> **本节是提案，尚未批准。** 代码已在分支 `feat/runtime-provision` 上实现（见文末落点
+> 表），契约文字以主脑裁决为准；未裁决前 §8.2 的 503 一览以本节为**待补**状态阅读。
+
+核实事实（B-11）：**§8.4 的 ensure topology 只写行，不建运行时**。
+`ProvisionRepositoryAgentTeam` 落 principal，`CreateProjectAgentTopology` 落
+`ProjectAgentTopology`，两者都不碰 AgentTeams 控制器。而真正把 Manager/Worker 注册进
+控制器、把 Team 建出来、把 `room_id` / `leader_room_id` / `runtime_status` 回填到拓扑行的
+是 `RegisterNativeAgent` + `ReconcileProjectAgentTopology`——**它们在 `src/` 下零调用方**，
+只有 `scripts/run_pipeline.py` 用。后果是控制台建的项目在控制器里根本不存在，`room_id`
+恒为 NULL，`collaboration.SendCollaborationMessage._route` 必然
+`CollaborationRouteUnavailable`。§8.2 那条「AgentTeams room is not ready → 503」不是偶发
+时序，是这条路径的**必然终点**：房间没有任何人去建，重试多少次都一样。
+
+裁决（提案）：**物化在调 bridge 之前、同步做一次运行时投影**，语义照
+`run_pipeline.py::_ensure_topology` 的后半段：
+
+1. 按拓扑逐个把 principal 投进控制器——org leader 走 `ensure_manager`，仓库 leader 与
+   worker 走 `ensure_worker`，资源名取 principal 已有的 `agentteams_resource_name`
+   （**不是**新建：目录里的行是 §8.4 刚建的，`CreateAgent` 是 create 语义，再建会撞
+   singleton；这里只补 `RegisterNativeAgent` 的控制器那一半）；
+2. `ReconcileProjectAgentTopology` 逐队 `ensure_team`，把房间号回填进拓扑行；
+3. **回填后仍有队缺 `room_id` 或 `leader_room_id` → 拒绝**，不让这一轮开工。
+
+三点必须写进契约：
+
+1. **投影的字段必须与脚本逐字段一致**（model / runtime / skills / MCP server）。控制器对
+   已存在资源做**逐字段比对**，不一致答 409；一个仓库先被 `run_pipeline.py` 配过、后被
+   控制台碰到，只要 skills 列表拼法不同就会冲突。因此 skills 常量与
+   task-control MCP 注入在两条路径上**共用同一份实现**。
+2. **投影的幂等键不含本轮的 idempotency key**：注册键是
+   `project:{project_id}:agent:{agent_id}:agentteams`，建队键沿用既有的
+   `project:{project_id}:repository:{repository_id}:team`。所以异键重试、第二轮、第二个
+   项目碰同一个仓库，落的都是**同一个**副作用。这与 §8.3 的 `prefix` 机制正交：`prefix`
+   保护的是规范与任务，投影不读它。
+3. **两个房间都要**：队房间承载 leader↔worker，leader 房间承载 org leader 的派活
+   （`_route` 按角色二选一），缺一个就有一半的对话没有落点。
+
+**新增 503（补进 §8.2 的 503 段）**：
+
+| 情形 | detail |
+| --- | --- |
+| 控制器未配置 | `the execution plane has no rooms for this project's teams (the AgentTeams control plane is not configured, …); nothing was started — materialize again once AgentTeams answers` |
+| 控制器不可达 / 拒绝 / 房间未就绪 | 同上包装，括号内是控制器原话（`AgentTeams HTTP …` / `… has not created rooms for … yet`） |
+
+失败语义与 §8.3 完全一致，并且**更干净**：投影发生在 bridge 之前，因此失败时
+`start_plan` 从未被调用、规范与任务一行未写、草稿未被消费；只有一张 `status: "failed"`
+的收据。同键重试重跑整段投影（失败收据不重放），异键重试按 §8.3 借用同一个 `prefix`
+——而投影本身不读 `prefix`，所以借不借都是同一批副作用。
+
+**与 §8.4「先写后拒」的关系**：投影同样发生在 REPOSITORY_SCOPE 闸门**之前**（闸门在
+bridge 内部），所以一轮被闸门挡下时房间可能已经建好。理由与 §8.4 同一条，且更弱：房间
+不给任何人派任何活，而闸门放行后紧接着就要用它；`ensure_*` 全是幂等的，重复建等于读。
+
+落点（提案）：
+
+| 内容 | 落点 |
+| --- | --- |
+| 端口（**调用方声明**，避免业务模块指名 integration） | `repository_intelligence/ports/runtime_projection.py` |
+| 投影实现（复用 `ReconcileProjectAgentTopology`） | `integrations/agentteams/runtime_projection.py` |
+| 两路径共用的 MCP 注入 | `integrations/agentteams/principal_registration.py::with_task_control` |
+| 调用点（ensure topology 之后、bridge 之前） | `repository_intelligence/application/discovery_materialization.py` |
+| 503 翻译 | `repository_intelligence/api/discovery_chain.py` |
+| 组装 + 错误族翻译 | `bootstrap/container.py::topology_runtime_projector` |
+| 控制器地址 | `REPOMESH_AGENTTEAMS_CONTROLLER_URL`（`settings.agentteams_controller_url`），无硬编码 |
+
+验证：`tests/integrations/agentteams/test_runtime_projection.py`（5 例，控制平面是记录型
+替身，零网络）+ `tests/api/test_issue_materialize.py` 新增 4 例（顺序、503、异键重试修复、
+未配置控制平面时组装出的真投影仍拒绝）。反证已做，见落点分支的施工记录。
+
 ---
 
 ## 附录 A：两条既有勘误（**已批准并同批实施**，2026-08-12）
