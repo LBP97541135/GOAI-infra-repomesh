@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from collections.abc import Awaitable, Callable
 from uuid import UUID
@@ -61,6 +62,20 @@ _logger = logging.getLogger(__name__)
 
 _FAILED_TASK_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.CANCELLED})
 
+#: Every ``idempotency_key`` column in the schema is ``String(200)`` — the task
+#: and execution-plan stores here, the collaboration message store a dispatch
+#: writes through, and the seven others besides. Named once, checked where keys
+#: are derived, and asserted against the live column definitions in
+#: ``tests/task_orchestration/test_redispatch_key_length.py`` so that a schema
+#: change cannot quietly outgrow it.
+IDEMPOTENCY_KEY_LIMIT = 200
+
+#: Hex characters of the attempt digest. Twelve is 48 bits: an operator would
+#: have to press re-dispatch on one round about sixteen million times before a
+#: pair of presses collided, and a collision costs one swallowed re-send rather
+#: than anything durable.
+_ATTEMPT_TOKEN_CHARS = 12
+
 
 def _dispatch_message_key(key: str, attempt: str | None) -> str:
     """The idempotency key of a dispatch's room message (contract v0.4 §8.7.4).
@@ -96,11 +111,56 @@ def _dispatch_message_key(key: str, attempt: str | None) -> str:
     request twice is idempotent by exactly the machinery above — the second
     call finds the DELIVERED message and stops. Idempotent per request,
     genuinely new between requests, which is the whole specification.
+
+    **The attempt is hashed, and the result is bounded.** The first live press
+    of this feature died on ``StringDataRightTruncationError: value too long
+    for type character varying(200)``, because the console's request key
+    (``console-redispatch-<uuid>-<uuid>``, ~60 characters) was appended
+    verbatim to an assignment key that was already 165 characters long. Nothing
+    about the *identity* of an attempt needs those 60 characters — only that
+    two presses differ and one press is stable — so a 12-hex digest carries it
+    instead, and the caller may send a key of any length without the column
+    caring.
+
+    A digest alone would still only have left three characters of headroom
+    under the limit, which is not a margin, it is a coincidence. So the result
+    is checked against the limit rather than assumed to fit: an over-long base
+    falls back to a digest of itself, which is bounded by construction at
+    around forty characters no matter how long key prefixes grow. The readable
+    form is what today's keys produce and what an operator will normally see;
+    the fallback exists so that correctness does not depend on that remaining
+    true. Both are exercised by tests, and both keep the two properties the
+    feature rests on — distinct per press, identical on a replay of the same
+    press.
     """
 
     if attempt is None:
         return f"{key}:message"
-    return f"{key}:message:redispatch:{attempt}"
+    token = _attempt_token(attempt)
+    derived = f"{key}:message:rd:{token}"
+    if len(derived) <= IDEMPOTENCY_KEY_LIMIT:
+        return derived
+    # The base is too long to carry legibly. Its digest still identifies the
+    # task uniquely (assignment keys are unique per task, and this is one),
+    # which is all the key has to do; the message row carries ``task_id`` for
+    # anyone who needs to read it back.
+    return f"rd:{_digest(key, 24)}:{token}"
+
+
+def _digest(value: str, chars: int) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:chars]
+
+
+def _attempt_token(attempt: str) -> str:
+    """A short, stable, collision-resistant stand-in for the caller's key.
+
+    Deterministic, so re-sending one request replays rather than re-posts; and
+    12 hex characters, so two presses a second apart are as distinct as their
+    UUIDs were without spending sixty characters of a 200-character column to
+    say so.
+    """
+
+    return _digest(attempt, _ATTEMPT_TOKEN_CHARS)
 
 
 class ObserveExecutionPlan:
