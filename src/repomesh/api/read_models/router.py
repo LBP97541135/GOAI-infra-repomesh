@@ -65,6 +65,21 @@ async def list_delivery_decisions(delivery_id: UUID, request: Request) -> dict:
     return payload
 
 
+@router.get("/{delivery_id}/rollback-scope")
+async def get_rollback_scope(delivery_id: UUID, request: Request) -> dict:
+    """Contract v0.1 §4.6 read side: what the rollback dialog puts in its table.
+
+    A delivery with no ChangeSet answers 200 with `available: false`, not 404 —
+    "there is nothing published to roll back" is a state the dialog explains,
+    the same call §5.1's rooms endpoint makes for an issue with no team.
+    """
+
+    payload = await _service(request).rollback_scope(delivery_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"delivery not found: {delivery_id}")
+    return payload
+
+
 _EVENT_KINDS = {"runner", "matrix", "gate", "plan", "deny"}
 
 

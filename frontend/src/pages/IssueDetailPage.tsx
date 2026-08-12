@@ -1,4 +1,9 @@
-import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
+import type {
+  IssueDetailView,
+  IssueRoundView,
+  RollbackScopeView,
+  RoomListItemView,
+} from "../api/contract";
 import type { DagExecutionView, Decision, PlanAnchor } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
 import { DiscoveryPanel, type MaterializeContext } from "../components/DiscoveryPanel";
@@ -97,6 +102,7 @@ export function IssueDetailPage({
   archiveConfirmId,
   archivingId,
   onArchiveRound,
+  onRollbackRound,
 }: {
   detail: IssueDetailView;
   rooms: RoomListItemView[];
@@ -132,6 +138,8 @@ export function IssueDetailPage({
   archiveConfirmId: string | null;
   archivingId: string | null;
   onArchiveRound: (round: IssueRoundView) => void;
+  /** 回滚（E-1）：交付卡上的动作，弹窗与提交态由容器持有 */
+  onRollbackRound: (round: IssueRoundView, scope: RollbackScopeView) => void;
 }) {
   const teamOf = (repositoryId: string) => detail.teams.find((t) => t.repository_id === repositoryId) ?? null;
 
@@ -265,6 +273,7 @@ export function IssueDetailPage({
         archivingId={archivingId}
         onToggleRound={onToggleRound}
         onArchiveRound={onArchiveRound}
+        onRollbackRound={onRollbackRound}
       />
 
       <div className="microlabel pt-5 pb-2">房间</div>

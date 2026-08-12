@@ -714,6 +714,72 @@ export interface GovernanceDecisionRequest {
   idempotency_key: string;
 }
 
+/* --------------------------------------------- §4.6 回滚范围与回滚决策（E-1） */
+
+/** 该仓当前是否已 merge。**读模型判定**（merge_sha 有无），前端不自行推。 */
+export type RollbackRepositoryState = "merged" | "unmerged";
+
+/** 恢复计划里该仓的第一个动作。`none` = 这仓没有可撤销的东西（既没 merge
+ *  也没开过 PR），不是「不确定」。 */
+export type RollbackRepositoryAction = "withhold" | "revert_pull_request" | "none";
+
+export interface RollbackRepositoryRow {
+  repository_id: string;
+  name: string;
+  state: RollbackRepositoryState;
+  action: RollbackRepositoryAction;
+  /** 逆序动作序号（saga 的 sequence 原值）；action=none 时 null */
+  step: number | null;
+  merge_sha: string | null;
+  pull_request_number: number | null;
+}
+
+/** §4.6 读投影。**无 ChangeSet 也返 200**（available=false + no_change_set），
+ *  只有交付不存在才 404——「本轮没发布过候选」是对话框要讲的状态，不是错误。 */
+export interface RollbackScopeView {
+  delivery_id: string;
+  change_set_id: string | null;
+  available: boolean;
+  unavailable_reason: "no_change_set" | "nothing_delivered" | null;
+  /** 已有未完成 recovery plan：再提交换个理由必 409，界面先说出来 */
+  recovery_in_progress: boolean;
+  repositories: RollbackRepositoryRow[];
+}
+
+/** §4.6 写请求。**没有 repository_id**：粒度是整 change set（GUI 裁决 4），
+ *  也**没有 head_sha**：各仓当前 head 由服务端自己读。 */
+export interface RollbackRequest {
+  change_set_id: string;
+  reason: string;
+  requested_by_agent_id: string;
+  idempotency_key: string;
+}
+
+export interface RollbackRecoveryActionView {
+  id: string;
+  sequence: number;
+  kind: string;
+  status: string;
+  repository_id: string | null;
+  run_id: string | null;
+  detail: string;
+}
+
+export interface RollbackReceipt {
+  delivery_id: string;
+  change_set_id: string;
+  decisions: GovernanceDecisionView[];
+  recovery_plan: {
+    id: string;
+    trigger: string;
+    reason: string;
+    created_at: string;
+    actions: RollbackRecoveryActionView[];
+  };
+  /** true = 同内容重放，后端零写入 */
+  replayed: boolean;
+}
+
 /* ------------------------------------------------- 契约 v0.4 发现链（批次 B） */
 
 /** 形状唯一来源：`docs/contracts/delivery-read-model-v0.4.md`（**已裁决 · 生效**）

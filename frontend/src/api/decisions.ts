@@ -9,12 +9,13 @@ import type {
   DeliveryAggregate,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
+  RollbackScopeView,
 } from "./contract";
 import { defaultClient } from "./client";
 import { fetchConsoleAgents } from "./grid";
 import { resolveDataSourceMode } from "./source";
 import { decisionsFromContract } from "../viewmodel";
-import { shortId } from "../display";
+import { errText, shortId } from "../display";
 import { decisionsFixture, deliveryAggregateFixture, deliveryAggregateFixtures } from "../data/issueDetail";
 
 /** 回放形态选择：`?tasks=<name>`，取值见 data/issueDetail.ts 的聚合夹具表。
@@ -62,6 +63,10 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
 export interface RoundDecisionHistory {
   pending: Decision[];
   recorded: GovernanceDecisionView[];
+  /** E-1：该轮的回滚范围（§4.6）。`null` = 没取到，配 `rollbackError` 说明原因。
+   *  **不用空对象冒充「无可回滚项」**——那是一句关于真实世界的断言。 */
+  rollback: RollbackScopeView | null;
+  rollbackError: string | null;
 }
 
 export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundDecisionHistory> {
@@ -73,13 +78,26 @@ export async function fetchRoundDecisionHistory(roundId: string): Promise<RoundD
     return {
       pending: decisionsFromContract(decisionsFixture.items),
       recorded: deliveryAggregateFixture.change_set?.governance_decisions ?? [],
+      rollback: null,
+      rollbackError: "回放夹具未覆盖回滚范围（§4.6 投影）。加 ?source=live 后可查看真实范围。",
     };
   }
   const api = defaultClient();
-  const [agg, decisions] = await Promise.all([api.getDelivery(roundId), api.getDecisions(roundId)]);
+  // 回滚范围单独降级：§4.6 是本批新增端点，服务端未升级时它 404，
+  // 而决策夹与历史决策与它无关，不该被一起拖垮。
+  const [agg, decisions, rollback] = await Promise.all([
+    api.getDelivery(roundId),
+    api.getDecisions(roundId),
+    api
+      .getRollbackScope(roundId)
+      .then((view) => ({ view, error: null as string | null }))
+      .catch((err: unknown) => ({ view: null, error: errText(err) })),
+  ]);
   return {
     pending: decisionsFromContract(decisions.items),
     recorded: agg.change_set?.governance_decisions ?? [],
+    rollback: rollback.view,
+    rollbackError: rollback.error,
   };
 }
 

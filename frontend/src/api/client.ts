@@ -28,6 +28,9 @@ import type {
   OrganizationCreateResponse,
   OrganizationsResponse,
   RepositoryPlanView,
+  RollbackReceipt,
+  RollbackRequest,
+  RollbackScopeView,
   RoomListResponse,
   RoomStreamPage,
   ScanTaskView,
@@ -264,5 +267,16 @@ export function createApiClient(config: ApiClientConfig) {
 
     archiveDelivery: (deliveryId: string) =>
       request<unknown>(config, "POST", `/deliveries/${deliveryId}/archive`),
+
+    /** §4.6 读：回滚会撤销什么。**逆序第 k 步由服务端给**（读模型跑同一个
+     *  recovery planner 的预览），前端只渲染，不按 merge_order 自己数。 */
+    getRollbackScope: (deliveryId: string) =>
+      request<RollbackScopeView>(config, "GET", `/deliveries/${deliveryId}/rollback-scope`),
+
+    /** §4.6 写：整 change set 回滚。一次调用两个写（每仓 ROLLBACK_REQUIRED
+     *  决策堵死 merge gate + 建 operator-requested recovery plan）。
+     *  409 = 已有未完成的 recovery plan；detail 原文上抛。 */
+    postRollback: (deliveryId: string, payload: RollbackRequest) =>
+      request<RollbackReceipt>(config, "POST", `/deliveries/${deliveryId}/rollback`, payload),
   };
 }

@@ -16,6 +16,7 @@ from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     DeliveryArchiveView,
     MergeGateDecision,
+    RecoveryActionView,
     SCMObservationView,
 )
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
@@ -105,6 +106,18 @@ class ChangeSetSource(Protocol):
     async def merge_gate(
         self, change_set_id: UUID, repository_id: UUID
     ) -> MergeGateDecision: ...
+
+    async def recovery_preview(
+        self, change_set_id: UUID
+    ) -> tuple[RecoveryActionView, ...]:
+        """The actions an operator-requested rollback would run, unsaved.
+
+        The rollback scope projection (§4.6) must not re-derive "which
+        repository gets a revert PR, and in which position" — that rule lives
+        in delivery's recovery planner, and this is the same planner run in
+        preview mode.
+        """
+        ...
 
 
 class ArchiveSource(Protocol):

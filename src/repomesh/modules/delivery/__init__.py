@@ -3,6 +3,7 @@
 from .application import (
     DeliveryArchiveService,
     DeliveryGovernanceService,
+    DeliveryRollbackService,
     DeliveryService,
     SCMCommandService,
     SCMObservationService,
@@ -30,6 +31,7 @@ from .ports import ContractCatalogPort
 __all__ = [
     "DeliveryArchiveService",
     "DeliveryGovernanceService",
+    "DeliveryRollbackService",
     "DeliveryService",
     "DeliveryConflict",
     "DeliveryDenied",
