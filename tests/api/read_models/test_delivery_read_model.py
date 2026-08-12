@@ -92,9 +92,7 @@ def test_read_model_aggregates_a_delivered_two_repository_plan(
         organization_id = uuid4()
         project_id = uuid4()
         org_leader_id = uuid4()
-        api_repo = RepositoryProfile(
-            name="repomesh-e2e-api", url="https://github.test/e2e/api.git"
-        )
+        api_repo = RepositoryProfile(name="repomesh-e2e-api", url="https://github.test/e2e/api.git")
         client_repo = RepositoryProfile(
             name="repomesh-e2e-client", url="https://github.test/e2e/client.git"
         )
@@ -484,9 +482,7 @@ def test_rework_chain_drives_attempt_repairing_and_escalation(
             await tasks.add(
                 rework, idempotency_key="rw-rework", request_fingerprint="sha256:" + "c" * 64
             )
-            await application_container.execution_plan_store().add(
-                plan, idempotency_key="rw-plan"
-            )
+            await application_container.execution_plan_store().add(plan, idempotency_key="rw-plan")
             change_set = await delivery.prepare(
                 PrepareChangeSetCommand(
                     organization_id=organization_id,
