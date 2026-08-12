@@ -1319,9 +1319,24 @@ transaction id 去重。于是有**两层**吞掉重发：`send` 的 DELIVERED �
 **给这个字符串加版本，而不是绕过任何一层守卫**：
 
 ```
-attempt is None  →  f"{key}:message"                      # 一切既有调用方，含重放
-attempt 有值     →  f"{key}:message:redispatch:{attempt}" # 一次显式重新派工
+attempt is None  →  f"{key}:message"                       # 一切既有调用方，含重放
+attempt 有值     →  f"{key}:message:rd:{sha256(attempt)[:12]}"   # 一次显式重新派工
+                    # 若上式超过 200，退为 f"rd:{sha256(key)[:24]}:{token}"
 ```
+
+> **勘正（A-20，2026-08-12，本节裁决后）**：上式原文是
+> `f"{key}:message:redispatch:{attempt}"`——把调用方的键**逐字**接在后面。首次活体按下
+> 即以 `asyncpg StringDataRightTruncationError: value too long for type character
+> varying(200)` 裸 500 逃逸。算术此前无人做过：worker 指派键
+> `disc-console-discovery-materialize-<uuid>:b0:<uuid>:decompose:worker:<uuid>` 已是
+> **165 字**，`:message` 到 173（所以正常派工一直能过），再接控制台的
+> `console-redispatch-<uuid>-<uuid>`（92 字）到 245。**零副作用**：库拒了这条 insert，
+> 房间也因此没被通知（已核实）。
+>
+> attempt 的**身份**不需要那 92 个字，只需要「两次不同、一次稳定」，故改摘要承载。
+> 但仅改摘要只剩 3 字余量——那是巧合不是余量，所以**再对结果做长度检查**，超限则连
+> base 一并摘要，使上界成为构造性质而非观察结果。两条路径都有测试。
+> 端点的 `max_length=180` **不是**保证插入合法的东西，不得当作保证依赖。
 
 **这与 §8.7.3 裁决 (a) 不冲突，是同一条裁决的两侧**：那条裁决说的是**重放**不换 id
 （换了会在「原消息实际已达」时双发），本节的重放路径一个字符都没改——`attempt is None`
@@ -1365,6 +1380,7 @@ content")`。§8.7.3 **有意不把 `ValueError` 翻成 503**（重试改变不�
 | 503 | 存储接不住任务包 | 复用 §8.7.3 原话，但**不说 "nothing was started"**，说 `nothing was re-sent` |
 | 503 | 房间不可路由 | `…press re-dispatch again once the rooms exist` |
 | 503 | 执行面根本未配置 | 无 messenger 即无 orchestrator，是部署问题不是 500 |
+| 500 | 其余一切（A-20 补） | **具名**，不裸 500：`…failed unexpectedly (<异常类名>: <原话>); nothing was re-sent`。与 §8.2 给 `RoundNotRecorded` 具名的理由同一条——类名与驱动原话就是全部可行动内容，而 `text/plain "Internal Server Error"` 连「这是 bug 还是故障」都答不了。**仅本端点、与兄弟端点对齐**；全局错误信封是另一议题，未在此裁 |
 
 #### 读模型附带一项：`tasks[].last_dispatched_at`
 
