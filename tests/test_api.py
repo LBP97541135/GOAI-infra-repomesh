@@ -21,6 +21,26 @@ def test_health(application_container: ApplicationContainer) -> None:
         assert client.get("/health/ready").json() == {"status": "ready"}
 
 
+def test_first_run_setup_status_and_coding_agent_probe(
+    application_container: ApplicationContainer,
+) -> None:
+    with TestClient(create_app(application_container)) as client:
+        status = client.get("/api/v1/setup/status")
+        assert status.status_code == 200
+        assert status.json()["counts"] == {
+            "accounts": 0,
+            "agents": 0,
+            "repositories": 0,
+        }
+        assert "administrator" in status.json()["next_actions"]
+
+        probes = client.get("/api/v1/setup/coding-agents")
+        assert probes.status_code == 200
+        adapters = {item["adapter_id"]: item for item in probes.json()["adapters"]}
+        assert {"claude-code", "codex", "kimi"}.issubset(adapters)
+        assert "auth_status" in adapters["codex"]
+
+
 def test_local_account_bootstrap_login_and_session_authentication(
     application_container: ApplicationContainer,
 ) -> None:

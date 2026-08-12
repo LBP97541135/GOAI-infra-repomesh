@@ -1,5 +1,7 @@
 """Project lifecycle, participating repositories, memberships, and workstreams."""
 from .application import (
+    CreateAutomaticProjectTopology,
+    CreateAutomaticProjectTopologyRequest,
     CreateProjectAgentTopology,
     CreateProjectAgentTopologyRequest,
     HumanProjectGrantInput,
@@ -34,6 +36,8 @@ from .human_control import (
 from .lifecycle_control import ControlProjectCommand, ProjectLifecycleService
 
 __all__ = [
+    "CreateAutomaticProjectTopology",
+    "CreateAutomaticProjectTopologyRequest",
     "CreateProjectAgentTopology",
     "CreateProjectAgentTopologyRequest",
     "CodeAccessLevel",

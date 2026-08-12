@@ -10,10 +10,23 @@ from fastapi.responses import StreamingResponse
 from repomesh.api.human_control_models import (
     AccountCreate,
     AccountCredentials,
+    AutomaticProjectTopologyCreate,
     BootstrapAdmin,
     CheckpointDecisionCreate,
+    NativeAgentCreate,
     ProjectControlCreate,
     ProjectTopologyCreate,
+    RepositoryAgentTeamOnboard,
+)
+from repomesh.integrations.agentteams import RegisterNativeAgentRequest
+from repomesh.modules.agent_directory.application import CreateAgentRequest
+from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_runtime.ports.agent_team import (
+    ManagerProjection,
+    TeamMemberProjection,
+    TeamProjection,
+    TeamRole,
+    WorkerProjection,
 )
 from repomesh.modules.identity_access import (
     LocalAuthenticationError,
@@ -21,13 +34,19 @@ from repomesh.modules.identity_access import (
 )
 from repomesh.modules.project import (
     ControlProjectCommand,
+    CreateAutomaticProjectTopologyRequest,
     CreateProjectAgentTopologyRequest,
     HumanProjectGrantInput,
     RecordCheckpointDecisionCommand,
     RepositoryTeamAssignment,
 )
 from repomesh.modules.project.contracts import HumanReviewStatus, ProjectCheckpoint
-from repomesh.modules.project.domain import ProjectTopologyConflict, ProjectTopologyError
+from repomesh.modules.project.domain import (
+    ProjectTopologyConflict,
+    ProjectTopologyError,
+    repository_agentteams_team_name,
+)
+from repomesh.settings import get_settings
 
 router = APIRouter(tags=["human-control"])
 SESSION_COOKIE = "repomesh_session"
@@ -126,9 +145,162 @@ async def list_accounts(request: Request) -> list[dict]:
 async def list_agent_principals(request: Request) -> list[dict]:
     await _account(request)
     return [
-        asdict(item.to_view())
-        for item in await request.app.state.container.agent_directory.list()
+        asdict(item.to_view()) for item in await request.app.state.container.agent_directory.list()
     ]
+
+
+@router.post("/agents/native", status_code=status.HTTP_201_CREATED)
+async def create_native_agent(body: NativeAgentCreate, request: Request) -> dict:
+    """Create the AgentTeams runtime resource and its RepoMesh principal binding."""
+    actor = await _account(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    principal = CreateAgentRequest(
+        organization_id=body.organization_id,
+        role=body.role,
+        leader_agent_id=body.leader_agent_id,
+        repository_id=body.repository_id,
+        responsibility_paths=tuple(body.responsibility_paths),
+        agentteams_resource_name=body.resource_name,
+    )
+    manager = None
+    worker = None
+    if body.role is AgentRole.ORGANIZATION_LEADER:
+        manager = ManagerProjection(
+            name=body.resource_name,
+            model=body.model,
+            runtime=body.manager_runtime,
+            skills=("project-management", "task-coordination"),
+        )
+    else:
+        worker = WorkerProjection(
+            name=body.resource_name,
+            model=body.model,
+            runtime=body.worker_runtime,
+            identity=(
+                "Repository Leader" if body.role is AgentRole.REPOSITORY_LEADER else "Coding Worker"
+            ),
+            skills=("git-delegation",),
+        )
+    try:
+        created = await request.app.state.container.native_agent_registration().execute(
+            RegisterNativeAgentRequest(principal=principal, manager=manager, worker=worker),
+            idempotency_key=body.idempotency_key,
+        )
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return asdict(created.principal)
+
+
+@router.post(
+    "/repositories/{repository_id}/agent-team",
+    status_code=status.HTTP_201_CREATED,
+)
+async def onboard_repository_agent_team(
+    repository_id: UUID,
+    body: RepositoryAgentTeamOnboard,
+    request: Request,
+) -> dict:
+    """Create the durable repository Leader/Workers and their AgentTeams Team."""
+    actor = await _account(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    repository = await request.app.state.container.repository_catalog.get(repository_id)
+    if repository is None:
+        raise HTTPException(status_code=404, detail="scan and register the repository first")
+    directory = request.app.state.container.agent_directory
+    leaders = [
+        item
+        for item in await directory.list_views()
+        if item.organization_id == body.organization_id
+        and item.role is AgentRole.ORGANIZATION_LEADER
+        and item.status.value == "active"
+    ]
+    if len(leaders) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="organization requires exactly one active Organization Leader",
+        )
+    organization_leader = leaders[0]
+    prefix = f"repo-{repository_id.hex[:12]}"
+    model = body.model or get_settings().deepseek_model
+    registration = request.app.state.container.native_agent_registration()
+    leader_name = f"{prefix}-leader"
+    try:
+        leader = await registration.execute(
+            RegisterNativeAgentRequest(
+                principal=CreateAgentRequest(
+                    organization_id=body.organization_id,
+                    role=AgentRole.REPOSITORY_LEADER,
+                    agentteams_resource_name=leader_name,
+                    leader_agent_id=organization_leader.id,
+                    repository_id=repository_id,
+                    responsibility_paths=tuple(body.responsibility_paths),
+                ),
+                worker=WorkerProjection(
+                    name=leader_name,
+                    model=model,
+                    runtime=body.leader_runtime,
+                    identity=f"Repository Leader for {repository.name}",
+                    skills=("worker-management", "spec-authoring", "code-review"),
+                ),
+            ),
+            idempotency_key=f"{body.idempotency_key}:leader",
+        )
+        workers = []
+        for index in range(1, body.worker_count + 1):
+            worker_name = f"{prefix}-worker-{index:02d}"
+            workers.append(
+                await registration.execute(
+                    RegisterNativeAgentRequest(
+                        principal=CreateAgentRequest(
+                            organization_id=body.organization_id,
+                            role=AgentRole.WORKER,
+                            agentteams_resource_name=worker_name,
+                            leader_agent_id=leader.principal.id,
+                            repository_id=repository_id,
+                            responsibility_paths=tuple(body.responsibility_paths),
+                        ),
+                        worker=WorkerProjection(
+                            name=worker_name,
+                            model=model,
+                            runtime=body.worker_runtime,
+                            identity=f"Coding Worker for {repository.name}",
+                            skills=("git-delegation", "task-execution", "code-self-test"),
+                        ),
+                    ),
+                    idempotency_key=f"{body.idempotency_key}:worker:{index:02d}",
+                )
+            )
+        control_plane = request.app.state.container.agent_team_control_plane
+        if control_plane is None:
+            raise RuntimeError("AgentTeams control plane is not configured")
+        team = await control_plane.ensure_team(
+            TeamProjection(
+                name=repository_agentteams_team_name(repository_id),
+                description=f"Long-lived repository team for {repository.name}",
+                members=(
+                    TeamMemberProjection(leader_name, TeamRole.LEADER),
+                    *(
+                        TeamMemberProjection(
+                            item.principal.agentteams_resource_name,
+                            TeamRole.WORKER,
+                        )
+                        for item in workers
+                    ),
+                ),
+            ),
+            idempotency_key=f"{body.idempotency_key}:team",
+        )
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {
+        "repository_id": repository_id,
+        "repository_name": repository.name,
+        "leader": asdict(leader.principal),
+        "workers": [asdict(item.principal) for item in workers],
+        "team": asdict(team),
+    }
 
 
 async def _reviews_for(request: Request, actor: LocalHumanAccountView, review_status):
@@ -219,6 +391,45 @@ async def create_project_topology(body: ProjectTopologyCreate, request: Request)
     return asdict(topology)
 
 
+@router.post("/projects/automatic-topologies", status_code=status.HTTP_201_CREATED)
+async def create_automatic_project_topology(
+    body: AutomaticProjectTopologyCreate,
+    request: Request,
+) -> dict:
+    actor = await _account(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    account_service = request.app.state.container.local_account_service()
+    for grant in body.human_grants:
+        if await account_service.get_account(grant.human_principal_id) is None:
+            raise HTTPException(status_code=422, detail="human grant account does not exist")
+    try:
+        topology = await request.app.state.container.automatic_project_topology_creator().execute(
+            CreateAutomaticProjectTopologyRequest(
+                organization_id=body.organization_id,
+                project_id=body.project_id,
+                repository_ids=tuple(body.repository_ids),
+                execution_mode=body.execution_mode,
+                required_checkpoints=frozenset(body.required_checkpoints),
+                human_grants=tuple(
+                    HumanProjectGrantInput(
+                        human_principal_id=item.human_principal_id,
+                        role=item.role,
+                        code_access=item.code_access,
+                        control_actions=frozenset(item.control_actions),
+                        repository_id=item.repository_id,
+                        path_patterns=tuple(item.path_patterns),
+                    )
+                    for item in body.human_grants
+                ),
+            ),
+            idempotency_key=body.idempotency_key,
+        )
+    except ProjectTopologyError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return asdict(topology)
+
+
 @router.get("/projects/{project_id}/topology")
 async def get_project_topology(project_id: UUID, request: Request) -> dict:
     actor = await _account(request)
@@ -281,9 +492,7 @@ async def record_checkpoint_decision(
 
 
 @router.post("/projects/{project_id}/control")
-async def control_project(
-    project_id: UUID, body: ProjectControlCreate, request: Request
-) -> dict:
+async def control_project(project_id: UUID, body: ProjectControlCreate, request: Request) -> dict:
     actor = await _account(request)
     try:
         topology = await request.app.state.container.project_lifecycle_service().control(

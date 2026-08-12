@@ -43,6 +43,26 @@ On Linux:
 ./scripts/start-platform.sh --install-agentteams
 ~~~
 
+The full platform uses one default OpenAI-compatible model connection for both RepoMesh planning
+and AgentTeams agents:
+
+```dotenv
+REPOMESH_MODEL_API_KEY=your-key
+REPOMESH_MODEL_BASE_URL=https://api.deepseek.com/v1
+REPOMESH_MODEL=deepseek-chat
+```
+
+Advanced deployments may override the AgentTeams `AGENTTEAMS_LLM_*` or RepoMesh planning
+`REPOMESH_DEEPSEEK_*` variables independently. Coding-agent CLI authentication remains separate.
+
+The startup scripts generate Runner, agent-action, and MCP gateway tokens in the ignored
+`.secrets/platform.env`, load the AgentTeams controller token, and obtain a Matrix access token.
+Use `GET /api/v1/setup/status` for first-run readiness and
+`GET /api/v1/setup/coding-agents` to inspect installed CLI authentication. After a repository scan,
+`POST /api/v1/repositories/{repository_id}/agent-team` creates its long-lived Repository Leader,
+default Worker, and AgentTeams Team. Delivery policies are stored through the organization and
+repository policy endpoints under `/api/v1/delivery` rather than edited in `.env`.
+
 Run all checks with:
 
 ```powershell

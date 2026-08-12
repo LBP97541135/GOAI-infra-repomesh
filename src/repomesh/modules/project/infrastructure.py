@@ -62,7 +62,6 @@ class ProjectRepositoryTeamRecord(Base):
         UniqueConstraint(
             "project_id", "repository_id", name="uq_project_repository_agent_team"
         ),
-        UniqueConstraint("agentteams_team_name", name="uq_project_agentteams_team_name"),
         {"schema": "project"},
     )
 

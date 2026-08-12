@@ -138,6 +138,14 @@ class ApplicationContainer:
 
         return CreateProjectAgentTopology(self.agent_directory, self.project_topology_store)
 
+    def automatic_project_topology_creator(self):
+        from repomesh.modules.project import CreateAutomaticProjectTopology
+
+        return CreateAutomaticProjectTopology(
+            self.agent_directory,
+            self.project_topology_creator(),
+        )
+
     def agent_capabilities(self) -> ResolveAgentCapabilities:
         return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
 
@@ -234,6 +242,27 @@ class ApplicationContainer:
                 if get_settings().delivery_contract_gate
                 else None
             ),
+        )
+
+    @cached_service
+    def delivery_policy_store(self):
+        from repomesh.modules.delivery import PostgresDeliveryPolicyStore
+
+        return PostgresDeliveryPolicyStore(self.database)
+
+    @staticmethod
+    def default_delivery_policy(organization_id):
+        from repomesh.modules.delivery import DeliveryPolicy
+
+        settings = get_settings()
+        return DeliveryPolicy(
+            organization_id=organization_id,
+            auto_merge=settings.delivery_auto_enabled,
+            base_branch=settings.delivery_base_branch,
+            required_checks=settings.delivery_required_checks,
+            required_approvals=settings.delivery_required_approvals,
+            contract_gate=settings.delivery_contract_gate,
+            add_label=settings.delivery_pr_label,
         )
 
     def contract_catalog(self):
@@ -387,6 +416,19 @@ class ApplicationContainer:
             raise RuntimeError("automatic delivery requires at least one named CI check")
         if settings.delivery_required_approvals < 1:
             raise RuntimeError("automatic delivery requires at least one PR approval")
+        async def resolve_policy(organization_id, repository_id=None):
+            policy = await self.delivery_policy_store().resolve(
+                organization_id,
+                repository_id,
+                fallback=self.default_delivery_policy(organization_id),
+            )
+            return PlanDeliveryPolicy(
+                base_branch=policy.base_branch,
+                required_checks=policy.required_checks,
+                required_approvals=policy.required_approvals,
+                add_label=policy.add_label,
+            )
+
         return PlanDeliveryFinalizer(
             self.delivery_service(),
             self.changeset_scm_coordinator(),
@@ -397,6 +439,7 @@ class ApplicationContainer:
                 required_approvals=settings.delivery_required_approvals,
                 add_label=settings.delivery_pr_label,
             ),
+            policy_resolver=resolve_policy,
             validation=self.validation_snapshot_service(),
             checkpoints=self.project_checkpoint_service(),
             contracts=(

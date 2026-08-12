@@ -30,6 +30,8 @@ class AgentPrincipalView:
 class AgentPrincipalReader(Protocol):
     async def get_view(self, agent_id: UUID) -> AgentPrincipalView | None: ...
 
+    async def list_views(self) -> tuple[AgentPrincipalView, ...]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class AgentCreated:

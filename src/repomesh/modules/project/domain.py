@@ -33,6 +33,11 @@ class ProjectTopologyViolation(ProjectTopologyError):
     pass
 
 
+def repository_agentteams_team_name(repository_id: UUID) -> str:
+    """Stable AgentTeams Team binding shared by every project using a repository."""
+    return f"rm-repo-{repository_id.hex}"
+
+
 @dataclass(frozen=True, slots=True)
 class HumanProjectGrant:
     human_principal_id: UUID
@@ -158,7 +163,7 @@ class RepositoryTeam:
             object.__setattr__(
                 self,
                 "agentteams_team_name",
-                f"rm-team-{self.id.hex}",
+                repository_agentteams_team_name(self.repository_id),
             )
 
     def with_runtime(

@@ -48,6 +48,9 @@ class InMemoryAgentDirectory:
     async def list(self) -> tuple[AgentPrincipal, ...]:
         return tuple(sorted(self._principals.values(), key=lambda item: str(item.id)))
 
+    async def list_views(self):
+        return tuple(item.to_view() for item in await self.list())
+
     async def get_by_idempotency_key(
         self, idempotency_key: str
     ) -> tuple[AgentPrincipal, str] | None:

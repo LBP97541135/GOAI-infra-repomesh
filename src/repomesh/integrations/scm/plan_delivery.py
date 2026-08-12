@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -51,16 +52,19 @@ class PlanDeliveryFinalizer:
         validation: ValidationSnapshotService | None = None,
         checkpoints: ProjectCheckpointService | None = None,
         contracts: ContractCatalogPort | None = None,
+        policy_resolver: Callable[[UUID, UUID | None], Awaitable[PlanDeliveryPolicy]] | None = None,
     ) -> None:
         self._delivery = delivery
         self._coordinator = coordinator
         self._tasks = tasks
         self._policy = policy
+        self._policy_resolver = policy_resolver
         self._validation = validation
         self._checkpoints = checkpoints
         self._contracts = contracts
 
     async def handle(self, plan: ExecutionPlanView) -> None:
+        self._policy = await self._resolve_policy(plan.organization_id)
         candidates, workspaces, tests = await self._candidates(plan)
         if not candidates:
             return
@@ -156,6 +160,7 @@ class PlanDeliveryFinalizer:
         delivered batch is idempotent: existing pull requests are skipped and
         ``append_candidates`` ignores repositories already present.
         """
+        self._policy = await self._resolve_policy(plan.organization_id)
         batch_index = plan.current_batch_index
         candidates, workspaces, tests = await self._candidates_for_batch(plan, batch_index)
         if not candidates:
@@ -224,6 +229,11 @@ class PlanDeliveryFinalizer:
         await self._backfill_sibling_links(
             change_set.id, plan, batch_index=batch_index
         )
+
+    async def _resolve_policy(self, organization_id: UUID) -> PlanDeliveryPolicy:
+        if self._policy_resolver is None:
+            return self._policy
+        return await self._policy_resolver(organization_id, None)
 
     async def _candidates_for_batch(
         self, plan: ExecutionPlanView, batch_index: int

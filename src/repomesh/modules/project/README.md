@@ -14,10 +14,13 @@ Organization Leader (AgentTeams Manager)
   -> Repository Team B: Repository Leader + selected Workers
 ```
 
-Each participating repository has exactly one project Team and exactly one Repository Leader. An
-Agent cannot join two repository Teams in the same project. Creation validates organization,
-repository, role and durable Leader relationships before storing the topology. Reconciliation then
-ensures the Manager and Worker resources before creating one AgentTeams Team per repository.
+Each participating repository has one long-lived AgentTeams Team and exactly one Repository Leader.
+Projects reference that Team instead of creating duplicate runtime Teams. An Agent cannot join two
+repository Teams in the same project. The automatic creation API accepts only the organization,
+project and repository IDs, then resolves the active Organization Leader, Repository Leader and
+Workers from Agent Directory. Creation validates the durable hierarchy before storing the topology;
+reconciliation creates a missing runtime Team or reuses the existing repository Team.
 
 PostgreSQL tables `project.agent_topologies` and `project.repository_agent_teams` are the source of
-truth. AgentTeams Team names and Matrix room IDs are runtime bindings, not project state.
+truth. The stable `rm-repo-{repository_id}` name is the runtime binding shared across projects;
+Matrix room IDs are cached bindings, not business identity.
