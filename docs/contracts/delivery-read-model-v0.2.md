@@ -173,6 +173,12 @@ GitHub 式列表的两个标签页各带总数（`Open 3 | Closed 12`）。消�
 PlanSnapshot，**无快照时两者同为 `null`**（出自同一个判空分支，起草时只写对了
 `created_at`）；`repositories` 是「该 issue 各轮次计划涉及的仓库 ∪ 拓扑驻扎仓库」的并集。
 
+**勘误（2026-08-12，主脑裁决）**：`rounds[].updated_at` 在该轮**尚无 ChangeSet** 时
+等于 `created_at`——实现里两者出自同一个表达式（`read_models/service.py`），从来不存在
+「先 null、有活动后再填」的语义；它为 `null` 当且仅当快照本身缺失（与 `created_at`/
+`plan_version` 同一个判空分支）。此前活体见到的 rounds 双 null 是快照没被链接（缺陷
+A-5，v0.4 §8.2 具名 500 已封死），不是本字段的正常形态。
+
 `role_in_issue` nullable：拓扑不记录仓库在 issue 中的角色语义（生产者/消费者只存在于
 CONTRACT spec 的 scope），取不到时为 `null`。
 

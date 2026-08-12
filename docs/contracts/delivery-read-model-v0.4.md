@@ -792,6 +792,14 @@ Step 2「不收 `candidate_repos`」同一条，但后果更重：那里浏览�
 `raise ExecutionPlaneUnavailable`，所以这是可重试的，草稿仍开着；与
 `POST /bridge/materialize` 和 `run_pipeline.py` 对 503 的既有读法完全一致，**降级语义不变**。
 
+运行时投影（§8.7）再补两行 503——控制器未配置 / 不可达 / 房间未就绪，皆发生在
+`start_plan` 之前，同样可重试。另有一枚**具名 500**（`RoundNotRecorded`）：计划已启动
+但快照记不下它——任务在跑而轮次没有入册，detail 原文明说 `materialize again to finish
+recording it`。这是唯一一种**必须重按物化**而不是报障等待的 500：把它吞成 200 会让上表
+「已物化」那行 409 永远失灵，下一次点击就为同一轮开出第二个执行计划（缺陷 A-5 的真身；
+异常声明在 `change_orchestration/contracts.py::RoundNotRecorded`，脚本路径
+`POST /bridge/materialize` 不捕获它，同样以 500 示人而不再假 200）。
+
 ### 8.3 幂等与重放
 
 收据落在 `discovery.materialization`（与四个步块并列，同一张草稿）：
@@ -887,10 +895,10 @@ bridge 全是生产代码）。反证已做：拆掉就绪判定 → 三条 409 
 证明「不重建」那组断言（`start_plan` 调用计数、拓扑行 id 与队数、principal 集合）
 真的咬得住，而不是只在数数。
 
-### 8.7 运行时投影：建完队还要给队一个能说话的地方（**提案 · 待主脑裁决**，B-11）
+### 8.7 运行时投影：建完队还要给队一个能说话的地方（**已裁决 · 2026-08-12**，B-11）
 
-> **本节是提案，尚未批准。** 代码已在分支 `feat/runtime-provision` 上实现（见文末落点
-> 表），契约文字以主脑裁决为准；未裁决前 §8.2 的 503 一览以本节为**待补**状态阅读。
+> 主脑裁决通过，随修复合并生效（分支 `feat/runtime-provision`）；§8.2 的 503 段已含
+> 本节两行与 `RoundNotRecorded` 具名 500。
 
 核实事实（B-11）：**§8.4 的 ensure topology 只写行，不建运行时**。
 `ProvisionRepositoryAgentTeam` 落 principal，`CreateProjectAgentTopology` 落
@@ -902,7 +910,7 @@ bridge 全是生产代码）。反证已做：拆掉就绪判定 → 三条 409 
 `CollaborationRouteUnavailable`。§8.2 那条「AgentTeams room is not ready → 503」不是偶发
 时序，是这条路径的**必然终点**：房间没有任何人去建，重试多少次都一样。
 
-裁决（提案）：**物化在调 bridge 之前、同步做一次运行时投影**，语义照
+裁决：**物化在调 bridge 之前、同步做一次运行时投影**，语义照
 `run_pipeline.py::_ensure_topology` 的后半段：
 
 1. 按拓扑逐个把 principal 投进控制器——org leader 走 `ensure_manager`，仓库 leader 与
@@ -942,7 +950,7 @@ bridge 全是生产代码）。反证已做：拆掉就绪判定 → 三条 409 
 bridge 内部），所以一轮被闸门挡下时房间可能已经建好。理由与 §8.4 同一条，且更弱：房间
 不给任何人派任何活，而闸门放行后紧接着就要用它；`ensure_*` 全是幂等的，重复建等于读。
 
-落点（提案）：
+落点：
 
 | 内容 | 落点 |
 | --- | --- |
