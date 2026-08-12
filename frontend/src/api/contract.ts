@@ -244,12 +244,21 @@ export interface RepositoryPlanView {
   repository_id: string;
   plan_version: number;
   dag: {
-    nodes: Array<{ repository_id: string; name: string; batch_index: number; is_focus: boolean }>;
+    /** §5.4 勘正（2026-08-11）：`repository_id` **可为 null**——`execution_batches`
+     *  存的是仓库**名**，catalog 解析不到（名字不在册，或在 issue 域外重名歧义、
+     *  域内优先后仍无唯一解）时**节点保留、id 为 null**：丢掉节点会让批次缺项、
+     *  布局就错了。故消费方不得拿 `repository_id` 当列表 key 或跳转参数——
+     *  用 `name + batch_index` 组合键。`is_focus` 在 null 节点恒 false（服务端
+     *  判据是 `node_id is not None and node_id == repository_id`）。 */
+    nodes: Array<{ repository_id: string | null; name: string; batch_index: number; is_focus: boolean }>;
+    /** 两端服务端保证已解析且都落在 `nodes` 内（解析不到或不在任何批次里的边被丢弃），
+     *  故连线时不必判空。**但丢弃只进服务端日志**：消费方不得自称这是完整依赖图。 */
     edges: Array<{ from_repository_id: string; to_repository_id: string }>;
     /** §5.5：恒为 repository（graph_edges 列已持久化但恒空，不投影） */
     granularity: "repository";
     edge_source: "task_dag.depends_on";
   };
+  /** 装的是仓库**名**不是 id（节点侧 null 的来源即在此） */
   execution_batches: string[][];
   /** 无匹配为 null → 显「本仓无独立 spec，适用项目工程契约」（§5.4）。
    *  status 真实枚举以实现为准：契约原文的 `submitted` 不存在（已勘误）。 */
