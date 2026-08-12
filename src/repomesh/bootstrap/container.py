@@ -169,6 +169,63 @@ class ApplicationContainer:
             self.project_topology_creator(),
         )
 
+    def topology_runtime_projector(self):
+        """Contract v0.4 §8: the step that makes a round's rooms exist.
+
+        Wired here for the reason the bridge is: the capability is composed
+        out of an integration (``RegisterNativeAgent`` +
+        ``ReconcileProjectAgentTopology``) and the module that needs it
+        declares only a Protocol, so the two can meet nowhere else.
+
+        The adapter's whole body is a translation. The integration raises its
+        own taxonomy — unreachable controller, refused request, teams whose
+        rooms have not appeared — and the port publishes one refusal, because
+        the caller's next move is the same for all three: answer 503 and leave
+        the round materialisable. Same shape as the ``_Runtime`` proxy the
+        read model gets.
+
+        A container with no control plane gets a projector that refuses rather
+        than one that quietly does nothing: "the rooms were never made" is the
+        defect this exists to end, and a silent skip is how it hid. Production
+        always has one (``build_default_container`` constructs the client
+        unconditionally); a test that wants past this stubs it, exactly as it
+        already stubs ``execution_plan_starter``.
+        """
+
+        from repomesh.modules.repository_intelligence.ports import (
+            RuntimeProjectionUnavailable,
+        )
+
+        control_plane = self.agent_team_control_plane
+        store = self.project_topology_store
+        directory = self.agent_directory
+        settings = get_settings()
+
+        class _RuntimeProjection:
+            async def project(self, project_id: UUID) -> None:
+                from repomesh.integrations.agentteams import (  # noqa: PLC0415
+                    AgentTeamsError,
+                    ProjectRuntimeProjection,
+                )
+
+                if control_plane is None:
+                    raise RuntimeProjectionUnavailable(
+                        "the AgentTeams control plane is not configured, so this "
+                        "project's teams can have no rooms"
+                    )
+                try:
+                    await ProjectRuntimeProjection(
+                        directory,
+                        store,
+                        control_plane,
+                        model=settings.deepseek_model,
+                        worker_task_control_url=settings.worker_task_control_url,
+                    ).project(project_id)
+                except AgentTeamsError as error:
+                    raise RuntimeProjectionUnavailable(str(error)) from error
+
+        return _RuntimeProjection()
+
     def agent_capabilities(self) -> ResolveAgentCapabilities:
         return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
 
@@ -792,6 +849,7 @@ class ApplicationContainer:
             self.topology_reader(),
             self.project_topology_provisioner(),
             self.plan_execution_bridge(),
+            self.topology_runtime_projector(),
         )
 
     def issue_intake_service(self):

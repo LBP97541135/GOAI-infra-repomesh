@@ -13,6 +13,7 @@ from .inbound import AgentTeamsMatrixInboundPoller
 from .matrix import AgentTeamsMatrixClient, MatrixRoomMessage, MatrixSyncBatch
 from .principal_registration import RegisterNativeAgent, RegisterNativeAgentRequest
 from .project_topology import ReconcileProjectAgentTopology
+from .runtime_projection import AgentTeamsRoomsPending, ProjectRuntimeProjection
 from .versions import (
     UPSTREAM_MANIFEST,
     ComponentVersions,
@@ -38,10 +39,12 @@ __all__ = [
     "MatrixRoomMessage",
     "MatrixSyncBatch",
     "AgentTeamsResponseError",
+    "AgentTeamsRoomsPending",
     "AgentTeamsUnavailable",
     "AgentTeamsVersion",
     "ComponentVersions",
     "ComponentVersionsError",
+    "ProjectRuntimeProjection",
     "ReleaseIdentity",
     "ReconcileProjectAgentTopology",
     "RegisterNativeAgent",

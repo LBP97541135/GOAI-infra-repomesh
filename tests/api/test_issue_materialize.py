@@ -6,11 +6,11 @@ unapproved tiering, a blocked checkpoint, and a retry that must not build a
 second team or a second task.
 
 Nothing reaches the network. The LLM is the scripted double the chain tests
-use, and the *only* piece of the bridge that is replaced is the execution plane
-— ``start_plan``, whose real implementation needs Matrix. Everything between
-the endpoint and it is production code: the real snapshot store, the real
-topology provisioning, the real specification service, the real checkpoint
-gate, the real bridge.
+use, and the only pieces replaced are the two that need a live AgentTeams —
+``start_plan`` (the execution plane) and the runtime projection that makes the
+teams' Matrix rooms. Everything between the endpoint and them is production
+code: the real snapshot store, the real topology provisioning, the real
+specification service, the real checkpoint gate, the real bridge.
 """
 
 from __future__ import annotations
@@ -117,9 +117,39 @@ class StubPlanStarter:
         )
 
 
-def _with_execution_plane(monkeypatch, starter) -> None:
+class StubRuntimeProjection:
+    """Answers ``project`` by recording the project whose rooms were asked for.
+
+    The real one talks to the AgentTeams controller. What the tests here need
+    from it is only the order and the count: it must run before ``start_plan``
+    and it must run again on a retry, neither of which the response shows.
+    """
+
+    def __init__(self, *, log: list | None = None) -> None:
+        self.calls: list[UUID] = []
+        self._log = log
+
+    async def project(self, project_id: UUID) -> None:
+        self.calls.append(project_id)
+        if self._log is not None:
+            self._log.append(("project", project_id))
+
+
+def _with_execution_plane(monkeypatch, starter, projector=None) -> None:
+    """Stub both AgentTeams seams: the rooms, and the plane that uses them.
+
+    They go together on purpose. A round that starts without its rooms is
+    defect B-11, so a test that stubbed only ``start_plan`` would be asserting
+    against a state the endpoint no longer allows.
+    """
+
     monkeypatch.setattr(
         ApplicationContainer, "execution_plan_starter", lambda _self: starter
+    )
+    monkeypatch.setattr(
+        ApplicationContainer,
+        "topology_runtime_projector",
+        lambda _self: projector if projector is not None else StubRuntimeProjection(),
     )
 
 
@@ -524,6 +554,186 @@ def test_a_second_key_on_a_consumed_round_is_refused_not_replayed(
 
 
 # ---------------------------------------------------------------------------
+# The runtime projection (defect B-11)
+# ---------------------------------------------------------------------------
+
+
+def test_the_rooms_are_made_before_the_plan_is_started(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """B-11: a round must not start over teams that have no rooms.
+
+    Order is the whole assertion, and the response cannot show it — both
+    orders answer 200. The shared log can: the projection has to be the
+    earlier entry, because ``start_plan`` dispatches immediately and a team
+    whose ``room_id`` is still NULL fails that dispatch with
+    ``CollaborationRouteUnavailable``, which no button retries.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    log: list = []
+    starter = StubPlanStarter()
+    original_start = starter.start_plan
+
+    async def logged(**kwargs):
+        log.append(("start_plan", kwargs["project_id"]))
+        return await original_start(**kwargs)
+
+    starter.start_plan = logged  # type: ignore[method-assign]
+    projector = StubRuntimeProjection(log=log)
+    _with_execution_plane(monkeypatch, starter, projector)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        assert _materialize(chain).status_code == 200
+
+    assert [stage for stage, _ in log] == ["project", "start_plan"]
+    # And it is *this* project's rooms, not some other topology's.
+    assert projector.calls == [UUID(issue_id)]
+
+
+def test_a_runtime_without_rooms_answers_503_and_starts_nothing(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The controller cannot give the teams rooms: refuse, do not start.
+
+    Before B-11 was fixed this round started anyway and died on its first
+    dispatch. The three assertions are the three halves of "honest 503": the
+    status, that ``start_plan`` was never reached, and that the draft is still
+    a draft so the same key can finish the round later.
+    """
+
+    from repomesh.modules.repository_intelligence.ports import (
+        RuntimeProjectionUnavailable,
+    )
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+
+    class Unreachable:
+        calls = 0
+
+        async def project(self, project_id: UUID) -> None:
+            Unreachable.calls += 1
+            raise RuntimeProjectionUnavailable(
+                "AgentTeams HTTP 503: controller is not ready"
+            )
+
+    _with_execution_plane(monkeypatch, starter, Unreachable())
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain)
+        assert response.status_code == 503, response.text
+        assert "no rooms for this project's teams" in response.json()["detail"]
+        assert "controller is not ready" in response.json()["detail"]
+        assert starter.calls == []
+        # Unconsumed: the round is still materialisable.
+        assert chain.read()["step"] == 4
+
+        # The same key retries the whole projection rather than replaying a
+        # result nobody produced.
+        assert _materialize(chain).status_code == 503
+        assert Unreachable.calls == 2
+
+
+def test_a_retry_after_a_runtime_failure_finishes_the_round(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Re-entrancy across the new stage, under a *different* key.
+
+    The A-3 rule is that a retry completes the half-executed round instead of
+    racing it. A projection failure leaves the topology built and nothing
+    started, so the second attempt must project again, start once, and hand
+    back one plan — not a second one alongside an orphan.
+    """
+
+    from repomesh.modules.repository_intelligence.ports import (
+        RuntimeProjectionUnavailable,
+    )
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+
+    class FlakyRuntime:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def project(self, project_id: UUID) -> None:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeProjectionUnavailable("rooms are not there yet")
+
+    runtime = FlakyRuntime()
+    _with_execution_plane(monkeypatch, starter, runtime)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        first = _materialize(chain, key="rooms-came-late")
+        assert first.status_code == 503, first.text
+        topology_after_failure = _topology(container, issue_id)
+        assert topology_after_failure is not None
+        principals_after_failure = {p.id for p in _principals(container)}
+
+        second = _materialize(chain, key="a-fresh-panel-key")
+        assert second.status_code == 200, second.text
+        assert second.json()["status"] == "materialized"
+
+    assert runtime.calls == 2
+    assert len(starter.calls) == 1
+    # The repair reused what the first attempt built rather than rivalling it.
+    assert _topology(container, issue_id).id == topology_after_failure.id
+    assert {p.id for p in _principals(container)} == principals_after_failure
+
+
+def test_an_unconfigured_control_plane_refuses_rather_than_skipping(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The real projector, with the container the way defect B-11 found it.
+
+    No stub for the projection here — this is the composition root's own
+    adapter, and the point is that a container without an AgentTeams control
+    plane answers 503 instead of quietly starting a roomless round, which is
+    precisely how the defect stayed invisible.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: starter
+    )
+    container = replace(application_container, llm_client=_chain_llm())
+    assert container.agent_team_control_plane is None
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain)
+        assert response.status_code == 503, response.text
+        assert "control plane is not configured" in response.json()["detail"]
+        assert starter.calls == []
+        assert chain.read()["step"] == 4
+
+
+# ---------------------------------------------------------------------------
 # The gate and the missing execution plane
 # ---------------------------------------------------------------------------
 
@@ -584,9 +794,7 @@ def test_no_execution_plane_answers_503_and_leaves_the_round_open(
 
     _configure(monkeypatch)
     _, leader_id, _, _ = _seed(application_container)
-    monkeypatch.setattr(
-        ApplicationContainer, "execution_plan_starter", lambda _self: None
-    )
+    _with_execution_plane(monkeypatch, None)
     container = replace(application_container, llm_client=_chain_llm())
 
     with TestClient(create_app(container)) as client:
@@ -699,9 +907,7 @@ def test_a_failed_materialize_does_not_become_a_replayable_receipt(
             Exploding.calls += 1
             raise ExecutionPlaneUnavailable("plane went away mid-flight")
 
-    monkeypatch.setattr(
-        ApplicationContainer, "execution_plan_starter", lambda _self: Exploding()
-    )
+    _with_execution_plane(monkeypatch, Exploding())
 
     with TestClient(create_app(container)) as client:
         issue_id = _create_issue(client, leader_id)
@@ -797,9 +1003,7 @@ def test_a_team_without_a_room_is_a_503_not_a_500(
         async def start_plan(self, **_kwargs):
             raise CollaborationRouteUnavailable("AgentTeams room is not ready")
 
-    monkeypatch.setattr(
-        ApplicationContainer, "execution_plan_starter", lambda _self: Roomless()
-    )
+    _with_execution_plane(monkeypatch, Roomless())
 
     with TestClient(create_app(container)) as client:
         issue_id = _create_issue(client, leader_id)
@@ -847,9 +1051,7 @@ def test_a_retry_under_a_new_key_repairs_the_first_attempt(
             )
             raise CollaborationRouteUnavailable("AgentTeams room is not ready")
 
-    monkeypatch.setattr(
-        ApplicationContainer, "execution_plan_starter", lambda _self: RefusesOnce()
-    )
+    _with_execution_plane(monkeypatch, RefusesOnce())
 
     with TestClient(create_app(container)) as client:
         issue_id = _create_issue(client, leader_id)
@@ -909,9 +1111,7 @@ def test_a_retry_after_the_plan_changed_gets_its_own_keys(
             )
             raise CollaborationRouteUnavailable("AgentTeams room is not ready")
 
-    monkeypatch.setattr(
-        ApplicationContainer, "execution_plan_starter", lambda _self: RefusesOnce()
-    )
+    _with_execution_plane(monkeypatch, RefusesOnce())
 
     with TestClient(create_app(container)) as client:
         issue_id = _create_issue(client, leader_id)
