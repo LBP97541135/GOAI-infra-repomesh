@@ -22,6 +22,12 @@ from repomesh.modules.delivery.contracts import (
     RepositoryDeliveryStatus,
 )
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
+from repomesh.modules.repository_intelligence.contracts import (
+    classification_fingerprint,
+    discovery_step,
+    discovery_step_state,
+    effective_tiers,
+)
 from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
@@ -45,6 +51,7 @@ from .sources import (
     AgentNameSource,
     ArchiveSource,
     ChangeSetSource,
+    DiscoveryTaskProbe,
     ExecutionPlanSource,
     MessageSource,
     ObservationSource,
@@ -160,6 +167,7 @@ class DeliveryReadModelService:
         messages: MessageSource,
         observations: ObservationSource,
         runtime: RuntimeProbe | None = None,
+        discovery_tasks: DiscoveryTaskProbe | None = None,
         probe_timeout: float | None = None,
         probe_concurrency: int | None = None,
     ) -> None:
@@ -179,6 +187,10 @@ class DeliveryReadModelService:
         # None when AgentTeams is not configured: the roster still answers, with
         # runtime null rather than a fabricated "unreachable".
         self._runtime = runtime
+        # None outside the API process: the projection then reports the block's
+        # own state and no "running", which is true — this process knows of no
+        # step in flight — rather than guessed.
+        self._discovery_tasks = discovery_tasks
         # Per-request memo for reads this aggregation repeats. The container
         # builds a fresh service for every request — delivery_read_model_service
         # is deliberately not a cached_service — so nothing memoised here can
@@ -538,7 +550,16 @@ class DeliveryReadModelService:
         return (await self._issue_bundle(issue_id, plans)).summary
 
     async def get_issue(self, issue_id: UUID) -> dict | None:
-        """Contract v0.2 §3: §2's fields plus the round index and chips."""
+        """Contract v0.2 §3: §2's fields plus the round index and chips.
+
+        v0.4 §3.3 adds two scalars and no more. The badge on a detail page
+        needs "which step, what state"; the follow-up questions, the scored
+        candidates, the rationales and the tiering are an open-the-panel read
+        and live only on ``GET /issues/{id}/discovery``. Folding them in here
+        would make every detail render drag a page of rationale prose with it,
+        and ``GET /issues`` gets nothing at all — the list has no place to show
+        discovery progress, so a field there would have no consumer.
+        """
 
         plans_by_project = await self._plans_by_project()
         plans = plans_by_project.get(issue_id, ())
@@ -555,8 +576,14 @@ class DeliveryReadModelService:
             else {}
         )
         contract = await self._specifications.engineering_contract(issue_id)
+        discovery_snapshot = self._draft_of(snapshots) or (
+            snapshots[0] if snapshots else None
+        )
+        step, step_state, _running = self._discovery_state(issue_id, discovery_snapshot)
         return {
             **bundle.summary,
+            "discovery_step": step,
+            "discovery_state": step_state,
             "rounds": [
                 {
                     "round_id": facts.plan.id,
@@ -1099,6 +1126,102 @@ class DeliveryReadModelService:
         return {
             "items": items[offset : offset + limit],
             "next_cursor": (str(offset + limit) if offset + limit < len(items) else None),
+        }
+
+    def _draft_of(
+        self, snapshots: tuple[PlanSnapshotData, ...]
+    ) -> PlanSnapshotData | None:
+        """The unconsumed snapshot, if this round still has one (v0.4 §2.3).
+
+        ``for_project`` is newest-first, so the first unconsumed row is the
+        highest such version.
+        """
+
+        return next((s for s in snapshots if s.execution_plan_id is None), None)
+
+    def _discovery_state(
+        self, issue_id: UUID, snapshot: PlanSnapshotData | None
+    ) -> tuple[int, str, UUID | None]:
+        """§3.2's stepper cell and state, derived in exactly one place.
+
+        Both the discovery projection and the issue detail's two badge scalars
+        come through here, and the rules themselves live in the producing
+        module's contracts — so the panel, the badge and the write side cannot
+        end up with three opinions about which step an issue is on.
+        """
+
+        block = snapshot.discovery if snapshot is not None else None
+        in_flight = (
+            self._discovery_tasks.running(issue_id)
+            if self._discovery_tasks is not None
+            else None
+        )
+        running_task_id, running_step = in_flight if in_flight else (None, None)
+        has_plan = bool(snapshot is not None and snapshot.task_dag)
+        step = discovery_step(block)
+        state = discovery_step_state(
+            block, has_plan=has_plan, running_step=running_step
+        )
+        return step, state, running_task_id
+
+    async def discovery(self, issue_id: UUID) -> dict | None:
+        """Contract v0.4 §3.1: the discovery panel's whole read.
+
+        An issue that exists but never started a chain answers 200 with every
+        block null — the same call as v0.2 §7.2's "no team yet is an empty
+        list, not a 404". Only an issue with no snapshot at all is a 404.
+
+        Nothing here is summarised or trimmed. Rationales are long and the
+        temptation to cut them is real, but this is the text an approver is
+        deciding on, and a truncated reason is a reason that cannot be checked.
+        """
+
+        snapshots = await self._snapshots.for_project(issue_id)
+        if not snapshots:
+            return None
+        snapshot = self._draft_of(snapshots) or snapshots[0]
+        block = snapshot.discovery or {}
+        classification = block.get("classification")
+        step, state, running_task_id = self._discovery_state(issue_id, snapshot)
+
+        integration = None
+        if snapshot.task_dag or snapshot.execution_batches:
+            integration = {
+                "task_dag_count": len(snapshot.task_dag),
+                "batch_count": len(snapshot.execution_batches),
+                "contract_count": len(snapshot.contracts),
+            }
+
+        return {
+            "issue_id": issue_id,
+            "plan_version": snapshot.plan_version,
+            "step": step,
+            "step_state": state,
+            "running_task_id": running_task_id,
+            "requirement_text": snapshot.requirement_text,
+            "analyzed_requirement": (block.get("analysis") or {}).get(
+                "analyzed_requirement"
+            ),
+            "analysis": block.get("analysis"),
+            "candidates": block.get("candidates"),
+            "classification": classification,
+            # The fingerprint of the tiering as it stands, which is what an
+            # approval must be submitted against (§5.3). Distinct from
+            # ``approval.evidence_version``, which records what a past decision
+            # was bound to and is null until someone decides.
+            "classification_evidence_version": (
+                classification_fingerprint(classification) if classification else None
+            ),
+            "effective_tiers": effective_tiers(classification),
+            "approval": block.get("approval")
+            or {
+                "state": "not_requested",
+                "evidence_version": None,
+                "decided_by_agent_id": None,
+                "reason": "",
+                "decided_at": None,
+            },
+            "integration": integration,
         }
 
     async def repository_plan(self, issue_id: UUID, repository_id: UUID) -> dict | None:

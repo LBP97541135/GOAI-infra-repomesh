@@ -135,6 +135,21 @@ async def list_issue_rooms(issue_id: UUID, request: Request) -> dict:
     return payload
 
 
+@issues_router.get("/{issue_id}/discovery")
+async def get_issue_discovery(issue_id: UUID, request: Request) -> dict:
+    """Contract v0.4 §3.1. An issue that never started a chain returns 200.
+
+    Same call as §5.1's rooms endpoint: "nothing has happened yet" is a state
+    the panel renders, not an error. Only an issue with no snapshot at all —
+    nothing evidencing it exists — is a 404.
+    """
+
+    payload = await _service(request).discovery(issue_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail=f"issue not found: {issue_id}")
+    return payload
+
+
 @issues_router.get("/{issue_id}/repositories/{repository_id}/plan")
 async def get_repository_plan(
     issue_id: UUID, repository_id: UUID, request: Request

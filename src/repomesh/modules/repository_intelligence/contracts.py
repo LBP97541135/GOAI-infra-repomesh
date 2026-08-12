@@ -171,25 +171,34 @@ def effective_tiers(classification: dict[str, Any] | None) -> list[dict[str, Any
     this is its one implementation: the read model projects it and Step 3 feeds
     it into integration, so the plan is built from the same tiering the panel
     displays.
+
+    ``original_tier`` is **null unless ``adjusted`` is true**. It exists to
+    describe a change, and echoing the current tier back when nothing changed
+    invites a panel to render "was required, now required". The two nullable
+    cases stay distinguishable through ``adjusted``: ``adjusted: false`` with a
+    null original means untouched, while ``adjusted: true`` with a null
+    original means the approver added a repository the model never tiered.
     """
 
     if classification is None:
         return []
     rows: dict[str, dict[str, Any]] = {}
+    modelled: dict[str, str] = {}
     for tier in _TIERS:
         for item in classification.get(tier) or ():
             name = str(item.get("repository", ""))
+            modelled[name] = tier
             rows[name] = {
                 "repository": name,
                 "tier": tier,
                 "adjusted": False,
-                "original_tier": tier,
+                "original_tier": None,
             }
     for adjustment in classification.get("adjustments") or ():
         name = str(adjustment.get("repository", ""))
         tier = tier_of(str(adjustment.get("to", "")))
-        row = rows.get(name)
-        if row is None:
+        original = modelled.get(name)
+        if name not in rows:
             # An adjustment naming a repository the model never tiered still
             # counts: the approver added it deliberately, and dropping it would
             # silently ignore a human decision.
@@ -200,8 +209,10 @@ def effective_tiers(classification: dict[str, Any] | None) -> list[dict[str, Any
                 "original_tier": None,
             }
             continue
-        row["tier"] = tier
-        row["adjusted"] = tier != row["original_tier"]
+        adjusted = tier != original
+        rows[name]["tier"] = tier
+        rows[name]["adjusted"] = adjusted
+        rows[name]["original_tier"] = original if adjusted else None
     return [rows[name] for name in sorted(rows)]
 
 
