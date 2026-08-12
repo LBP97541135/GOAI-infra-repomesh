@@ -12,7 +12,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from repomesh.api.read_models import DeliveryReadModelService
-from repomesh.api.read_models.sources import PlanSnapshotData, RunnerEventData
+from repomesh.api.read_models.sources import (
+    PlanSnapshotData,
+    RepositoryProfileData,
+    RunnerEventData,
+)
 from repomesh.modules.collaboration.contracts import (
     CollaborationDeliveryStatus,
     CollaborationMessageKind,
@@ -37,6 +41,7 @@ from repomesh.modules.delivery.contracts import (
     SCMObservationView,
 )
 from repomesh.modules.task_orchestration.contracts import (
+    DeliveryRefusalView,
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
@@ -794,3 +799,100 @@ async def test_a_task_without_declared_evidence_contributes_no_diff() -> None:
     )
 
     assert (await service.get_delivery(plan.id))["diffs"] == []
+
+
+# ---------------------------------------------------------------------------
+# A refused delivery is projected, not left to be guessed at (A-19)
+# ---------------------------------------------------------------------------
+
+
+class StubRepositoryProfiles:
+    """One catalog row, so the refusal can name a repository rather than a UUID."""
+
+    def __init__(self, repository_id: UUID, name: str) -> None:
+        self._profile = RepositoryProfileData(
+            id=repository_id,
+            name=name,
+            url=f"https://github.com/example/{name}",
+            description="",
+            topics=(),
+            languages=(),
+            profiled_at=NOW,
+        )
+
+    async def list(self):
+        return (self._profile,)
+
+    async def profiles(self):
+        return (self._profile,)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_delivery_is_projected_with_the_servers_own_words() -> None:
+    """Defect A-19: the console must be able to say why the round is stopped.
+
+    Before this, a round whose batch had succeeded and whose delivery kept
+    refusing projected as EXECUTE with "第 1/1 批执行中" — a note that was true
+    of nothing. The batch was done; delivery had refused it; the refusal lived
+    only in a log line nobody was reading.
+
+    ``reason`` is asserted character-for-character against what
+    ``_candidates_for_batch`` raises. A projection that translated or
+    summarised it would hand the operator a sentence they cannot match against
+    the evidence or the log.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    refused_at = datetime(2026, 8, 12, 3, 4, 5, tzinfo=UTC)
+    plan = replace(
+        _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS),
+        delivery_refusal=DeliveryRefusalView(
+            reason="Runner evidence has no test results",
+            batch_index=0,
+            repository_id=repository_id,
+            task_id=leader_task_id,
+            at=refused_at,
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        repositories=StubRepositoryProfiles(repository_id, "repomesh-e2e-checkout"),
+    )
+
+    detail = await service.get_delivery(plan.id)
+    assert detail["delivery_refusal"] == {
+        "reason": "Runner evidence has no test results",
+        "batch_index": 0,
+        "repository_id": repository_id,
+        "repository_name": "repomesh-e2e-checkout",
+        "task_id": leader_task_id,
+        "at": refused_at,
+    }
+    # And the list a console opens on says it too, ahead of the batch counter
+    # that used to be the only thing this round reported.
+    listed = await service.list_deliveries()
+    summary = listed["projects"][0]["deliveries"][0]
+    assert summary["phase_note"] == "交付被拒:Runner evidence has no test results"
+
+
+@pytest.mark.asyncio
+async def test_a_round_with_no_refusal_projects_null_and_its_ordinary_note() -> None:
+    """The reverse: nothing invented for the ordinary case."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
+    service = _service(
+        StubPlans(plan), StubSnapshots(), StubTasks(), StubChangeSets({}), StubArchives()
+    )
+
+    assert (await service.get_delivery(plan.id))["delivery_refusal"] is None
+    listed = await service.list_deliveries()
+    assert listed["projects"][0]["deliveries"][0]["phase_note"] == "第 1/1 批执行中"

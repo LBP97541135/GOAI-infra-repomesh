@@ -21,6 +21,7 @@ from repomesh.modules.task_orchestration.application import (
 )
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
+    BatchDeliveryRefused,
     DeliveryGatedRepositoryView,
     DeliveryStatePort,
     ExecutionPlanStatus,
@@ -982,3 +983,172 @@ async def test_terminal_task_outside_any_plan_is_ignored() -> None:
     await environment.advancer.on_task_terminal(uuid4())
 
     assert environment.plans.plans == {}
+
+
+# ---------------------------------------------------------------------------
+# A refused delivery is a state, not a background traceback (A-19)
+# ---------------------------------------------------------------------------
+
+
+class RefusingDelivery:
+    """``on_batch_deliver`` that refuses until it is told to stop refusing.
+
+    Models the real sequence rather than a single failure: the batch is refused
+    because its Runner evidence carries no test results, and later — after a
+    re-dispatch with the repository's verification commands actually in the
+    payload — the same call succeeds. Both halves are the defect.
+    """
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        # Set by the test once the environment exists; the environment needs
+        # the callback at construction time and the callback needs its ids.
+        self.repository_id: UUID | None = None
+        self.task_id: UUID | None = None
+        self.refusing = True
+        self.calls = 0
+
+    async def __call__(self, plan) -> None:
+        self.calls += 1
+        if self.refusing:
+            raise BatchDeliveryRefused(
+                self.reason, repository_id=self.repository_id, task_id=self.task_id
+            )
+
+
+async def _succeed_first_batch(environment: Environment, plan) -> UUID:
+    """Carry batch 0's only worker to SUCCEEDED and re-enter the advancer."""
+
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker.id, TaskStatus.SUCCEEDED, "Repo 0 done.")
+    await environment.advancer.on_task_terminal(worker.id)
+    return worker.id
+
+
+@pytest.mark.asyncio
+async def test_a_refused_delivery_is_recorded_on_the_round_rather_than_thrown_away() -> None:
+    """Defect A-19's silent twin: the refusal used to reach nobody.
+
+    ``_candidates_for_batch`` refuses a candidate whose Runner evidence has no
+    test results — correctly. But it refused by raising into
+    ``_advance_if_ready``, which runs under the Runner ingest's best-effort
+    handler, so the exception was logged and dropped on every terminal event.
+    Nothing was written and nothing was projected: the console showed green
+    tasks beside a change set that would stay empty forever.
+
+    So the assertion is not "it did not crash". It is that the round now
+    *carries* the refusal, in the delivering side's own words, naming the
+    repository — while still refusing to advance, which is the part that was
+    right all along.
+    """
+
+    delivery = RefusingDelivery("Runner evidence has no test results")
+    environment = Environment(repository_count=2, on_batch_deliver=delivery)
+    delivery.repository_id = environment.repository_ids[0]
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    await _succeed_first_batch(environment, plan)
+
+    refused = await environment.plans.get(plan.id)
+    assert refused is not None
+    assert refused.delivery_refusal is not None
+    assert refused.delivery_refusal.reason == "Runner evidence has no test results"
+    assert refused.delivery_refusal.repository_id == environment.repository_ids[0]
+    assert refused.delivery_refusal.batch_index == 0
+    # Refused, not failed and not advanced. Delivery declining unverified work
+    # is correct and nothing here weakens it.
+    assert refused.status is ExecutionPlanStatus.IN_PROGRESS
+    assert refused.current_batch_index == 0
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_refusal_does_not_rewrite_the_round() -> None:
+    """The crash-loop's shape, gone: many events, one recorded refusal.
+
+    Every terminal Runner event and every delivery observation re-enters the
+    advancer, so an unresolved refusal is restated constantly. If each
+    restatement wrote a new version, the round's history would be the loop
+    rather than the reason for it.
+    """
+
+    delivery = RefusingDelivery("Runner evidence has no test results")
+    environment = Environment(repository_count=2, on_batch_deliver=delivery)
+    delivery.repository_id = environment.repository_ids[0]
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    worker_id = await _succeed_first_batch(environment, plan)
+    first = await environment.plans.get(plan.id)
+    assert first is not None and first.delivery_refusal is not None
+
+    await environment.advancer.reconsider_task(worker_id)
+    await environment.advancer.reconsider_task(worker_id)
+
+    again = await environment.plans.get(plan.id)
+    assert again is not None
+    assert delivery.calls == 3  # it really was asked three times
+    assert again.version == first.version
+    assert again.delivery_refusal.at == first.delivery_refusal.at
+
+
+@pytest.mark.asyncio
+async def test_evidence_that_finally_carries_test_results_clears_the_refusal() -> None:
+    """Convergence, and what re-triggers it.
+
+    Nothing new: the same entry points that were already re-firing during the
+    crash-loop — ``on_task_terminal`` for a terminal Runner event,
+    ``reconsider_task`` for a delivery observation — reach the advance path.
+    Once delivery stops refusing, the recorded refusal is cleared and the plan
+    advances in the same call, with no operator action and no second code path.
+    """
+
+    delivery = RefusingDelivery("Runner evidence has no test results")
+    environment = Environment(repository_count=2, on_batch_deliver=delivery)
+    delivery.repository_id = environment.repository_ids[0]
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    worker_id = await _succeed_first_batch(environment, plan)
+    assert (await environment.plans.get(plan.id)).delivery_refusal is not None
+
+    # The re-dispatched Worker reported evidence with test results in it, so
+    # the delivering side accepts the batch this time.
+    delivery.refusing = False
+    await environment.advancer.reconsider_task(worker_id)
+
+    advanced = await environment.plans.get(plan.id)
+    assert advanced is not None
+    assert advanced.delivery_refusal is None
+    assert advanced.current_batch_index == 1
+    assert advanced.status is ExecutionPlanStatus.IN_PROGRESS
+
+
+@pytest.mark.asyncio
+async def test_a_fault_in_the_delivering_side_is_not_recorded_as_its_verdict() -> None:
+    """Only a *stated* refusal is caught, and the reverse-proof of that.
+
+    An adapter that cannot reach GitHub is a fault, not a judgement about the
+    evidence. Recording it on the round would put a sentence in front of the
+    operator that delivery never said. It still escapes — which is also what
+    keeps this handling from being a blanket ``except Exception`` that would
+    hide the next bug the way the old code hid this one.
+    """
+
+    async def _explode(plan) -> None:
+        raise RuntimeError("github: connection reset")
+
+    environment = Environment(repository_count=2, on_batch_deliver=_explode)
+    plan = environment.plan(((0,), (1,)))
+    await environment.advancer.start(plan, idempotency_key="plan-start")
+
+    leader_task_id = await environment.leader_task_id(plan.id, 0, 0)
+    worker = await environment.worker_task_of(leader_task_id)
+    await environment.finish(worker.id, TaskStatus.SUCCEEDED, "Repo 0 done.")
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await environment.advancer.on_task_terminal(worker.id)
+
+    untouched = await environment.plans.get(plan.id)
+    assert untouched is not None and untouched.delivery_refusal is None

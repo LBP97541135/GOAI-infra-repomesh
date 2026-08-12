@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
@@ -85,6 +86,24 @@ class PlannedRepositoryTaskView:
 
 
 @dataclass(frozen=True, slots=True)
+class DeliveryRefusalView:
+    """Why the batch this plan is standing on was not delivered.
+
+    Delivery declining unverified work is correct and stays; what changes is
+    that the decline is now a fact the round carries rather than a traceback in
+    a background log (defect A-19's silent twin). ``reason`` is the delivering
+    side's own sentence, stored verbatim: a projection that reworded it would
+    throw away the only part an operator can act on.
+    """
+
+    reason: str
+    batch_index: int
+    repository_id: UUID | None
+    task_id: UUID | None
+    at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionPlanView:
     id: UUID
     organization_id: UUID
@@ -93,6 +112,45 @@ class ExecutionPlanView:
     status: ExecutionPlanStatus
     current_batch_index: int
     batches: tuple[tuple[PlannedRepositoryTaskView, ...], ...]
+    delivery_refusal: DeliveryRefusalView | None = None
+
+
+class BatchDeliveryRefused(ValueError):
+    """The delivery side declined to deliver this batch, and said why.
+
+    The ``on_batch_deliver`` callback's own word, declared here rather than in
+    the integration that raises it for the same reason
+    ``TaskPublicationUnavailable`` is declared here: it is the port's vocabulary,
+    and the module that invokes the port must be able to name it without
+    importing the adapter behind it.
+
+    A ``ValueError`` subclass on purpose. Every refusal in
+    ``PlanDeliveryFinalizer._candidates_for_batch`` was already a bare
+    ``ValueError``; making the type narrower rather than different means the
+    callers and tests that already treat these as ValueErrors keep working,
+    while the advancer can single out a *stated* refusal from an ordinary bug.
+    An unhandled crash-loop is what this replaces (defect A-19): the refusal
+    "Runner evidence has no test results" escaped ``_advance_if_ready`` into a
+    background handler that logged and dropped it, so nothing was written,
+    nothing was projected, and the console showed green tasks beside an empty
+    change set forever.
+
+    ``repository_id`` and ``task_id`` are the candidate the refusal is about,
+    when the refusal knows — a contract-coverage refusal names no single
+    repository, and inventing one would be worse than leaving it null.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        repository_id: UUID | None = None,
+        task_id: UUID | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.repository_id = repository_id
+        self.task_id = task_id
 
 
 @dataclass(frozen=True, slots=True)

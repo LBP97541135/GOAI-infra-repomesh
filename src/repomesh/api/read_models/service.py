@@ -113,6 +113,9 @@ _ACTIVE_TASK_STATUSES = frozenset({TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS, 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 """Sort floor for rounds whose only timestamp source is missing entirely."""
 
+_SETTLED_PHASES = frozenset({DeliveryPhase.DELIVERED, DeliveryPhase.ARCHIVED})
+"""Rounds a stale delivery refusal must not be allowed to talk over (A-19)."""
+
 
 @dataclass(frozen=True, slots=True)
 class _RoundFacts:
@@ -394,6 +397,15 @@ class DeliveryReadModelService:
 
     @staticmethod
     def _phase_note(phase: DeliveryPhase, plan, change_set: ChangeSetView | None) -> str:
+        refusal = plan.delivery_refusal
+        if refusal is not None and phase not in _SETTLED_PHASES:
+            # Defect A-19. Ahead of every other note on purpose: the batch did
+            # succeed and the plan is in progress, so "第 n/m 批执行中" is what
+            # this round used to say while it was in fact refused and going
+            # nowhere. The reason is the delivering side's own sentence,
+            # unedited — a reworded refusal is one the operator cannot match
+            # against the log or the evidence.
+            return f"交付被拒:{refusal.reason}"
         if phase is DeliveryPhase.EXECUTE:
             return f"第 {plan.current_batch_index + 1}/{len(plan.batches)} 批执行中"
         if change_set is not None:
@@ -1739,6 +1751,9 @@ class DeliveryReadModelService:
                 "merge_order": merge_order,
             },
             "tasks": task_views,
+            # Defect A-19: why this round has no change set, when that is a
+            # decision rather than a wait. Null is the ordinary case.
+            "delivery_refusal": _delivery_refusal_block(plan, catalog),
             "change_set": self._change_set_block(change_set) if change_set is not None else None,
             "validation_snapshot": (
                 {
@@ -2089,6 +2104,35 @@ def _projected_item(
         "repository_id": repository_id,
         "task_id": task_id,
         "payload_ref": payload_ref,
+    }
+
+
+def _delivery_refusal_block(plan, catalog: dict) -> dict | None:
+    """The delivering side's stated refusal for this round, or None (A-19).
+
+    Names the repository so the panel can point at one row rather than at the
+    round; falls back to the id when the catalog does not know it, and to null
+    when the refusal itself names no repository. ``reason`` is passed through
+    verbatim — the projection's job is to carry the server's words to the
+    operator, not to phrase them.
+    """
+
+    refusal = plan.delivery_refusal
+    if refusal is None:
+        return None
+    repository_id = refusal.repository_id
+    name = None
+    if repository_id is not None:
+        name = (
+            catalog[repository_id].name if repository_id in catalog else str(repository_id)[:8]
+        )
+    return {
+        "reason": refusal.reason,
+        "batch_index": refusal.batch_index,
+        "repository_id": repository_id,
+        "repository_name": name,
+        "task_id": refusal.task_id,
+        "at": refusal.at,
     }
 
 
