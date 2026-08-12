@@ -55,8 +55,7 @@ class StubRepositories:
         from repomesh.api.read_models.sources import RepositoryData
 
         return tuple(
-            RepositoryData(id=key, name=name, description="")
-            for key, name in self.mapping.items()
+            RepositoryData(id=key, name=name, description="") for key, name in self.mapping.items()
         )
 
 
@@ -119,9 +118,7 @@ async def test_rooms_are_two_per_team_and_empty_rooms_stay_empty() -> None:
     project_id = uuid4()
     repository_id = uuid4()
     plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.IN_PROGRESS)
-    worker = replace(
-        _worker(project_id, repository_id, uuid4()), status=TaskStatus.IN_PROGRESS
-    )
+    worker = replace(_worker(project_id, repository_id, uuid4()), status=TaskStatus.IN_PROGRESS)
     topology = StubTopology({project_id: _topology(project_id, repository_id)})
     team = topology.mapping[project_id].repository_teams[0]
     service = _service(
@@ -198,9 +195,7 @@ async def test_live_is_false_without_in_flight_work() -> None:
     project_id = uuid4()
     repository_id = uuid4()
     plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
-    finished = replace(
-        _worker(project_id, repository_id, uuid4()), status=TaskStatus.SUCCEEDED
-    )
+    finished = replace(_worker(project_id, repository_id, uuid4()), status=TaskStatus.SUCCEEDED)
     service = _service(
         StubPlans(plan),
         StubSnapshots(),
@@ -397,9 +392,7 @@ async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None
         StubTasks(),
         StubChangeSets({}),
         StubArchives(),
-        repositories=StubRepositories(
-            {api: "repomesh-e2e-api", client: "repomesh-e2e-client"}
-        ),
+        repositories=StubRepositories({api: "repomesh-e2e-api", client: "repomesh-e2e-client"}),
         specifications=StubSpecifications(spec),
     )
 
@@ -424,9 +417,7 @@ async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None
         },
     ]
     # The unresolvable dependency name is dropped instead of becoming a null edge.
-    assert payload["dag"]["edges"] == [
-        {"from_repository_id": api, "to_repository_id": client}
-    ]
+    assert payload["dag"]["edges"] == [{"from_repository_id": api, "to_repository_id": client}]
     # ...and the drop is reported, because a DAG quietly missing an edge reads
     # as a complete one.
     assert "dropped 1 unresolvable DAG edge" in caplog.text
@@ -441,3 +432,117 @@ async def test_repository_plan_projects_a_repository_grained_dag(caplog) -> None
     # read spec:null as "no spec of its own", so the wrong page rendered as a
     # perfectly normal one.
     assert await service.repository_plan(project_id, uuid4()) is None
+
+
+@pytest.mark.asyncio
+async def test_a_name_shared_with_another_issue_does_not_steal_the_node(caplog) -> None:
+    """repositories.name has no unique constraint and holds the short name.
+
+    Two owners' `api` are both legitimate rows, and a plain name->id map
+    resolved to whichever came last. The issue's own repository has to win, or
+    nodes, edges and is_focus all point at somebody else's repository while
+    the page looks perfectly ordinary.
+    """
+
+    project_id = uuid4()
+    mine, stranger = uuid4(), uuid4()
+    plan = _plan(project_id, mine, uuid4(), ExecutionPlanStatus.COMPLETED)
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(
+            _snapshot(
+                project_id,
+                plan.id,
+                batches=(("api",),),
+                dag=({"repository": "api", "depends_on": []},),
+            )
+        ),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        # The stranger is listed after mine, so last-write-wins picked it.
+        repositories=StubRepositories({mine: "api", stranger: "api"}),
+    )
+
+    payload = await service.repository_plan(project_id, mine)
+
+    assert payload["dag"]["nodes"][0]["repository_id"] == mine
+    assert payload["dag"]["nodes"][0]["is_focus"] is True
+
+
+@pytest.mark.asyncio
+async def test_edges_never_point_at_a_node_the_layout_did_not_draw(caplog) -> None:
+    """Nodes come from execution_batches, edges from task_dag.
+
+    §5.5 reads them as one graph but nothing made them agree, so a repository
+    dropped from the batches while its dependency survived produced an edge
+    into empty canvas. Dropping it is the same treatment §7.2 already gives an
+    unresolvable name, and it is logged for the same reason.
+    """
+
+    project_id = uuid4()
+    api, client = uuid4(), uuid4()
+    plan = _plan(project_id, api, uuid4(), ExecutionPlanStatus.COMPLETED)
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(
+            _snapshot(
+                project_id,
+                plan.id,
+                # client is known to the catalog but was left out of the batches
+                batches=(("repomesh-e2e-api",),),
+                dag=(
+                    {
+                        "repository": "repomesh-e2e-client",
+                        "depends_on": ["repomesh-e2e-api"],
+                    },
+                ),
+            )
+        ),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        repositories=StubRepositories({api: "repomesh-e2e-api", client: "repomesh-e2e-client"}),
+    )
+
+    with caplog.at_level("WARNING"):
+        payload = await service.repository_plan(project_id, api)
+
+    assert [node["name"] for node in payload["dag"]["nodes"]] == ["repomesh-e2e-api"]
+    assert payload["dag"]["edges"] == []
+    assert "not in any batch" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_node_with_no_catalog_match_is_reported_not_just_nulled(caplog) -> None:
+    """The node stays — dropping it would leave a hole in its batch — but
+    §7.2's "never truncate silently" covers nodes as much as edges, and only
+    the edges were reporting."""
+
+    project_id = uuid4()
+    api = uuid4()
+    plan = _plan(project_id, api, uuid4(), ExecutionPlanStatus.COMPLETED)
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(
+            _snapshot(
+                project_id,
+                plan.id,
+                batches=(("repomesh-e2e-api",), ("retired-repo",)),
+                dag=({"repository": "repomesh-e2e-api", "depends_on": []},),
+            )
+        ),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        repositories=StubRepositories({api: "repomesh-e2e-api"}),
+    )
+
+    with caplog.at_level("WARNING"):
+        payload = await service.repository_plan(project_id, api)
+
+    retired = [n for n in payload["dag"]["nodes"] if n["name"] == "retired-repo"][0]
+    assert retired["repository_id"] is None
+    assert retired["is_focus"] is False
+    assert "no catalog match" in caplog.text
+    assert "retired-repo" in caplog.text

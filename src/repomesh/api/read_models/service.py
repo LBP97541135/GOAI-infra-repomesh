@@ -203,6 +203,52 @@ class DeliveryReadModelService:
             )
         return self._validation_memo[project_id]
 
+    async def _issue_repository_ids(self, issue_id: UUID) -> set[UUID]:
+        """The repositories a §3 issue owns: every round's plan plus the topology.
+
+        Same set _issue_bundle publishes, derived without the round facts —
+        callers that only need membership should not pay for change sets and
+        decision counts.
+        """
+
+        plans = (await self._plans_by_project()).get(issue_id, ())
+        owned = {
+            planned.repository_id for plan in plans for batch in plan.batches for planned in batch
+        }
+        topology = await self._topology.get_view(issue_id)
+        if topology is not None:
+            owned |= {team.repository_id for team in topology.repository_teams}
+        return owned
+
+    def _name_resolver(self, catalog: dict, owned: set[UUID]) -> dict[str, UUID | None]:
+        """Map repository name to id, preferring the issue's own repositories.
+
+        `repositories.name` carries no unique constraint and holds the platform
+        short name, so two owners' `api` are both legitimate rows. A plain
+        `{item.name: item.id}` comprehension resolved such a name to whichever
+        row came last, which silently pointed nodes, edges and is_focus at a
+        repository from another issue.
+
+        Names outside the issue fall back to the catalog at large, and a name
+        that is ambiguous there resolves to None — the same treatment as a name
+        the catalog does not know, because picking one of two is a guess.
+        """
+
+        def collect(items) -> dict[str, UUID | None]:
+            found: dict[str, UUID | None] = {}
+            for item in items:
+                if item.name in found and found[item.name] != item.id:
+                    found[item.name] = None  # ambiguous: refuse to guess
+                else:
+                    found.setdefault(item.name, item.id)
+            return found
+
+        mine = collect(item for item in catalog.values() if item.id in owned)
+        everywhere = collect(catalog.values())
+        # The issue's own repositories win outright; only names it does not
+        # own fall through, and there an ambiguous name stays unresolved.
+        return {**everywhere, **mine}
+
     async def _agent_name(self, agent_id: UUID | None) -> str | None:
         """Resolve a name once per agent instead of once per mention.
 
@@ -1058,7 +1104,8 @@ class DeliveryReadModelService:
             return None
         snapshot = snapshots[0]
         catalog = await self._catalog()
-        id_by_name = {item.name: item.id for item in catalog.values()}
+        owned = await self._issue_repository_ids(issue_id)
+        id_by_name = self._name_resolver(catalog, owned)
 
         # Membership check. Without it the sheet for an unrelated repository
         # came back 200 carrying this issue's DAG, is_focus false everywhere
@@ -1073,30 +1120,41 @@ class DeliveryReadModelService:
         # repository can sit in either one alone and still legitimately belong
         # here, so checking only the bundle rejects rows the sheet itself
         # draws.
-        planned = {
+        drawn = {
             id_by_name[name]
             for batch in snapshot.execution_batches
             for name in batch
-            if name in id_by_name
+            if id_by_name.get(name) is not None
         }
-        if repository_id not in planned:
-            plans = (await self._plans_by_project()).get(issue_id, ())
-            bundle = await self._issue_bundle(issue_id, plans)
-            if repository_id not in bundle.repository_ids:
-                return None
+        if repository_id not in drawn and repository_id not in owned:
+            return None
 
         nodes = []
+        unresolved_nodes: list[str] = []
         for batch_index, batch in enumerate(snapshot.execution_batches):
             for name in batch:
                 node_id = id_by_name.get(name)
+                if node_id is None:
+                    # The node stays — dropping it would leave a hole in the
+                    # batch and mislay the layout — but §7.2's "never truncate
+                    # silently" applies to it just as much as to an edge.
+                    unresolved_nodes.append(name)
                 nodes.append(
                     {
                         "repository_id": node_id,
                         "name": name,
                         "batch_index": batch_index,
-                        "is_focus": node_id == repository_id,
+                        "is_focus": node_id is not None and node_id == repository_id,
                     }
                 )
+        if unresolved_nodes:
+            _logger.warning(
+                "issue %s repository %s: %d DAG node(s) have no catalog match: %s",
+                issue_id,
+                repository_id,
+                len(unresolved_nodes),
+                ", ".join(unresolved_nodes),
+            )
         edges = []
         dropped: list[str] = []
         for node in snapshot.task_dag:
@@ -1108,6 +1166,13 @@ class DeliveryReadModelService:
                     # A name the catalog cannot resolve is not an edge; an edge
                     # with a null endpoint would draw a line to nowhere.
                     dropped.append(f"{dependency} -> {target_name}")
+                    continue
+                if source not in drawn or target not in drawn:
+                    # nodes come from execution_batches and edges from task_dag;
+                    # §5.5 reads them as one graph, but nothing made them agree.
+                    # An endpoint the layout never drew is a line to an empty
+                    # spot on the canvas.
+                    dropped.append(f"{dependency} -> {target_name} (not in any batch)")
                     continue
                 edges.append({"from_repository_id": source, "to_repository_id": target})
         if dropped:
