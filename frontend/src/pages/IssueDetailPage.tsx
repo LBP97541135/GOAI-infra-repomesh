@@ -1,6 +1,7 @@
 import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { Decision } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
+import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
 import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, eventTime, openedBy, shortId } from "../display";
 
@@ -79,6 +80,8 @@ export function IssueDetailPage({
   onToggleDeck,
   onBringToFront,
   onDecisionAction,
+  planState,
+  onRetryPlan,
   onBack,
   onOpenRoom,
   onToast,
@@ -98,6 +101,9 @@ export function IssueDetailPage({
   onToggleDeck: () => void;
   onBringToFront: (id: string) => void;
   onDecisionAction: (decision: Decision, actionIdx: number) => void;
+  /** 计划 DAG 面板（C-2）的取数四态：加载 / 无快照 / 失败 / 就绪，由容器持有 */
+  planState: PlanDagState;
+  onRetryPlan: () => void;
   onBack: () => void;
   onOpenRoom: (room: RoomListItemView) => void;
   onToast: (text: string) => void;
@@ -190,6 +196,11 @@ export function IssueDetailPage({
           );
         })}
       </div>
+
+      {/* 计划 DAG（C-2）：位置按 IA 定稿——issue 详情页新区块，关联仓库芯片之后、
+          决策夹之前（先看计划长什么样，再看这一轮要决什么）。本批只做静态渲染，
+          「物化并开工」与执行期着色属 C-3/C-4。 */}
+      <PlanDagPanel state={planState} onRetry={onRetryPlan} />
 
       {/* 决策夹：位置按设计定稿——关联仓库芯片之后、房间区之前。
           决策是轮次粒度，deckNote 说明取的是哪一轮，避免与 issue 级

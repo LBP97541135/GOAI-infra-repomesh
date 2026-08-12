@@ -10,10 +10,12 @@ import {
   type GovernanceAgent,
 } from "../api/decisions";
 import type { RoundHistoryState } from "../components/RoundsPanel";
-import { fetchIssueDetail, fetchRooms } from "../api/rooms";
+import { fetchIssueDetail, fetchRepositoryPlan, fetchRooms } from "../api/rooms";
+import { ApiError } from "../api/client";
 import { resolveDataSourceMode } from "../api/source";
 import { ApprovalModal } from "../components/ApprovalModal";
 import { EvidenceModal } from "../components/EvidenceModal";
+import type { PlanDagState } from "../components/PlanDagPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 import { errText, shortId } from "../display";
 import { approvalForDecision, evidenceFromAggregate } from "../viewmodel";
@@ -72,6 +74,11 @@ export function IssueDetailContainer({
     const id = window.setTimeout(() => setArchiveConfirmId(null), 8000);
     return () => window.clearTimeout(id);
   }, [archiveConfirmId]);
+
+  /** 计划 DAG 面板（C-2）：契约 §5.4 的计划纸面。取数失败 / 无快照都不该拖垮整页，
+   *  所以自成一态，与决策夹同款单区块降级。 */
+  const [planState, setPlanState] = useState<PlanDagState>({ status: "loading" });
+  const [planReload, setPlanReload] = useState(0);
 
   /** 证据面（B-3）：决策夹取数时保留的本轮聚合 + 当前打开的单仓证据 */
   const [deckAggregate, setDeckAggregate] = useState<DeliveryAggregate | null>(null);
@@ -161,6 +168,45 @@ export function IssueDetailContainer({
     // roundLabel 只消费 rounds，够用。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId, detail?.rounds, reload]);
+
+  /** 计划纸面的锚点仓。§5.4 端点是**单仓作用域**，而 DAG 与 execution_batches 是
+   *  issue 级、每个仓取回的是同一份（服务端只用 repository_id 决定哪个节点带
+   *  `is_focus` 和取哪一份 spec）——所以画整张图只需要任取一个本 issue 的仓库。
+   *  取第一个，并在面板页脚把「锚点是谁」说出来，免得读者把 is_focus 读成别的意思。 */
+  const anchorRepositoryId = detail?.repositories[0]?.repository_id ?? null;
+  const anchorRepositoryName = detail?.repositories[0]?.name ?? null;
+  const hasDetail = detail !== null;
+
+  useEffect(() => {
+    if (!hasDetail) return;
+    if (!anchorRepositoryId || !anchorRepositoryName) {
+      // 草稿 issue：范围未定 → 没有仓库可作锚点，端点无从调用。空要说出来。
+      setPlanState({
+        status: "absent",
+        reason: "尚未确定交付范围，暂无计划 DAG（计划在范围冻结后由发现链生成，纸面按仓取数）。",
+      });
+      return;
+    }
+    let cancelled = false;
+    setPlanState({ status: "loading" });
+    fetchRepositoryPlan(issueId, anchorRepositoryId)
+      .then((plan) => !cancelled && setPlanState({ status: "ready", plan, anchorName: anchorRepositoryName }))
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        // 404 = 无计划快照。服务端把「issue 不存在」与「issue 从未规划」写成同一个
+        // 404，但此处 issue 详情已经取到了，所以只可能是后者——不是错误态。
+        setPlanState(
+          err instanceof ApiError && err.status === 404
+            ? { status: "absent", reason: "本 issue 还没有计划快照，DAG 无从绘制（计划由发现链在分档审批后生成）。" }
+            : { status: "error", message: errText(err) },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+    // 依赖只列锚点标识与刷新计数，不列 detail 整体：reload 时 detail 的 identity 必变，
+    // 依赖整个对象会让每次刷新多发一次计划请求（B2 的同款教训）。
+  }, [issueId, hasDetail, anchorRepositoryId, anchorRepositoryName, reload, planReload]);
 
   const handleToggleRound = useCallback(
     (round: IssueRoundView) => {
@@ -330,6 +376,8 @@ export function IssueDetailContainer({
           })
         }
         onDecisionAction={handleDecisionAction}
+        planState={planState}
+        onRetryPlan={() => setPlanReload((n) => n + 1)}
         onBack={onBack}
         onOpenRoom={onOpenRoom}
         onToast={onToast}
