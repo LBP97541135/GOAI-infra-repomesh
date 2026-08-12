@@ -2271,6 +2271,12 @@ def _diffs(worker_tasks: tuple[TaskView, ...]) -> list[dict]:
     field the producer only ever declared as free text. The producer now owns
     that parse and publishes TaskEvidenceView, so a task with no structured
     evidence says so instead of being rescued by a JSONDecodeError handler.
+
+    The ``commit_sha is not None`` filter is not defensive padding: since A-18's
+    fourth face, evidence survives a failed run and its commit is null. §3
+    declares ``diffs[].commit_sha`` as a string, and a diff is a *change that
+    exists* — a run that never committed produced none. Reporting it with a
+    null head would put a row in diffs[] pointing at nothing.
     """
 
     return [
@@ -2282,7 +2288,9 @@ def _diffs(worker_tasks: tuple[TaskView, ...]) -> list[dict]:
             "diffstat": None,
         }
         for task in worker_tasks
-        if task.status is TaskStatus.SUCCEEDED and task.evidence is not None
+        if task.status is TaskStatus.SUCCEEDED
+        and task.evidence is not None
+        and task.evidence.commit_sha is not None
     ]
 
 

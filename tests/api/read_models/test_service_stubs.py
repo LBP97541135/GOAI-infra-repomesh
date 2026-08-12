@@ -1104,3 +1104,57 @@ async def test_a_round_with_no_refusal_projects_null_and_its_ordinary_note() -> 
     assert (await service.get_delivery(plan.id))["delivery_refusal"] is None
     listed = await service.list_deliveries()
     assert listed["projects"][0]["deliveries"][0]["phase_note"] == "第 1/1 批执行中"
+
+
+# -------------------------------------------------- A-18, fourth face -------
+
+
+@pytest.mark.asyncio
+async def test_a_failed_task_projects_its_reason_and_contributes_no_diff() -> None:
+    """The reason an operator can act on, and nothing that pretends to be a change.
+
+    ``changed_path_denied: tests/test_discount.py`` is the live text, and it
+    names the fix (add ``tests/`` to allowed_paths). It had no field to live in
+    while evidence was gated on a commit sha, so the console rendered "failed"
+    and stopped there.
+
+    diffs[] must stay empty for the same row: §3 declares ``commit_sha`` a
+    string, and a run that never committed produced no change to diff.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    reason = "changed_path_denied: tests/test_discount.py"
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
+    worker = replace(
+        _worker(project_id, repository_id, leader_task_id),
+        status=TaskStatus.FAILED,
+        result_summary="{...}",
+        evidence=TaskEvidenceView(
+            commit_sha=None,
+            run_id=uuid4(),
+            changed_files=("src/checkout/tiers.py", "tests/test_discount.py"),
+            base_sha="0" * 40,
+            summary_text=reason,
+            test_command=None,
+            test_results=(),
+            artifact_count=0,
+        ),
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({plan.id: _manual_intervention_change_set(plan, repository_id, worker.id)}),
+        StubArchives(),
+    )
+
+    detail = await service.get_delivery(plan.id)
+    task = detail["tasks"][0]
+
+    assert task["display_status"] == "failed"
+    assert task["evidence"] is not None, "a failed run's evidence is still evidence"
+    assert task["evidence"]["summary_text"] == reason
+    assert task["evidence"]["verified"] is False
+    assert detail["diffs"] == []

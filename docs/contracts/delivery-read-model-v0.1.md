@@ -456,6 +456,39 @@ agent 自己的 `summary` 开头写着 "I could not execute anything to verify i
 **本提案不动合并门禁**（`merge_gate` / delivery_auto 行为一字未改）：界面在审批点把话摆出来，
 不替人做决定。门禁语义是另一轮裁决。
 
+#### 5.4.1 失败的一趟也有证据；`commit_sha` 可空（【提案 · 待主脑裁决】，A-18 第四面）
+
+缺陷事实：live plan `5b1cbfd1` / issue `74e9701e` 的两条失败任务，`result_summary` 里躺着
+完整的 Runner 文档——
+
+```
+{"artifacts": [], "baseSha": "0a7683a9…", "blockers": [], "changedFiles": [...],
+ "commitSha": null, "runId": "…", "summary": "changed_path_denied: tests/test_discount.py",
+ "testCommand": null, "testResults": [], "workspacePath": "…"}
+```
+
+另一条的 `summary` 是 `test_command_failed: python scripts/run_tests.py (exit code 1)`。
+两句都是**可执行的操作信息**（前者直说「把 `tests/` 加进 allowed_paths」）。而 §5.4 的
+投影此前卡在 parser 的一条前提上：文档必须带**非空 `commitSha`**。失败的一趟没有 commit，
+于是每一条失败任务都投影成 `evidence: null`，界面只能说一句「failed」，为什么无处可查
+（live 核对：两条失败任务 `tasks[].evidence` 均为 NULL，整页 grep 不到 `changed_path_denied`）。
+
+| 变更 | 内容 |
+| --- | --- |
+| 判别式 | 由「succeeded 才算证据」改为「**这是不是 Runner 的文档**」：JSON 对象且**带 `commitSha` 键**即可，键的**值可以为 null**。同一个键，presence 取代 truthiness——不会拒绝旧 parser 接受过的任何文档。 |
+| `commit_sha` | `string` → **`string \| null`**。空串与 `null` 归一为 `null`（`""` 能活过 `.lower()` 与 `[:12]`，会让比对静默同意而不是拒绝）。 |
+| `diffs[]` | 不变，仍恒带非空 `commit_sha`：新增 `commit_sha is not None` 过滤。diff 是**已存在的变更**，没 commit 就没有变更可 diff。 |
+| 散文 / `SUPERSEDED:` | **拒绝不变**，仍投影 `null`。判别式放宽最容易顺手放进来的就是它们，故另有测试专盯。 |
+
+消费方约束：需要真实 head 的路径必须自己拒绝 null，不得回退。`plan_delivery` 只读
+SUCCEEDED worker 的证据，那里的 null 意味着「报了成功却没有 commit」，经既有
+`_full_sha` 检查落到具名拒绝 `Runner evidence has no frozen commit/base SHA`
+（已加测试钉住；此前它靠 parser 保证非空，属于隐式依赖）。
+
+界面（同批）：失败任务**逐字**显示 `summary_text` 作为失败理由，赭红；且**不叠加**琥珀
+「未验证」标记——失败任务 `verified` 必然为 false，但那不是新消息，两个标记叠着会稀释
+「跑成了却没验证」这一类真正需要注意的行。
+
 ## 6. 已知缺口与降级约定
 
 | # | 缺口 | v0.1 行为 | 补齐路径 |

@@ -41,6 +41,10 @@ export function agentReportsFromAggregate(
       taskId: task.task_id,
       repositoryId: task.repository_id,
       title: task.title,
+      // 原样透传（§5.1 是唯一映射实现）。带上它是因为「失败」和「未验证」在展示上
+      // 必须分得开：失败的任务本来就不会有可核验的执行记录，再扣一个琥珀标记是
+      // 把同一件事说两遍，还会让真正需要注意的那一层（跑成了但没验证）失去分量。
+      displayStatus: task.display_status,
       verified: task.evidence!.verified,
       blockers: task.evidence!.blockers,
       summaryText: task.evidence!.summary_text,
@@ -52,6 +56,18 @@ export function agentReportsFromAggregate(
       })),
       artifactCount: task.evidence!.artifact_count,
     }));
+}
+
+/** 该不该给这条任务打「未验证」标记。
+ *
+ *  **唯一实现**：DAG 节点计数、授权单清单、证据面配色三处共用，免得日后有一处漏改
+ *  就成了「同一条任务在两屏一个有标记一个没有」。
+ *
+ *  失败的任务一律不打。它 `verified` 必然是 false（失败的跑法不可能留下绿的执行
+ *  记录），但那不是新信息——失败本身已经说了，而且说得更响。再叠一个琥珀标记只会
+ *  让「跑成了、却没验证」这一类——A-18 真正要人看见的那一类——混在失败堆里失去分量。 */
+export function marksUnverified(report: TaskAgentReport): boolean {
+  return !report.verified && report.displayStatus !== "failed";
 }
 
 /** 用 Record<DecisionAction,…> 而非 Record<string,…>：契约新增动作枚举时，
@@ -114,7 +130,7 @@ export function approvalForDecision(
     headSha: decision.headSha,
     // A-18：授权单绑的是**这个仓**这一次合并，所以只摆这个仓的未验证声明。
     // 摆整轮的会把别人的话算到这次授权头上——授权单说什么就得是它签什么。
-    unverified: agentReportsFromAggregate(agg, decision.repositoryId).filter((r) => !r.verified),
+    unverified: agentReportsFromAggregate(agg, decision.repositoryId).filter(marksUnverified),
   };
 }
 
@@ -177,8 +193,15 @@ export function dagExecutionFromAggregate(agg: DeliveryAggregate, roundLabel: st
   // 和未验证（live 的 6ba476ab 正是），把它并进态里就得二选一，那就又丢一个事实。
   const unverifiedCountByRepository: Record<string, number> = {};
   const blockerCountByRepository: Record<string, number> = {};
+  const failureReasonsByRepository: Record<string, string[]> = {};
   for (const report of agentReportsFromAggregate(agg)) {
-    if (report.verified) continue;
+    // A-18 第四面：失败任务的理由（`changed_path_denied: …` 这类）此前无处可去——
+    // 读模型给不出，界面就只能说一句「failed」。它是可执行的操作信息（「把 tests/
+    // 加进 allowed_paths」），摆在图上比藏在弹窗里有用。
+    if (report.displayStatus === "failed" && report.summaryText) {
+      (failureReasonsByRepository[report.repositoryId] ??= []).push(report.summaryText);
+    }
+    if (!marksUnverified(report)) continue;
     unverifiedCountByRepository[report.repositoryId] =
       (unverifiedCountByRepository[report.repositoryId] ?? 0) + 1;
     blockerCountByRepository[report.repositoryId] =
@@ -190,6 +213,7 @@ export function dagExecutionFromAggregate(agg: DeliveryAggregate, roundLabel: st
     taskCountByRepository,
     unverifiedCountByRepository,
     blockerCountByRepository,
+    failureReasonsByRepository,
     roundLabel,
   };
 }

@@ -266,7 +266,13 @@ class PlanDeliveryFinalizer:
                     repository_id=planned.repository_id,
                     task_id=worker.id,
                 )
-            commit_sha = evidence.commit_sha.lower()
+            # ``commit_sha`` is nullable since A-18's fourth face let failed runs
+            # keep their evidence. This path only ever sees SUCCEEDED workers, so
+            # a null here means a run that reported success without committing --
+            # not a shape to publish. It falls through to the ``_full_sha`` check
+            # below and refuses there; the ``or ""`` exists so that check gets to
+            # run at all instead of an AttributeError two lines earlier.
+            commit_sha = (evidence.commit_sha or "").lower()
             base_sha = (evidence.base_sha or "").lower()
             workspace = Path(evidence.workspace_path or "")
             if not self._full_sha(commit_sha) or not self._full_sha(base_sha):

@@ -43,6 +43,12 @@ export interface TaskAgentReport {
   taskId: string;
   repositoryId: string;
   title: string;
+  /** 读模型给的 `display_status` 原值（§5.1），原样透传。
+   *
+   *  用途只有一个：把「失败」与「未验证」分开呈现。失败的任务当然没有可核验的执行
+   *  记录——`verified` 恒 false——但它不该再多一个琥珀标记：失败已经是更响的那句话，
+   *  两个标记叠在一起既是重复，也会稀释真正需要人注意的那一类（跑成了却没验证）。 */
+  displayStatus: TaskDisplayStatus;
   /** 服务端派生（§5.4），前端只渲染 */
   verified: boolean;
   /** 逐字。为空**不代表没有 blocker**，只代表载荷没有结构化声明过（契约 6.12） */
@@ -105,6 +111,13 @@ export interface DagExecutionView {
   /** 该仓未验证任务里，agent 结构化声明的 blocker 总条数。为 0 时节点只说「未验证」，
    *  绝不写「0 条 blocker」——没声明和声明了零条是两回事（契约 6.12）。 */
   blockerCountByRepository: Record<string, number>;
+  /** A-18 第四面：该仓失败任务的理由原文（Runner `summary`，逐字）。
+   *
+   *  失败任务此前在读模型里没有证据（parser 卡在「必须有 commitSha」上），界面因此
+   *  只能说「failed」。理由是可执行的操作信息——`changed_path_denied: tests/
+   *  test_discount.py` 直接指出「把 tests/ 加进 allowed_paths」——所以它上图，
+   *  不只躺在弹窗里。没有理由的失败任务不进这张表（不编）。 */
+  failureReasonsByRepository: Record<string, string[]>;
   /** 着色取自哪一轮，页脚如实标注（决策夹的 deckNote 同款语义） */
   roundLabel: string;
 }

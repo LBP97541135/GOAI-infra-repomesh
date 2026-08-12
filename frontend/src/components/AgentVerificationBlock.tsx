@@ -1,5 +1,6 @@
 import type { TaskAgentReport } from "../types";
 import { unverifiedMarkerLabel } from "../display";
+import { marksUnverified } from "../viewmodel";
 
 /** A-18：coding agent 对自己这一趟的自述，逐字摆出来。
  *
@@ -56,16 +57,30 @@ export function UnverifiedMarker({
 /** 一条任务的自述块。`verified` 为 true 时也渲染——「跑了什么、退出码多少」同样是
  *  事实，只有把两种都摆出来，未验证那条才不像是界面临时冒出来的一个惊叹号。 */
 export function AgentVerificationBlock({ report }: { report: TaskAgentReport }) {
-  const unverified = !report.verified;
+  /** 三种色调，按事实分，不叠加（A-18 第四面）：
+   *
+   *   - **失败（赭红）**：这一趟没跑通。`verified` 当然也是 false，但那不是新消息，
+   *     所以**不再挂琥珀标记**——失败已经是更响的那句话，两个标记叠着只会让「跑成了
+   *     却没验证」这一类失去分量。此时下面的原文就是失败理由，是本块的主角。
+   *   - **未验证（琥珀）**：跑完了、也产出了 commit，但没有可核验的执行记录。
+   *   - **已验证（橄榄绿）**：跑了什么、退出码多少，摆出来当对照组。 */
+  const failed = report.displayStatus === "failed";
+  const unverified = marksUnverified(report);
+
+  const tone = failed
+    ? "border-salmon bg-[#2b1712]"
+    : unverified
+      ? "border-amber bg-[#2a2110]"
+      : "border-olive bg-panel-2";
 
   return (
-    <div
-      className={`rounded-hard border-l-2 px-3 py-2 ${
-        unverified ? "border-amber bg-[#2a2110]" : "border-olive bg-panel-2"
-      }`}
-    >
+    <div className={`rounded-hard border-l-2 px-3 py-2 ${tone}`}>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        {unverified ? (
+        {failed ? (
+          <span className="rounded-hard border border-salmon px-1.5 py-px font-mono text-[10px] font-bold text-salmon">
+            失败
+          </span>
+        ) : unverified ? (
           <UnverifiedMarker blockerCount={report.blockers.length} />
         ) : (
           <span className="rounded-hard border border-olive px-1.5 py-px font-mono text-[10px] font-bold text-olive">
@@ -117,8 +132,10 @@ export function AgentVerificationBlock({ report }: { report: TaskAgentReport }) 
 
       {report.summaryText && (
         <div className="mt-2">
-          <div className="microlabel pb-1">
-            AGENT 回报原文
+          <div className={`microlabel pb-1 ${failed ? "text-salmon" : ""}`}>
+            {/* 失败时这段原文就是**失败理由**——`changed_path_denied: tests/…` 这类，
+                直接指出该改什么。叫它「回报原文」会让人以为是可跳过的说明文字。 */}
+            {failed ? "失败理由（RUNNER 原文）" : "AGENT 回报原文"}
             {report.blockers.length === 0 && unverified && (
               // 空的 blockers 不是「没有 blocker」，这句话必须说出来，否则读者会
               // 把「界面没数出 blocker」当成「agent 没提出 blocker」。
@@ -127,10 +144,20 @@ export function AgentVerificationBlock({ report }: { report: TaskAgentReport }) 
               </span>
             )}
           </div>
-          <pre className="max-h-[260px] overflow-y-auto rounded-hard border border-line bg-[#161209] px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-tx">
+          <pre
+            className={`max-h-[260px] overflow-y-auto rounded-hard border px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap ${
+              failed ? "border-salmon/50 bg-[#211008] text-[#e8a184]" : "border-line bg-[#161209] text-tx"
+            }`}
+          >
             {report.summaryText}
           </pre>
         </div>
+      )}
+
+      {failed && !report.summaryText && (
+        <p className="mt-2 text-[11.5px] text-tx2">
+          这一趟失败了，但载荷里没有理由文本——界面无从说明为什么，服务端日志是唯一去处。
+        </p>
       )}
 
       {unverified && !report.summaryText && report.blockers.length === 0 && (
