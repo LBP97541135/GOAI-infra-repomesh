@@ -1512,9 +1512,13 @@ class DeliveryReadModelService:
                     "backend_status": task.status.value,
                     "display_status": display.value,
                     "agent": await self._agents.name(task.assignee_agent_id),
-                    # §5.2: 1 + length of the rework chain on the same (repository,
-                    # parent) key; a rework row counts itself and its predecessors.
-                    "attempt": (2 + chain.index(task)) if is_rework else 1 + len(chain),
+                    # §5.2, as an attempt number: the original try is 1 and the
+                    # k-th rework on the same (repository, parent) key is 1 + k.
+                    # The original row used to report the total instead, so one
+                    # original plus two reworks read 3 / 2 / 3 — two rows both
+                    # claiming to be the third attempt, and the first try
+                    # labelled as the third.
+                    "attempt": (2 + chain.index(task)) if is_rework else 1,
                     "depends_on": depends_on,
                     "result_summary": task.result_summary,
                     "repair_timeline": repair_timeline,
