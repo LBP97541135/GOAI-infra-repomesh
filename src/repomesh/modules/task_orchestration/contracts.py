@@ -14,6 +14,37 @@ class TaskStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class TaskOrigin(StrEnum):
+    """Why this task exists.
+
+    Consumers used to answer this by comparing ``title`` against the literal
+    CIReworkTaskCreator assigns, so rewording a display string silently
+    changed derived read-model fields (attempt number, ``repairing`` display
+    status, repair timeline) with no test going red. Origin is a declared
+    fact of the producer instead of a side effect of presentation text.
+    """
+
+    PLANNED = "planned"  # produced directly by a plan batch
+    REWORK = "rework"  # created to repair a failed delivery candidate
+
+
+@dataclass(frozen=True, slots=True)
+class TaskEvidenceView:
+    """Structured Runner evidence for a task, when the task has any.
+
+    ``result_summary`` is free text by contract and carries three unrelated
+    shapes (a Runner JSON document, ``SUPERSEDED: ...``, and plain prose), so
+    a consumer parsing it was reading a field the producer never promised.
+    This view is the declared, parsed form; it is ``None`` whenever the task
+    carries no structured evidence.
+    """
+
+    commit_sha: str  # non-empty; without it there is no evidence to report
+    run_id: UUID | None  # null when the Runner reported no run id
+    changed_files: tuple[str, ...]
+    base_sha: str | None
+
+
 @dataclass(frozen=True, slots=True)
 class TaskView:
     id: UUID
@@ -29,6 +60,8 @@ class TaskView:
     status: TaskStatus
     result_summary: str | None
     version: int
+    origin: TaskOrigin = TaskOrigin.PLANNED
+    evidence: TaskEvidenceView | None = None
 
 
 class ExecutionPlanStatus(StrEnum):
@@ -175,7 +208,25 @@ class DeliveryStatePort(Protocol):
 
 
 class TaskAssignmentGateway(Protocol):
-    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView: ...
+    """Assign a task to an agent.
+
+    ``origin`` is deliberately a keyword of the call and not a field of
+    AssignTaskCommand: the command is hashed into ``request_fingerprint`` and
+    compared on every idempotent replay, so adding a field to it would change
+    the fingerprint of every command shape and make replays of tasks persisted
+    before this change fail with a spurious conflict. Origin is also not part
+    of a request's identity — it follows from which caller builds the task, and
+    the callers own disjoint idempotency-key namespaces (``ci-rework:...`` vs.
+    the plan's key prefix), so one key can never mean two different origins.
+    """
+
+    async def assign(
+        self,
+        command: AssignTaskCommand,
+        *,
+        idempotency_key: str,
+        origin: TaskOrigin = TaskOrigin.PLANNED,
+    ) -> TaskView: ...
 
 
 class TaskSpecificationAuthor(Protocol):

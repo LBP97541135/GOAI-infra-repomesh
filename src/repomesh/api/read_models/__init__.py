@@ -12,14 +12,13 @@ from .mappings import (
     task_display_status,
 )
 from .router import grid_router, issues_router, rooms_router, router
-from .service import REWORK_TASK_TITLE, DeliveryReadModelService
+from .service import DeliveryReadModelService
 
 __all__ = [
     "DeliveryPhase",
     "DeliveryReadModelService",
     "GateDisplay",
     "IssueState",
-    "REWORK_TASK_TITLE",
     "TaskDisplayStatus",
     "derive_issue_state",
     "derive_phase",

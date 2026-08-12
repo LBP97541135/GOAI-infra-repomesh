@@ -34,7 +34,7 @@ from repomesh.modules.review_validation.contracts import (
 from repomesh.modules.review_validation.infrastructure import (
     PostgresValidationSnapshotStore,
 )
-from repomesh.modules.task_orchestration.contracts import TaskStatus
+from repomesh.modules.task_orchestration.contracts import TaskOrigin, TaskStatus
 from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
     ExecutionPlanStatus,
@@ -46,6 +46,15 @@ from repomesh.settings import get_settings
 API_HEAD = "8deb466aff32990f7acf3858c61c045ebeaff335"
 CLIENT_HEAD = "5fdafd67f25de54b1a67c16b1d7d7a7071030693"
 BASE = "b" * 40
+
+REWORDED_REWORK_TITLE = "返工：修复失败的交付候选"
+"""Deliberately NOT the literal CIReworkTaskCreator writes.
+
+The read model used to identify rework tasks by comparing this title against a
+constant, so a reworded title silently broke attempt / display_status /
+repair_timeline. The rework row below is recognised through its declared
+origin, so the title is free to be anything a human would want to read.
+"""
 
 
 def _worker_task(
@@ -403,7 +412,6 @@ def test_rework_chain_drives_attempt_repairing_and_escalation(
     monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     get_settings.cache_clear()
     try:
-        from repomesh.api.read_models import REWORK_TASK_TITLE
         from repomesh.modules.delivery.contracts import (
             PlanRecoveryCommand,
             RecoveryTrigger,
@@ -471,10 +479,11 @@ def test_rework_chain_drives_attempt_repairing_and_escalation(
                 parent_task_id=leader_task_id,
                 assigned_by_agent_id=org_leader_id,
                 assignee_agent_id=worker_agent,
-                title=REWORK_TASK_TITLE,
+                title=REWORDED_REWORK_TITLE,
                 instruction="Repair the failed candidate.",
                 acceptance=("CI passes",),
                 status=TaskStatus.IN_PROGRESS,
+                origin=TaskOrigin.REWORK,
             )
             await tasks.add(
                 original, idempotency_key="rw-original", request_fingerprint="sha256:" + "b" * 64
@@ -522,7 +531,7 @@ def test_rework_chain_drives_attempt_repairing_and_escalation(
         body = detail.json()
         by_title = {task["title"]: task for task in body["tasks"]}
         original_view = by_title["Implement repo-a scope"]
-        rework_view = by_title[REWORK_TASK_TITLE]
+        rework_view = by_title[REWORDED_REWORK_TITLE]
         # attempt is a number in a sequence, so the two rows cannot share one.
         # This used to assert 2 and 2: the original reported the total while
         # the rework reported its position, and the collision was written down

@@ -7,7 +7,6 @@ composition-root adapters; unimplemented contract fields return ``null``.
 """
 
 import asyncio
-import json
 import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -26,6 +25,7 @@ from repomesh.modules.project.contracts import ProjectAgentTopologyView
 from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
+    TaskOrigin,
     TaskStatus,
     TaskView,
 )
@@ -75,9 +75,6 @@ counts against each probe's own timeout, so rows start reporting
 `reachable: false` while the controller is perfectly healthy. A false outage
 is worse than the serial wait §4.4 set out to remove, because it looks like
 a real one."""
-
-REWORK_TASK_TITLE = "Repair failed delivery candidate"
-"""The canonical title CIReworkTaskCreator assigns; identifies rework chains."""
 
 MERGE_GATE_MOOT_STATUSES = frozenset(
     {
@@ -419,7 +416,7 @@ class DeliveryReadModelService:
             task.repository_id
             for task in tasks
             if task.parent_task_id in leader_task_ids
-            and task.title == REWORK_TASK_TITLE
+            and task.origin is TaskOrigin.REWORK
             and task.status in _ACTIVE_TASK_STATUSES
         }
         revision_at: dict[UUID, datetime] = {}
@@ -1610,12 +1607,12 @@ class DeliveryReadModelService:
     ) -> list[dict]:
         rework_by_key: dict[tuple[UUID, UUID | None], list[TaskView]] = {}
         for task in worker_tasks:
-            if task.title == REWORK_TASK_TITLE:
+            if task.origin is TaskOrigin.REWORK:
                 rework_by_key.setdefault((task.repository_id, task.parent_task_id), []).append(task)
 
         name_to_task: dict[str, UUID] = {}
         for task in worker_tasks:
-            if task.title != REWORK_TASK_TITLE and task.repository_id in catalog:
+            if task.origin is not TaskOrigin.REWORK and task.repository_id in catalog:
                 name_to_task[catalog[task.repository_id].name] = task.id
         dag_dependencies: dict[str, tuple[str, ...]] = {}
         if snapshot is not None:
@@ -1640,7 +1637,7 @@ class DeliveryReadModelService:
         views: list[dict] = []
         for task in worker_tasks:
             chain = rework_by_key.get((task.repository_id, task.parent_task_id), [])
-            is_rework = task.title == REWORK_TASK_TITLE
+            is_rework = task.origin is TaskOrigin.REWORK
             active_rework = any(item.status in _ACTIVE_TASK_STATUSES for item in chain)
             repairing = is_rework or (active_rework and task.status is TaskStatus.IN_PROGRESS)
             display = task_display_status(task.status, has_active_rework=repairing)
@@ -1887,33 +1884,29 @@ def _title(requirement_text: str | None, project_id: UUID) -> str:
 
 
 def _diffs(worker_tasks: tuple[TaskView, ...]) -> list[dict]:
-    """runner.completed evidence written back into task result summaries."""
+    """§3 diffs[]: the Runner evidence task orchestration declares per task.
 
-    diffs: list[dict] = []
-    for task in worker_tasks:
-        if task.status is not TaskStatus.SUCCEEDED or not task.result_summary:
-            continue
-        try:
-            evidence = json.loads(task.result_summary)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(evidence, dict) or not evidence.get("commitSha"):
-            continue
-        diffs.append(
-            {
-                "repository_id": task.repository_id,
-                "run_id": evidence.get("runId"),
-                "commit_sha": evidence.get("commitSha"),
-                "changed_files": list(evidence.get("changedFiles") or ()),
-                "diffstat": None,
-            }
-        )
-    return diffs
+    This used to json.loads(result_summary) here — parsing structure out of a
+    field the producer only ever declared as free text. The producer now owns
+    that parse and publishes TaskEvidenceView, so a task with no structured
+    evidence says so instead of being rescued by a JSONDecodeError handler.
+    """
+
+    return [
+        {
+            "repository_id": task.repository_id,
+            "run_id": task.evidence.run_id,
+            "commit_sha": task.evidence.commit_sha,
+            "changed_files": list(task.evidence.changed_files),
+            "diffstat": None,
+        }
+        for task in worker_tasks
+        if task.status is TaskStatus.SUCCEEDED and task.evidence is not None
+    ]
 
 
 __all__ = [
     "DeliveryReadModelService",
     "DeliveryPhase",
     "GateDisplay",
-    "REWORK_TASK_TITLE",
 ]

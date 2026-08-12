@@ -17,7 +17,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
-from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
+from repomesh.modules.task_orchestration.contracts import (
+    ExecutionPlanStatus,
+    TaskOrigin,
+    TaskStatus,
+)
 from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
     PlannedRepositoryTask,
@@ -50,6 +54,7 @@ class TaskRecord(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     result_summary: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer)
+    origin: Mapped[str] = mapped_column(String(30), server_default=TaskOrigin.PLANNED.value)
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_fingerprint: Mapped[str] = mapped_column(String(71))
 
@@ -270,6 +275,7 @@ class PostgresTaskStore:
             "status": task.status.value,
             "result_summary": task.result_summary,
             "version": task.version,
+            "origin": task.origin.value,
         }
 
     @staticmethod
@@ -288,6 +294,9 @@ class PostgresTaskStore:
             status=TaskStatus(record.status),
             result_summary=record.result_summary,
             version=record.version,
+            # Rows written before origin existed read back as the column
+            # default; the migration backfills the rework ones.
+            origin=TaskOrigin(record.origin or TaskOrigin.PLANNED.value),
         )
 
 

@@ -32,6 +32,7 @@ from repomesh.modules.task_orchestration.contracts import (
     SupersedeTaskCommand,
     TaskAssignmentGateway,
     TaskAssignmentPublisher,
+    TaskOrigin,
     TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
@@ -120,7 +121,13 @@ class TaskOrchestrator:
         self._publisher = publisher
         self._checkpoints = checkpoints or TopologyAwareCheckpointFallback(topologies)
 
-    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
+    async def assign(
+        self,
+        command: AssignTaskCommand,
+        *,
+        idempotency_key: str,
+        origin: TaskOrigin = TaskOrigin.PLANNED,
+    ) -> TaskView:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
@@ -165,6 +172,7 @@ class TaskOrchestrator:
             title=command.title.strip(),
             instruction=command.instruction.strip(),
             acceptance=tuple(item.strip() for item in command.acceptance),
+            origin=origin,
         )
         await self._tasks.add(
             task,
@@ -492,6 +500,10 @@ class DecomposeRepositoryTask:
                 parent_task_id=task.id,
             ),
             idempotency_key=f"{key}:worker:{worker_agent_id}",
+            # A worker task inherits why its repository task exists. The old
+            # title-equality judgement had the same effect by accident, since
+            # the title is copied down verbatim; here it is stated.
+            origin=task.origin,
         )
         await self._ensure_specification(worker_task, tests=tests, key=key)
         return (worker_task,)

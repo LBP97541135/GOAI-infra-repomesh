@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass, field, replace
 from uuid import UUID
 
@@ -5,6 +6,8 @@ from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskEvidenceView,
+    TaskOrigin,
     TaskStatus,
     TaskView,
 )
@@ -42,6 +45,53 @@ FINAL_TASK_STATUSES = frozenset(
 )
 
 
+def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
+    """Read structured Runner evidence out of a task's free-text summary.
+
+    ``result_summary`` holds three unrelated shapes: the Runner gateway writes
+    a JSON document, ``supersede()`` writes ``SUPERSEDED: ...``, and a plain
+    agent report writes prose. Anything that is not a JSON object carrying a
+    non-empty ``commitSha`` has no evidence to report, and returns ``None``.
+
+    HONEST GAP (not solved here): this still depends on the Runner happening to
+    write these particular keys. What this function changes is *where* that
+    dependency lives — it is now inside the producing module, next to the
+    contract that declares TaskEvidenceView, instead of in a consumer parsing a
+    field that was only ever promised to be free text. Removing the dependency
+    for real needs the Runner to write structured columns; that is separate
+    work, and TaskEvidenceView's shape is meant to survive it unchanged.
+    """
+
+    if not result_summary:
+        return None
+    try:
+        document = json.loads(result_summary)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    commit_sha = document.get("commitSha")
+    if not isinstance(commit_sha, str) or not commit_sha:
+        return None
+    raw_run_id = document.get("runId")
+    try:
+        run_id = UUID(str(raw_run_id)) if raw_run_id else None
+    except ValueError:
+        # A run id that is not a UUID is not a run id we can hand out typed.
+        run_id = None
+    raw_changed = document.get("changedFiles")
+    changed_files = (
+        tuple(str(item) for item in raw_changed) if isinstance(raw_changed, list) else ()
+    )
+    base_sha = document.get("baseSha")
+    return TaskEvidenceView(
+        commit_sha=commit_sha,
+        run_id=run_id,
+        changed_files=changed_files,
+        base_sha=str(base_sha) if base_sha else None,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Task:
     organization_id: UUID
@@ -57,6 +107,7 @@ class Task:
     status: TaskStatus = TaskStatus.ASSIGNED
     result_summary: str | None = None
     version: int = 1
+    origin: TaskOrigin = TaskOrigin.PLANNED
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -120,6 +171,8 @@ class Task:
             status=self.status,
             result_summary=self.result_summary,
             version=self.version,
+            origin=self.origin,
+            evidence=_parse_evidence(self.result_summary),
         )
 
 

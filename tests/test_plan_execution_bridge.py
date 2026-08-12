@@ -49,6 +49,7 @@ from repomesh.modules.task_orchestration.contracts import (  # noqa: E402
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskOrigin,
     TaskStatus,
     TaskView,
 )
@@ -603,7 +604,13 @@ class RecordingAssigner:
         self._tasks = tasks
         self.commands: list[tuple[AssignTaskCommand, str]] = []
 
-    async def assign(self, command: AssignTaskCommand, *, idempotency_key: str) -> TaskView:
+    async def assign(
+        self,
+        command: AssignTaskCommand,
+        *,
+        idempotency_key: str,
+        origin: TaskOrigin = TaskOrigin.PLANNED,
+    ) -> TaskView:
         self.commands.append((command, idempotency_key))
         if existing := await self._tasks.get_by_idempotency_key(idempotency_key):
             return existing[0].to_view()
@@ -617,6 +624,7 @@ class RecordingAssigner:
             title=command.title,
             instruction=command.instruction,
             acceptance=command.acceptance,
+            origin=origin,
         )
         await self._tasks.add(
             task, idempotency_key=idempotency_key, request_fingerprint="sha256:test"

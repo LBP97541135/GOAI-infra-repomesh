@@ -5,6 +5,7 @@ from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,
     CreateCIReworkTaskCommand,
     TaskAssignmentGateway,
+    TaskOrigin,
     TaskView,
 )
 from repomesh.shared.git import normalize_full_sha
@@ -36,6 +37,8 @@ class CIReworkTaskCreator:
                 acceptance=command.acceptance,
             ),
             idempotency_key=(f"ci-rework:{command.change_set_id}:{command.repository_id}:{sha}"),
+            # The title above is display text; this is the fact consumers read.
+            origin=TaskOrigin.REWORK,
         )
 
 
