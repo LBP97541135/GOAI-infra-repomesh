@@ -25,7 +25,7 @@ from repomesh.modules.identity_access.contracts import (
     OrganizationView,
 )
 from repomesh.shared.domain import DomainError, new_id
-from repomesh.shared.events import ActorType, EventEnvelope
+from repomesh.shared.events import EventEnvelope
 
 # Frozen: changing it would re-map every workspace idempotency key.
 ORGANIZATION_NAMESPACE = uuid5(NAMESPACE_URL, "repomesh://organization-registry")
@@ -33,6 +33,19 @@ ORGANIZATION_NAMESPACE = uuid5(NAMESPACE_URL, "repomesh://organization-registry"
 
 class OrganizationNameConflict(DomainError):
     """The name is already registered under a different idempotency key."""
+
+
+class OrganizationInsertConflict(DomainError):
+    """The registry insert hit a unique constraint (id or name). Raised by
+    the store; the service disambiguates by looking the id row back up
+    (present → same-key replay, absent → name conflict)."""
+
+
+class OrganizationLeaderConflict(DomainError):
+    """Leader registration is blocked: the resource name is held by another
+    workspace (v0.3 §6 S-8). Repairable, not an orphan state: replaying the
+    same idempotency_key with a different leader_resource_name completes the
+    registration against the already-inserted organization row."""
 
 
 class OrganizationSnapshot(Protocol):
@@ -48,19 +61,22 @@ class OrganizationStore(Protocol):
 
     async def get(self, organization_id: UUID) -> OrganizationSnapshot | None: ...
 
-    async def get_by_name(self, name: str) -> OrganizationSnapshot | None: ...
-
     async def list_all(self) -> tuple[OrganizationSnapshot, ...]: ...
 
 
 class OrganizationLeaderRegistrar(Protocol):
     """Registers the workspace's ORGANIZATION_LEADER via the agent_directory
     contract (wired in the composition root; this module never imports
-    another module's application code)."""
+    another module's application code).
+
+    Returns ``(leader_id, leader_created)`` — the flag distinguishes a fresh
+    registration from converging on an existing leader, which is what lets
+    the service audit exactly one completed registration per workspace even
+    when the first attempt aborted between the two writes."""
 
     async def ensure_leader(
         self, organization_id: UUID, resource_name: str, idempotency_key: str
-    ) -> UUID: ...
+    ) -> tuple[UUID, bool]: ...
 
 
 class OrganizationAgentCounter(Protocol):
@@ -71,11 +87,18 @@ class OrganizationAuditLog(Protocol):
     async def append(self, event: EventEnvelope) -> None: ...
 
 
-def _leader_resource_name(name: str) -> str:
+def _leader_resource_name(name: str, organization_id: UUID) -> str:
+    """Auto-derived leader names carry an organization suffix (v0.3 §6 S-8):
+    similar workspace names ("web app" / "web-app") slug identically, and the
+    AgentTeams binding is unique platform-wide — without the suffix the second
+    workspace's leader registration would collide and strand that workspace.
+    The suffix derives from the organization id, which derives from the
+    idempotency key, so replays compute the same name."""
+
     slug = "".join(
         ch if ch.isalnum() else "-" for ch in name.strip().lower()
     ).strip("-")
-    return f"rm-org-leader-{slug or 'workspace'}"
+    return f"rm-org-leader-{slug or 'workspace'}-{organization_id.hex[:8]}"
 
 
 class OrganizationRegistryService:
@@ -93,8 +116,16 @@ class OrganizationRegistryService:
         self._counter = counter
         self._audit = audit
 
-    async def list_views(self) -> tuple[OrganizationView, ...]:
+    async def list_views(
+        self, organization_id: UUID | None = None
+    ) -> tuple[OrganizationView, ...]:
         rows = await self._store.list_all()
+        # v0.3 §6 S-6: caller-scoped filtering. Honest limit: the shared
+        # action token carries no tenant, so this narrows what a caller asks
+        # for, not what it may see — real tenant isolation arrives with the
+        # subject-carrying credential backlog item.
+        if organization_id is not None:
+            rows = tuple(row for row in rows if row.organization_id == organization_id)
         views = []
         for row in rows:
             views.append(
@@ -119,36 +150,54 @@ class OrganizationRegistryService:
         resource_name = (
             command.leader_resource_name.strip()
             if command.leader_resource_name and command.leader_resource_name.strip()
-            else _leader_resource_name(name)
+            else _leader_resource_name(name, organization_id)
         )
 
-        existing = await self._store.get(organization_id)
+        # v0.3 §6 S-7: insert first and let the unique constraints arbitrate —
+        # same pattern as issue intake. The previous read-then-insert spanned
+        # three transactions, so two concurrent creates could both pass the
+        # checks and the loser surfaced as a raw 500. After a conflict the id
+        # lookup tells the cases apart: row present → same-key replay (200);
+        # absent → the name is taken under another key (409).
         created = False
-        if existing is None:
-            named = await self._store.get_by_name(name)
-            if named is not None:
-                # Same name under a different key is a real conflict (409),
-                # not an idempotent replay.
-                raise OrganizationNameConflict(f"organization name in use: {name}")
+        try:
             await self._store.add(organization_id, name)
             created = True
+        except OrganizationInsertConflict:
+            if await self._store.get(organization_id) is None:
+                raise OrganizationNameConflict(
+                    f"organization name in use: {name}"
+                ) from None
 
         # Leader registration is idempotent by the same key; a replay after a
-        # crash between the two writes repairs the missing leader here.
-        leader_id = await self._leaders.ensure_leader(
+        # crash between the two writes repairs the missing leader here. A
+        # genuine resource-name collision raises OrganizationLeaderConflict
+        # (409 at the API) and the organization row is deliberately kept:
+        # replaying the same idempotency_key with a different
+        # leader_resource_name completes the registration (S-8 — no
+        # unrepairable orphan state).
+        leader_id, leader_created = await self._leaders.ensure_leader(
             organization_id, resource_name, f"workspace-leader:{key}"
         )
 
-        row = existing or await self._store.get(organization_id)
+        row = await self._store.get(organization_id)
         if row is None:  # pragma: no cover - the row was just inserted
             raise DomainError("organization row unavailable after insert")
 
-        if created:
+        # Audit once per *completed* registration. The event sits after both
+        # writes, so gating on `created` alone would lose the trail whenever
+        # the first attempt aborted between them (leader conflict, crash) and
+        # the replay finished the job with created=False. `leader_created`
+        # marks exactly those repairs; a plain replay has both flags False.
+        if created or leader_created:
+            # v0.3 §6 S-6: attribution comes from the caller-resolved actor
+            # (human session when present, else a token fingerprint) — a
+            # hardcoded label made every workspace creation untraceable.
             await self._audit.append(
                 EventEnvelope(
                     event_type="OrganizationRegistered",
-                    actor_type=ActorType.HUMAN,
-                    actor_id="console",
+                    actor_type=command.actor_type,
+                    actor_id=command.actor_id,
                     aggregate_type="Organization",
                     aggregate_id=organization_id,
                     aggregate_version=1,

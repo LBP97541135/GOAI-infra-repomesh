@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import Boolean, DateTime, String, delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -11,7 +12,10 @@ from repomesh.modules.identity_access.local_accounts import (
     LocalHumanAccount,
     LocalHumanSession,
 )
-from repomesh.modules.identity_access.organizations import OrganizationStore
+from repomesh.modules.identity_access.organizations import (
+    OrganizationInsertConflict,
+    OrganizationStore,
+)
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
@@ -65,19 +69,20 @@ class PostgresOrganizationStore(OrganizationStore):
         self._database = database
 
     async def add(self, organization_id: UUID, name: str) -> None:
-        async with self._database.transaction() as session:
-            session.add(OrganizationRecord(id=organization_id, name=name))
+        try:
+            async with self._database.transaction() as session:
+                session.add(OrganizationRecord(id=organization_id, name=name))
+        except IntegrityError as error:
+            # Either unique constraint (pk = same-key replay, name = conflict
+            # under another key); the service disambiguates by re-reading the
+            # id row (v0.3 §6 S-7 — no read-then-insert window here).
+            raise OrganizationInsertConflict(
+                f"organization insert conflict: {organization_id}"
+            ) from error
 
     async def get(self, organization_id: UUID) -> OrganizationRow | None:
         async with self._database.transaction() as session:
             record = await session.get(OrganizationRecord, organization_id)
-        return self._row(record)
-
-    async def get_by_name(self, name: str) -> OrganizationRow | None:
-        async with self._database.transaction() as session:
-            record = await session.scalar(
-                select(OrganizationRecord).where(OrganizationRecord.name == name)
-            )
         return self._row(record)
 
     async def list_all(self) -> tuple[OrganizationRow, ...]:

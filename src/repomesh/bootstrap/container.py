@@ -640,11 +640,13 @@ class ApplicationContainer:
             AgentPrincipalStatus,
             AgentRole,
         )
+        from repomesh.modules.agent_directory.domain import AgentAlreadyExists
         from repomesh.modules.delivery import PostgresDeliveryAuditLog
         from repomesh.modules.identity_access.infrastructure import (
             PostgresOrganizationStore,
         )
         from repomesh.modules.identity_access.organizations import (
+            OrganizationLeaderConflict,
             OrganizationRegistryService,
         )
 
@@ -656,16 +658,47 @@ class ApplicationContainer:
         class _LeaderRegistrar:
             async def ensure_leader(
                 self, organization_id: UUID, resource_name: str, idempotency_key: str
-            ) -> UUID:
-                created = await CreateAgent(directory).execute(
-                    CreateAgentRequest(
-                        organization_id=organization_id,
-                        role=AgentRole.ORGANIZATION_LEADER,
-                        agentteams_resource_name=resource_name,
-                    ),
-                    idempotency_key=idempotency_key,
-                )
-                return created.principal.id
+            ) -> tuple[UUID, bool]:
+                # Key already used → that registration stands, whatever
+                # resource name this call derived (the naming scheme may have
+                # changed since); replaying must not trip CreateAgent's
+                # fingerprint comparison.
+                existing = await directory.get_by_idempotency_key(idempotency_key)
+                if existing is not None:
+                    return existing[0].id, False
+                try:
+                    created = await CreateAgent(directory).execute(
+                        CreateAgentRequest(
+                            organization_id=organization_id,
+                            role=AgentRole.ORGANIZATION_LEADER,
+                            agentteams_resource_name=resource_name,
+                        ),
+                        idempotency_key=idempotency_key,
+                    )
+                    return created.principal.id, True
+                except AgentAlreadyExists as error:
+                    # Converge on the workspace's existing leader when there is
+                    # one: the directory's singleton key guarantees at most one
+                    # ORGANIZATION_LEADER per organization, so any conflict here
+                    # (idempotency-fingerprint drift after the naming scheme
+                    # changed, crash-gap replay, singleton race) resolves to
+                    # that row instead of stranding the workspace.
+                    for principal in await directory.list():
+                        if (
+                            principal.organization_id == organization_id
+                            and principal.role is AgentRole.ORGANIZATION_LEADER
+                            and principal.status is AgentPrincipalStatus.ACTIVE
+                        ):
+                            return principal.id, False
+                    # No leader in this workspace → the resource name is held
+                    # by another workspace (v0.3 §6 S-8). Typed so the API
+                    # answers 409 with repair guidance instead of a 500, and
+                    # the organization row stays repairable by replay.
+                    raise OrganizationLeaderConflict(
+                        f"leader resource name is not available: {resource_name}; "
+                        "replay the same idempotency_key with a different "
+                        "leader_resource_name"
+                    ) from error
 
         class _AgentCounter:
             async def count_active(self, organization_id: UUID) -> int:

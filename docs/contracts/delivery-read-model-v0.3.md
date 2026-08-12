@@ -120,6 +120,9 @@ identity_access.organizations
 
 - 路径进 `console` 命名空间（§4.5 裁决的通用做法：新增通名端点先查占用、统一前缀）。
 - 按 `created_at` 升序；无分页（工作区数量与「一屏读完」前提一致，风格同 v0.1 §4.2）。
+- 可选 `?organization_id=` 过滤（§6 S-6）：命中即单行、未知 id 即空集。诚实边界：
+  共享动作 token 不承载租户，该参数是**调用方自我收窄**而非租户隔离——隔离随主体化
+  凭据 backlog 落地。工作区切换器仍取全量（它的用途就是选一个）。
 - **注册表之外的 organization_id 不出现在列表里**：若某历史 org 无注册行，列表如实
   缺席（该数据不可达工作区切换器），不做「从散落列反推组织」的编造式聚合——补齐
   方式是种子/管理侧回填注册行。
@@ -135,8 +138,10 @@ identity_access.organizations
 - **创建工作区 = 建组织 + 绑定 Org Leader**（设计稿原文语义）。缺 Org Leader 的
   组织开不了 issue（§1.2 校验），只建组织行是把闭环断在下一步，故本端点**同事务**
   创建一个活跃 ORGANIZATION_LEADER principal：
-  `agentteams_resource_name = leader_resource_name ?? "rm-org-leader-{name 的 slug}"`
+  `agentteams_resource_name = leader_resource_name ?? "rm-org-leader-{name 的 slug}-{组织 id 前 8 hex}"`
   （经 agent_directory `CreateAgent` 契约创建，幂等键沿用本请求的 idempotency_key）。
+  自动派生名带组织后缀（§6 S-8）：相近工作区名 slug 相同，而 AgentTeams 绑定平台级
+  唯一，无后缀则第二个工作区必然撞名搁浅；后缀从组织 id（即幂等键）派生，重放同名。
 - **诚实边界（主脑裁决补充）**：自动创建的 Org Leader 是 agent_directory 的**期望态
   登记行，不是已拉起的运行时**——花名册上它以 runtime 三态如实呈现（未配置 →
   `null` → 显「未接入」）。本端点响应与前端文案**不得暗示「已生成一个可工作的智能体」**；
@@ -147,10 +152,18 @@ identity_access.organizations
   DB 会话/事务破坏模块边界（identity_access 不得进入 agent_directory 的存储），代价大于
   「同事务」字面收益；用户可见保证等价——不存在「重放也修不好」的中间态。
 - `organization_id` 由 `idempotency_key` UUIDv5 稳定派生；重放 → 200 返回既有行。
-  `name` 撞 UNIQUE（不同 key 同名）→ 409。
+  `name` 撞 UNIQUE（不同 key 同名）→ 409。键最短 8 字符（§6，同 §1.3 硬化）。
+- **并发正确性（§6 S-7）**：实现为「先插后判」——插入由唯一约束仲裁，冲突后按
+  组织 id 回查区分「同键重放（200）/ 同名异键（409）」。不存在先查后插窗口，
+  并发同键/同名的失败方拿到的是 200/409 而非 500。
+- **leader 资源名冲突可修复（§6 S-8）**：显式 `leader_resource_name` 被其他工作区
+  占用 → 409（组织行保留）；**同 idempotency_key + 换一个 leader_resource_name 重放
+  即补完注册**，不存在「重放也修不好」的孤儿组织。目录侧幂等指纹漂移（如命名方案
+  演进后的重放）收敛到该工作区既有 leader，不报错。
 - 响应 `201`/`200`：`{ "organization_id", "name", "created_at",
   "leader_agent_id" }`。
-- 写 platform 审计事件（同 §1.5）。
+- 写 platform 审计事件（同 §1.5）；**恰好一次每完成的注册**——首次尝试在两写之间
+  中止（冲突/崩溃）时，补完注册的那次重放补写审计。actor 归因见 §6 S-6。
 
 ### 2.4 前端接线约束（随实现验收）
 
@@ -196,3 +209,6 @@ token / 会话票据统一鉴权）是已立项 backlog，属架构变更不在�
 | --- | --- | --- |
 | S-4 | 止血「主体由请求体决定」：§1.2 增可选 `organization_id` 交叉校验位（不一致 403）；鉴权现状（token 无主体、主体来自 body、组织来自目录行）在代码注释与本节明文 | §1.2 |
 | S-5 | 幂等键空间按工作区隔离（派生加组织前缀）+ 重放校验归属（不一致 403 不回投影）+ 键最短 8 字符 | §1.3 |
+| S-6 | 列表加 `?organization_id=` 调用方收窄（非租户隔离，诚实注记）；创建审计 actor 从硬编码 `"console"` 改为可辨维度：带人类会话 → `human:{account_id}`，否则 → `action-token:{sha256 前 12}` | §2.2/§2.3 |
+| S-7 | 创建改「先插后判」，唯一约束仲裁并发；同键重放 200、同名异键 409，不再 500 | §2.3 |
+| S-8 | 自动 leader 名加组织后缀根除同 slug 撞名；显式名冲突 → 409 + 同键换名重放补完注册（孤儿态可修复）；审计改「每完成的注册恰好一次」 | §2.3 |
