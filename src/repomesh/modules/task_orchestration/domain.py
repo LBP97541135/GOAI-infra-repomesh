@@ -277,6 +277,25 @@ class ExecutionPlan:
         self._require_in_progress()
         return replace(self, status=ExecutionPlanStatus.FAILED, version=self.version + 1)
 
+    def reopen(self) -> "ExecutionPlan":
+        """Return a failed plan to IN_PROGRESS once its batch was repaired.
+
+        ``fail()`` is reached from a single non-succeeded leader task, so a plan
+        died the moment one repository's first attempt failed. Repairing that
+        repository then had nowhere to land: the rework task could succeed and
+        roll its leader up to SUCCEEDED while the plan stayed FAILED forever,
+        because every mutator is guarded by ``_require_in_progress``.
+
+        Reopening only restores the status. It never skips a batch or invents
+        progress -- the caller must have established that the current batch now
+        succeeds, and the ordinary advance path takes it from there. COMPLETED
+        stays terminal: a delivered plan is history, not something to revisit.
+        """
+
+        if self.status is not ExecutionPlanStatus.FAILED:
+            raise TaskConflict("only a failed execution plan can be reopened")
+        return replace(self, status=ExecutionPlanStatus.IN_PROGRESS, version=self.version + 1)
+
     def to_view(self) -> ExecutionPlanView:
         return ExecutionPlanView(
             id=self.id,
