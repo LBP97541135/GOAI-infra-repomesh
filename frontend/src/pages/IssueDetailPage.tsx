@@ -1,5 +1,5 @@
 import type { IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
-import type { Decision, PlanAnchor } from "../types";
+import type { DagExecutionView, Decision, PlanAnchor } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
 import { DiscoveryPanel, type MaterializeContext } from "../components/DiscoveryPanel";
 import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
@@ -82,6 +82,7 @@ export function IssueDetailPage({
   onBringToFront,
   onDecisionAction,
   planState,
+  planExecution,
   onRetryPlan,
   onPlanGenerated,
   onCandidateAnchor,
@@ -108,6 +109,8 @@ export function IssueDetailPage({
   onDecisionAction: (decision: Decision, actionIdx: number) => void;
   /** 计划 DAG 面板（C-2）的取数四态：加载 / 无快照 / 失败 / 就绪，由容器持有 */
   planState: PlanDagState;
+  /** DAG 执行态着色（C-4）：本轮任务展示态按仓一份，null = 无执行事实可着色 */
+  planExecution: DagExecutionView | null;
   onRetryPlan: () => void;
   /** 发现面板（B-1/B-2）生成计划成功后刷新计划纸面。与 onRetryPlan 是同一个动作
    *  （重取该 issue 的计划快照），但两个入口的语义不同，故分成两个 prop 各自命名。 */
@@ -224,10 +227,10 @@ export function IssueDetailPage({
         })}
       </div>
 
-      {/* 计划 DAG（C-2）：位置按 IA 定稿——issue 详情页新区块，关联仓库芯片之后、
-          决策夹之前（先看计划长什么样，再看这一轮要决什么）。本批只做静态渲染，
-          「物化并开工」与执行期着色属 C-3/C-4。 */}
-      <PlanDagPanel state={planState} onRetry={onRetryPlan} />
+      {/* 计划 DAG（C-2 + C-4）：位置按 IA 定稿——issue 详情页新区块，关联仓库芯片
+          之后、决策夹之前（先看计划长什么样，再看这一轮要决什么）。物化后节点按
+          本轮任务的 display_status 着色（C-4），未物化时维持结构三视觉。 */}
+      <PlanDagPanel state={planState} execution={planExecution} onRetry={onRetryPlan} />
 
       {/* 决策夹：位置按设计定稿——关联仓库芯片之后、房间区之前。
           决策是轮次粒度，deckNote 说明取的是哪一轮，避免与 issue 级

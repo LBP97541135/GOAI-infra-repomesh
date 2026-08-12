@@ -1,4 +1,5 @@
-import type { RepositoryPlanView } from "../api/contract";
+import type { RepositoryPlanView, TaskDisplayStatus } from "../api/contract";
+import type { DagExecutionView } from "../types";
 
 /** 图形化 DAG 面板（批次 C-2，设计定稿 `full-loop-gui-design-20260812.md` ③）。
  *
@@ -6,9 +7,11 @@ import type { RepositoryPlanView } from "../api/contract";
  *  即 RoomView 里文本版计划纸面（PlanPaper）的同一份投影——本面是它的图形化升级，
  *  落位在 issue 详情页（IA 裁决：不加新的顶层导航）。
  *
- *  **本批只做静态渲染**：物化开工按钮与执行期轮询着色（橄榄绿=已交付 / 琥珀=进行中 /
- *  弱灰=等待）属 C-3/C-4，要等后端产出执行态才有真实事实可着色——先把颜色摆上去
- *  就是拿布局假装状态。本面的三种视觉只区分**结构性事实**：锚点仓 / 普通 / 未解析。
+ *  **两套视觉，按有没有执行态事实切换**（C-4）：
+ *   - 未物化 / 本轮聚合取不到：只区分**结构性事实**——锚点仓 / 普通 / 未解析。
+ *     此时把执行态颜色摆上去就是拿布局假装状态。
+ *   - 已物化且取到本轮聚合：节点按读模型的 `tasks[].display_status` 着色（见
+ *     `EXEC_SKIN`）。着色是皮肤，状态映射唯一实现仍在读模型。
  *
  *  布局＝**批次泳道**（设计裁决，不做力导向）：列 = `batch_index`，列内节点垂直排布，
  *  边只画 `depends_on`。列序直接就是执行顺序，这是自由画布给不了的信息。
@@ -41,6 +44,43 @@ interface Placed {
   row: number;
 }
 
+/* ── 执行态皮肤（C-4）─────────────────────────────────────────────────────── */
+
+/** **展示皮肤，不是状态映射。**
+ *
+ *  状态映射唯一实现在读模型：契约 v0.1 §5.1 把后端 7 态算成展示 6 态
+ *  `display_status`，那张表在服务端。本表只把**已经给出的那 6 个字面值**分到皮肤上，
+ *  不参与任何判定——这里读不到 `backend_status`，也读不到 rework 链，想改判也无从
+ *  改起，这是有意的。
+ *
+ *  分桶取自设计定稿 ③「橄榄绿 = 已交付 / 琥珀 = 进行中 / 弱灰 = 等待」：
+ *
+ *  | display_status | 桶     | 皮肤   | 归入理由 |
+ *  | -------------- | ------ | ------ | -------- |
+ *  | succeeded      | 已交付 | 橄榄绿 | 终态且成功 |
+ *  | running        | 进行中 | 琥珀   | 在跑 |
+ *  | repairing      | 进行中 | 琥珀   | 在跑（带未终态 rework 链），仍是「有人在动它」 |
+ *  | pending        | 等待   | 弱灰   | 已派未起 |
+ *  | blocked        | 等待   | 弱灰   | 卡在前置上，同样是「还没往前走」；§5.1 明写它不并入 repairing，故不给琥珀 |
+ *  | failed         | 失败   | 赭红   | **定稿的三桶里没有失败的位置**，而 §5.1 明写 failed 是六态之一——塞进任何一桶都是谎报，故用本仓既有的失败语义色 |
+ *
+ *  第四桶的赭红是**实线**，与「未解析」节点的赭红**虚线**在形状上分得开；两者都不是
+ *  新增颜色语义（PHASE_SKIN.failed 早就是赭红）。
+ *
+ *  Record 收窄到契约枚举：读模型将来多出第 7 个展示态时，这里缺项即编译错误，
+ *  不会静默落到某一桶里。
+ *
+ *  底色一律不透明并混进 cream：节点盖在边的图层之上，透明底会让跨列的边从节点文字
+ *  中间穿过去（与既有三视觉同一条约束）。 */
+const EXEC_SKIN: Record<TaskDisplayStatus, string> = {
+  succeeded: "border-olive bg-[color-mix(in_oklab,var(--color-olive)_20%,var(--color-cream))] text-paper-ink",
+  running: "border-amber bg-[color-mix(in_oklab,var(--color-amber)_22%,var(--color-cream))] text-paper-ink",
+  repairing: "border-amber bg-[color-mix(in_oklab,var(--color-amber)_22%,var(--color-cream))] text-paper-ink",
+  pending: "border-paper-dim/40 bg-cream text-paper-dim",
+  blocked: "border-paper-dim/40 bg-cream text-paper-dim",
+  failed: "border-salmon bg-[color-mix(in_oklab,var(--color-salmon)_16%,var(--color-cream))] text-paper-ink",
+};
+
 /** 按 `batch_index` 分列。列取自节点自身而非 `execution_batches`——两者是同一份
  *  投影（服务端遍历 execution_batches 生成节点，batch_index 就是那个下标），
  *  从节点走一遍能同时拿到 `repository_id` 与 `is_focus`，不必两处对齐。
@@ -57,41 +97,62 @@ function layout(nodes: RepositoryPlanView["dag"]["nodes"]): { placed: Placed[]; 
   return { placed, batches, rows: Math.max(1, ...filled.values()) };
 }
 
-function NodeBox({ placed }: { placed: Placed }) {
+function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutionView | null }) {
   const { node } = placed;
   const unresolved = node.repository_id === null;
 
-  // 三种视觉都用既有令牌：未解析＝虚线赭红，锚点仓＝琥珀框 + 琥珀底，其余＝纸面细框。
-  // 底色都是不透明的：节点盖在边的图层之上，透明底会让跨列的边从节点文字中间穿过去。
+  /** 本仓在本轮的执行态。三种「没有」互不相同，压成一个会撒谎：
+   *   - `execution === null`：未物化 / 本轮聚合没取到——**无事实可着色**；
+   *   - 本轮没有这个仓的任务（计数 0）：计划里有它，执行面还没有它；
+   *   - 有多条任务且态不一致（值为 null）：读模型没有给出仓级结论，不挑一条充数。 */
+  const taskCount = execution && node.repository_id ? (execution.taskCountByRepository[node.repository_id] ?? 0) : 0;
+  const status = execution && node.repository_id ? (execution.byRepository[node.repository_id] ?? null) : null;
+  const colored = !unresolved && status !== null;
+
+  // 未解析永远是虚线赭红：它没有 repository_id，也就没有任何执行态事实可谈。
+  // 其余节点：有执行态就走 EXEC_SKIN，没有就退回结构三视觉（锚点仓 / 普通）。
   const skin = unresolved
     ? "border-dashed border-salmon bg-cream text-salmon"
-    : node.is_focus
-      ? "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-cream))] text-paper-ink"
-      : "border-paper-dim/60 bg-cream text-paper-ink";
+    : colored
+      ? EXEC_SKIN[status]
+      : node.is_focus
+        ? "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-cream))] text-paper-ink"
+        : "border-paper-dim/60 bg-cream text-paper-ink";
+
+  const title = unresolved
+    ? `${node.name}：catalog 中查无此仓库——名字未注册，或在本 issue 域外重名歧义（域内优先后仍无唯一解），服务端不猜。`
+    : colored
+      ? `${node.name} · 本轮任务展示态 ${status}（读模型 §5.1 算出的 display_status，界面只上色）`
+      : node.name;
 
   return (
     <div
       className={`absolute flex flex-col justify-center overflow-hidden rounded-hard border px-2.5 ${skin}`}
       style={{ left: nodeX(placed.col), top: nodeY(placed.row), width: NODE_W, height: NODE_H }}
-      title={
-        unresolved
-          ? `${node.name}：catalog 中查无此仓库——名字未注册，或在本 issue 域外重名歧义（域内优先后仍无唯一解），服务端不猜。`
-          : node.name
-      }
+      title={title}
     >
       <div className="truncate font-mono text-[11.5px] leading-tight font-semibold">{node.name}</div>
-      <div className="flex items-baseline gap-1.5 font-mono text-[9.5px] tracking-[0.08em] text-paper-dim uppercase">
-        <span>batch {node.batch_index + 1}</span>
+      <div className="flex items-baseline gap-1.5 overflow-hidden font-mono text-[9.5px] tracking-[0.08em] text-paper-dim uppercase">
+        <span className="flex-none">batch {node.batch_index + 1}</span>
         {/* 未解析节点不隐藏（§5.4：丢节点会让批次缺项、布局就错了），显式留痕 */}
-        {unresolved && <span className="font-bold text-salmon">未解析</span>}
+        {unresolved && <span className="flex-none font-bold text-salmon">未解析</span>}
         {/* is_focus 只在 id 非 null 时可能为 true，故与「未解析」互斥 */}
-        {node.is_focus && <span className="font-bold text-amber">锚点仓</span>}
+        {node.is_focus && <span className="flex-none font-bold text-amber">锚点仓</span>}
+        {/* 颜色是皮肤，**字面值才是事实**：服务端给的 display_status 原样印在节点上，
+            这样读者不必反查配色表，将来加了新态也不会被静默归到某个颜色里。 */}
+        {colored && <span className="truncate font-bold lowercase">{status}</span>}
+        {!unresolved && execution && taskCount === 0 && (
+          <span className="truncate font-bold">本轮无任务</span>
+        )}
+        {!unresolved && execution && taskCount > 1 && status === null && (
+          <span className="truncate font-bold text-salmon">{taskCount} 任务态不一</span>
+        )}
       </div>
     </div>
   );
 }
 
-function DagCanvas({ dag }: { dag: RepositoryPlanView["dag"] }) {
+function DagCanvas({ dag, execution }: { dag: RepositoryPlanView["dag"]; execution: DagExecutionView | null }) {
   const { placed, batches, rows } = layout(dag.nodes);
   const width = PAD * 2 + batches.length * NODE_W + Math.max(0, batches.length - 1) * COL_GAP;
   const gridBottom = PAD + HEAD_H + rows * NODE_H + Math.max(0, rows - 1) * ROW_GAP;
@@ -190,9 +251,45 @@ function DagCanvas({ dag }: { dag: RepositoryPlanView["dag"] }) {
         ))}
 
         {placed.map((p) => (
-          <NodeBox key={nodeKey(p.node)} placed={p} />
+          <NodeBox key={nodeKey(p.node)} placed={p} execution={execution} />
         ))}
       </div>
+    </div>
+  );
+}
+
+/** 图例行。**两套图例按有没有执行态事实切换**——未物化时摆一排执行态色块，等于
+ *  给一张没有执行事实的图配一本用不上的色谱，读者会以为自己在看运行状态。 */
+function Legend({ execution }: { execution: DagExecutionView | null }) {
+  const swatch = (className: string, label: string) => (
+    <span key={label} className="flex items-center gap-1">
+      <i className={`inline-block size-[9px] rounded-[1px] border ${className}`} />
+      {label}
+    </span>
+  );
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-paper-dim/40 pt-2 font-mono text-[10px] text-paper-dim">
+      {execution ? (
+        <>
+          <span className="font-bold tracking-[0.1em] uppercase">执行态 · {execution.roundLabel}</span>
+          {swatch(EXEC_SKIN.succeeded, "已交付 succeeded")}
+          {swatch(EXEC_SKIN.running, "进行中 running / repairing")}
+          {swatch(EXEC_SKIN.pending, "等待 pending / blocked")}
+          {swatch(EXEC_SKIN.failed, "失败 failed")}
+          {swatch("border-dashed border-salmon bg-cream", "未解析（catalog 无此仓）")}
+        </>
+      ) : (
+        <>
+          <span className="font-bold tracking-[0.1em] uppercase">结构</span>
+          {swatch(
+            "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-cream))]",
+            "锚点仓",
+          )}
+          {swatch("border-paper-dim/60 bg-cream", "计划内仓库")}
+          {swatch("border-dashed border-salmon bg-cream", "未解析（catalog 无此仓）")}
+        </>
+      )}
     </div>
   );
 }
@@ -212,7 +309,17 @@ export type PlanDagState =
       anchorFromCandidate: boolean;
     };
 
-export function PlanDagPanel({ state, onRetry }: { state: PlanDagState; onRetry: () => void }) {
+export function PlanDagPanel({
+  state,
+  execution,
+  onRetry,
+}: {
+  state: PlanDagState;
+  /** C-4 执行态着色的输入。`null` = 尚未物化（无轮次）或本轮聚合没取到，
+   *  此时节点维持结构三视觉——没有事实就不上色。 */
+  execution: DagExecutionView | null;
+  onRetry: () => void;
+}) {
   return (
     <>
       <div className="microlabel flex items-baseline gap-2 pt-5 pb-2">
@@ -240,6 +347,7 @@ export function PlanDagPanel({ state, onRetry }: { state: PlanDagState; onRetry:
           plan={state.plan}
           anchorName={state.anchorName}
           anchorFromCandidate={state.anchorFromCandidate}
+          execution={execution}
         />
       )}
     </>
@@ -250,10 +358,12 @@ function PlanDagSheet({
   plan,
   anchorName,
   anchorFromCandidate,
+  execution,
 }: {
   plan: RepositoryPlanView;
   anchorName: string;
   anchorFromCandidate: boolean;
+  execution: DagExecutionView | null;
 }) {
   const unresolved = plan.dag.nodes.filter((n) => n.repository_id === null);
 
@@ -276,7 +386,13 @@ function PlanDagSheet({
         </p>
       ) : (
         <div className="pt-3">
-          <DagCanvas dag={plan.dag} />
+          <DagCanvas dag={plan.dag} execution={execution} />
+        </div>
+      )}
+
+      {plan.dag.nodes.length > 0 && (
+        <div className="mt-2">
+          <Legend execution={execution} />
         </div>
       )}
 
@@ -300,6 +416,18 @@ function PlanDagSheet({
           <div className="text-salmon">
             {unresolved.length} 个节点在 catalog 中查无仓库（{unresolved.map((n) => n.name).join("、")}）——名字未注册，
             或在本 issue 域外重名歧义（域内优先后仍无唯一解）；服务端不猜，节点按虚线如实留痕、不隐藏。
+          </div>
+        )}
+        {execution ? (
+          <div>
+            节点着色取自 <b>{execution.roundLabel}</b> 交付聚合的 `tasks[].display_status`（契约 v0.1 §5.1
+            的展示 6 态，读模型算好的），本面只把字面值分档上色、并把它原样印在节点上。
+            <b>本页没有轮询</b>：着色随页面刷新更新，不会自己动。
+          </div>
+        ) : (
+          <div>
+            本图<b>未着执行态色</b>：issue 尚未物化（没有轮次）或本轮交付聚合没取到，
+            无执行事实可着色。上面三种视觉只区分结构——锚点仓 / 计划内仓库 / 未解析。
           </div>
         )}
         {plan.dag.edges.length === 0 && (

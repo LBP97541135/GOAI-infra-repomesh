@@ -15,7 +15,21 @@ import { fetchConsoleAgents } from "./grid";
 import { resolveDataSourceMode } from "./source";
 import { decisionsFromContract } from "../viewmodel";
 import { shortId } from "../display";
-import { decisionsFixture, deliveryAggregateFixture } from "../data/issueDetail";
+import { decisionsFixture, deliveryAggregateFixture, deliveryAggregateFixtures } from "../data/issueDetail";
+
+/** 回放形态选择：`?tasks=<name>`，取值见 data/issueDetail.ts 的聚合夹具表。
+ *  **自检开关**（同 `?discovery=` / `?issue=`），live 模式下完全不参与取数——
+ *  它只为走到 C-4 那两条「读模型没给结论就留白」的分支（同仓多任务态不一 /
+ *  本轮无该仓任务），默认形态里每仓恰好一条任务，永远走不到。
+ *  名字打错时不静默回落，否则会让人以为自己在看 A 其实在看 B。 */
+function replayAggregate(): DeliveryAggregate {
+  const name = new URLSearchParams(window.location.search).get("tasks");
+  const picked = name ? deliveryAggregateFixtures[name] : undefined;
+  if (name && !picked) {
+    throw new Error(`回放夹具没有任务形态「${name}」。可选：${Object.keys(deliveryAggregateFixtures).join(" / ")}`);
+  }
+  return picked ?? deliveryAggregateFixture;
+}
 
 export interface DecisionDeckData {
   deck: Decision[];
@@ -29,7 +43,7 @@ export async function fetchDecisionDeck(roundId: string): Promise<DecisionDeckDa
     // 夹具与详情/房间/计划同源（同一 issue、同一套仓库与轮次 id）
     return {
       deck: decisionsFromContract(decisionsFixture.items),
-      aggregate: deliveryAggregateFixture,
+      aggregate: replayAggregate(),
     };
   }
   const api = defaultClient();

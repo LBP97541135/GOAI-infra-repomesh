@@ -467,6 +467,55 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
     execution_batches: [["saleor-core"], ["saleor-dashboard", "saleor-docs"]],
     merge_order: [REPO_API, REPO_WEB, REPO_DOCS],
   },
+  /** C-4 着色的数据源。三仓三态**有意各不相同**：只摆一屏全绿等于没测——
+   *  真出事时看的正是琥珀（在跑 / 修复中）与灰（等前置）那几个节点。
+   *  `display_status` 是读模型按 §5.1 算好的，夹具照抄字面值，不在这里重算一遍。 */
+  tasks: [
+    {
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a002",
+      task_key: null,
+      repository_id: REPO_API,
+      title: "价格修改原因：模型、审计与 GraphQL 暴露",
+      backend_status: "succeeded",
+      display_status: "succeeded",
+      agent: "rm-worker-597869c4",
+      attempt: 1,
+      depends_on: [],
+      result_summary: "PR 19466：迁移 + 必填校验 + 审计字段，隐藏验收 9/9",
+      repair_timeline: [],
+      escalated_to_human: false,
+    },
+    {
+      // §5.2：in_progress 且存在未终态 rework 链 → 展示 repairing（attempt 2）。
+      // 这是 CI 失败后返工的形态，与 change_set 里那条 ci_failed 是同一件事的两个面。
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a003",
+      task_key: null,
+      repository_id: REPO_WEB,
+      title: "后台订单详情页展示价格修改原因",
+      backend_status: "in_progress",
+      display_status: "repairing",
+      agent: "rm-worker-b6b2f051",
+      attempt: 2,
+      depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
+      result_summary: null,
+      repair_timeline: [{ at: "2026-08-11T11:40:00Z", what: "隐藏验收测试 3/9 失败，开返工任务" }],
+      escalated_to_human: false,
+    },
+    {
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a005",
+      task_key: null,
+      repository_id: REPO_DOCS,
+      title: "运营文档补价格修改原因章节",
+      backend_status: "assigned",
+      display_status: "pending",
+      agent: null,
+      attempt: 1,
+      depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
+      result_summary: null,
+      repair_timeline: [],
+      escalated_to_human: false,
+    },
+  ],
   change_set: {
     change_set_id: CHANGE_SET_ID,
     status: "delivering",
@@ -580,6 +629,41 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
 
 /** 本轮决策夹（§4.3）。approve 指向 REPO_API，与上面 change_set 里那条
  *  `merge_gate.allowed: false / 缺 head-bound 治理决策` 对应——批准它正是补上那一条。 */
+/** C-4 的两条「拒绝派生」分支的自检形态（`?tasks=conflict`）。默认形态里每仓恰好
+ *  一条任务，这两条分支永远走不到——而它们正是出事时才会被看到的那两个节点：
+ *
+ *   - saleor-dashboard 有**两条任务、展示态不一致**（父任务 failed + 返工任务
+ *     running）。读模型没有给出「这个仓整体算什么态」这一事实，界面留白并写明
+ *     几条任务不一致，不挑一条充数；
+ *   - saleor-docs **本轮没有任务**：计划里有它，执行面还没有它。这与「等待」
+ *     不是一回事，节点上如实写「本轮无任务」而不是涂成灰的 pending。 */
+export const deliveryAggregateTaskConflictFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: [
+    deliveryAggregateFixture.tasks[0],
+    {
+      ...deliveryAggregateFixture.tasks[1],
+      backend_status: "failed",
+      display_status: "failed",
+      attempt: 1,
+      repair_timeline: [],
+    },
+    {
+      ...deliveryAggregateFixture.tasks[1],
+      task_id: "b7d20c11-4e6f-4a83-9c01-6f2e8d94a004",
+      title: "后台订单详情页展示价格修改原因（返工）",
+      backend_status: "in_progress",
+      display_status: "running",
+      attempt: 2,
+    },
+  ],
+};
+
+export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
+  default: deliveryAggregateFixture,
+  conflict: deliveryAggregateTaskConflictFixture,
+};
+
 export const decisionsFixture: DecisionsResponse = {
   items: [
     {

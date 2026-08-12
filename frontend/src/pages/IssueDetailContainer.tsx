@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeliveryAggregate, IssueDetailView, IssueRoundView, RoomListItemView } from "../api/contract";
 import type { ApprovalInfo, Decision, EvidenceView, PlanAnchor } from "../types";
 import {
@@ -18,7 +18,7 @@ import { EvidenceModal } from "../components/EvidenceModal";
 import type { PlanDagState } from "../components/PlanDagPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 import { errText, shortId } from "../display";
-import { approvalForDecision, evidenceFromAggregate } from "../viewmodel";
+import { approvalForDecision, dagExecutionFromAggregate, evidenceFromAggregate } from "../viewmodel";
 import { IssueDetailPage } from "./IssueDetailPage";
 
 /** issue 详情取数容器（§3 概览 + §5.1 房间清单 + §4.3 决策夹 + §4.4 写回路）。
@@ -257,6 +257,21 @@ export function IssueDetailContainer({
     planReload,
   ]);
 
+  /** DAG 执行态着色（C-4）的输入。数据源是**本轮交付聚合**——决策夹取数时已经把它
+   *  留下了（`deckAggregate`），这里零额外请求。
+   *
+   *  `null` 有两种来路，页脚都能说清：草稿 issue 没有轮次（聚合根本没取）、
+   *  或本轮聚合取用失败。两种都是「无执行事实」，节点维持结构三视觉——
+   *  取不到就不上色，比摆一排灰块让人以为「全都在等」诚实。
+   *
+   *  轮次标签与决策夹同一份算法（第 N 轮 / 轮次 短id），免得同一页出现两种叫法。 */
+  const roundIndex = roundId && detail ? detail.rounds.findIndex((r) => r.round_id === roundId) : -1;
+  const roundLabel = !roundId ? "" : roundIndex >= 0 ? `第 ${roundIndex + 1} 轮` : `轮次 ${shortId(roundId)}`;
+  const planExecution = useMemo(
+    () => (deckAggregate ? dagExecutionFromAggregate(deckAggregate, roundLabel) : null),
+    [deckAggregate, roundLabel],
+  );
+
   /** 物化确认弹窗（C-3）里的 M。设计定稿写死「**每仓一队**」，所以数的是计划里的
    *  **仓库**——`execution_batches` 去重后的仓库名数，不是 `dag.nodes.length`
    *  （同一仓库在多个批次里出现就会被数两遍），也不是候选数。
@@ -452,6 +467,7 @@ export function IssueDetailContainer({
         }
         onDecisionAction={handleDecisionAction}
         planState={planState}
+        planExecution={planExecution}
         onRetryPlan={handlePlanReload}
         onPlanGenerated={handlePlanReload}
         onCandidateAnchor={handleCandidateAnchor}

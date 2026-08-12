@@ -31,6 +31,13 @@ export type RepositoryDeliveryStatus =
   | "compensation_pending"
   | "compensated";
 
+/** §5.1 Task：后端 7 态 → **展示 6 态**（读模型内唯一实现，前端禁止另行映射）。
+ *  映射表在 v0.1 §5.1：assigned→pending / in_progress→running / in_progress 且存在
+ *  未终态 rework 链→repairing / blocked→blocked / succeeded→succeeded /
+ *  failed|cancelled→failed；superseded 在列表里被过滤掉。
+ *  消费方拿到的就是这 6 个字面值之一，`backend_status` 只作审计用不参与展示判定。 */
+export type TaskDisplayStatus = "pending" | "running" | "repairing" | "blocked" | "succeeded" | "failed";
+
 export type GovernanceDecisionValue = "ready" | "blocked" | "rollback_required";
 
 /* ------------------------------------------------------------------ §2 列表 */
@@ -539,6 +546,36 @@ export interface RepositoryDeliveryView {
   merge_sha: string | null;
 }
 
+/** v0.1 §3 交付聚合的 `tasks[]`（task_orchestration TaskView + DAG 边）。
+ *
+ *  本文件此前没有转写它——直到 C-4 需要「DAG 节点按执行态着色」才有第一个消费方。
+ *  形状取自契约 v0.1 §3 的响应体原文并已对 live 实调核过（8100，只读 GET）。
+ *
+ *  ⚠ **同一个 repository_id 可以对应多条**：CI rework task 与父任务同仓（§5.2 的
+ *  attempt 就是这么数出来的）。所以按仓消费时必须自己面对「多条各说各话」这一形态，
+ *  不能默认 find 出第一条当成该仓的状态。 */
+export interface DeliveryTaskView {
+  task_id: string;
+  /** 无 Project 注册表，恒 null（同 issue_key 的降级） */
+  task_key: string | null;
+  repository_id: string;
+  title: string;
+  /** 审计用的后端 7 态原值；**展示一律用 `display_status`**（§5.1 是唯一映射实现） */
+  backend_status: string;
+  display_status: TaskDisplayStatus;
+  /** 由 assignee 经 agent_directory 解析出的资源名（不是人名），解析不到为 null */
+  agent: string | null;
+  /** §5.2：1 + 同仓 rework 链长度 */
+  attempt: number;
+  /** plan snapshot task_dag，装的是 task_id */
+  depends_on: string[];
+  result_summary: string | null;
+  /** rework task 创建事件 + recovery action 状态变化合成，可为空 */
+  repair_timeline: Array<{ at: string | null; what: string }>;
+  /** §5.2：**读模型不做升级判断**，仅转述 recovery plan 里未终态的 MANUAL_INTERVENTION */
+  escalated_to_human: boolean;
+}
+
 export interface GovernanceDecisionView {
   id: string;
   repository_id: string;
@@ -588,6 +625,8 @@ export interface DeliveryAggregate {
   contract: DeliveryContractView | null;
   repositories: DeliveryRepositoryInfo[];
   plan: DeliveryPlanView;
+  /** §3 一直投影这一列，本文件到 C-4 才转写（第一个消费方是 DAG 执行态着色） */
+  tasks: DeliveryTaskView[];
   change_set: ChangeSetView | null;
   validation_snapshot: ValidationSnapshotView | null;
   diffs: DeliveryDiffView[];
