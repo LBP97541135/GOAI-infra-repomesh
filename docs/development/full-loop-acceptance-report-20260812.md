@@ -54,7 +54,7 @@ console-demo，物化成功标本）。
 | B2-clarify | 追问回路 + 强行继续留痕 | √ | 含糊 issue `de2973ab` → 「不充分（0.10）· 3 条追问」+缺失维度+逐条答复框；强行继续按钮自述诚实（永久留痕+审计+不重跑模型）；点击后 `forced_continue {at, by_agent_id, ignored_question_count:3}` 落库、GUI 琥珀留痕、步进器按 §3.2 规则 2 放行 |
 | B3 | 物化并开工 | **√（第三走）/ 途中揪出 A-1·A-3·A-4** | 确认弹窗数字三次全对（3任务3团队/2任务2团队×2 · 主体派生 · 不可逆文案）。第一走 500=A-1（跨组织异常未翻译）；第二走 500=A-3 首触发（REQUIRED_CHECKS 请求期爆炸→半执行）；**第三走（35e66beb）物化 200 成功**：轮次 1 + 仓 2 + 团队 2 落库 |
 | B3-负路径 | 跨组织物化拒绝 | √（A-1 关闭证据） | ba7e827 + REQUIRED_CHECKS 修正后，GUI 重放 a2c0c2f9 → 弹窗「服务端拒绝 … **HTTP 409 · repository 48ff85ee… already has a leader in another organization (d68a5926…); it cannot join this project's topology**」原文透传（截图 S16） |
-| B4 | 执行观测（新 issue） | **待复走** | 35e66beb 团队 runtime_status=pending、任务 0、房间 0——全部堵在宿主→AgentTeams 控制面通路（§1 三重墙）后面；sidecar 修复在途。复走判据之一：**pending 团队在通路恢复后应被 reconcile 自动收敛**（不收敛=新缺陷） |
+| B4 | 执行观测（新 issue） | **待复走** | 35e66beb 团队 runtime_status=pending、任务 0、房间 0。两层阻断：①宿主→控制面通路三重墙（⑮ sidecar 已通，127.0.0.1:8090/6167 实测 200）；②**更深一层（B-11）**：GUI 物化路径从不向 AgentTeams 投影运行时——注册/reconcile 只接在 run_pipeline 脚本，src 零调用点，控制器里 rm-team 系 4 agent/2 team 全不存在、room_id 恒 NULL，**连通性修好房间也不会自己长出来**。复走判据（勘正）：35e66beb **不会自收敛**，应走 A-3 修复的「重放补完」路径转正 |
 | B4（旁证） | 执行面读模型（种子 B） | √ | DAG 执行态着色（succeeded 节点+6 态图例+「本页没有轮询」自述）；teamRoom 消息头像/系统条目结构之别+「控制台投影」脚注（§5.2 合规）；环境窗（变更文件/commit/PR #7/基线快照）；事件时间线四 kind 过滤 |
 | B5 | GUI 回滚（整 change set） | **√（GUI 语义闭环）** | 种子 B 轮 `9129f894`：轮次卡「回滚…」入口 → 对话框与 v0.1 §4.6 及设计定稿④逐项吻合（范围表 checkout/未 merge/withhold 免费撤回/逆序第 1 步/PR #7；琥珀条不许诺一键还原；理由必填；主体派生随组织正确切换；确认框门控）。pre/post 三中：merge_gate `{allowed:true}`→`{allowed:false,["an active recovery plan is incomplete"]}`；新增 head-bound `ROLLBACK_REQUIRED` 决策（理由原文入档）；recovery_in_progress false→true。GUI 即时呈现「关注·修复观察」+「已有恢复计划在执行」+决策卡 |
 | B5-saga | 回滚 saga 真执行 | **待复走** | 勘正：种子 B 的 catalog URL 是占位符，saga 对它的 close 动作在 URL 解析处必失败——**saga 活体证据不能从种子 B 拿**，须在 B4 真交付产生 change set 后对其走 GUI 回滚获取。`gate_display` 仍 "open" 为 §5.3 合规（映射交付 status 非 merge_gate），亲核契约后判非缺陷 |
@@ -77,12 +77,22 @@ console-demo，物化成功标本）。
 | --- | --- | --- | --- |
 | A-1 | 物化端点对跨组织仓库返 500（应为业务拒绝） | 首走 500；根因=repository leader 单例全局，跨组织 converge 被 provisioner 诚实拒绝（AgentHierarchyViolation）但端点未翻译。修复 `ba7e827`（异常上提 contracts+译 409+回归测试）+ 环境修正（REQUIRED_CHECKS）双因子后，**GUI 重放实得 409+拒因原文**（S16） | **已修已关**（活体反证成立） |
 | A-2 | dev-up 启动器会收养并迁移不是自己起的库 | 代码级实证（`dev-up.sh:150-153`）：`compose ps` 见 postgres 在跑即 `own_database=1` → `alembic upgrade head`——防得住陌生进程占端口，防不住**先于脚本存在的同项目 compose 库**（本机活体 5432 即此形态，谱系不符）。与脚本自述「never migrates into anything it did not start」矛盾 | 入册待修（建议：迁移前比对 alembic 谱系，或无 postgres.started 状态文件时要求显式确认） |
-| A-3 | **materialize 非原子：失败留半执行状态** | 两条触发路径实证：①REQUIRED_CHECKS 缺失 → `container.py:1002` 请求期 RuntimeError；②AgentTeams 房间未就绪 → `collaboration._route CollaborationRouteUnavailable` 抛穿。两者都发生在轮次/plan 已落库之后——**§8.2/8.3 的「失败不留可重放收据」只保护了收据，没保护轮次行**。标本：`5c1b3567`（轮次 1+仓 2、任务 0 房间 0）。连带发现：容器工厂配置错误在请求期才爆、以 500 示人（启动期校验缺失，主脑已入 backlog） | 修复在途（派工进重试队列；判据=同 issue 重放收敛到完整状态），标本保全 |
-| A-4 | **每个刚物化的轮次杀死 issue 详情页** | 全链：读模型对新轮次投影 `updated_at:null`+`plan_version:null`（curl 双标本实证）→ `RoundsPanel.tsx:107` `dayLabel(round.updated_at)` → `display.ts:151` 对 null 调 `.match` → TypeError → **无错误边界，SPA 整树卸载**，hash 导航救不回须整页刷新。**产线主流程必踩**（物化后到首个活动 stamp 前该 issue 页必死）；种子轮次全带时间戳，故此前历轮验收未暴露 | 修复在途（空值容忍+区块级错误边界；判据=5c1b3567 活标本页面恢复可达且半执行态诚实呈现） |
+| A-3 | **materialize 非原子：失败留半执行状态** | 两条触发路径实证：①REQUIRED_CHECKS 缺失 → `container.py:1002` 请求期 RuntimeError；②AgentTeams 房间未就绪 → `collaboration._route CollaborationRouteUnavailable` 抛穿。两者都发生在轮次/plan 已落库之后——**§8.2/8.3 的「失败不留可重放收据」只保护了收据，没保护轮次行**。标本：`5c1b3567`（轮次 1+仓 2、任务 0 房间 0）。连带发现：容器工厂配置错误在请求期才爆、以 500 示人（启动期校验缺失，主脑已入 backlog） | **修复已合并**（503 诚实翻译 + materialize 可重入重放：同/新幂等键均可把半执行补完）；活体重放验证随复走做，标本保全 |
+| A-5 | **草稿快照消费不持久化（活体 Postgres 路径），防二次物化失效** | 主脑 SQL 实证：5533 上 `5c1b3567` 与 `35e66beb` 两条快照行 `execution_plan_id IS NULL`——连**成功物化**的 35e66beb 也没回填。即「物化消费草稿、link_execution_plan 回填」在 Postgres 实现上没落盘，而测试全绿=**测试 store 与 Postgres 实现分叉**（方法论五形态第五条「测到的≠想测的对象」的活体案例）。这是 A-4 的数据源头（rounds[] 投影 plan_version/updated_at 双 null 由此而来），且「已消费轮次拒绝二次物化 409」因此失守 | 修复在途（⑰：分叉根因+回归测试以 Postgres 行为为准+存量两行补救） |
+| A-4 | **每个刚物化的轮次杀死 issue 详情页** | 全链：读模型对新轮次投影 `updated_at:null`+`plan_version:null`（curl 双标本实证；**数据源头=A-5**）→ `RoundsPanel.tsx:107` `dayLabel(round.updated_at)` → `display.ts:151` 对 null 调 `.match` → TypeError → **无错误边界，SPA 整树卸载**，hash 导航救不回须整页刷新。**产线主流程必踩**（物化后到首个活动 stamp 前该 issue 页必死）；种子轮次全带时间戳，故此前历轮验收未暴露 | 修复在途（⑯：空值容忍+区块级错误边界+「刚物化·尚无活动」与「物化中断产物」两种诚实文案分开；判据=5c1b3567 活标本页面恢复可达且半执行态诚实呈现） |
 
 ### B 类
 
-本轮实走范围内未新增 B 类；上一轮 **B-1（issue 写端点）与 B-2（工作区列表/切换）修复成立**并在本轮实证。其余 B-3~B-10 未复测，仍以上一轮报告为准。
+上一轮 **B-1（issue 写端点）与 B-2（工作区列表/切换）修复成立**并在本轮实证；其余
+B-3~B-10 未复测，仍以上一轮报告为准。本轮新增一条（编号顺延）：
+
+| # | 缺陷 | 现状（实证） | 缺失能力 |
+| --- | --- | --- | --- |
+| B-11 | **GUI 物化路径从不向 AgentTeams 投影运行时** | 注册 agent / reconcile 团队房间的代码只接在 `run_pipeline` 脚本，src 零调用点；控制器内 rm-team 系 4 agent/2 team 全不存在、room_id 恒 NULL（主脑诊断代理事实链）。GUI 物化建的团队永远停在 pending——**通路修好房间也不会长出来**，历史上「能跑」全靠脚本旁路 | materialize 同步做运行时投影（注册+reconcile 在 start_plan 之前）——已裁决，⑱ 在修 |
+
+诊断附注（素材入档）：物化后 docker 里「长出」新 worker 容器实为巧合——controller
+挂着 docker.sock 在轮流重启全部历史容器，Exited(1) 是容器内 baked 的 AUTH_TOKEN
+在 08-08 控制器重启轮换后失效、起来即 401 自杀；没有任何团队规格曾送达控制器。
 
 ### C 类
 
@@ -111,7 +121,7 @@ console-demo，物化成功标本）。
 | `35e66beb`（console-demo） | **物化成功标本**：轮次 1+仓 2+团队 2（pending） | **保全勿动**——通路恢复后 reconcile 自动收敛的验证件 |
 | `de2973ab` | clarify 验证：不充分判定+forced_continue 留痕 | 随种子重置清理 |
 | `9129f894`（种子 B） | 已改性：+ROLLBACK_REQUIRED 决策+恢复计划（占位 URL 上不会真执行） | 种子重置时复位；不再是「唯一 approve 待放行」形态 |
-| `e6b251db` | 空文本 issue，非验收产物（曾对 materialize 打过三次 500，来源待查） | 主脑已入清理清单 |
+| `e6b251db` | 空文本 issue，非验收产物；其三次 materialize 500 已归因 **A-1 同族**（跨组织 AgentHierarchyViolation，发生在写行前无半执行，ba7e827 已覆盖） | 主脑已入清理清单 |
 | catalog | checkout/billing 两行 URL 被主脑外科更新为真仓地址（原占位符） | 入种子重置清单（主脑留档） |
 | compose console 栈 | 已 `down -v` 清理 | 无残留 |
 
@@ -143,9 +153,12 @@ DOM/console 实读留档；A-4 崩溃页面无帧可拍（白屏本身即证据�
 
 **当前判定：不可进入推送。** 判据②全过（compose 冷路径首跑即通为本轮重要正面结论）；
 判据①：发现链、审批、计划、DAG、回滚语义、clarify 全部实走通过且契约红线零违例，
-但 **A-3（物化非原子）与 A-4（新轮次杀死详情页）落在产线主动脉上**，且 B4 执行观测
-被宿主→AgentTeams 通路阻断未走。三项修复（派工重试队列 / RoundsPanel 容错+错误边界 /
-sidecar 通路）落地后复走 B4 + B5-saga，再作终判。
+但物化之后的执行面在活体上层层断裂：**A-3（非原子，修复已合并待活体验证）、A-4（新
+轮次杀死详情页，⑯ 在修）、A-5（草稿消费不持久化，⑰ 在修）、B-11（GUI 物化从不投影
+运行时，⑱ 在修）**。修复齐（⑮ 通路已通 + ⑯⑰⑱）、8100 换 env 重启后复走
+B4 + B5-saga，再作终判。
 
-方法论沉淀：本轮四个 A 类中三个（A-1/A-3/A-4）都只在「发现链亲产数据 + 全新轮次」
-的形态下触发——种子数据是熟路，**终态验收的价值恰恰在走生路**。
+方法论沉淀：本轮五个 A 类与 B-11 全部只在「发现链亲产数据 + 全新轮次 + 活体
+Postgres/控制面」的形态下触发——种子数据是熟路、测试 store 是替身（A-5 即
+「测到的≠想测的对象」活体案例）、脚本旁路是暗门（B-11），**终态验收的价值恰恰在
+走生路**。
