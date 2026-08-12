@@ -64,6 +64,39 @@ class RepoScanRequest(BaseModel):
     gitlab_token: str = Field(default="", description="GitLab access token")
 
 
+class ConsoleOrgScanRequest(BaseModel):
+    """Console request body for an organization scan.
+
+    A whitelist, not a copy of :class:`OrgScanRequest`: ``github_token`` and
+    ``gitlab_token`` are absent on purpose. A browser is not a place to type a
+    personal access token, so the console's credentials come from the server's
+    env (``REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN`` / ``..._GITLAB_TOKEN``) and
+    from nowhere else. The native RI endpoints keep their token fields for
+    scripts and operators; this face closes that bypass.
+
+    ``extra="forbid"`` makes the closure audible: a client that sends a token
+    anyway gets a 422 naming the field, rather than having it silently dropped
+    and believing the private repo it asked for simply was not there.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_url: HttpUrl
+    max_workers: int = Field(default=5, ge=1, le=20)
+
+
+class ConsoleRepoScanRequest(BaseModel):
+    """Console request body for a single-repository scan.
+
+    Same whitelist rule as :class:`ConsoleOrgScanRequest`: no token fields,
+    credentials from the server env only.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    repo_url: HttpUrl
+
+
 class UrlIdentification(BaseModel):
     """The backend's verdict on what a pasted URL points at.
 

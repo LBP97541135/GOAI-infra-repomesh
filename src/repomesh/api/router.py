@@ -11,6 +11,9 @@ from repomesh.modules.agent_runtime.api.router import router as agent_runtime_ro
 from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
 from repomesh.modules.identity_access.api import router as identity_console_router
+from repomesh.modules.repository_intelligence.api.console import (
+    router as console_repositories_router,
+)
 from repomesh.modules.repository_intelligence.api.router import (
     router as repository_intelligence_router,
 )
@@ -19,6 +22,10 @@ api_router = APIRouter()
 api_router.include_router(health_router)
 api_router.include_router(worker_mcp_router)
 api_router.include_router(repository_intelligence_router, prefix="/api/v1")
+# Shares the /console prefix with the read model's grid router and with
+# identity_access; the paths are disjoint, and a console *write* belongs to the
+# module that owns the rows rather than to the read-model package.
+api_router.include_router(console_repositories_router, prefix="/api/v1")
 api_router.include_router(agent_runtime_router, prefix="/api/v1")
 api_router.include_router(delivery_router, prefix="/api/v1")
 api_router.include_router(human_control_router, prefix="/api/v1")

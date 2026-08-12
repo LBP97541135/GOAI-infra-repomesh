@@ -17,6 +17,7 @@ from repomesh.modules.repository_intelligence.application import (
     IssueIntakeDenied,
     RegisterRepository,
     RepositoryDiscoveryService,
+    ScanRegistration,
     identify_url_type,
     register_scanned_profiles,
     render_markdown,
@@ -184,6 +185,73 @@ def build_scan_fetcher(
     return make_fetcher(platform, github_token=github_token, gitlab_token=gitlab_token)
 
 
+def require_single_repo_url(url: str) -> None:
+    """Refuse a URL that does not name one repository.
+
+    The same judgement the console badges with, applied server-side: a group
+    URL sent to a single-repo scan is a mistake worth naming, not something to
+    guess a repository name out of.
+    """
+
+    if identify_url_type(url) is not UrlType.SINGLE_REPO:
+        raise HTTPException(400, "URL must point at a single repository, not a group")
+
+
+class ScanFailed(Exception):
+    """A scan could not complete.
+
+    Carries the sentence the caller may see and nothing else. Whatever the
+    outbound request actually saw is already in the log by the time this is
+    raised — that separation is the point (S-2), and it is what lets the
+    background scan tasks report a failure without inventing a second, chattier
+    error path.
+    """
+
+
+async def perform_org_scan(
+    url: str,
+    fetcher: object,
+    catalog: RepositoryCatalog,
+    *,
+    max_workers: int,
+) -> ScanRegistration:
+    """Scan an organization and register what came back."""
+
+    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
+        scan_org,
+    )
+
+    try:
+        profiles = await scan_org(url, fetcher, max_workers=max_workers)
+    except Exception as exc:
+        # The message used to be echoed back, which handed the caller whatever
+        # the outbound request saw. Operators read it in the log instead.
+        _logger.warning("org scan failed for %s", url, exc_info=exc)
+        raise ScanFailed("organization scan failed") from exc
+
+    return await register_scanned_profiles(profiles, catalog)
+
+
+async def perform_repo_scan(
+    url: str,
+    fetcher: object,
+    catalog: RepositoryCatalog,
+) -> ScanRegistration:
+    """Scan one repository and register it."""
+
+    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
+        scan_single_repo,
+    )
+
+    try:
+        profile = await scan_single_repo(url, fetcher)
+    except Exception as exc:
+        _logger.warning("repository scan failed for %s", url, exc_info=exc)
+        raise ScanFailed("repository scan failed") from exc
+
+    return await register_scanned_profiles([profile], catalog)
+
+
 @router.post("/issues", dependencies=[ACTION_TOKEN])
 async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONResponse:
     """Contract v0.3 §1: create an issue (= first draft PlanSnapshot).
@@ -303,10 +371,6 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
     (``POST /console/repositories/scan-org``) returns 202 and a task instead,
     because a browser cannot hold a request open for a 40-repo organization.
     """
-    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
-        scan_org,
-    )
-
     url = str(body.org_url)
     fetcher = build_scan_fetcher(
         url,
@@ -316,14 +380,10 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
     )
 
     try:
-        profiles = await scan_org(url, fetcher, max_workers=body.max_workers)
-    except Exception as exc:
-        # The message used to be echoed back, which handed the caller whatever
-        # the outbound request saw. Operators read it in the log instead.
-        _logger.warning("org scan failed for %s", url, exc_info=exc)
-        raise HTTPException(502, "organization scan failed") from exc
+        outcome = await perform_org_scan(url, fetcher, catalog, max_workers=body.max_workers)
+    except ScanFailed as error:
+        raise HTTPException(502, str(error)) from error
 
-    outcome = await register_scanned_profiles(profiles, catalog)
     return OrgScanResult(
         org_url=url,
         total_scanned=outcome.total_scanned,
@@ -349,14 +409,8 @@ async def scan_single_repository(
     dependency files and the commits, and builds the AutoCard from what is
     actually in the repo.
     """
-    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
-        scan_single_repo,
-    )
-
     url = str(body.repo_url).rstrip("/")
-    if identify_url_type(url) is not UrlType.SINGLE_REPO:
-        raise HTTPException(400, "URL must point at a single repository, not a group")
-
+    require_single_repo_url(url)
     fetcher = build_scan_fetcher(
         url,
         target="repository",
@@ -365,12 +419,10 @@ async def scan_single_repository(
     )
 
     try:
-        profile = await scan_single_repo(url, fetcher)
-    except Exception as exc:
-        _logger.warning("repository scan failed for %s", url, exc_info=exc)
-        raise HTTPException(502, "repository scan failed") from exc
+        outcome = await perform_repo_scan(url, fetcher, catalog)
+    except ScanFailed as error:
+        raise HTTPException(502, str(error)) from error
 
-    outcome = await register_scanned_profiles([profile], catalog)
     return RepoScanResult(
         repo_url=url,
         total_scanned=outcome.total_scanned,

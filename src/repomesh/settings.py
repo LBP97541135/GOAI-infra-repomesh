@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
     #: else is refused before a request leaves this process.
     repository_scan_allowed_hosts: str = "github.com"
+    #: Credentials the *console* scan endpoints use to read private
+    #: repositories. The console's request bodies carry no token field on
+    #: purpose (a browser is not a place to type a PAT), so this env is the
+    #: only way to reach a private repo from the GUI. The native RI endpoints
+    #: still accept a token in the body for scripts and operators.
+    repository_scan_github_token: str = ""
+    repository_scan_gitlab_token: str = ""
     #: AgentTeams probe budget per row, and how many may be in flight at once.
     runtime_probe_timeout_seconds: float = 2.0
     runtime_probe_concurrency: int = 16
