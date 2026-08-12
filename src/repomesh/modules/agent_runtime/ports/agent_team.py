@@ -107,6 +107,13 @@ class WorkerRuntimeRef:
     room_id: str | None = None
     matrix_user_id: str | None = None
     message: str | None = None
+    #: The Team this worker is currently a member of, as the controller
+    #: reports it, or None when it belongs to none. Membership is *exclusive*
+    #: — a second Team naming the same worker is refused with 400 "is already
+    #: a member of Team X" — so this field is the only way to ask "where does
+    #: this repository's team already live?" without provoking that refusal.
+    #: It is what makes adoption possible (defect A-8, contract §8.7.2).
+    team: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

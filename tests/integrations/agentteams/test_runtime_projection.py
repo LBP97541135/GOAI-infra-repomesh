@@ -17,12 +17,14 @@ them is visible from the outside:
 Nothing reaches the network: the control plane is a recording double.
 """
 
+from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 
+from repomesh.integrations.agentteams.control_plane import AgentTeamsResponseError
 from repomesh.integrations.agentteams.runtime_projection import (
     AgentTeamsRoomsPending,
     ProjectRuntimeProjection,
@@ -64,14 +66,33 @@ _RUNTIMES = {
 
 
 class RecordingControlPlane:
-    """Answers every ensure, and remembers what it was asked for."""
+    """Answers every ensure, and remembers what it was asked for.
 
-    def __init__(self, *, rooms: bool = True) -> None:
+    ``memberships`` is the controller's answer to "which Team does this worker
+    already belong to" — the read the reconcile makes before it names a Team
+    (A-8). Empty by default, which is a controller that has never seen these
+    principals.
+    """
+
+    def __init__(
+        self,
+        *,
+        rooms: bool = True,
+        memberships: dict[str, str] | None = None,
+    ) -> None:
         self.managers: list[ManagerProjection] = []
         self.workers: list[WorkerProjection] = []
         self.teams: list[TeamProjection] = []
         self.keys: list[str] = []
+        self.membership_reads: list[str] = []
         self._rooms = rooms
+        self._memberships = dict(memberships or {})
+
+    async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
+        self.membership_reads.append(name)
+        if name not in self._memberships:
+            return None
+        return WorkerRuntimeRef(name, "Ready", team=self._memberships[name])
 
     async def ensure_manager(
         self, projection: ManagerProjection, *, idempotency_key: str
@@ -90,6 +111,19 @@ class RecordingControlPlane:
     async def ensure_team(
         self, projection: TeamProjection, *, idempotency_key: str
     ) -> TeamRuntimeRef:
+        # The rule that makes A-8 a defect rather than a tidiness question:
+        # Team membership is exclusive, and asking for a second Team over a
+        # worker some other Team already holds is a 400 no retry can clear.
+        # Copied from the deployed controller's own sentence.
+        for member in projection.members:
+            held = self._memberships.get(member.name)
+            if held is not None and held != projection.name:
+                raise AgentTeamsResponseError(
+                    400,
+                    f"Worker {member.name} is already a member of Team {held}",
+                )
+        for member in projection.members:
+            self._memberships[member.name] = projection.name
         self.teams.append(projection)
         self.keys.append(idempotency_key)
         return TeamRuntimeRef(
@@ -152,6 +186,80 @@ async def _console_project(
             repository_teams=tuple(assignments),
         ),
         idempotency_key="console-topology",
+    )
+    return project_id
+
+
+async def _shared_repository(
+    directory: InMemoryAgentDirectory,
+    store: InMemoryProjectTopologyStore,
+) -> tuple[UUID, UUID, UUID, UUID]:
+    """One repository, one organization, one project — the first issue.
+
+    Returns ``(organization_id, organization_leader_id, repository_id,
+    project_id)`` so a second issue can be laid over the same repository.
+    """
+
+    organization_id = uuid4()
+    repository_id = uuid4()
+    leader = await CreateAgent(directory).execute(
+        CreateAgentRequest(
+            organization_id=organization_id,
+            role=AgentRole.ORGANIZATION_LEADER,
+            agentteams_resource_name="agt-org-shared",
+        ),
+        idempotency_key="shared-org-leader",
+    )
+    project_id = await _second_project_on(
+        directory,
+        store,
+        organization_id=organization_id,
+        organization_leader_id=leader.principal.id,
+        repository_id=repository_id,
+        label="first-issue",
+    )
+    return organization_id, leader.principal.id, repository_id, project_id
+
+
+async def _second_project_on(
+    directory: InMemoryAgentDirectory,
+    store: InMemoryProjectTopologyStore,
+    *,
+    organization_id: UUID,
+    organization_leader_id: UUID,
+    repository_id: UUID,
+    label: str,
+) -> UUID:
+    """Another issue over a repository that already has a project.
+
+    Through ``ProvisionRepositoryAgentTeam``, which converges rather than
+    creates, so the second project genuinely reuses the *same* leader and
+    worker principals — repository-scoped directory singletons. That sharing is
+    what makes the AgentTeams Team unshareable-by-row, and building it by hand
+    would assume away the only interesting fact.
+    """
+
+    team = await ProvisionRepositoryAgentTeam(directory).provision(
+        organization_id=organization_id,
+        organization_leader_id=organization_leader_id,
+        repository_id=repository_id,
+        idempotency_key=f"{label}-team",
+    )
+    project_id = uuid4()
+    await CreateProjectAgentTopology(directory, store).execute(
+        CreateProjectAgentTopologyRequest(
+            organization_id=organization_id,
+            project_id=project_id,
+            organization_leader_id=organization_leader_id,
+            repository_teams=(
+                RepositoryTeamAssignment(
+                    repository_id=repository_id,
+                    leader_agent_id=team.leader.id,
+                    worker_agent_ids=tuple(worker.id for worker in team.workers),
+                ),
+            ),
+        ),
+        idempotency_key=f"{label}-topology",
     )
     return project_id
 
@@ -276,6 +384,176 @@ async def test_a_project_with_no_topology_is_a_violation_not_a_silent_success() 
         await ProjectRuntimeProjection(
             directory, store, RecordingControlPlane(), model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
         ).project(uuid4())
+
+
+# ---------------------------------------------------------------------------
+# A Team belongs to a repository, not to a topology row (defect A-8, §8.7.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_team_is_named_after_its_repository_not_its_row() -> None:
+    """The name has to be derivable from the repository by anyone who asks.
+
+    A row-derived name is unguessable from outside the row, so a second project
+    over the same repository has no way to arrive at it — which is how three
+    issues ended up asking for three Teams over one set of principals.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    _, _, repository_id, project_id = await _shared_repository(directory, store)
+
+    control_plane = RecordingControlPlane()
+    view = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    expected = f"rm-team-{repository_id.hex}"
+    assert [team.name for team in control_plane.teams] == [expected]
+    assert view.repository_teams[0].agentteams_team_name == expected
+
+
+@pytest.mark.asyncio
+async def test_a_second_issue_on_one_repository_shares_the_first_issue_s_team() -> None:
+    """Defect A-8 in one assertion.
+
+    Two issues, one repository, one controller. The second must land in the
+    Team the first created — same name, same two rooms — because the leader it
+    would put in a Team of its own is already in that one, and the controller
+    holds membership exclusively.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    organization_id, leader_id, repository_id, first = await _shared_repository(
+        directory, store
+    )
+    control_plane = RecordingControlPlane()
+    first_view = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(first)
+
+    second = await _second_project_on(
+        directory,
+        store,
+        organization_id=organization_id,
+        organization_leader_id=leader_id,
+        repository_id=repository_id,
+        label="second-issue",
+    )
+    second_view = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(second)
+
+    shared = first_view.repository_teams[0]
+    joined = second_view.repository_teams[0]
+    assert joined.agentteams_team_name == shared.agentteams_team_name
+    assert (joined.room_id, joined.leader_room_id) == (
+        shared.room_id,
+        shared.leader_room_id,
+    )
+    # Two projections, but only ever one Team asked for.
+    assert len({team.name for team in control_plane.teams}) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_row_minted_before_the_fix_adopts_the_team_that_already_exists() -> None:
+    """The two stuck specimens, on replay, without touching the controller.
+
+    A row whose stored name predates A-8 points at a Team nobody ever created,
+    while the repository's real Team sits under some unrelated name holding the
+    leader. Replay must converge on the *existing* Team — adoption — and write
+    that name back, because a row still pointing at the phantom asks the same
+    question again next time.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    _, _, repository_id, project_id = await _shared_repository(directory, store)
+
+    # The state 35e66beb / 5c1b3567 are actually in: a per-row name, and a
+    # controller whose Team for this repository is called something else
+    # entirely (96896557's row id, in the live case).
+    topology = await store.get(project_id)
+    stale = replace(
+        topology.repository_teams[0],
+        agentteams_team_name="rm-team-b0e9b2eee4074dfd9cf767a46b2d2575",
+    )
+    await store.save(replace(topology, repository_teams=(stale,)))
+    incumbent = "rm-team-6c503f0227a44e9280b3ab29775c0b76"
+    leader = await directory.get_view(stale.leader_agent_id)
+    worker = await directory.get_view(stale.worker_agent_ids[0])
+    control_plane = RecordingControlPlane(
+        memberships={
+            leader.agentteams_resource_name: incumbent,
+            worker.agentteams_resource_name: incumbent,
+        }
+    )
+
+    view = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    assert [team.name for team in control_plane.teams] == [incumbent]
+    assert view.repository_teams[0].agentteams_team_name == incumbent
+    # Written back, not just returned: the next replay must not re-ask.
+    persisted = (await store.get(project_id)).to_view()
+    assert persisted.repository_teams[0].agentteams_team_name == incumbent
+    assert persisted.repository_teams[0].room_id
+
+
+@pytest.mark.asyncio
+async def test_the_leader_is_the_anchor_the_membership_is_read_from() -> None:
+    """One read, and it is the repository leader's.
+
+    The leader is the one principal a repository's Team must contain and it is
+    a directory singleton, so whatever Team holds it *is* this repository's
+    Team. Asking the workers instead would be asking a question the leader
+    already answers.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    _, _, _, project_id = await _shared_repository(directory, store)
+    topology = await store.get(project_id)
+    leader = await directory.get_view(topology.repository_teams[0].leader_agent_id)
+
+    control_plane = RecordingControlPlane()
+    await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    assert control_plane.membership_reads == [leader.agentteams_resource_name]
+
+
+@pytest.mark.asyncio
+async def test_a_team_whose_members_disagree_is_a_conflict_not_a_wait() -> None:
+    """What is left of the 400 once adoption exists.
+
+    Adoption removes the already-a-member case, not every case: a controller
+    holding a Team whose membership genuinely differs from what this topology
+    asks for still refuses, and that refusal is a 4xx the composition root now
+    turns into a 409 rather than a retryable 503.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    _, _, _, project_id = await _shared_repository(directory, store)
+    topology = await store.get(project_id)
+    worker = await directory.get_view(topology.repository_teams[0].worker_agent_ids[0])
+
+    # The worker is spoken for by an unrelated Team; the leader is not, so
+    # there is nothing to adopt and the ensure walks into the refusal.
+    control_plane = RecordingControlPlane(
+        memberships={worker.agentteams_resource_name: "rm-team-somebody-else"}
+    )
+
+    with pytest.raises(AgentTeamsResponseError, match="already a member of Team") as raised:
+        await ProjectRuntimeProjection(
+            directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+        ).project(project_id)
+    assert raised.value.status_code == 400
 
 
 # ---------------------------------------------------------------------------

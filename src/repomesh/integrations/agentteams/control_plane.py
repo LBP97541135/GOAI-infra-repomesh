@@ -357,6 +357,12 @@ class AgentTeamsControlPlaneClient:
             room_id=body.get("roomID"),
             matrix_user_id=body.get("matrixUserID"),
             message=body.get("message"),
+            # Verified against the deployed controller (v1.2.0, read-only GET
+            # /api/v1/workers/rm-leader-b-checkout, 2026-08-12): the worker
+            # document carries its Team by name. Reading it is what lets the
+            # reconcile adopt an existing repository Team instead of walking
+            # into the exclusive-membership 400 (A-8).
+            team=body.get("team"),
         )
 
     @staticmethod

@@ -71,7 +71,21 @@ class ProjectRepositoryTeamRecord(Base):
         UniqueConstraint(
             "project_id", "repository_id", name="uq_project_repository_agent_team"
         ),
-        UniqueConstraint("agentteams_team_name", name="uq_project_agentteams_team_name"),
+        # Scoped to the project since A-8 (§8.7.2, migration 20260812_0024).
+        # Table-wide it said "no two topology rows may name the same AgentTeams
+        # Team", which stopped being true the moment Teams became
+        # repository-scoped: every project touching a repository now names the
+        # *same* Team on purpose, and the old constraint forbade exactly that.
+        # What survives is the half that is still true — within one project the
+        # two repositories are two different Teams — and it is worth keeping,
+        # because a project whose repositories collapsed onto one Team would
+        # route both repositories' traffic into one room with nothing to
+        # notice.
+        UniqueConstraint(
+            "project_id",
+            "agentteams_team_name",
+            name="uq_project_agentteams_team_name",
+        ),
         {"schema": "project"},
     )
 

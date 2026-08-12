@@ -158,8 +158,30 @@ class RepositoryTeam:
             object.__setattr__(
                 self,
                 "agentteams_team_name",
-                f"rm-team-{self.id.hex}",
+                self.canonical_agentteams_team_name(self.repository_id),
             )
+
+    @staticmethod
+    def canonical_agentteams_team_name(repository_id: UUID) -> str:
+        """The AgentTeams Team a repository's agents belong to.
+
+        Keyed on the *repository*, not on this row's id — the correction A-8
+        is. An AgentTeams Team owns its members exclusively, and a repository's
+        leader and workers are directory singletons shared by every project
+        that touches the repository, so there can only ever be one Team for
+        them. Minting a name per topology row asked the controller for a second
+        Team over the same principals, which it refused with
+        ``400 ... is already a member of Team ...`` — a refusal no retry could
+        clear, because nothing about it was transient.
+
+        That name only ever survived because the script era never put two
+        projects on one repository. Sharing the Team (and therefore its two
+        Matrix rooms) across those projects is the architecture, not a
+        concession: a repository's room is where that repository's agents talk,
+        whichever issue they are talking about.
+        """
+
+        return f"rm-team-{repository_id.hex}"
 
     def with_runtime(
         self,
@@ -167,12 +189,23 @@ class RepositoryTeam:
         status: ProjectTeamRuntimeStatus,
         room_id: str | None,
         leader_room_id: str | None,
+        agentteams_team_name: str | None = None,
     ) -> "RepositoryTeam":
+        """Write back what the controller actually gave this team.
+
+        ``agentteams_team_name`` joins the room ids because the reconcile may
+        have *adopted* a Team created under some other name (a row minted
+        before A-8, most of them). The adopted name has to land on the row, or
+        the next projection asks the same question again and the row keeps
+        pointing at a Team that does not exist.
+        """
+
         return replace(
             self,
             runtime_status=status,
             room_id=room_id,
             leader_room_id=leader_room_id,
+            agentteams_team_name=agentteams_team_name or self.agentteams_team_name,
         )
 
     def to_view(self) -> RepositoryTeamView:
