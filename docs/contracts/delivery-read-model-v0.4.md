@@ -1001,15 +1001,20 @@ bridge 内部），所以一轮被闸门挡下时房间可能已经建好。理�
 
 **已知代价，需一并裁决**：`ensure_worker` / `ensure_manager` 对已存在资源是
 **create-or-verify，不是 update**——`control_plane.py:111` 先 GET，命中就拿现有资源逐字段
-比对，`runtime` 不一致直接 `AgentTeamsConflict`，**不发 POST，也没有 PUT/DELETE**。因此
-本节生效后，**存量 `openclaw` 资源不会自动收敛**，而会在下一轮物化时冲突。两条路可选：
+比对，`runtime` 不一致直接 `AgentTeamsConflict`（`control_plane.py:335-340`），**既不发
+POST，客户端也没有 PUT/DELETE**。因此本节生效后，**存量 `openclaw` 资源不会自动收敛**，
+而会在下一轮物化时冲突——且该冲突经 `topology_runtime_projector` 会被译成
+`RuntimeProjectionUnavailable` → 503「materialize again once AgentTeams answers」，
+是一个**重试永远不会好**的 503。这条误导本身值得单独裁一次。
 
-| 方案 | 代价 |
-| --- | --- |
-| 带外删除存量 rm-* 资源后重投影 | 需人工执行一次；`repomesh-gh-*` 绝不可动 |
-| 客户端补 `PUT`（控制器已有该路由，但本仓 mirror 已漂移，未经实测） | 需先验证部署态控制器，且 CRD 是否允许改 `runtime` 未知 |
+收敛手段（已在部署态控制器上核实，非 mirror 推断）：`agt update worker --runtime` 与
+`agt update manager --runtime` **都存在**，容器内 `agt` 经 `AGENTTEAMS_AUTH_TOKEN_FILE`
+自动鉴权，因此**无需删除**即可就地改 spec。本环境需收敛的只有 4 个 Worker
+（`rm-{leader,worker}-{b-checkout,c-billing}`）与 1 个 Manager（`console-demo-org-leader`）。
+`repomesh-gh-*` 与 `e2e-remote` 的 `bohan-*` 均不在其中，不得触碰。
 
-本提案**不含**收敛动作，只把取值变成设置；收敛方式请主脑一并裁。
+未核实项：改 `runtime` 后控制器是否会用 copaw 镜像重建容器（当前 `containerState=stopped`），
+需收敛后实测。本提案**不含**收敛动作本身，只把取值变成设置。
 
 补充勘误（同批）：`AgentTeamsUnavailable` 此前在物化路径上**无人翻译**，裸奔成
 `500 text/plain "Internal Server Error"`。已按 §8.2 既有读法并入 503 家族，翻译点在
