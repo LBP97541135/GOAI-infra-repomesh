@@ -5,6 +5,7 @@ from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskOrigin,
     TaskStatus,
     TaskView,
 )
@@ -57,6 +58,7 @@ class Task:
     status: TaskStatus = TaskStatus.ASSIGNED
     result_summary: str | None = None
     version: int = 1
+    origin: TaskOrigin = TaskOrigin.PLANNED
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -120,6 +122,7 @@ class Task:
             status=self.status,
             result_summary=self.result_summary,
             version=self.version,
+            origin=self.origin,
         )
 
 

@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from repomesh.api.read_models import REWORK_TASK_TITLE, DeliveryReadModelService
+from repomesh.api.read_models import DeliveryReadModelService
 from repomesh.api.read_models.sources import PlanSnapshotData, RunnerEventData
 from repomesh.modules.collaboration.contracts import (
     CollaborationDeliveryStatus,
@@ -40,6 +40,7 @@ from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskOrigin,
     TaskStatus,
     TaskView,
 )
@@ -427,10 +428,10 @@ async def test_repair_timeline_at_is_always_a_timestamp() -> None:
     plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
     worker = _worker(project_id, repository_id, leader_task_id)
     revised_rework = replace(
-        worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.SUCCEEDED
+        worker, id=uuid4(), origin=TaskOrigin.REWORK, status=TaskStatus.SUCCEEDED
     )
     running_rework = replace(
-        worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.IN_PROGRESS
+        worker, id=uuid4(), origin=TaskOrigin.REWORK, status=TaskStatus.IN_PROGRESS
     )
     revision_at = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
     change_set = replace(
@@ -518,7 +519,7 @@ async def test_decisions_watch_covers_active_rework_and_missing_delivery() -> No
     leader_task_id = uuid4()
     plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.IN_PROGRESS)
     worker = _worker(project_id, repository_id, leader_task_id)
-    rework = replace(worker, id=uuid4(), title=REWORK_TASK_TITLE, status=TaskStatus.IN_PROGRESS)
+    rework = replace(worker, id=uuid4(), origin=TaskOrigin.REWORK, status=TaskStatus.IN_PROGRESS)
     change_set = replace(
         _manual_intervention_change_set(plan, repository_id, worker.id),
         recovery_plans=(),

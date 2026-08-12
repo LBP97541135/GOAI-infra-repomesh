@@ -133,7 +133,7 @@ from repomesh.modules.specification.domain import (
     SpecificationContent,
     SpecificationVersion,
 )
-from repomesh.modules.task_orchestration.contracts import TaskStatus
+from repomesh.modules.task_orchestration.contracts import TaskOrigin, TaskStatus
 from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
     ExecutionPlanStatus,
@@ -238,6 +238,7 @@ async def seed_tasks(
             instruction="Repair the failed candidate.",
             acceptance=("CI passes",),
             status=rework_status,
+            origin=TaskOrigin.REWORK,
         )
         await tasks.add(
             rework,
