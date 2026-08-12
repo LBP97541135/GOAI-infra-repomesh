@@ -56,7 +56,14 @@ class TaskEvidenceView:
     carries no structured evidence.
     """
 
-    commit_sha: str  # non-empty; without it there is no evidence to report
+    # Null on a run that failed before it could commit -- which is most of them,
+    # and used to be the reason the whole view was thrown away (A-18, fourth
+    # face). A failed run's evidence is still evidence: ``summary_text`` carries
+    # the reason the operator has to act on. Consumers that need a real head
+    # (delivery's candidate publication) must refuse a null themselves; there is
+    # no sha here to fall back to and inventing one is how a wrong head gets
+    # merged.
+    commit_sha: str | None
     run_id: UUID | None  # null when the Runner reported no run id
     changed_files: tuple[str, ...]
     base_sha: str | None

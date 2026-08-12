@@ -179,7 +179,10 @@ async def _store_candidate(
     leader_id,
     workspace: Path,
     base_sha: str,
-    commit_sha: str,
+    # Nullable since A-18's fourth face: a Runner document may carry
+    # ``commitSha: null``. On a SUCCEEDED worker that is a contradiction
+    # delivery has to refuse, which is what the test below pins.
+    commit_sha: str | None,
     test_results: list | None = None,
 ) -> tuple[Task, Task]:
     actor = uuid4()
@@ -552,6 +555,74 @@ async def test_a_candidate_with_no_test_results_is_refused_by_name(tmp_path: Pat
         await finalizer.handle_batch(plan)
 
     assert refused.value.reason == "Runner evidence has no test results"
+    assert refused.value.repository_id == repository_id
+    assert refused.value.task_id == worker.id
+    assert adapter.pull_requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_succeeded_candidate_with_no_commit_sha_is_refused(tmp_path) -> None:
+    """A-18's fourth face widened ``commit_sha`` to nullable. Publication must not soften.
+
+    Failed runs keep their evidence now, and their commit is null. This path
+    only ever looks at SUCCEEDED workers, so a null here is a run that claimed
+    success without committing anything — there is no head to push and none may
+    be invented. The refusal already existed (``_full_sha`` rejects the empty
+    string); what is pinned is that it still *arrives*, as a named refusal
+    rather than the ``AttributeError`` a nullable field would otherwise cause
+    one line earlier, and that nothing was published on the way.
+    """
+
+    _remote, workspace, base_sha, _head_sha = _repository(tmp_path, "checkout")
+    organization_id = uuid4()
+    project_id = uuid4()
+    repository_id = uuid4()
+    tasks = InMemoryTaskStore()
+    leader, worker = await _store_candidate(
+        tasks,
+        organization_id=organization_id,
+        project_id=project_id,
+        repository_id=repository_id,
+        leader_id=uuid4(),
+        workspace=workspace,
+        base_sha=base_sha,
+        commit_sha=None,
+    )
+    # The evidence is present — that is the change — and it is still unusable here.
+    evidence = worker.to_view().evidence
+    assert evidence is not None
+    assert evidence.commit_sha is None
+
+    plan = ExecutionPlanView(
+        id=uuid4(),
+        organization_id=organization_id,
+        project_id=project_id,
+        created_by_agent_id=uuid4(),
+        status=ExecutionPlanStatus.IN_PROGRESS,
+        current_batch_index=0,
+        batches=(
+            (PlannedRepositoryTaskView(repository_id, "checkout", "implement", (), leader.id),),
+        ),
+    )
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(
+            id=repository_id, name="checkout", url="https://github.com/acme/checkout"
+        )
+    )
+    delivery = DeliveryService(InMemoryChangeSetStore())
+    adapter = RecordingGitHubAdapter()
+    finalizer = PlanDeliveryFinalizer(
+        delivery,
+        ChangeSetSCMCoordinator(delivery, catalog, adapter, GitBranchPublisher(tmp_path)),
+        tasks,
+        PlanDeliveryPolicy(),
+    )
+
+    with pytest.raises(BatchDeliveryRefused) as refused:
+        await finalizer.handle_batch(plan)
+
+    assert refused.value.reason == "Runner evidence has no frozen commit/base SHA"
     assert refused.value.repository_id == repository_id
     assert refused.value.task_id == worker.id
     assert adapter.pull_requests == []

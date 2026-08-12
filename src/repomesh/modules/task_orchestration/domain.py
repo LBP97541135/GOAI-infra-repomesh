@@ -66,13 +66,41 @@ FINAL_TASK_STATUSES = frozenset(
 _REDOABLE_TASK_STATUSES = frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED})
 
 
+#: The key that identifies a document as the Runner gateway's write-back.
+#:
+#: Deliberately the same key the old rule gated on, and deliberately only that
+#: one: the change is *presence instead of truthiness*, nothing else. So this
+#: cannot reject a document the previous parser accepted, and it cannot start
+#: accepting some unrelated JSON an agent happened to write -- ``commitSha`` is
+#: not a word that turns up in a hand-written report.
+#:
+#: Requiring ``runId`` as well was tried and rejected: the gateway does write it
+#: on every event, but in-repo producers construct the document without it, so
+#: the extra requirement would refuse documents that plainly are Runner
+#: documents. One widening at a time.
+_RUNNER_DOCUMENT_KEYS = ("commitSha",)
+
+
 def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
     """Read structured Runner evidence out of a task's free-text summary.
 
     ``result_summary`` holds three unrelated shapes: the Runner gateway writes
     a JSON document, ``supersede()`` writes ``SUPERSEDED: ...``, and a plain
-    agent report writes prose. Anything that is not a JSON object carrying a
-    non-empty ``commitSha`` has no evidence to report, and returns ``None``.
+    agent report writes prose. The latter two are not JSON objects and have no
+    evidence to report, which is unchanged.
+
+    A-18 (fourth face): this used to also require a **non-empty commitSha**,
+    which quietly meant "evidence exists only for runs that succeeded". A
+    failed run writes the same document with ``commitSha: null`` and the reason
+    in ``summary`` -- live rows read ``changed_path_denied: tests/test_discount.py``
+    and ``test_command_failed: python scripts/run_tests.py (exit code 1)``, both
+    of which tell an operator exactly what to change. Gating on the commit threw
+    every one of them away, so the console could say "failed" and nothing else.
+
+    The discriminator is now *"is this the Runner's document"* rather than
+    *"did it succeed"*: the two keys the gateway always writes must be present.
+    Their values may be null -- that is the failed shape, and it is precisely
+    the shape we came here for.
 
     HONEST GAP (not solved here): this still depends on the Runner happening to
     write these particular keys. What this function changes is *where* that
@@ -91,9 +119,15 @@ def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
         return None
     if not isinstance(document, dict):
         return None
-    commit_sha = document.get("commitSha")
-    if not isinstance(commit_sha, str) or not commit_sha:
+    if any(key not in document for key in _RUNNER_DOCUMENT_KEYS):
         return None
+    raw_commit_sha = document.get("commitSha")
+    # An empty string is the same claim as null and must not reach consumers as
+    # a "sha" -- ``""[:12]`` renders as nothing and ``"".lower()`` compares
+    # equal to nothing, so both would fail silently rather than refuse.
+    commit_sha = (
+        raw_commit_sha if isinstance(raw_commit_sha, str) and raw_commit_sha.strip() else None
+    )
     raw_run_id = document.get("runId")
     try:
         run_id = UUID(str(raw_run_id)) if raw_run_id else None

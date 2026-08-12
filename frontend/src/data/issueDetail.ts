@@ -911,6 +911,54 @@ export const deliveryAggregateDeclaredBlockersFixture: DeliveryAggregate = {
   ],
 };
 
+/** A-18 第四面：**失败任务带着理由**。
+ *
+ *  形状照抄 live 两条失败行（plan 5b1cbfd1 / issue 74e9701e）：`commitSha: null`、
+ *  `testResults` 空或红、理由在 `summary` 里。此前 parser 卡在「必须有非空 commitSha」，
+ *  这两行的 evidence 一律投影成 null，界面只能说一句「failed」。
+ *
+ *  这份夹具同时验两件事：失败任务**显示理由**（赭红），且**不挂琥珀「未验证」标记**
+ *  ——它的 `verified` 当然是 false，但失败已经是更响的那句话，双标记会稀释真正需要
+ *  注意的那一类。第三条任务保留 default 的已验证成功，作对照。 */
+export const deliveryAggregateFailedReasonFixture: DeliveryAggregate = {
+  ...deliveryAggregateFixture,
+  tasks: [
+    deliveryAggregateFixture.tasks[0],
+    {
+      ...deliveryAggregateFixture.tasks[1],
+      backend_status: "failed",
+      display_status: "failed",
+      attempt: 1,
+      repair_timeline: [],
+      evidence: {
+        verified: false,
+        blockers: [],
+        // live 原文，逐字。它直接说明该改什么：把 tests/ 加进 allowed_paths。
+        summary_text: "changed_path_denied: tests/test_discount.py",
+        test_command: null,
+        test_results: [],
+        artifact_count: 0,
+      },
+    },
+    {
+      ...deliveryAggregateFixture.tasks[2],
+      backend_status: "failed",
+      display_status: "failed",
+      evidence: {
+        verified: false,
+        blockers: [],
+        // 另一条 live 失败行：命令**跑过**、退出码 1。「跑了」和「验证过」不是一回事。
+        summary_text: "test_command_failed: python scripts/run_tests.py (exit code 1)",
+        test_command: null,
+        test_results: [
+          { command: "python scripts/run_tests.py", exit_code: 1, summary: "" },
+        ],
+        artifact_count: 0,
+      },
+    },
+  ],
+};
+
 export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
   default: deliveryAggregateFixture,
   conflict: deliveryAggregateTaskConflictFixture,
@@ -920,6 +968,7 @@ export const deliveryAggregateFixtures: Record<string, DeliveryAggregate> = {
   all_settled: deliveryAggregateSettledFixture,
   unverified: deliveryAggregateUnverifiedFixture,
   blockers: deliveryAggregateDeclaredBlockersFixture,
+  failed_reason: deliveryAggregateFailedReasonFixture,
 };
 
 export const decisionsFixture: DecisionsResponse = {

@@ -140,10 +140,21 @@ function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutio
     : colored
       ? `${node.name} · 本轮任务展示态 ${status}（读模型 §5.1 算出的 display_status，界面只上色）`
       : node.name;
-  const title =
+  /** A-18 第四面：失败理由。此前读模型对失败任务给不出证据，节点只能红着不说话。 */
+  const failureReasons =
+    execution && node.repository_id
+      ? (execution.failureReasonsByRepository[node.repository_id] ?? [])
+      : [];
+
+  const title = [
+    baseTitle,
     unverified > 0
-      ? `${baseTitle}\n${unverifiedMarkerLabel(blockerCount)}：本仓 ${unverified} 条任务没有可核验的执行记录（agent 自述，契约 §5.4）。原话在「查看证据」里。`
-      : baseTitle;
+      ? `${unverifiedMarkerLabel(blockerCount)}：本仓 ${unverified} 条任务没有可核验的执行记录（agent 自述，契约 §5.4）。原话在「查看证据」里。`
+      : null,
+    ...failureReasons.map((reason) => `失败理由（Runner 原文）：${reason}`),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div
@@ -412,6 +423,19 @@ function PlanDagSheet({
         }))
     : [];
 
+  /** A-18 第四面：失败理由上图脚。这是**可执行的操作信息**——`changed_path_denied:
+   *  tests/test_discount.py` 直接说明「把 tests/ 加进 allowed_paths」——把它埋在弹窗
+   *  里等于要人先猜到该点哪儿。逐字，不截断、不改写成「路径受限」之类的转述。 */
+  const failedNodes = execution
+    ? plan.dag.nodes
+        .filter((n) => n.repository_id !== null)
+        .map((n) => ({
+          label: n.name,
+          reasons: execution.failureReasonsByRepository[n.repository_id!] ?? [],
+        }))
+        .filter((n) => n.reasons.length > 0)
+    : [];
+
   return (
     <div className="rounded-hard bg-cream px-4 py-3.5 text-paper-ink">
       <div className="flex items-baseline gap-2.5 border-b-2 border-paper-ink pb-2">
@@ -461,6 +485,23 @@ function PlanDagSheet({
           <div className="text-salmon">
             {unresolved.length} 个节点在 catalog 中查无仓库（{unresolved.map((n) => n.name).join("、")}）——名字未注册，
             或在本 issue 域外重名歧义（域内优先后仍无唯一解）；服务端不猜，节点按虚线如实留痕、不隐藏。
+          </div>
+        )}
+        {/* A-18 第四面：失败任务的理由，逐字。节点是红的，红色不说明该改什么。 */}
+        {failedNodes.length > 0 && (
+          <div className="text-salmon">
+            <b>失败理由（Runner 原文，逐字）</b>
+            {failedNodes.map((n) => (
+              <div key={n.label} className="pl-2">
+                {n.label}：
+                {n.reasons.map((reason, i) => (
+                  <code key={i} className="break-all">
+                    {i > 0 && "；"}
+                    {reason}
+                  </code>
+                ))}
+              </div>
+            ))}
           </div>
         )}
         {/* A-18：图上缩写成了「未验证」，整句在这里写全——缩写不能把事实缩没 */}
