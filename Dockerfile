@@ -13,6 +13,11 @@ COPY pyproject.toml README.md alembic.ini ./
 COPY src ./src
 COPY migrations ./migrations
 COPY capabilities ./capabilities
+# Operator scripts travel with the image so a containerised console can be
+# seeded in place: `docker compose --profile console exec console-api \
+# python scripts/seed-console-demo.py` picks the database up from the
+# container's own REPOMESH_DATABASE_URL.
+COPY scripts ./scripts
 
 RUN pip install --no-cache-dir .
 

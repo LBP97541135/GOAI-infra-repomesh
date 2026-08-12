@@ -1,12 +1,21 @@
 services:
   postgres:
+    # Profiled so that `--profile console` does not drag this database (and its
+    # published 5432) into the self-contained console stack below. Naming the
+    # service explicitly still starts it without any flag - `docker compose up -d
+    # postgres` enables the profile of a service it is told to start - and the
+    # platform api keeps it as a dependency under the platform profile.
+    profiles: ["dev", "platform"]
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: repomesh
       POSTGRES_USER: repomesh
       POSTGRES_PASSWORD: repomesh
     ports:
-      - "5432:5432"
+      # Host port only; the container always listens on 5432. Override when the
+      # host's 5432 is already taken: REPOMESH_POSTGRES_PORT=5433 docker compose ...
+      # scripts/dev-up.* reads the same variable to build its DSN.
+      - "${REPOMESH_POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U repomesh -d repomesh"]
       interval: 5s
@@ -73,8 +82,81 @@ services:
       timeout: 3s
       retries: 12
 
+  # ------------------------------------------------------------------ console
+  # `docker compose --profile console up -d` brings up the delivery console on
+  # its own: database, API (which migrates itself on start), and the built
+  # frontend served from the same origin by nginx. The host needs Docker only.
+  #
+  # This stack is deliberately separate from the `postgres` / `api` services
+  # above: it owns its own database volume, publishes exactly one host port,
+  # and is mutually exclusive with scripts/dev-up.* (both use 8100).
+  console-postgres:
+    profiles: ["console"]
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: repomesh
+      POSTGRES_USER: repomesh
+      POSTGRES_PASSWORD: repomesh
+    # No host port on purpose: nothing outside the stack talks to this database,
+    # and the platform postgres above already claims 5432 on the host. To poke
+    # at it: docker compose --profile console exec console-postgres psql -U repomesh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U repomesh -d repomesh"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - repomesh-console-postgres:/var/lib/postgresql/data
+
+  console-api:
+    profiles: ["console"]
+    build:
+      context: .
+    environment:
+      REPOMESH_ENVIRONMENT: development
+      REPOMESH_LOG_LEVEL: INFO
+      REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@console-postgres:5432/repomesh
+      # Same default as frontend/.env.development; the web image is built with
+      # the matching token, so overriding this means overriding it for both.
+      REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_CONSOLE_ACTION_TOKEN:-console-dev-token}
+      REPOMESH_LOCAL_SESSION_TTL_SECONDS: ${REPOMESH_LOCAL_SESSION_TTL_SECONDS:-28800}
+    # The image CMD is `alembic upgrade head && uvicorn ...`, so the container
+    # migrates its own (private) database on every start.
+    depends_on:
+      console-postgres:
+        condition: service_healthy
+    healthcheck:
+      # /docs, not /health/ready: readiness reports 503 under this minimal
+      # configuration, which says nothing about the API being able to serve.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  console-web:
+    profiles: ["console"]
+    build:
+      context: ./frontend
+      args:
+        VITE_API_TOKEN: ${REPOMESH_CONSOLE_ACTION_TOKEN:-console-dev-token}
+    # The only published port of the console stack: nginx serves the built SPA
+    # and reverse-proxies /api to console-api, so the browser sees one origin
+    # and no CORS or dev proxy is involved.
+    ports:
+      - "${REPOMESH_CONSOLE_PORT:-8100}:80"
+    depends_on:
+      console-api:
+        condition: service_healthy
+
 volumes:
   repomesh-postgres:
+  repomesh-console-postgres:
   agentteams-storage:
     external: true
     name: agentteams-data
