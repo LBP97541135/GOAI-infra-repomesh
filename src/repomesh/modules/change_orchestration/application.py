@@ -56,7 +56,12 @@ from repomesh.modules.task_orchestration.contracts import (
 from repomesh.shared.workflow import WorkflowBlocked
 from repomesh.telemetry import SpanAttributes, traced
 
-from .contracts import ExecutionPlaneUnavailable, MaterializationResult, ReplanResult
+from .contracts import (
+    ExecutionPlaneUnavailable,
+    MaterializationResult,
+    ReplanResult,
+    RoundNotRecorded,
+)
 from .ports import (
     ExecutionPlanStarter,
     HandoffDocGenerator,
@@ -183,6 +188,10 @@ class PlanExecutionBridge:
             ExecutionPlaneUnavailable: when no task orchestrator is configured.
                 Raised before any spec is created so a refused materialization
                 leaves no partial state behind.
+            RoundNotRecorded: when a plan was started but the snapshot could
+                not be made to name it. The opposite bargain to the one above:
+                the side effects stand, and the failure is reported so the
+                round is not silently lost.
         """
 
         # --- 0. Fail closed before any side effect ----------------------------
@@ -336,8 +345,8 @@ class PlanExecutionBridge:
                 # Inside the try, deliberately: a snapshot problem must not
                 # undo tasks that have already been created. That leniency is
                 # also what hid the serialisation bug for the life of this
-                # feature, so the guard against it is a test that asserts a row
-                # was written, not a narrower except here.
+                # feature, so it now ends where a plan begins — see the
+                # `plan_id is not None` re-raise below.
                 contracts_payload = [_jsonable(c) for c in plan.contracts]
                 task_dag_payload = [_jsonable(t) for t in plan.task_dag]
                 batches_payload = [list(b) for b in plan.execution_batches]
@@ -374,7 +383,7 @@ class PlanExecutionBridge:
                         requirement_text=requirement,
                         integration_method="llm_only",
                     )
-            except Exception:
+            except Exception as error:
                 # Loud about which project lost its snapshot: the previous
                 # message named neither the project nor the round, so the one
                 # line this bug ever produced was indistinguishable from noise.
@@ -385,6 +394,28 @@ class PlanExecutionBridge:
                     plan_version,
                     exc_info=True,
                 )
+                if plan_id is not None:
+                    # A started plan that no snapshot names is not a degraded
+                    # panel, it is a round the server has lost track of: the
+                    # draft still reads as unconsumed, so §8's "already
+                    # materialised" 409 cannot fire and the next attempt starts
+                    # a second execution plan against the same repositories.
+                    # Answering 200 there is the one outcome nobody can repair,
+                    # because nothing is left that says a repair is due.
+                    #
+                    # Failing instead is repairable, and only because of the
+                    # replay machinery this sits on: the receipt records the
+                    # failure and lends its prefix onward, `start_plan` finds
+                    # the plan it already wrote and hands it back without
+                    # reassigning anyone, and the link is simply attempted
+                    # again. The tasks stay; only the verdict changes.
+                    raise RoundNotRecorded(
+                        f"execution plan {plan_id} was started for project "
+                        f"{project_id} but its plan snapshot could not be "
+                        f"updated ({error}); the work is running and the round "
+                        "is not on record — materialize again to finish "
+                        "recording it"
+                    ) from error
 
         # --- 5b. Generate handoff documents (if store configured) ------------
         # One PENDING document per repository so the repository owner can
