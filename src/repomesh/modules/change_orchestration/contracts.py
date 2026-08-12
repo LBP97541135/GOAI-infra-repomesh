@@ -16,6 +16,34 @@ class ExecutionPlaneUnavailable(RuntimeError):
     """
 
 
+class RoundNotRecorded(RuntimeError):
+    """A plan was started but its snapshot could not be told about it.
+
+    ``execution_plan_id`` is not decoration. It is the only place the round is
+    written down: the read model keys a delivery's ``plan_version``,
+    ``created_at`` and ``updated_at`` off it, and §8's "this issue has already
+    been materialised" 409 is nothing but ``current_draft`` finding the column
+    still NULL. A materialize that started a plan and then failed to record it
+    returns 200 over a draft that still looks untouched, so the next attempt —
+    a reloaded panel, a second operator — starts a *second* execution plan for
+    the same round.
+
+    That failure mode is not hypothetical. The snapshot block used to swallow
+    every exception into a log line, and it has already hidden one bug that way
+    (``dict()`` over a slotted dataclass raised ``TypeError`` for every plan
+    that carried a contract; see the regression in
+    ``tests/test_plan_execution_bridge.py``). Leniency there is only defensible
+    while nothing has been started; once a plan exists, silence is the bug.
+
+    Raised instead of swallowed because the round is now repairable: the failed
+    materialization receipt lends its prefix to the next attempt, whose
+    ``start_plan`` recognises the plan it already wrote and returns it without
+    reassigning anything, so the retry gets a second run at the link. The tasks
+    that were created are *not* undone — this says "not recorded", not "not
+    started".
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class StartedExecutionPlan:
     """Execution plan and initially released tasks."""
@@ -52,5 +80,6 @@ __all__ = [
     "ExecutionPlaneUnavailable",
     "MaterializationResult",
     "ReplanResult",
+    "RoundNotRecorded",
     "StartedExecutionPlan",
 ]

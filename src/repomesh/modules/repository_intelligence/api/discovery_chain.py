@@ -37,7 +37,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from repomesh.modules.agent_directory.contracts import AgentHierarchyViolation
-from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
+from repomesh.modules.change_orchestration.contracts import (
+    ExecutionPlaneUnavailable,
+    RoundNotRecorded,
+)
 from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
 from repomesh.modules.repository_intelligence.application.discovery_chain import (
     DiscoveryActorNotFound,
@@ -248,6 +251,13 @@ def _translate(error: Exception) -> HTTPException:
                 "materialize again once the repository teams have their rooms"
             ),
         )
+    if isinstance(error, RoundNotRecorded):
+        # A server fault, so a 500 — but a *named* one. The plan is running and
+        # the round is not written down, which is the one failure the operator
+        # must not read as "nothing happened": pressing materialize again is
+        # what finishes recording it, and the default empty-bodied 500 would
+        # have told them to file a bug and wait instead.
+        return HTTPException(status_code=500, detail=str(error))
     if isinstance(error, DiscoveryPreconditionFailed | DiscoveryEvidenceStale):
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, AgentHierarchyViolation):

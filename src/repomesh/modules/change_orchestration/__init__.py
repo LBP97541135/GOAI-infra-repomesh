@@ -5,6 +5,7 @@ from .contracts import (
     ExecutionPlaneUnavailable,
     MaterializationResult,
     ReplanResult,
+    RoundNotRecorded,
     StartedExecutionPlan,
 )
 from .ports import TaskSupersederGateway
@@ -14,6 +15,7 @@ __all__ = [
     "MaterializationResult",
     "PlanExecutionBridge",
     "ReplanResult",
+    "RoundNotRecorded",
     "StartedExecutionPlan",
     "TaskSupersederGateway",
 ]

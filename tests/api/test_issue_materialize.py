@@ -172,6 +172,20 @@ def _topology(container: ApplicationContainer, project_id: str):
     return asyncio.run(container.project_topology_store.get(UUID(project_id)))
 
 
+def _draft_row(container: ApplicationContainer, issue_id: str):
+    """The round's snapshot, read back from the database it was written to.
+
+    ``GET /issues/{id}/discovery`` cannot answer "was this round consumed" —
+    ``step`` is computed from the discovery block and stays 4 either way — so
+    the column has to be read directly. Asserting on the projection instead is
+    what let the live bug through: the panel said step 4, the row said NULL.
+    """
+
+    rows = asyncio.run(container.plan_snapshot_store().list_all(UUID(issue_id)))
+    assert len(rows) == 1, f"expected exactly one snapshot, got {len(rows)}"
+    return rows[0]
+
+
 def _principals(container: ApplicationContainer):
     return asyncio.run(container.agent_directory.list())
 
@@ -279,8 +293,146 @@ def test_materialize_builds_the_teams_and_starts_the_round(
         assert all(team.worker_agent_ids for team in topology.repository_teams)
 
         # The draft is consumed, which is what makes a second round a new
-        # version rather than an edit of this one (§2.4).
+        # version rather than an edit of this one (§2.4). Read from the row,
+        # not from the panel: ``step`` is 4 whether or not the column was
+        # written, so it was never evidence of anything.
         assert chain.read()["step"] == 4
+        row = _draft_row(container, issue_id)
+        assert str(row.execution_plan_id) == body["plan_id"]
+        assert row.plan_version == 1
+
+
+# ---------------------------------------------------------------------------
+# The write that consumes the draft is not optional (A-5)
+# ---------------------------------------------------------------------------
+
+
+class _LinkRefusingSnapshotStore:
+    """The real snapshot store with ``link_execution_plan`` broken *n* times.
+
+    Everything else on it is the production object, so the draft the retry
+    finds, the version it reads and the discovery block it rewrites are all the
+    real ones; only the single write under test is made to fail.
+
+    Why a fault injector rather than a live reproduction: the column is written
+    by one ``UPDATE`` inside one committed transaction, and that statement was
+    checked against a real PostgreSQL 16 — it persists. What was never checked
+    is what the *caller* does when it does not, and the caller used to answer
+    200. So the interesting object is the failure branch, and the honest way to
+    reach it is to fail the write on purpose.
+    """
+
+    def __init__(self, inner, failures: int) -> None:
+        self._inner = inner
+        self.remaining = failures
+        self.attempts = 0
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    async def link_execution_plan(self, snapshot_id, execution_plan_id) -> None:
+        self.attempts += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise RuntimeError("connection reset while consuming the draft")
+        await self._inner.link_execution_plan(snapshot_id, execution_plan_id)
+
+
+def test_a_round_whose_link_fails_is_not_reported_as_materialised(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A started plan the snapshot does not name must not answer 200.
+
+    ``execution_plan_id`` is the whole of §8's "already materialised" 409:
+    ``current_draft`` is a ``WHERE execution_plan_id IS NULL``. So a
+    materialize that starts a plan, fails to write that column, and returns 200
+    anyway leaves a draft that still reads as untouched — and the next attempt
+    under a different key sails past the guard and starts a *second* execution
+    plan for the same repositories. The bridge used to do exactly that: the
+    snapshot block swallowed every exception into a log line, which is the same
+    ``except`` that once hid materialize saving no snapshot at all.
+
+    Asserted here rather than at the store, because the store is not where the
+    bug was — the ``UPDATE`` persists. The defect is the verdict the bridge
+    returns when it does not.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+    broken = _LinkRefusingSnapshotStore(
+        application_container.plan_snapshot_store(), failures=1
+    )
+    monkeypatch.setattr(
+        ApplicationContainer, "plan_snapshot_store", lambda _self: broken
+    )
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container), raise_server_exceptions=False) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        lost = _materialize(chain, key="link-fails-once")
+        assert lost.status_code == 500, lost.text
+        # Named, not blank: the operator's next move is to press it again, and
+        # an empty-bodied 500 says the opposite.
+        assert "not on record" in lost.json()["detail"]
+        assert _draft_row(container, issue_id).execution_plan_id is None
+
+        # The round is repairable exactly because the draft was left open, and
+        # the retry's `start_plan` recognises the plan it already wrote (7659c89)
+        # rather than starting a rival one.
+        repaired = _materialize(chain, key="link-fails-once")
+        assert repaired.status_code == 200, repaired.text
+        row = _draft_row(container, issue_id)
+        assert str(row.execution_plan_id) == repaired.json()["plan_id"]
+        assert broken.attempts == 2
+
+        # And only now does §8's guard hold: a fresh key is refused instead of
+        # materialising the same issue a second time.
+        again = _materialize(chain, key="a-completely-different-key")
+        assert again.status_code == 409, again.text
+        assert "already been materialised" in again.json()["detail"]
+
+
+def test_a_link_that_never_lands_keeps_refusing_rather_than_forking_the_round(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The guard's failure mode is a refusal, never a second execution plan.
+
+    The previous test's happy ending depends on the retry succeeding. This one
+    removes that: the write is broken for good, and what must *not* happen is
+    the console quietly acquiring two ``in_progress`` plans for one issue —
+    which is the shape the live console was left in on 2026-08-12, and the
+    reason the orphan row had to be found by reading the database by hand.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    broken = _LinkRefusingSnapshotStore(
+        application_container.plan_snapshot_store(), failures=99
+    )
+    monkeypatch.setattr(
+        ApplicationContainer, "plan_snapshot_store", lambda _self: broken
+    )
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container), raise_server_exceptions=False) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        assert _materialize(chain, key="first-attempt-key").status_code == 500
+        assert _materialize(chain, key="second-attempt-key").status_code == 500
+
+        # Two attempts, one idempotency prefix: the failed receipt lends its
+        # prefix to the second key, so the execution plane is asked for the
+        # same plan both times instead of a rival one.
+        assert len({key for _, key, _ in starter.calls}) == 1
+        assert _draft_row(container, issue_id).execution_plan_id is None
 
 
 def test_the_request_body_cannot_carry_a_plan(
