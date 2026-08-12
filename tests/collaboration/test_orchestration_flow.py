@@ -44,6 +44,12 @@ from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage
 
 
 class ReadyControlPlane:
+    async def get_worker(self, name: str):
+        # Nothing to adopt: the reconcile asks where this repository's Team
+        # already lives (A-8) and this controller has never seen the leader,
+        # so it falls through to the canonical repository name.
+        return None
+
     async def ensure_team(self, projection, *, idempotency_key: str):
         return TeamRuntimeRef(
             name=projection.name,
