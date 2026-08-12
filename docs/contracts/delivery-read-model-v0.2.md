@@ -101,12 +101,32 @@ project 分组，v0.2 的 `/issues` 是**issue 粒度**——两者并存不互�
 2. 存在活跃轮次（`ExecutionPlan.status == in_progress`）→ **open**；
 3. 存在非终态 ChangeSet（`status ∉ {delivered, compensated}`）→ **open**；
 4. 存在虚拟草稿（该 project 最新 PlanSnapshot 的 `execution_plan_id is null`）→ **open**；
+4b. **最近一轮（§2.2 口径）phase 为 `failed` 且该轮未归档 → open**（见下方勘误）；
 5. 存在轮次且全部终态 → **closed**；
 6. 无任何轮次且无草稿 → **open**（空 issue 视为待办，不是已完成）。
 
 `operational_status == paused` **不影响** state：暂停不等于关闭，前端以独立徽标呈现。
 理由与 v0.1 phase 推导一致——state 描述「工作是否还需要人或 agent 继续」，
 paused 的工作仍需继续。
+
+**勘误 4b（2026-08-12，缺陷 A-22）【提案 · 待主脑裁决】**：起草 §2.1 时尚无「整轮失败」
+这一形态，规则 5 的「全部终态」把它算作终局。活体反例：issue `74e9701e` 的第 1 轮
+`5b1cbfd1` 两个任务全败、未产出 ChangeSet——没有 ChangeSet 就够不上规则 3，于是规则 5
+把它判成 `Closed · 执行失败`。**这与 §2.1 自己的定义相抵触**：本节为 `paused` 不关闭
+issue 给出的理由是「state 描述工作是否还需要人或 agent 继续」，而一轮失败的工作显然
+还需要——它正是重新派发路径的入口。故插入规则 4b。
+
+- **归档是例外的例外**：轮次卡的「归档本轮」（`POST /deliveries/{id}/archive`，v0.1 §4.5）
+  是操作者在说「本轮失败已知悉、且是终局」。已归档的失败轮回落规则 5，照常 closed。
+  语义分工：未归档的失败 = 还要干（重新派发）；归档 = 有意收尾（另起一轮或就此作罢）。
+- **不改 §2.4**：轮次粒度归档的既有语义不动，v0.2 仍不引入 issue 级归档实体；本规则
+  只是让 state 读取那条已存在的归档事实。
+- **不重编号**：新规则取名 4b 而非顶掉 5/6，因为 §6.1 与 §7 的 Q8 都按序号引用规则 6。
+- **实现无新增存储**：`derive_phase` 判 `archived` 在判 `failed` 之前，所以 phase 为
+  `failed` 已经等价于「失败且未归档」，读模型不做第二次归档查询
+  （`api/read_models/service.py` 的 `_issue_bundle`）。
+- **对 §2.2 phase 无影响**：phase 仍取最近一轮的 `failed`；变的只有 state。因此该 issue
+  呈现为 `Open · 执行失败`，而不再是自相矛盾的 `Closed · 执行失败`。
 
 ### 2.2 `phase`（issue 粒度）派生规则
 
