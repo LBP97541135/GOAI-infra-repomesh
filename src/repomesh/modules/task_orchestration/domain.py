@@ -84,11 +84,13 @@ def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
         tuple(str(item) for item in raw_changed) if isinstance(raw_changed, list) else ()
     )
     base_sha = document.get("baseSha")
+    workspace_path = document.get("workspacePath")
     return TaskEvidenceView(
         commit_sha=commit_sha,
         run_id=run_id,
         changed_files=changed_files,
         base_sha=str(base_sha) if base_sha else None,
+        workspace_path=str(workspace_path) if workspace_path else None,
     )
 
 

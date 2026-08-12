@@ -119,6 +119,28 @@ def test_a_missing_run_id_is_null_rather_than_invented() -> None:
     assert view.evidence.run_id is None
 
 
+def test_workspace_path_is_declared_so_delivery_need_not_re_parse_the_summary() -> None:
+    """Delivery pushes the candidate commit from this worktree.
+
+    It is the one fact delivery could not get from the view, which is why the
+    finalizer kept its own json.loads() of a free-text field.
+    """
+
+    view = _task(status=TaskStatus.SUCCEEDED, result_summary=_runner_document()).to_view()
+
+    assert view.evidence is not None
+    assert view.evidence.workspace_path == "C:/ws"
+
+
+def test_a_missing_workspace_path_is_null_rather_than_an_empty_path() -> None:
+    """An empty string would resolve to the current directory downstream."""
+
+    for summary in (_runner_document(workspacePath=None), _runner_document(workspacePath="")):
+        view = _task(status=TaskStatus.SUCCEEDED, result_summary=summary).to_view()
+        assert view.evidence is not None
+        assert view.evidence.workspace_path is None
+
+
 def test_changed_files_defaults_to_empty_rather_than_none() -> None:
     for summary in (_runner_document(changedFiles=[]), _runner_document(changedFiles=None)):
         view = _task(status=TaskStatus.SUCCEEDED, result_summary=summary).to_view()

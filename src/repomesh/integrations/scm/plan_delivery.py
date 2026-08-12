@@ -250,13 +250,21 @@ class PlanDeliveryFinalizer:
                     f"repository {planned.repository_id} has no unique successful candidate"
                 )
             worker = succeeded[0]
-            evidence = self._evidence(worker.result_summary)
-            commit_sha = str(evidence.get("commitSha") or "").lower()
-            base_sha = str(evidence.get("baseSha") or "").lower()
-            workspace = Path(str(evidence.get("workspacePath") or ""))
+            # Declared evidence, resolved by the producing module at projection
+            # time. This used to re-parse ``result_summary`` here, which is free
+            # text by contract, so delivery was reading a shape nobody promised
+            # it -- and parsing it differently from the producer besides.
+            evidence = worker.to_view().evidence
+            if evidence is None:
+                raise ValueError(
+                    f"repository {planned.repository_id} candidate carries no Runner evidence"
+                )
+            commit_sha = evidence.commit_sha.lower()
+            base_sha = (evidence.base_sha or "").lower()
+            workspace = Path(evidence.workspace_path or "")
             if not self._full_sha(commit_sha) or not self._full_sha(base_sha):
                 raise ValueError("Runner evidence has no frozen commit/base SHA")
-            if not workspace.is_dir():
+            if not evidence.workspace_path or not workspace.is_dir():
                 raise ValueError("Runner evidence workspace no longer exists")
             branch = f"repomesh/{str(plan.id)[:8]}/{str(planned.repository_id)[:8]}"
             candidates.append(
@@ -272,7 +280,11 @@ class PlanDeliveryFinalizer:
                 )
             )
             workspaces[planned.repository_id] = workspace
-            raw_tests = evidence.get("testResults") or ()
+            # REMAINING UNDECLARED READ: test results are still dug out of the
+            # free-text summary, because TaskEvidenceView does not declare them
+            # yet. Everything delivery needs to *publish* a candidate is now
+            # declared; this last one only feeds the validation snapshot.
+            raw_tests = self._evidence(worker.result_summary).get("testResults") or ()
             if not isinstance(raw_tests, list) or not raw_tests:
                 raise ValueError("Runner evidence has no test results")
             for result in raw_tests:
