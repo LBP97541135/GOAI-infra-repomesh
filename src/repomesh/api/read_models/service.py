@@ -1232,6 +1232,7 @@ class DeliveryReadModelService:
                 "decided_at": None,
             },
             "integration": integration,
+            "materialization": _materialization_receipt(block),
         }
 
     async def repository_plan(self, issue_id: UUID, repository_id: UUID) -> dict | None:
@@ -2105,6 +2106,45 @@ def _contract_block(contract: SpecificationContractData | None) -> dict | None:
         "tests": list(contract.tests),
         "non_goals": None,
         "release_rules": None,
+    }
+
+
+def _materialization_receipt(block: dict) -> dict | None:
+    """§8.3's materialization receipt, as much of it as a client may see.
+
+    Projected because of defect B-12: materialize has been re-entrant since
+    7659c89 — a round that half-executed can be finished by calling it again —
+    but the receipt saying a round *did* half-execute never reached the panel,
+    so the GUI had no way to know a retry was warranted and no entry to trigger
+    one. The receipt is the honest signal; it was simply not being carried.
+
+    Four of the receipt's fields are deliberately withheld. ``idempotency_key``,
+    ``prefix`` and ``plan_fingerprint`` are the server's replay bookkeeping:
+    handing them out invites a client to mint a key that collides with a real
+    one, and §8.3's whole guarantee rests on the server owning that namespace.
+    The success-only fields (``task_ids`` / ``team_count`` / ``repositories`` /
+    ``skipped_repos``) are omitted because what they describe is already
+    projected as rounds, teams and rooms — a second copy is a second chance to
+    disagree.
+
+    What is left is projected verbatim, ``error`` included and untouched: the
+    panel shows the server's words. No judgment is derived here — no "stuck",
+    no "retryable". The reader decides from ``status`` alone, because the moment
+    this function invents a distinction, the panel is rendering our opinion of
+    the failure rather than the failure.
+    """
+
+    receipt = block.get("materialization")
+    if not receipt:
+        return None
+    return {
+        "status": receipt.get("status"),
+        "at": receipt.get("at"),
+        "by_agent_id": receipt.get("by_agent_id"),
+        # Absent by construction on the failure path (`_record_failure` writes
+        # no `plan_id`), so `.get` is the honest read, not a defensive one.
+        "error": receipt.get("error"),
+        "plan_id": receipt.get("plan_id"),
     }
 
 
