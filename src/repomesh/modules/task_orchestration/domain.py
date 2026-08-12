@@ -308,6 +308,16 @@ class PlannedRepositoryTask:
     leader_task_id: UUID | None = None
     tests: tuple[str, ...] = ()
     """Verification commands the Worker must run before reporting this task."""
+    test_paths: tuple[str, ...] = ()
+    """Where those commands read from, added to the Worker's allowed paths.
+
+    Defect A-21. Supplying the command without the path it reads is a trap: the
+    Worker is permitted ``src/checkout/**`` and the command discovers from the
+    root's ``tests/``, so writing the test where the command looks voids the run
+    on the path guard and writing it where the Worker may voids the
+    verification. These travel together for the same reason they were broken
+    apart.
+    """
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -326,6 +336,7 @@ class PlannedRepositoryTask:
             acceptance=self.acceptance,
             leader_task_id=self.leader_task_id,
             tests=self.tests,
+            test_paths=self.test_paths,
         )
 
 

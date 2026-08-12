@@ -32,6 +32,14 @@ class RepositoryRecord(Base):
     operator; ``metadata`` carries the scanner's derived AutoCard, which is
     rewritten wholesale by the next scan.
     """
+    test_paths: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, nullable=False, server_default="[]", default=list
+    )
+    """Defect A-21: glob patterns the verification commands read from.
+
+    Beside ``test_commands`` because they are one fact in two halves — a
+    command without the path it reads is the trap that voided a whole run.
+    """
     profiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

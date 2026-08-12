@@ -1457,6 +1457,9 @@ class DeliveryReadModelService:
                     # Defect A-19: read-only, and empty is the answer that
                     # explains why a repository's rounds verify nothing.
                     "test_commands": list(profile.test_commands),
+                    # Defect A-21: the paths those commands read. Shown beside
+                    # them because a command without its path is the trap.
+                    "test_paths": list(profile.test_paths),
                     "profiled_at": profile.profiled_at,
                     "resident_team_count": len(teams_by_repository.get(profile.id, ())),
                     "open_issue_count": open_issues.get(profile.id, 0),

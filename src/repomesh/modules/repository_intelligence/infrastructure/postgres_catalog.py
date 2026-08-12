@@ -42,6 +42,7 @@ class PostgresRepositoryCatalog:
                         topics=list(profile.topics),
                         languages=list(profile.languages),
                         test_commands=list(profile.test_commands),
+                        test_paths=list(profile.test_paths),
                         profiled_at=profile.profiled_at,
                         metadata=_serialize_metadata(profile),
                     )
@@ -75,6 +76,8 @@ class PostgresRepositoryCatalog:
             # Rows written before defect A-19 have no verification commands;
             # NULL and [] both mean "nobody has said how to test this".
             test_commands=tuple(record.test_commands or ()),
+            # Rows written before defect A-21 say nothing about where tests live.
+            test_paths=tuple(record.test_paths or ()),
             auto_card=_deserialize_auto_card(record.metadata_payload),
             profiled_at=_as_utc(record.profiled_at),
         )

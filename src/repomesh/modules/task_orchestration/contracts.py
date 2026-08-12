@@ -144,6 +144,7 @@ class PlannedRepositoryTaskView:
     acceptance: tuple[str, ...]
     leader_task_id: UUID | None
     tests: tuple[str, ...] = ()
+    test_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -31,6 +31,8 @@ class RepositoryCreate(BaseModel):
     languages: list[str] = Field(default_factory=list)
     test_commands: list[str] = Field(default_factory=list)
     """Defect A-19: how this repository is verified. Empty means nobody said."""
+    test_paths: list[str] = Field(default_factory=list)
+    """Defect A-21: where those commands read from, e.g. ``["tests/**"]``."""
     auto_card: AutoCardCreate | None = None
 
 
@@ -176,6 +178,7 @@ class RepositoryView(BaseModel):
     topics: tuple[str, ...]
     languages: tuple[str, ...]
     test_commands: tuple[str, ...] = ()
+    test_paths: tuple[str, ...] = ()
     auto_card: AutoCardView | None = None
 
 

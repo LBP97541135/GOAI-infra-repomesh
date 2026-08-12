@@ -627,6 +627,7 @@ class DecomposeRepositoryTask:
         *,
         idempotency_key: str,
         tests: tuple[str, ...] = (),
+        test_paths: tuple[str, ...] = (),
     ) -> tuple[TaskView, ...]:
         key = idempotency_key.strip()
         if not key:
@@ -665,7 +666,9 @@ class DecomposeRepositoryTask:
             views = tuple(child.to_view() for child in children)
             for child, view in zip(children, views, strict=True):
                 if child.status not in FINAL_TASK_STATUSES:
-                    await self._ensure_specification(view, tests=tests, key=key)
+                    await self._ensure_specification(
+                        view, tests=tests, test_paths=test_paths, key=key
+                    )
             return views
 
         # Falling through with an in-flight task this key owns is the point
@@ -693,21 +696,45 @@ class DecomposeRepositoryTask:
             # the title is copied down verbatim; here it is stated.
             origin=task.origin,
         )
-        await self._ensure_specification(worker_task, tests=tests, key=key)
+        await self._ensure_specification(worker_task, tests=tests, test_paths=test_paths, key=key)
         return (worker_task,)
 
     async def _ensure_specification(
-        self, worker_task: TaskView, *, tests: tuple[str, ...], key: str
+        self,
+        worker_task: TaskView,
+        *,
+        tests: tuple[str, ...],
+        test_paths: tuple[str, ...],
+        key: str,
     ) -> None:
-        """Produce the execution permit in the same motion as the executable task."""
+        """Produce the execution permit in the same motion as the executable task.
+
+        ``test_paths`` widen the permit, and only ever widen it (defect A-21).
+        A Worker's responsibility paths say which product code it owns; they
+        have nothing to say about where that repository keeps its tests, and
+        the two disagreed silently until a run died on it. The permit is also
+        the document the agent reads — ``current-task.md`` renders "Allowed
+        paths" verbatim — so this is what stops a compliant agent from
+        concluding, correctly, that it may not write the test its own
+        verification command will look for.
+
+        A Worker with no responsibility paths already gets ``**`` and is left
+        alone: everything is permitted, and appending to that would only make
+        the rendered permit read as though something had been carved out.
+        """
+
         if self._spec_author is None:
             return
         worker = await self._directory.get_view(worker_task.assignee_agent_id)
         if worker is None or worker.status is not AgentPrincipalStatus.ACTIVE:
             raise TaskDenied("worker agent is missing or disabled")
+        responsibility = tuple(worker.responsibility_paths)
+        allowed_paths = (
+            tuple(dict.fromkeys((*responsibility, *test_paths))) if responsibility else ("**",)
+        )
         await self._spec_author.ensure_approved(
             worker_task,
-            allowed_paths=tuple(worker.responsibility_paths) or ("**",),
+            allowed_paths=allowed_paths,
             tests=tests,
             idempotency_key=f"{key}:spec:{worker_task.assignee_agent_id}",
         )
@@ -1013,6 +1040,7 @@ class AdvanceExecutionPlan:
                 leader_task_id,
                 idempotency_key=(f"{key_prefix}:b{batch_index}:{planned.repository_id}:decompose"),
                 tests=planned.tests,
+                test_paths=planned.test_paths,
             )
         return assigned
 

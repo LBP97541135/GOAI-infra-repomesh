@@ -463,6 +463,7 @@ class PostgresExecutionPlanStore:
                         str(planned.leader_task_id) if planned.leader_task_id is not None else None
                     ),
                     "tests": list(planned.tests),
+                    "test_paths": list(planned.test_paths),
                 }
                 for planned in batch
             ]
@@ -526,6 +527,7 @@ class PostgresExecutionPlanStore:
                         ),
                         # Rows persisted before verification commands existed have no key.
                         tests=tuple(planned.get("tests") or ()),
+                        test_paths=tuple(planned.get("test_paths") or ()),
                     )
                     for planned in batch
                 )

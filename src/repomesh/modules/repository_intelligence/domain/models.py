@@ -45,6 +45,23 @@ class RepositoryProfile:
     unverified candidate downstream rather than this field inventing a
     plausible ``pytest``.
     """
+    test_paths: tuple[str, ...] = ()
+    """Where this repository keeps the files its verification commands read.
+
+    Defect A-21, and the other half of ``test_commands``: supplying the command
+    without the path is a trap. A Worker's allowed paths come from its
+    responsibility paths — ``src/checkout/**`` — while ``run_tests.py``
+    discovers from the repository root's ``tests/``. So the compliant agent
+    wrote the test where the command looks, and the path guard voided the
+    entire run (``changed_path_denied: tests/test_discount.py``, commitSha
+    null). The evading agent hid the test under ``src/`` where the command
+    never finds it. Two agents, both dead ends, because the permission and the
+    verification described different repositories.
+
+    Added to a task's allowed paths, never substituted for them: a repository
+    saying where its tests live cannot be a way to widen what a Worker may
+    touch elsewhere.
+    """
     id: UUID = field(default_factory=new_id)
     profiled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
