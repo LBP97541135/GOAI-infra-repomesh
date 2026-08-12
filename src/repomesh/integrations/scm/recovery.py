@@ -21,6 +21,29 @@ class RevertConflict(RuntimeError):
     pass
 
 
+class RecoveryWaiting(RuntimeError):
+    """The action cannot run yet, and not running yet is not a failure.
+
+    Without this signal a handler has only two outcomes, and both are wrong for
+    "the remote is not ready": returning success claims work that never
+    happened, and raising anything else records the action ``FAILED``, which
+    the Saga treats as terminal and never retries.
+
+    Raising ``RecoveryWaiting`` means:
+
+    * the action is recorded back as ``PENDING``, never ``FAILED``;
+    * the Saga does not advance to the next action in the plan;
+    * the same action is attempted again on the next executor interval.
+
+    The ChangeSet therefore stays ``COMPENSATING`` rather than falling into
+    ``MANUAL_INTERVENTION``. The message is stored as the action detail, so an
+    operator can read what the rollback is waiting for. Handlers must only
+    raise it for conditions a remote can still resolve on its own (a check that
+    is still running); a condition that will never clear is a real failure and
+    belongs in ``SCMConflict``.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class RecoveryExecutionContext:
     change_set: ChangeSetView
@@ -136,6 +159,20 @@ class RecoverySagaExecutor:
         context = RecoveryExecutionContext(change_set, action)
         try:
             detail = await self._handler.execute(context)
+        except RecoveryWaiting as error:
+            # Not a failure: hand the action back as PENDING so this same
+            # action is retried on the next interval instead of being skipped
+            # forever, and leave the rest of the plan untouched.
+            await self._delivery.record_recovery_action(
+                RecordRecoveryActionCommand(
+                    change_set.id,
+                    plan_id,
+                    action.id,
+                    RecoveryActionStatus.PENDING,
+                    f"Waiting: {error}",
+                )
+            )
+            return
         except RevertConflict as error:
             if self._conflict_tasks is None:
                 await self._record_failure(change_set.id, plan_id, action.id, str(error))
