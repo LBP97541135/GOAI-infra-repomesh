@@ -1,4 +1,11 @@
-import type { GovernanceDecisionView, IssueListItemView, Phase, RuntimeBlock } from "./api/contract";
+import type {
+  DiscoveryTier,
+  DiscoveryTierStatus,
+  GovernanceDecisionView,
+  IssueListItemView,
+  Phase,
+  RuntimeBlock,
+} from "./api/contract";
 
 /** issue 与网格页的展示辅助。**纯格式化**，不含任何状态派生——state/phase/
  *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。 */
@@ -32,6 +39,40 @@ export const TEAM_STATUS_SKIN: Record<"pending" | "ready" | "failed", string> = 
   ready: "border-olive text-olive",
   failed: "border-salmon text-salmon",
 };
+
+/** 发现链三档的措辞与皮肤唯一表（契约 v0.4）。三色沿决策夹标签色（设计定稿
+ *  「新界面不新增颜色语义」）：橄榄绿 = 必需、琥珀 = 可能、赭红 = 排除。
+ *  展示皮肤，不是状态映射——生效分档由读模型的 `effective_tiers` 给出。 */
+export const TIER_LABEL: Record<DiscoveryTier, string> = {
+  required: "必需",
+  maybe: "可能",
+  excluded: "排除",
+};
+
+export const TIER_SKIN: Record<DiscoveryTier, string> = {
+  required: "border-olive text-olive",
+  maybe: "border-amber text-amber",
+  excluded: "border-salmon text-salmon",
+};
+
+/** 大写 `ConfirmationResult.status` / `adjustments.from|to` → 小写档位。
+ *  契约 §1.1：「大小写映射必须只有一处实现」——就是这里，别在组件里再写第二个。
+ *  运行时兜底不猜新值：认不出就原样小写回显（宁可显示一个陌生词，也不静默归到某一档）。 */
+const TIER_OF: Record<DiscoveryTierStatus, DiscoveryTier> = {
+  REQUIRED: "required",
+  MAYBE: "maybe",
+  EXCLUDED: "excluded",
+};
+
+export function tierOf(status: string): DiscoveryTier | null {
+  return TIER_OF[status as DiscoveryTierStatus] ?? null;
+}
+
+/** 大写档位的展示文案：认得出走三档表，认不出原样透出服务端字面值。 */
+export function tierStatusLabel(status: string): string {
+  const tier = tierOf(status);
+  return tier ? TIER_LABEL[tier] : status;
+}
 
 /** uuid 短版。`issue_key` 恒 null（无 Project 注册表，§0/§6.1），所以 issue 的
  *  人类可读标识只能是它，不得自造 GitHub 式序号。 */

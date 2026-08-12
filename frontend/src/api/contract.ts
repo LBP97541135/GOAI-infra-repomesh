@@ -663,3 +663,258 @@ export interface GovernanceDecisionRequest {
   /** 幂等语义为内容重放去重（相同决策重放 no-op、版本不涨） */
   idempotency_key: string;
 }
+
+/* ------------------------------------------------- 契约 v0.4 发现链（批次 B） */
+
+/** 形状唯一来源：`docs/contracts/delivery-read-model-v0.4-draft.md`
+ *  §2.2（discovery 块）/ §3.1（读投影）/ §4.3+§4.5（写触发与轮询）/ §5.2（审批）。
+ *  嵌套的 `ConfirmationResultView` 复用 `repository_intelligence/api/models.py:255`
+ *  既有形状（契约 §2.2 明写「不另写第二套序列化」）。
+ *
+ *  **契约是唯一事实，契约没写的字段一律不加**——本批后端端点尚未合并，任何「先兼容
+ *  一下」的猜测字段都会变成第二份真相。存疑处在批次回报里列为悬挂项等裁决。 */
+
+/** 三档的两种大小写**都是契约明文**，不是笔误，也不许在前端归一成一种：
+ *   - 小写 `required|maybe|excluded`：§3.1 `effective_tiers[].tier`、§5.2 审批请求
+ *     `adjustments[].tier`（GUI 行内下拉的取值域，契约 §1.1 明写「GUI 展示小写」）；
+ *   - 大写 `REQUIRED|MAYBE|EXCLUDED`：`ConfirmationResult.status` 与 §2.2
+ *     `adjustments[].from/to`（管线自身的字面值，`application/confirmation.py:86`）。
+ *  两者出现在**不同字段**上，故类型也分成两个；渲染时的大小写归一只在 display 层
+ *  一处实现（契约 §1.1「大小写映射必须只有一处实现」）。 */
+export type DiscoveryTier = "required" | "maybe" | "excluded";
+export type DiscoveryTierStatus = "REQUIRED" | "MAYBE" | "EXCLUDED";
+
+/** §2.2：步块失败 = 该块 `error` 非空。**不设计假进度**——一步失败就是这一步
+ *  error 非空、后续步块保持 null。`message` 是服务端错误原文摘要（≤500 字）。 */
+export interface DiscoveryStepError {
+  message: string;
+  at: string;
+}
+
+export interface DiscoveryAnswer {
+  question: string;
+  answer: string;
+}
+
+/** §4.6 强行继续的留痕（快照侧那一份；另一份是 platform 审计事件）。
+ *  ⚠ 读投影里叫 `forced_continue`（已发生），写请求里叫 `force_continue`（祈使），
+ *  两个拼写都取自契约原文（§2.2 vs §4.6），不是笔误。 */
+export interface DiscoveryForcedContinue {
+  ignored_question_count: number;
+  by_agent_id: string;
+  at: string;
+}
+
+/** §2.2 `requirement_analysis` 直投影（GUI 步 1 / 管线 Step 0）。 */
+export interface DiscoveryAnalysisBlock {
+  sufficient: boolean;
+  confidence: number;
+  missing_dimensions: string[];
+  questions: string[];
+  extracted_keywords: string[];
+  /** 上一次追问的回答；拼接规则唯一实现在服务端（§4.3，前端拼即第二事实源） */
+  answers: DiscoveryAnswer[];
+  /** 实际送进 LLM 的全文（含已拼入的答复）。**不是** issue 标题的事实源——
+   *  §4.3 Q16 裁决 clarify 答复不改写快照 `requirement_text`。 */
+  analyzed_requirement: string;
+  forced_continue: DiscoveryForcedContinue | null;
+  ran_at: string;
+  by_agent_id: string;
+  error: DiscoveryStepError | null;
+}
+
+/** §2.2 candidates.items 单条。`repository_id` 契约写作 `uuid|null`
+ *  （既有 `DiscoveryCandidate` 模型该列不可空，以契约为准）。 */
+export interface DiscoveryCandidateItem {
+  repository_id: string | null;
+  repository_name: string;
+  score: number;
+  matched_terms: string[];
+  /** **原样透传，读模型不摘要不截断**（§3.1 诚实条款），前端同样不许摘要 */
+  rationale: string;
+  is_entry_point: boolean;
+}
+
+/** §2.2 `candidates` 直投影（GUI 步 2 / 管线 Step 1）。 */
+export interface DiscoveryCandidatesBlock {
+  items: DiscoveryCandidateItem[];
+  /** Q11：**产出机制的自述**。关键词回退与 LLM 结果形状完全相同，
+   *  `false` 时必须显示「关键词回退评分」，**禁止呈现为模型评分**（§3.1 诚实条款）。
+   *  ⚠ 不得用 `matched_terms` 是否为空去反推——那是信号对≠原因对。 */
+  llm_used: boolean;
+  limit: number;
+  entry_point: string | null;
+  ran_at: string;
+  by_agent_id: string;
+  error: DiscoveryStepError | null;
+}
+
+/** `ConfirmationResultView.plan`。名字与 §5.4 的 `RepositoryPlanView`（计划纸面）
+ *  撞车但**是两个不相干的形状**，故在 TS 侧加 Confirmation 前缀区分。 */
+export interface ConfirmationRepositoryPlanView {
+  changed_apis: string[];
+  changed_modules: string[];
+  depends_on: string[];
+  impacts: string[];
+  risk: string;
+}
+
+/** `repository_intelligence/api/models.py:255` 既有形状，§2.2 直接复用。
+ *  `status` 是**大写字符串**（不是枚举类型），值域见 DiscoveryTierStatus。 */
+export interface ConfirmationResultView {
+  repository: string;
+  status: DiscoveryTierStatus;
+  confidence: number;
+  reason: string;
+  plan_summary: string;
+  plan: ConfirmationRepositoryPlanView | null;
+  missing_dependencies: string[];
+}
+
+/** §2.2 `classification.adjustments`：审批人改档的留痕，与 LLM 原判**并存**。
+ *  覆盖写会抹掉「模型说什么、人改成什么」的对照，属删证据。 */
+export interface DiscoveryAdjustmentRecord {
+  repository: string;
+  from: DiscoveryTierStatus;
+  to: DiscoveryTierStatus;
+  by_agent_id: string;
+  at: string;
+}
+
+/** §2.2 `classification` 直投影（GUI 步 3 上半 / 管线 Step 2）。
+ *  三档列表保留 **LLM 原始分档**；生效分档见 §3.1 `effective_tiers`。 */
+export interface DiscoveryClassificationBlock {
+  required: ConfirmationResultView[];
+  maybe: ConfirmationResultView[];
+  excluded: ConfirmationResultView[];
+  supplemented_repos: string[];
+  adjustments: DiscoveryAdjustmentRecord[];
+  ran_at: string;
+  by_agent_id: string;
+  error: DiscoveryStepError | null;
+}
+
+/** §2.2 `approval`（GUI 步 3 下半）。审批 v1 必经：非 approved 时 §4.3 的
+ *  生成计划端点 409。 */
+export interface DiscoveryApprovalBlock {
+  state: "not_requested" | "approved" | "changes_requested";
+  /** §5.3：规范化三档结果的 sha256。审批必须绑在它实际看到的那份分档上，
+   *  提交时不符即 409（Q18，head-bound 语义在发现期的等价物）。 */
+  evidence_version: string;
+  decided_by_agent_id: string | null;
+  reason: string;
+  decided_at: string | null;
+}
+
+/** §3.1 派生字段：原始分档叠加 adjustments 后的**唯一生效分档来源**。
+ *  前端**禁止**自己把 adjustments 叠到 classification 上（状态映射唯一实现在读模型）。
+ *  `original_tier` 在 `adjusted === false` 时的取值契约未写死，故渲染只在
+ *  `adjusted` 为真时读它（见批次回报悬挂项）。 */
+export interface DiscoveryEffectiveTier {
+  repository: string;
+  tier: DiscoveryTier;
+  adjusted: boolean;
+  original_tier: DiscoveryTier | null;
+}
+
+/** §3.1 `integration`：集成产物已落草稿快照时的计数（GUI 步 4 / 管线 Step 3）。 */
+export interface DiscoveryIntegrationCounts {
+  task_dag_count: number;
+  batch_count: number;
+  contract_count: number;
+}
+
+/** §3.1 `GET /issues/{issue_id}/discovery` 全体。
+ *
+ *  **issue 存在但从未发起发现 → HTTP 200** 且三块全 null、`step: 1`、
+ *  `step_state: "idle"`（不是 404，沿 §7.2「未建团的 issue 返 200 空集」同一口径）；
+ *  issue 本身不存在 → 404。
+ *
+ *  `step` / `step_state` 由**读模型按 §3.2 七条规则按序判定**，是步进器位置的
+ *  唯一事实源：前端只渲染，不得用下面任何一块数据自行推断走到了哪一步。 */
+export interface DiscoveryView {
+  issue_id: string;
+  /** 承载 discovery 的**当前草稿快照**版本（§2.3；发现四步与审批都不涨版） */
+  plan_version: number;
+  step: 1 | 2 | 3 | 4;
+  step_state: "idle" | "running" | "failed" | "done";
+  running_task_id: string | null;
+  requirement_text: string;
+  analyzed_requirement: string | null;
+  /** 未跑过的步为 **null**，不填空对象冒充「跑过但没结果」（§3.1 诚实条款） */
+  analysis: DiscoveryAnalysisBlock | null;
+  candidates: DiscoveryCandidatesBlock | null;
+  classification: DiscoveryClassificationBlock | null;
+  effective_tiers: DiscoveryEffectiveTier[];
+  approval: DiscoveryApprovalBlock;
+  integration: DiscoveryIntegrationCounts | null;
+}
+
+/** §4.5 轮询视图。**进程内记录、重启即丢**（沿 A-2 的诚实注记）：404 不是坏 id。
+ *  与扫描不同的是这里有**更强的保证**——结果在快照里，重取 `GET …/discovery`
+ *  就知道该步到底落没落，不必重跑。
+ *
+ *  `status === "succeeded"` 之后前端**仍必须重取** `GET …/discovery`：
+ *  任务视图不投影结果（避免同一份数据两个序列化）。 */
+export interface DiscoveryTaskView {
+  task_id: string;
+  issue_id: string;
+  step: 1 | 2 | 3 | 4;
+  status: "running" | "succeeded" | "failed";
+  /** Q17：Step 2 是 N 次 LLM 调用，逐候选投影进度；其余步 `total` 恒 1 */
+  progress: { done: number; total: number; label: string };
+  /** 失败原因原文摘要，与快照里落的同一份 */
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/** §4.3 四个写触发的 202 体。 */
+export interface DiscoveryTriggerAccepted {
+  task_id: string;
+  step: 1 | 2 | 3 | 4;
+}
+
+/** §4.3 Step 0 需求分析。**不收 requirement**：需求文本的事实源是快照的
+ *  `requirement_text`（存两份即两个事实源）。 */
+export interface DiscoveryAnalysisRequest {
+  created_by_agent_id: string;
+  /** §4.1：最短 8 字符，**随表单生成**，每次逻辑触发新键、重试沿用同键 */
+  idempotency_key: string;
+  answers?: DiscoveryAnswer[];
+  /** §4.6：置 true 时**不重跑 LLM**，只在既有 analysis 上记 forced_continue；
+   *  analysis 为 null 时 409（没有追问可忽略） */
+  force_continue?: boolean;
+}
+
+/** §4.3 Step 1 候选评分。需求文本取 `analyzed_requirement`，不收。
+ *  `limit` / `entry_point` **不由 GUI 送**，交服务端缺省——契约示例写 10 而既有
+ *  `DiscoveryRequest.limit` 缺省是 5，前端硬编任一个都会变成第二份缺省
+ *  （同 repositoryScan.ts 不送 max_workers 的取舍）。 */
+export interface DiscoveryCandidatesRequest {
+  created_by_agent_id: string;
+  idempotency_key: string;
+  limit?: number;
+  entry_point?: string | null;
+}
+
+/** §4.3 Step 2 三档分类 / Step 3 生成计划：请求体只有主体与幂等键。
+ *  分类**不收** candidate_repos / discovery_evidence——脚本时代由客户端回传，
+ *  GUI 面由服务端从快照的 candidates 块取（让浏览器回传候选即让前端成为事实源）。 */
+export interface DiscoveryStepRequest {
+  created_by_agent_id: string;
+  idempotency_key: string;
+}
+
+/** §5.2 分档审批（同步端点，200）。`adjustments` 与 `decision` **一次提交**：
+ *  拆成两个写会造出「改了但没批」的中间态。 */
+export interface DiscoveryApprovalRequest {
+  /** 活跃 ORGANIZATION_LEADER（§4.1），前端沿用 decisions.ts 的花名册派生单点实现 */
+  decided_by_agent_id: string;
+  idempotency_key: string;
+  decision: "approved" | "changes_requested";
+  reason: string;
+  adjustments: { repository: string; tier: DiscoveryTier }[];
+  /** §5.3：与服务端当前分档指纹不符 → 409（批的必须是它实际看到的那份证据） */
+  evidence_version: string;
+}
