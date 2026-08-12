@@ -42,3 +42,27 @@ class RepositoryAgentTeamCreated:
     repository_id: UUID
     leader: AgentPrincipalView
     workers: tuple[AgentPrincipalView, ...]
+
+
+class RepositoryAgentTeamProvisioner(Protocol):
+    """Give a repository the leader-and-worker pair a project topology needs.
+
+    Published as a contract because the caller is another module: building a
+    topology (``project``) requires principals (``agent_directory``), and the
+    alternative to this protocol is the project module importing this one's
+    application layer.
+
+    ``provision`` is *ensure*, not *create*: a repository's leader is a
+    directory singleton (``repository:{id}:leader``), so a repository that
+    already has a team must yield that team rather than a conflict. Two
+    projects touching the same repository is ordinary, not an error.
+    """
+
+    async def provision(
+        self,
+        *,
+        organization_id: UUID,
+        organization_leader_id: UUID,
+        repository_id: UUID,
+        idempotency_key: str,
+    ) -> RepositoryAgentTeamCreated: ...

@@ -36,6 +36,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application.discovery_chain import (
     DiscoveryActorNotFound,
     DiscoveryChainService,
@@ -45,17 +46,23 @@ from repomesh.modules.repository_intelligence.application.discovery_chain import
     DiscoveryLLMUnavailable,
     DiscoveryPreconditionFailed,
 )
+from repomesh.modules.repository_intelligence.application.discovery_materialization import (
+    MaterializeIssueCommand,
+)
 from repomesh.modules.repository_intelligence.contracts import (
     GUI_STEP_OF,
     DiscoveryApprovalCommand,
     DiscoveryStepCommand,
 )
+from repomesh.shared.workflow import WorkflowBlocked
 
 from .models import (
     DiscoveryAnalysisRequest,
     DiscoveryApprovalRequest,
     DiscoveryCandidatesRequest,
     DiscoveryClassificationRequest,
+    DiscoveryMaterializeRequest,
+    DiscoveryMaterializeView,
     DiscoveryPlanRequest,
     DiscoveryTaskProgress,
     DiscoveryTaskView,
@@ -417,6 +424,54 @@ async def decide_classification(
         task_id=None,
         step=GUI_STEP_OF["approval"],
         status="replayed" if replayed else "accepted",
+    )
+
+
+@router.post(
+    "/issues/{issue_id}/discovery/materialize",
+    response_model=DiscoveryMaterializeView,
+    dependencies=[ACTION_TOKEN],
+)
+async def materialize_discovery_plan(
+    issue_id: UUID, body: DiscoveryMaterializeRequest, request: Request
+) -> DiscoveryMaterializeView:
+    """§8 — build the teams, create the tasks, start the round.
+
+    Synchronous, and deliberately not one of the ``_start``/``_accepted`` pair
+    above: nothing here calls a model, so there is no blocking work to move off
+    the loop and no task worth polling. The panel's next move is a re-read of
+    the issue, exactly as after an approval.
+
+    Both 409s below are passed through with the server's own words. The
+    checkpoint one in particular is not ours to reword — it names the gate and
+    the evidence version, which is the entire actionable content, and a panel
+    that renders "blocked" instead has thrown that away.
+    """
+
+    service = request.app.state.container.discovery_materialization_service()
+    command = MaterializeIssueCommand(
+        issue_id=issue_id,
+        created_by_agent_id=body.created_by_agent_id,
+        idempotency_key=body.idempotency_key,
+    )
+    try:
+        result = await service.materialize(command)
+    except WorkflowBlocked as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ExecutionPlaneUnavailable as error:
+        # The bridge refuses before any side effect, so this is a 503 the
+        # caller may simply retry once the plane is configured — same reading
+        # as `POST /bridge/materialize` gives it.
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        raise _translate(error) from error
+
+    return DiscoveryMaterializeView(
+        plan_id=result.plan_id,
+        task_ids=list(result.task_ids),
+        team_count=result.team_count,
+        repositories=list(result.repositories),
+        status=result.status,
     )
 
 

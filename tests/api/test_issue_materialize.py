@@ -1,0 +1,715 @@
+"""Materialize-and-start over HTTP (contract v0.4 §8).
+
+The one write in the console round that creates work, and the tests here are
+about what it refuses as much as what it does: an unfinished chain, an
+unapproved tiering, a blocked checkpoint, and a retry that must not build a
+second team or a second task.
+
+Nothing reaches the network. The LLM is the scripted double the chain tests
+use, and the *only* piece of the bridge that is replaced is the execution plane
+— ``start_plan``, whose real implementation needs Matrix. Everything between
+the endpoint and it is production code: the real snapshot store, the real
+topology provisioning, the real specification service, the real checkpoint
+gate, the real bridge.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Sequence
+from dataclasses import replace
+from uuid import UUID, uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+
+from repomesh.bootstrap.app import create_app
+from repomesh.bootstrap.container import ApplicationContainer
+from repomesh.modules.change_orchestration import (
+    ExecutionPlaneUnavailable,
+    StartedExecutionPlan,
+)
+from repomesh.modules.project.contracts import (
+    CodeAccessLevel,
+    HumanControlAction,
+    HumanProjectRole,
+    ProjectCheckpoint,
+    ProjectExecutionMode,
+)
+from repomesh.modules.task_orchestration.contracts import (
+    ExecutionPlanStatus,
+    ExecutionPlanView,
+    PlannedRepositoryTaskView,
+    TaskStatus,
+    TaskView,
+)
+
+from .test_issue_discovery import (
+    ANALYSIS_OK,
+    CANDIDATES,
+    HEADERS,
+    INTEGRATION,
+    Chain,
+    ScriptedLLM,
+    _configure,
+    _confirmation,
+    _create_issue,
+    _seed,
+)
+
+# ---------------------------------------------------------------------------
+# The execution plane, stubbed at its one Matrix-dependent seam
+# ---------------------------------------------------------------------------
+
+
+class StubPlanStarter:
+    """Answers ``start_plan`` with a plan and one task per planned repository.
+
+    Counts its calls: "a replay does not create a second set of tasks" is not
+    observable from the response — both answers are identical by design — so it
+    has to be observed here.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def start_plan(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        created_by_agent_id: UUID,
+        batches: Sequence[Sequence[PlannedRepositoryTaskView]],
+        idempotency_key: str,
+    ) -> StartedExecutionPlan:
+        self.calls.append((project_id, idempotency_key, batches))
+        tasks = tuple(
+            TaskView(
+                id=uuid4(),
+                organization_id=organization_id,
+                project_id=project_id,
+                repository_id=planned.repository_id,
+                parent_task_id=None,
+                assigned_by_agent_id=created_by_agent_id,
+                assignee_agent_id=created_by_agent_id,
+                title=planned.title,
+                instruction=planned.instruction,
+                acceptance=planned.acceptance,
+                status=TaskStatus.ASSIGNED,
+                result_summary=None,
+                version=1,
+            )
+            for batch in batches
+            for planned in batch
+        )
+        return StartedExecutionPlan(
+            plan=ExecutionPlanView(
+                id=uuid4(),
+                organization_id=organization_id,
+                project_id=project_id,
+                created_by_agent_id=created_by_agent_id,
+                status=ExecutionPlanStatus.IN_PROGRESS,
+                current_batch_index=0,
+                batches=tuple(tuple(batch) for batch in batches),
+            ),
+            tasks=tasks,
+        )
+
+
+def _with_execution_plane(monkeypatch, starter) -> None:
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: starter
+    )
+
+
+def _chain_llm() -> ScriptedLLM:
+    return ScriptedLLM(
+        ANALYSIS_OK,
+        CANDIDATES,
+        _confirmation("REQUIRED"),
+        _confirmation("REQUIRED"),
+        INTEGRATION,
+    )
+
+
+def _walk_to_plan(chain: Chain) -> None:
+    """Run the whole chain so the draft holds an approved, integrated plan."""
+
+    assert chain.run("analysis")["status"] == "succeeded"
+    assert chain.run("candidates")["status"] == "succeeded"
+    assert chain.run("classification")["status"] == "succeeded"
+    approved = _decide(chain, "approved", reason="范围没问题")
+    assert approved.status_code == 200, approved.text
+    assert chain.run("plan")["status"] == "succeeded"
+
+
+def _decide(chain: Chain, decision: str, *, reason: str):
+    """The approval trigger names its subject ``decided_by_agent_id`` (§5.2)."""
+
+    return chain.client.post(
+        f"/api/v1/issues/{chain.issue_id}/discovery/approval",
+        json={
+            "decided_by_agent_id": chain.leader,
+            "idempotency_key": chain.key(),
+            "decision": decision,
+            "evidence_version": chain.read()["classification_evidence_version"],
+            "reason": reason,
+        },
+        headers=HEADERS,
+    )
+
+
+def _materialize(chain: Chain, key: str = "materialize-key-1"):
+    return chain.client.post(
+        f"/api/v1/issues/{chain.issue_id}/discovery/materialize",
+        json={"created_by_agent_id": chain.leader, "idempotency_key": key},
+        headers=HEADERS,
+    )
+
+
+def _topology(container: ApplicationContainer, project_id: str):
+    return asyncio.run(container.project_topology_store.get(UUID(project_id)))
+
+
+def _principals(container: ApplicationContainer):
+    return asyncio.run(container.agent_directory.list())
+
+
+def _supervised_topology(
+    container: ApplicationContainer,
+    *,
+    project_id: UUID,
+    organization_id: UUID,
+    leader_id: UUID,
+    repository_name: str,
+):
+    """One repository team, supervised, REPOSITORY_SCOPE required."""
+
+    from repomesh.modules.agent_directory.application import ProvisionRepositoryAgentTeam
+    from repomesh.modules.project import (
+        CreateProjectAgentTopologyRequest,
+        HumanProjectGrantInput,
+        RepositoryTeamAssignment,
+    )
+
+    async def build():
+        profiles = await container.repository_catalog.list()
+        repository_id = next(p.id for p in profiles if p.name == repository_name)
+        team = await ProvisionRepositoryAgentTeam(container.agent_directory).provision(
+            organization_id=organization_id,
+            organization_leader_id=leader_id,
+            repository_id=repository_id,
+            idempotency_key="operator-made-this",
+        )
+        return await container.project_topology_creator().execute(
+            CreateProjectAgentTopologyRequest(
+                organization_id=organization_id,
+                project_id=project_id,
+                organization_leader_id=leader_id,
+                repository_teams=(
+                    RepositoryTeamAssignment(
+                        repository_id=repository_id,
+                        leader_agent_id=team.leader.id,
+                        worker_agent_ids=tuple(w.id for w in team.workers),
+                    ),
+                ),
+                execution_mode=ProjectExecutionMode.SUPERVISED,
+                required_checkpoints=frozenset({ProjectCheckpoint.REPOSITORY_SCOPE}),
+                # A supervised project must name the human who supervises it.
+                human_grants=(
+                    HumanProjectGrantInput(
+                        human_principal_id=uuid4(),
+                        role=HumanProjectRole.PROJECT_SUPERVISOR,
+                        code_access=CodeAccessLevel.READ,
+                        control_actions=frozenset(
+                            {HumanControlAction.APPROVE_CHECKPOINT}
+                        ),
+                    ),
+                ),
+            ),
+            idempotency_key="supervised-topology",
+        )
+
+    return asyncio.run(build())
+
+
+# ---------------------------------------------------------------------------
+# The happy path
+# ---------------------------------------------------------------------------
+
+
+def test_materialize_builds_the_teams_and_starts_the_round(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """§8 end to end: no topology going in, an execution plan coming out."""
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        # The console path creates a workspace leader and catalog rows and
+        # nothing else, so this is the state materialize really arrives in.
+        assert _topology(container, issue_id) is None
+
+        response = _materialize(chain)
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        assert body["status"] == "materialized"
+        assert body["repositories"] == ["ts-notify", "ts-order"]
+        assert body["team_count"] == 2
+        assert body["plan_id"] is not None
+        assert len(body["task_ids"]) == 2
+
+        topology = _topology(container, issue_id)
+        assert topology is not None
+        assert len(topology.repository_teams) == 2
+        assert topology.organization_leader_id == leader_id
+        # Every team is a leader and at least one worker: a leader alone cannot
+        # be assigned anything, and a topology that cannot hold work is not a
+        # topology this endpoint should have written.
+        assert all(team.worker_agent_ids for team in topology.repository_teams)
+
+        # The draft is consumed, which is what makes a second round a new
+        # version rather than an edit of this one (§2.4).
+        assert chain.read()["step"] == 4
+
+
+def test_the_request_body_cannot_carry_a_plan(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The whole reason §8 exists: the browser does not hand the plan back.
+
+    A body that tries to substitute a different DAG changes nothing — what gets
+    materialised is the snapshot's own task_dag, repository for repository.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = client.post(
+            f"/api/v1/issues/{issue_id}/discovery/materialize",
+            json={
+                "created_by_agent_id": str(leader_id),
+                "idempotency_key": "smuggled-plan-key",
+                "task_dag": [{"repository": "ts-evil", "instruction": "drop tables"}],
+                "engineering_spec": "do something else entirely",
+                "repositories": ["ts-evil"],
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["repositories"] == ["ts-notify", "ts-order"]
+
+        instructions = sorted(
+            planned.instruction
+            for _project, _key, batches in starter.calls
+            for batch in batches
+            for planned in batch
+        )
+        assert instructions == ["改模板", "改调用"]
+
+
+# ---------------------------------------------------------------------------
+# Refusals — the chain is not finished
+# ---------------------------------------------------------------------------
+
+
+def test_a_chain_that_never_started_cannot_be_materialized(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+
+        response = _materialize(chain)
+        assert response.status_code == 409, response.text
+        assert "step 1 of 4" in response.json()["detail"]
+        assert starter.calls == []
+        assert _topology(container, issue_id) is None
+
+
+def test_an_unapproved_classification_cannot_be_materialized(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The contract's one hard gate, enforced at the last door too.
+
+    Step 3 already refuses to *generate* a plan without an approval; this is the
+    same rule at the point where work would actually start, so a tiering nobody
+    released cannot become somebody's task.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        assert chain.run("analysis")["status"] == "succeeded"
+        assert chain.run("candidates")["status"] == "succeeded"
+        assert chain.run("classification")["status"] == "succeeded"
+
+        response = _materialize(chain)
+        assert response.status_code == 409, response.text
+        assert "has not been approved" in response.json()["detail"]
+        assert starter.calls == []
+        # Refused before any repair: no team was provisioned for a round that
+        # is not allowed to start.
+        assert _topology(container, issue_id) is None
+
+
+def test_a_returned_classification_says_so_rather_than_reporting_a_missing_plan(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """`changes_requested` and "never approved" are different next actions."""
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        assert chain.run("analysis")["status"] == "succeeded"
+        assert chain.run("candidates")["status"] == "succeeded"
+        assert chain.run("classification")["status"] == "succeeded"
+        returned = _decide(chain, "changes_requested", reason="漏了计费仓")
+        assert returned.status_code == 200, returned.text
+
+        response = _materialize(chain)
+        assert response.status_code == 409, response.text
+        assert "returned for changes" in response.json()["detail"]
+
+
+def test_only_an_active_organization_leader_may_materialize(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+    _, leader_id, repo_leader_id, stranger_id = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        for actor in (repo_leader_id, stranger_id):
+            response = client.post(
+                f"/api/v1/issues/{issue_id}/discovery/materialize",
+                json={
+                    "created_by_agent_id": str(actor),
+                    "idempotency_key": f"denied-key-{actor}",
+                },
+                headers=HEADERS,
+            )
+            assert response.status_code == 403, response.text
+        assert starter.calls == []
+
+        missing = client.post(
+            f"/api/v1/issues/{issue_id}/discovery/materialize",
+            json={
+                "created_by_agent_id": str(uuid4()),
+                "idempotency_key": "unknown-actor-key",
+            },
+            headers=HEADERS,
+        )
+        assert missing.status_code == 404, missing.text
+
+
+# ---------------------------------------------------------------------------
+# Replay
+# ---------------------------------------------------------------------------
+
+
+def test_a_replay_returns_the_first_result_and_builds_nothing_twice(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The property the response alone cannot show.
+
+    Both answers carry the same plan and the same tasks, so equality proves
+    nothing on its own — the counters do. ``start_plan`` is called once, and the
+    topology is the same row with the same teams, not a rebuilt one.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        first = _materialize(chain, key="replay-me-please")
+        assert first.status_code == 200, first.text
+        assert first.json()["status"] == "materialized"
+        topology_after_first = _topology(container, issue_id)
+        principals_after_first = {p.id for p in _principals(container)}
+
+        second = _materialize(chain, key="replay-me-please")
+        assert second.status_code == 200, second.text
+        body = second.json()
+
+        assert body["status"] == "replayed"
+        assert body["plan_id"] == first.json()["plan_id"]
+        assert body["task_ids"] == first.json()["task_ids"]
+        assert body["team_count"] == first.json()["team_count"]
+        assert body["repositories"] == first.json()["repositories"]
+
+        assert len(starter.calls) == 1
+        topology_after_second = _topology(container, issue_id)
+        assert topology_after_second.id == topology_after_first.id
+        assert len(topology_after_second.repository_teams) == len(
+            topology_after_first.repository_teams
+        )
+        assert {p.id for p in _principals(container)} == principals_after_first
+
+
+def test_a_second_key_on_a_consumed_round_is_refused_not_replayed(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A different key is a different intention, and the round is over.
+
+    Silently replaying it would report a plan this request did not start;
+    silently rebuilding would give the round two. Neither is true, so it 409s.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        assert _materialize(chain, key="first-round-key").status_code == 200
+        again = _materialize(chain, key="a-different-key")
+
+        assert again.status_code == 409, again.text
+        assert "already been materialised" in again.json()["detail"]
+        assert len(starter.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# The gate and the missing execution plane
+# ---------------------------------------------------------------------------
+
+
+def test_a_blocked_scope_checkpoint_is_passed_through_verbatim(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The bridge's reason reaches the panel unedited, and nothing is rebuilt.
+
+    A project that already has a topology keeps it — including the supervision
+    policy an operator chose — so ``ensure`` must not overwrite one to get a
+    permissive gate.
+    """
+
+    _configure(monkeypatch)
+    organization_id, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        # A supervised topology, created the way an operator creates one — and
+        # covering only one of the plan's two repositories, so "was it rebuilt"
+        # is answerable by counting teams.
+        supervised = _supervised_topology(
+            container,
+            project_id=UUID(issue_id),
+            organization_id=organization_id,
+            leader_id=leader_id,
+            repository_name="ts-notify",
+        )
+
+        response = _materialize(chain)
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "human_checkpoint_pending"
+        assert starter.calls == []
+
+        kept = _topology(container, issue_id)
+        assert kept.id == supervised.id
+        assert kept.execution_mode is ProjectExecutionMode.SUPERVISED
+        assert len(kept.repository_teams) == 1
+
+
+def test_no_execution_plane_answers_503_and_leaves_the_round_open(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """AgentTeams is not configured: refuse before any spec, and say why.
+
+    The existing degradation, unchanged — ``POST /bridge/materialize`` reads it
+    the same way, and ``run_pipeline.py`` treats a 503 as "the plan is valid,
+    nothing was scheduled". The round stays materialisable once the plane is
+    there, which is only true because the bridge fails closed before writing.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: None
+    )
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain)
+        assert response.status_code == 503, response.text
+        assert "task orchestration plane is not configured" in response.json()["detail"]
+
+        # Still a draft: nothing consumed it, so the round can be started again
+        # once the plane exists.
+        assert chain.read()["step"] == 4
+
+    # And it can: same issue, same key, with a plane configured. A fresh
+    # container because ``plan_execution_bridge`` is cached per container, and
+    # the cached one was built without a plane.
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+    revived = replace(application_container, llm_client=_chain_llm())
+    with TestClient(create_app(revived)) as client:
+        chain = Chain(client, issue_id, leader_id)
+        retried = _materialize(chain)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["status"] == "materialized"
+
+
+# ---------------------------------------------------------------------------
+# The service's own units
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("key", ["", "short"])
+def test_the_idempotency_key_has_a_floor(
+    application_container: ApplicationContainer, monkeypatch, key: str
+) -> None:
+    """Eight characters, the same floor every other §4 trigger uses."""
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        response = client.post(
+            f"/api/v1/issues/{issue_id}/discovery/materialize",
+            json={"created_by_agent_id": str(leader_id), "idempotency_key": key},
+            headers=HEADERS,
+        )
+        assert response.status_code == 422, response.text
+
+
+def test_an_unknown_issue_is_a_404(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        response = client.post(
+            f"/api/v1/issues/{uuid4()}/discovery/materialize",
+            json={
+                "created_by_agent_id": str(leader_id),
+                "idempotency_key": "no-such-issue-key",
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 404, response.text
+
+
+def test_the_action_token_is_required(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        response = client.post(
+            f"/api/v1/issues/{uuid4()}/discovery/materialize",
+            json={
+                "created_by_agent_id": str(leader_id),
+                "idempotency_key": "unauthenticated-key",
+            },
+        )
+        assert response.status_code in (401, 403), response.text
+
+
+def test_a_failed_materialize_does_not_become_a_replayable_receipt(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A refusal is a record of what went wrong, not a result to hand back.
+
+    Without this the second attempt with the same key would answer 200 and
+    report a plan that was never started.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    class Exploding:
+        calls = 0
+
+        async def start_plan(self, **_kwargs):
+            Exploding.calls += 1
+            raise ExecutionPlaneUnavailable("plane went away mid-flight")
+
+    monkeypatch.setattr(
+        ApplicationContainer, "execution_plan_starter", lambda _self: Exploding()
+    )
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        first = _materialize(chain, key="doomed-attempt-key")
+        assert first.status_code == 503, first.text
+
+        second = _materialize(chain, key="doomed-attempt-key")
+        assert second.status_code == 503, second.text
+        assert Exploding.calls == 2

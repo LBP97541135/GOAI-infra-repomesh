@@ -41,6 +41,7 @@ from uuid import UUID
 from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalReader,
     AgentPrincipalStatus,
+    AgentPrincipalView,
     AgentRole,
 )
 from repomesh.modules.repository_intelligence.application.confirmation import (
@@ -111,6 +112,52 @@ class DiscoveryLLMUnavailable(DomainError):
 
 class DiscoveryAuditLog(Protocol):
     async def append(self, event: EventEnvelope) -> None: ...
+
+
+async def _issue_organization(
+    directory: AgentPrincipalReader, snapshots: PlanSnapshotStore, project_id: UUID
+) -> UUID | None:
+    records = await snapshots.list_all(project_id)
+    if not records:
+        return None
+    creator_id = records[-1].created_by_agent_id
+    if creator_id is None:
+        return None
+    creator = await directory.get_view(creator_id)
+    return creator.organization_id if creator is not None else None
+
+
+async def require_organization_leader(
+    directory: AgentPrincipalReader,
+    snapshots: PlanSnapshotStore,
+    agent_id: UUID,
+    project_id: UUID,
+) -> AgentPrincipalView:
+    """Contract §4.1: an active ORGANIZATION_LEADER of the issue's workspace.
+
+    Same rule and the same lookup as issue intake (v0.3 §1.2) — the roster
+    derivation the console already does for every other write. The workspace of
+    record is the issue creator's, never anything the request body says.
+
+    A module-level function rather than a method because §8's materialize
+    trigger answers to the same rule and must not grow a second copy of it: an
+    authorization rule that exists twice is a rule that will be relaxed once.
+    """
+
+    actor = await directory.get_view(agent_id)
+    if actor is None:
+        raise DiscoveryActorNotFound(f"agent principal not found: {agent_id}")
+    if (
+        actor.status is not AgentPrincipalStatus.ACTIVE
+        or actor.role is not AgentRole.ORGANIZATION_LEADER
+    ):
+        raise DiscoveryDenied(
+            "the discovery chain requires an active organization leader"
+        )
+    owner = await _issue_organization(directory, snapshots, project_id)
+    if owner is not None and owner != actor.organization_id:
+        raise DiscoveryDenied("the issue belongs to a different organization")
+    return actor
 
 
 def _now() -> str:
@@ -405,38 +452,9 @@ class DiscoveryChainService:
     # -------------------------------------------------- subject and target
 
     async def _actor(self, agent_id: UUID, project_id: UUID):  # noqa: ANN202
-        """Contract §4.1: an active ORGANIZATION_LEADER of the issue's workspace.
-
-        Same rule and the same lookup as issue intake (v0.3 §1.2) — the roster
-        derivation the console already does for every other write. The
-        workspace of record is the issue creator's, never anything the request
-        body says.
-        """
-
-        actor = await self._directory.get_view(agent_id)
-        if actor is None:
-            raise DiscoveryActorNotFound(f"agent principal not found: {agent_id}")
-        if (
-            actor.status is not AgentPrincipalStatus.ACTIVE
-            or actor.role is not AgentRole.ORGANIZATION_LEADER
-        ):
-            raise DiscoveryDenied(
-                "the discovery chain requires an active organization leader"
-            )
-        owner = await self._issue_organization(project_id)
-        if owner is not None and owner != actor.organization_id:
-            raise DiscoveryDenied("the issue belongs to a different organization")
-        return actor
-
-    async def _issue_organization(self, project_id: UUID) -> UUID | None:
-        snapshots = await self._snapshots.list_all(project_id)
-        if not snapshots:
-            return None
-        creator_id = snapshots[-1].created_by_agent_id
-        if creator_id is None:
-            return None
-        creator = await self._directory.get_view(creator_id)
-        return creator.organization_id if creator is not None else None
+        return await require_organization_leader(
+            self._directory, self._snapshots, agent_id, project_id
+        )
 
     async def target(self, issue_id: UUID) -> DiscoveryTarget:
         """The draft this issue's chain writes to (§2.3).
@@ -917,5 +935,6 @@ __all__ = [
     "DiscoveryPreconditionFailed",
     "DiscoveryStepCommand",
     "DiscoveryTarget",
+    "require_organization_leader",
     "summary_in_force",
 ]

@@ -149,6 +149,26 @@ class ApplicationContainer:
 
         return CreateProjectAgentTopology(self.agent_directory, self.project_topology_store)
 
+    def project_topology_provisioner(self):
+        """Contract v0.4 §8: the topology a console round makes on its way to work.
+
+        Composed of the two capabilities the modules already publish rather
+        than a third path into the same tables — ``scripts/run_pipeline.py``
+        writes the topology straight to the store, and repeating that here
+        would put a fourth spelling of "what a team is" in the codebase.
+        """
+
+        from repomesh.modules.agent_directory.application import (
+            ProvisionRepositoryAgentTeam,
+        )
+        from repomesh.modules.project import EnsureProjectAgentTopology
+
+        return EnsureProjectAgentTopology(
+            self.project_topology_store,
+            ProvisionRepositoryAgentTeam(self.agent_directory),
+            self.project_topology_creator(),
+        )
+
     def agent_capabilities(self) -> ResolveAgentCapabilities:
         return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
 
@@ -735,6 +755,29 @@ class ApplicationContainer:
                 self.llm_client,
                 self.requirement_analyzer(),
             ),
+        )
+
+    def discovery_materialization_service(self):
+        """Contract v0.4 §8: the write that ends a round and starts the work.
+
+        The bridge is handed in as ``PlanMaterializer``, the port
+        repository_intelligence declares for it. The import direction is the
+        reason: change_orchestration already depends on repository_intelligence
+        for ``IntegratedPlan``, so the service cannot name the bridge without
+        closing a cycle — the composition root is where the two meet.
+        """
+
+        from repomesh.modules.repository_intelligence.application.discovery_materialization import (  # noqa: E501
+            DiscoveryMaterializationService,
+        )
+
+        return DiscoveryMaterializationService(
+            self.plan_snapshot_store(),
+            self.agent_directory,
+            self.repository_catalog,
+            self.topology_reader(),
+            self.project_topology_provisioner(),
+            self.plan_execution_bridge(),
         )
 
     def issue_intake_service(self):
