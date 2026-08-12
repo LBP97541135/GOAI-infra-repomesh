@@ -184,13 +184,20 @@ repository_intelligence.plan_snapshots
     "maybe":    [ ConfirmationResultView ],
     "excluded": [ ConfirmationResultView ],
     "supplemented_repos": ["repo-x"],
-    "adjustments": [ { "repository": "repo-a", "from": "MAYBE", "to": "REQUIRED",
+    "adjustments": [ { "repository": "repo-a", "from": "MAYBE|null", "to": "REQUIRED",
                        "by_agent_id": "uuid", "at": "..." } ],
+                       // from=null：模型从未给该仓分档、审批人自行加入（实现
+                       // discovery_chain.py 的 original.get(...) or None）——
+                       // 前端渲染为「未分档」而非空串（2026-08-12 勘正）
     "ran_at": "...", "by_agent_id": "uuid", "error": null
   },
   "approval": {
     "state": "not_requested|approved|changes_requested",
-    "evidence_version": "sha256:...",
+    "evidence_version": "sha256:...|null",
+                       // null=尚无任何审批决定。与 §3.1 分工表一致（本 JSON 块
+                       // 原漏写 |null——同一事实两处只改一处的复发，2026-08-12 勘正）；
+                       // 审批请求必须带的是顶层 classification_evidence_version，
+                       // 不是这个字段
     "decided_by_agent_id": "uuid|null", "reason": "string",
     "decided_at": "...|null"
   }
