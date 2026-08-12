@@ -789,6 +789,9 @@ class ApplicationContainer:
                     message.to_view() for message in await message_store.list_by_room(room_id)
                 )
 
+            async def last_assignment_at(self, project_id: UUID):
+                return await message_store.last_assignment_at(project_id)
+
         class _Observations:
             async def for_change_set(self, change_set_id: UUID):
                 return tuple(

@@ -138,6 +138,9 @@ class _Empty:
     async def for_room(self, room_id: str):
         return ()
 
+    async def last_assignment_at(self, project_id: UUID):
+        return {}
+
     async def repository_spec(self, project_id: UUID, repository_id: UUID):
         return None
 
@@ -563,6 +566,16 @@ class StubMessages:
     async def for_room(self, room_id: str):
         return tuple(item for item in self.messages if item.room_id == room_id)
 
+    async def last_assignment_at(self, project_id: UUID):
+        latest: dict[UUID, object] = {}
+        for item in self.messages:
+            if item.task_id is None:
+                continue
+            seen = latest.get(item.task_id)
+            if seen is None or item.created_at > seen:
+                latest[item.task_id] = item.created_at
+        return latest
+
 
 class StubObservations:
     def __init__(self, *observations: SCMObservationView) -> None:
@@ -794,3 +807,65 @@ async def test_a_task_without_declared_evidence_contributes_no_diff() -> None:
     )
 
     assert (await service.get_delivery(plan.id))["diffs"] == []
+
+
+@pytest.mark.asyncio
+async def test_a_task_reports_when_it_was_last_dispatched() -> None:
+    """§8.7.4: the honest context the console's re-dispatch entry sits next to.
+
+    The *latest* assignment message wins, which is what makes the field useful
+    after a re-dispatch: pressing the button moves this timestamp, and that
+    movement is the only feedback the console can give that is a fact rather
+    than a guess about whether the Worker woke up. A task nobody ever told
+    reports ``None`` — itself worth seeing, because it means the dispatch never
+    happened at all.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = _worker(project_id, repository_id, leader_task_id)
+
+    def message(task_id: UUID | None, at: datetime) -> CollaborationMessageView:
+        return CollaborationMessageView(
+            id=uuid4(),
+            organization_id=plan.organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            task_id=task_id,
+            sender_agent_id=uuid4(),
+            recipient_agent_id=worker.assignee_agent_id,
+            kind=CollaborationMessageKind.TASK_ASSIGNMENT,
+            subject="任务指派",
+            body="body",
+            room_id="!room:local",
+            status=CollaborationDeliveryStatus.DELIVERED,
+            event_id=None,
+            correlation_id=uuid4(),
+            created_at=at,
+        )
+
+    first = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
+    redispatched = datetime(2026, 8, 12, 14, 30, tzinfo=UTC)
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({}),
+        StubArchives(),
+        messages=StubMessages(message(worker.id, first), message(worker.id, redispatched)),
+    )
+
+    detail = await service.get_delivery(plan.id)
+
+    assert detail["tasks"][0]["last_dispatched_at"] == redispatched
+
+    silent = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({}),
+        StubArchives(),
+    )
+    assert (await silent.get_delivery(plan.id))["tasks"][0]["last_dispatched_at"] is None
