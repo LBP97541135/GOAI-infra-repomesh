@@ -146,6 +146,17 @@ class SCMAdapter(Protocol):
     async def get_branch_protection(
         self, repository: RepositoryRef, branch: str
     ) -> BranchProtectionObservation: ...
+
+    async def get_branch_head(self, repository: RepositoryRef, branch: str) -> str | None:
+        """The commit a remote branch points at, or None when it does not exist.
+
+        Delivery needs to tell "the branch was pushed" from "the branch was
+        never pushed" without a workspace: the reconciler holds a ChangeSet,
+        not a checkout, so ``BranchPublisher`` -- which reads the remote through
+        a local clone -- is out of reach there.
+        """
+        ...
+
     async def create_draft_pull_request(
         self, command: CreateDraftPullRequestCommand
     ) -> PullRequestObservation: ...

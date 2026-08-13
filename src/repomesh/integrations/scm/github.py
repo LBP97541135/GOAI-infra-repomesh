@@ -26,6 +26,7 @@ from .contracts import (
 )
 
 _UNPROTECTED_BRANCH_MESSAGE = "branch not protected"
+_MISSING_BRANCH_MESSAGE = "branch not found"
 
 
 class GitHubAdapter:
@@ -125,6 +126,27 @@ class GitHubAdapter:
                 (payload.get("required_conversation_resolution") or {}).get("enabled")
             ),
         )
+
+    async def get_branch_head(self, repository: RepositoryRef, branch: str) -> str | None:
+        """The SHA a remote branch points at, or None when the branch is absent.
+
+        Same 404-honesty problem as ``get_branch_protection``: GitHub answers
+        this endpoint with 404 both for a branch that does not exist ("Branch
+        not found") and for a repository RepoMesh cannot see ("Not Found").
+        Only the first is an answer about the branch, so only the first becomes
+        None; a repository-level 404 stays an error, because reporting it as
+        "the branch is missing" would make delivery skip a candidate for a
+        reason that is not true.
+        """
+
+        try:
+            payload = await self._request("GET", repository, f"/branches/{branch}")
+        except SCMNotFound as error:
+            if error.detail.strip().lower() != _MISSING_BRANCH_MESSAGE:
+                raise
+            return None
+        sha = str((payload.get("commit") or {}).get("sha") or "").lower()
+        return sha or None
 
     async def list_check_runs(
         self, repository: RepositoryRef, head_sha: str
