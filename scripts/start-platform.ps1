@@ -140,7 +140,7 @@ if ([string]::IsNullOrWhiteSpace($env:REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN)) 
 }
 
 try {
-    docker compose --profile platform up -d --build api
+    docker compose --profile platform up -d --build api web
     $ComposeExitCode = $LASTEXITCODE
 } finally {
     if ($InjectedControllerToken) {
@@ -170,3 +170,4 @@ if (-not $Ready) {
 }
 
 Write-Host "RepoMesh is ready at http://127.0.0.1:8000/docs"
+Write-Host "RepoMesh Control Plane is ready at http://127.0.0.1:5173"

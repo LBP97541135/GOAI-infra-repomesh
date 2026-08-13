@@ -78,6 +78,21 @@ services:
       timeout: 3s
       retries: 12
 
+  web:
+    profiles: ["platform"]
+    build:
+      context: ./web
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
 volumes:
   repomesh-postgres:
   agentteams-storage:

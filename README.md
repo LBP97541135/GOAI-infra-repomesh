@@ -37,6 +37,10 @@ to install AgentTeams from the checked-in installer and start the containerized 
 .\scripts\start-platform.ps1 -InstallAgentTeams
 ~~~
 
+The command starts PostgreSQL, AgentTeams, the RepoMesh API, and the production web console.
+Open `http://127.0.0.1:5173` after the readiness check completes. Subsequent starts can omit
+`-InstallAgentTeams`.
+
 On Linux:
 
 ~~~bash
