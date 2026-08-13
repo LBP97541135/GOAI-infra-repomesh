@@ -42,7 +42,7 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
         setJobId(latest.id); setResults(latest.results || [])
         setOrgUrl(latest.org_url || '')
         if (latest.organization_id) setOrganizationId(latest.organization_id)
-        if (latest.status === 'failed') { setRetryJob(latest); setPhase('idle'); setError(latest.error || '上次仓库接入失败，可重新授权后重试') }
+        if (latest.status === 'failed' || latest.status === 'interrupted') { setRetryJob(latest); setPhase('idle'); setError(latest.error || (latest.status === 'interrupted' ? '上次接入被服务重启中断，请重新授权后重试' : '上次仓库接入失败，可重新授权后重试')) }
         else setPhase(latest.phase as Phase)
       }
       const orgLeader = principals.find((agent) => agent.role === 'organization_leader')
@@ -58,7 +58,7 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
         const job = await api.onboardingJob(jobId)
         setResults(job.results || [])
         if (job.status === 'completed') { setPhase('done'); setToken(''); await refresh() }
-        else if (job.status === 'failed') { setPhase('idle'); setError(job.error || (job.phase === 'authorization' ? '任务需要重新输入访问 Token' : '仓库接入失败')) }
+        else if (job.status === 'failed' || job.status === 'interrupted') { setRetryJob(job); setPhase('idle'); setError(job.error || (job.phase === 'authorization' ? '任务需要重新输入访问 Token' : '仓库接入失败')) }
         else setPhase(job.phase === 'queued' ? 'queued' : job.phase as Phase)
       } catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取接入进度') }
     }, 900)

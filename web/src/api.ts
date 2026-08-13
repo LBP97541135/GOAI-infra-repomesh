@@ -70,7 +70,7 @@ export type OnboardingJob = {
   id: string;
   organization_id?: string;
   org_url?: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "interrupted";
   phase: "queued" | "scanning" | "registering" | "teaming" | "done" | "authorization" | "failed";
   requires_auth?: boolean;
   results: RepositoryOnboardResult["repositories"];
