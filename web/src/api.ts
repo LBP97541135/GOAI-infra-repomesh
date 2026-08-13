@@ -66,6 +66,87 @@ export type RepositoryOnboardResult = {
   }>;
 };
 
+// ---------------------------------------------------------------------------
+// PRD → 方案制定链路（repository_intelligence /api/v1）
+// ---------------------------------------------------------------------------
+
+export type RequirementAnalysis = {
+  sufficient: boolean;
+  confidence: number;
+  missing_dimensions: string[];
+  questions: string[];
+  extracted_keywords: string[];
+};
+
+export type DiscoveryCandidate = {
+  repository_id: string;
+  repository_name: string;
+  score: number;
+  matched_terms: string[];
+  rationale: string;
+  is_entry_point: boolean;
+};
+
+export type RepositoryPlan = {
+  changed_apis: string[];
+  changed_modules: string[];
+  depends_on: string[];
+  impacts: string[];
+  risk: string;
+};
+
+export type ConfirmationResult = {
+  repository: string;
+  status: string;
+  confidence: number;
+  reason: string;
+  plan_summary: string;
+  plan: RepositoryPlan | null;
+  missing_dependencies: string[];
+};
+
+export type ConfirmationSummary = {
+  required: ConfirmationResult[];
+  maybe: ConfirmationResult[];
+  excluded: ConfirmationResult[];
+  supplemented_repos: string[];
+  final_repos: string[];
+};
+
+export type IntegratedPlan = {
+  engineering_spec: string;
+  contracts: { producer: string; consumer: string; interface: string; agreement: string }[];
+  task_dag: {
+    repository: string;
+    instruction: string;
+    depends_on: string[];
+    parallelizable_with: string[];
+    tests: string[];
+  }[];
+  execution_batches: string[][];
+};
+
+export type MaterializePayload = {
+  engineering_spec: string;
+  contracts: IntegratedPlan["contracts"];
+  task_dag: IntegratedPlan["task_dag"];
+  execution_batches: string[][];
+  requirement: string;
+  project_id: string;
+  leader_agent_id: string;
+  idempotency_prefix: string;
+  repo_details?: Record<string, RepositoryPlan>;
+};
+
+export type MaterializeResult = {
+  engineering_spec_id: string;
+  contract_spec_ids: string[];
+  task_ids: string[];
+  skipped_repos: string[];
+  plan_id: string | null;
+  handoff_doc_ids: string[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     credentials: "include",
@@ -113,6 +194,40 @@ export const api = {
     request<object>("/projects/topologies", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+  requirementAnalysis: (requirement: string) =>
+    request<RequirementAnalysis>("/requirement-analysis", {
+      method: "POST",
+      body: JSON.stringify({ requirement }),
+    }),
+  discovery: (requirement: string, limit = 8) =>
+    request<DiscoveryCandidate[]>("/discovery", {
+      method: "POST",
+      body: JSON.stringify({ requirement, limit }),
+    }),
+  confirmation: (
+    requirement: string,
+    candidateRepos: string[],
+    evidence: Record<string, [string, number][]>,
+  ) =>
+    request<ConfirmationSummary>("/confirmation", {
+      method: "POST",
+      body: JSON.stringify({
+        requirement,
+        candidate_repos: candidateRepos,
+        discovery_evidence: evidence,
+        limit: 15,
+      }),
+    }),
+  integration: (requirement: string, confirmation: ConfirmationSummary) =>
+    request<IntegratedPlan>("/integration", {
+      method: "POST",
+      body: JSON.stringify({ requirement, confirmation }),
+    }),
+  materialize: (payload: MaterializePayload) =>
+    request<MaterializeResult>("/bridge/materialize", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
   reviews: (status = "") =>
     request<ReviewRequest[]>(
