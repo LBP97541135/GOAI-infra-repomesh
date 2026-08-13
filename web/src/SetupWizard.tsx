@@ -25,6 +25,8 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
   const [retryJob, setRetryJob] = useState<OnboardingJob | null>(null)
   const [results, setResults] = useState<RepositoryOnboardResult['repositories']>([])
   const [organizationId, setOrganizationId] = useState<string>(() => crypto.randomUUID())
+  const [orgName, setOrgName] = useState('')
+  const [orgProvider, setOrgProvider] = useState<'github' | 'gitlab'>('github')
   const [leaderName, setLeaderName] = useState('organization-leader')
   const [orgUrl, setOrgUrl] = useState('')
   const [token, setToken] = useState('')
@@ -73,7 +75,9 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
   const createLeader = async () => {
     setError('')
     try {
-      await api.createNativeAgent({ organization_id: organizationId, role: 'organization_leader', resource_name: leaderName, idempotency_key: `setup-org-leader:${organizationId}` })
+      const organization = await api.createOrganization({ name: orgName.trim(), scm_provider: orgProvider })
+      setOrganizationId(organization.id)
+      await api.createNativeAgent({ organization_id: organization.id, role: 'organization_leader', resource_name: leaderName, idempotency_key: `setup-org-leader:${organization.id}` })
       await refresh()
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Organization Leader 创建失败') }
   }
@@ -116,7 +120,7 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
         </SetupSection>
 
         <SetupSection icon={UserRoundCog} number="03" title="Organization Leader" copy="每个组织保留一个长期负责人，负责项目级拆解和仓库分工。">
-          {organizationLeader ? <div className="leader-ready"><span><Check size={17} /></span><div><strong>{organizationLeader.agentteams_resource_name}</strong><small>组织 {organizationLeader.organization_id.slice(0, 8)} · AgentTeams 已注册</small></div></div> : <div className="leader-form"><label>组织 ID<input value={organizationId} onChange={(event) => setOrganizationId(event.target.value)} /></label><label>Agent 名称<input value={leaderName} onChange={(event) => setLeaderName(event.target.value)} /></label><button className="primary" disabled={!organizationId || leaderName.length < 3 || !status?.checks.agentteams} onClick={createLeader}>创建负责人<ChevronRight size={14} /></button></div>}
+          {organizationLeader ? <div className="leader-ready"><span><Check size={17} /></span><div><strong>{organizationLeader.agentteams_resource_name}</strong><small>组织 {organizationLeader.organization_id.slice(0, 8)} · AgentTeams 已注册</small></div></div> : <div className="leader-form"><label>组织名称<input placeholder="例如：Acme Corp" value={orgName} onChange={(event) => setOrgName(event.target.value)} /></label><label>代码平台<select value={orgProvider} onChange={(event) => setOrgProvider(event.target.value as 'github' | 'gitlab')}><option value="github">GitHub</option><option value="gitlab">GitLab</option></select></label><label>Agent 名称<input value={leaderName} onChange={(event) => setLeaderName(event.target.value)} /></label><button className="primary" disabled={!orgName.trim() || leaderName.length < 3 || !status?.checks.agentteams} onClick={createLeader}>创建负责人<ChevronRight size={14} /></button></div>}
         </SetupSection>
 
         <SetupSection icon={GitBranch} number="04" title="接入仓库并创建 Team" copy="扫描组织仓库，为每个仓库创建长期 Leader、默认 Worker 和 AgentTeams Team。">

@@ -77,6 +77,17 @@ export type OnboardingJob = {
   error?: string | null;
 };
 
+export type Organization = {
+  id: string;
+  name: string;
+  slug: string;
+  scm_provider: "github" | "gitlab";
+  scm_organization_url: string | null;
+  default_model: string | null;
+  default_worker_count: number;
+  created_at: string;
+};
+
 export type ProjectTopology = {
   id: string;
   organization_id: string;
@@ -205,6 +216,8 @@ export const api = {
   setupStatus: () => request<SetupStatus>("/setup/status"),
   codingAgents: () => request<{ environment: string; note: string; adapters: CodingAgentProbe[] }>("/setup/coding-agents"),
   createNativeAgent: (data: object) => request<AgentPrincipal>("/agents/native", { method: "POST", body: JSON.stringify(data) }),
+  organizations: () => request<Organization[]>("/organizations"),
+  createOrganization: (data: object) => request<Organization>("/organizations", { method: "POST", body: JSON.stringify(data) }),
   onboardRepositories: (data: object) => request<RepositoryOnboardResult>("/setup/repositories/onboard", { method: "POST", body: JSON.stringify(data) }),
   createOnboardingJob: (data: object) => request<OnboardingJob>("/setup/repositories/onboarding-jobs", { method: "POST", body: JSON.stringify(data) }),
   onboardingJob: (jobId: string) => request<OnboardingJob>(`/setup/repositories/onboarding-jobs/${jobId}`),
