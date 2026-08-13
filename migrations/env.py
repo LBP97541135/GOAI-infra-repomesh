@@ -5,6 +5,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from repomesh.api.platform_setup import RepositoryOnboardingJobRecord
 from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipalRecord
 from repomesh.modules.collaboration.infrastructure import (
     CollaborationMessageRecord,
@@ -81,6 +82,7 @@ _REGISTERED_MODELS = (
     OutboxEventRecord,
     TraceLinkRecord,
     IdempotencyRecord,
+    RepositoryOnboardingJobRecord,
 )
 
 config = context.config
