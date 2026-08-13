@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from repomesh.api.platform_setup import recover_interrupted_onboarding_jobs
 from repomesh.api.router import api_router
 from repomesh.bootstrap.container import ApplicationContainer, AsyncCloseable
 from repomesh.integrations.agentteams import (
@@ -77,6 +78,7 @@ from repomesh_runner.telemetry import setup_tracing
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     try:
         await application.state.container.start()
+        await recover_interrupted_onboarding_jobs(application.state.container.database)
         yield
     finally:
         await application.state.container.close()

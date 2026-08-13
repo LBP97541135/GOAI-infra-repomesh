@@ -25,6 +25,11 @@ from repomesh.settings import get_settings
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
 
+# Statuses a job can still legitimately leave on its own. Anything in one of
+# these at process startup was orphaned by a restart (BackgroundTasks run
+# in-process) and can never progress, so it is swept to ``interrupted``.
+_NON_TERMINAL_JOB_STATUSES = ("queued", "running")
+
 
 class RepositoryOnboardingJobRecord(Base):
     __tablename__ = "repository_onboarding_jobs"
@@ -72,6 +77,31 @@ def _job_view(record: RepositoryOnboardingJobRecord) -> dict:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+async def recover_interrupted_onboarding_jobs(database) -> int:
+    """Flag onboarding jobs orphaned by a service restart so they can be retried.
+
+    Called once at startup. FastAPI ``BackgroundTasks`` execute in the same
+    process as the request, so a job still in a non-terminal status after a
+    restart has no runner behind it. We mark it ``interrupted`` (a status the
+    retry endpoint already accepts) rather than auto-resuming, because private
+    repositories need their access token re-supplied by an operator.
+    """
+    now = datetime.now(UTC)
+    async with database.transaction() as session:
+        records = (
+            await session.scalars(
+                select(RepositoryOnboardingJobRecord).where(
+                    RepositoryOnboardingJobRecord.status.in_(_NON_TERMINAL_JOB_STATUSES)
+                )
+            )
+        ).all()
+        for record in records:
+            record.status = "interrupted"
+            record.error = "onboarding was interrupted by a service restart; retry to resume"
+            record.updated_at = now
+    return len(records)
 
 
 async def _run_onboarding_job(
@@ -168,6 +198,17 @@ async def create_onboarding_job(
             raise HTTPException(
                 status_code=404,
                 detail="organization does not exist; create it before onboarding",
+            )
+        active = await session.scalar(
+            select(RepositoryOnboardingJobRecord).where(
+                RepositoryOnboardingJobRecord.organization_id == body.organization_id,
+                RepositoryOnboardingJobRecord.status.in_(_NON_TERMINAL_JOB_STATUSES),
+            )
+        )
+        if active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="an onboarding job is already in progress for this organization",
             )
         session.add(
             RepositoryOnboardingJobRecord(
