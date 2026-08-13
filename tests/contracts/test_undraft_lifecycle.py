@@ -9,7 +9,11 @@ from repomesh.integrations.scm.contracts import (
     PullRequestObservation,
     PullRequestState,
     RepositoryRef,
+    SCMAuthenticationError,
+    SCMConflict,
+    SCMNotFound,
     SCMProvider,
+    SCMRateLimited,
 )
 from repomesh.integrations.scm.delivery import ChangeSetSCMCoordinator
 from repomesh.integrations.scm.github import GitHubAdapter
@@ -32,9 +36,13 @@ def repository() -> RepositoryRef:
     return RepositoryRef(SCMProvider.GITHUB, "acme", "pricing")
 
 
+NODE_ID = "PR_kwDOAbCdEf4AbCdEf"
+
+
 def pull_payload(*, draft: bool = True, state: str = "open") -> dict:
     return {
         "number": 42,
+        "node_id": NODE_ID,
         "html_url": "https://github.com/acme/pricing/pull/42",
         "state": state,
         "draft": draft,
@@ -42,6 +50,16 @@ def pull_payload(*, draft: bool = True, state: str = "open") -> dict:
         "head": {"ref": "repomesh/pricing", "sha": "a" * 40},
         "base": {"ref": "main", "sha": "b" * 40},
         "mergeable": True,
+    }
+
+
+def mark_ready_payload(*, is_draft: bool = False) -> dict:
+    return {
+        "data": {
+            "markPullRequestReadyForReview": {
+                "pullRequest": {"number": 42, "isDraft": is_draft}
+            }
+        }
     }
 
 
@@ -80,41 +98,142 @@ class FakeCommandService:
         self.commands.append(command)
 
 
-@pytest.mark.asyncio
-async def test_ready_for_review_patches_draft_false() -> None:
-    requests: list[httpx.Request] = []
-    responses = iter([pull_payload(draft=True), pull_payload(draft=False)])
+def undraft_transport(
+    requests: list[httpx.Request],
+    *,
+    draft: bool = True,
+    state: str = "open",
+    graphql: dict | None = None,
+) -> httpx.AsyncClient:
+    """REST reads answer with the PR, /graphql answers with ``graphql``."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json=next(responses))
+        if request.url.path.endswith("/graphql"):
+            return httpx.Response(200, json=graphql if graphql is not None else {})
+        return httpx.Response(200, json=pull_payload(draft=draft, state=state))
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_ready_for_review_promotes_through_the_graphql_mutation() -> None:
+    """REST has no way to undraft; the mutation is the only thing that works."""
+
+    requests: list[httpx.Request] = []
+    client = undraft_transport(requests, graphql=mark_ready_payload())
     adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
 
     result = await adapter.ready_for_review(repository(), 42, idempotency_key="undraft:1")
 
-    assert [request.method for request in requests] == ["GET", "PATCH"]
-    assert json.loads(requests[1].content) == {"draft": False}
+    assert [request.method for request in requests] == ["GET", "POST"]
+    assert requests[0].url.path == "/repos/acme/pricing/pulls/42"
+    assert requests[1].url.path == "/graphql"
+    body = json.loads(requests[1].content)
+    assert "markPullRequestReadyForReview" in body["query"]
+    # The node id is a variable, never interpolated into the query text.
+    assert body["variables"] == {"pullRequestId": NODE_ID}
+    assert NODE_ID not in body["query"]
+    assert requests[1].headers["Authorization"] == "Bearer installation-token"
+    # The PATCH that silently did nothing is gone.
+    assert "PATCH" not in [request.method for request in requests]
     assert result.draft is False
+    assert result.number == 42
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_mutation_that_leaves_the_pr_draft_is_not_a_success() -> None:
+    """The defect this method exists to stop: 200 OK, nothing changed.
+
+    GitHub answered 200 to ``PATCH {"draft": false}`` for as long as RepoMesh
+    has had this adapter, and every undraft on every path reported success
+    while the pull request stayed draft. A promotion is only promoted when the
+    provider says so.
+    """
+
+    requests: list[httpx.Request] = []
+    client = undraft_transport(requests, graphql=mark_ready_payload(is_draft=True))
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    with pytest.raises(SCMConflict, match="still a draft"):
+        await adapter.ready_for_review(repository(), 42, idempotency_key="undraft:1")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_mutation_answering_without_the_pull_request_is_not_a_success() -> None:
+    requests: list[httpx.Request] = []
+    client = undraft_transport(
+        requests, graphql={"data": {"markPullRequestReadyForReview": None}}
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    with pytest.raises(SCMConflict, match="still a draft"):
+        await adapter.ready_for_review(repository(), 42, idempotency_key="undraft:1")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("NOT_FOUND", SCMNotFound),
+        ("FORBIDDEN", SCMAuthenticationError),
+        ("UNAUTHORIZED", SCMAuthenticationError),
+        ("RATE_LIMITED", SCMRateLimited),
+        ("UNPROCESSABLE", SCMConflict),
+        ("", SCMConflict),
+    ],
+)
+async def test_graphql_errors_arrive_as_200_and_are_mapped_honestly(
+    kind: str, expected: type[Exception]
+) -> None:
+    """GraphQL reports failures inside a 200, so status code alone says nothing."""
+
+    requests: list[httpx.Request] = []
+    client = undraft_transport(
+        requests,
+        graphql={
+            "data": None,
+            "errors": [{"type": kind, "message": "Could not resolve to a node"}],
+        },
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    with pytest.raises(expected) as error:
+        await adapter.ready_for_review(repository(), 42, idempotency_key="undraft:1")
+    # GitHub's own words survive the mapping -- on SCMNotFound they live in
+    # ``detail``, the same place its REST 404s put them.
+    carried = f"{error.value} {getattr(error.value, 'detail', '')}"
+    assert "Could not resolve to a node" in carried
     await client.aclose()
 
 
 @pytest.mark.asyncio
 async def test_ready_for_review_is_noop_when_pr_not_draft() -> None:
     requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(200, json=pull_payload(draft=False))
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client = undraft_transport(requests, draft=False)
     adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
 
     result = await adapter.ready_for_review(repository(), 42, idempotency_key="undraft:1")
 
     assert [request.method for request in requests] == ["GET"]
+    assert not [request for request in requests if request.url.path.endswith("/graphql")]
     assert result.draft is False
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ready_for_review_leaves_a_closed_pull_request_alone() -> None:
+    requests: list[httpx.Request] = []
+    client = undraft_transport(requests, state="closed")
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    result = await adapter.ready_for_review(repository(), 42, idempotency_key="undraft:1")
+
+    assert [request.method for request in requests] == ["GET"]
+    assert result.state is PullRequestState.CLOSED
     await client.aclose()
 
 

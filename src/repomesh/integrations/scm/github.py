@@ -3,6 +3,7 @@ import hmac
 import inspect
 import json
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ from .contracts import (
     RepositoryRef,
     SCMAuthenticationError,
     SCMConflict,
+    SCMError,
     SCMNotFound,
     SCMProvider,
     SCMRateLimited,
@@ -27,6 +29,28 @@ from .contracts import (
 
 _UNPROTECTED_BRANCH_MESSAGE = "branch not protected"
 _MISSING_BRANCH_MESSAGE = "branch not found"
+
+_MARK_READY_FOR_REVIEW = """
+mutation MarkReadyForReview($pullRequestId: ID!) {
+  markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) {
+    pullRequest {
+      number
+      isDraft
+    }
+  }
+}
+""".strip()
+"""Promote a draft pull request to ready-for-review.
+
+There is no REST equivalent. ``PATCH /repos/{owner}/{repo}/pulls/{number}``
+does not document a ``draft`` parameter, and sending one anyway is worse than
+an error: GitHub answers 200 with an unchanged pull request. RepoMesh believed
+that 200 for as long as this adapter has existed -- every undraft on every
+path was a no-op that reported success.
+
+The node id travels as a GraphQL variable rather than being interpolated into
+the query text, so a pull request id can never be read as query syntax.
+"""
 
 
 class GitHubAdapter:
@@ -228,17 +252,41 @@ class GitHubAdapter:
     async def ready_for_review(
         self, repository: RepositoryRef, number: int, *, idempotency_key: str
     ) -> PullRequestObservation:
-        current = await self.get_pull_request(repository, number)
+        """Promote a draft pull request, and refuse to claim success unseen.
+
+        Two remote calls: the REST read is the idempotency guard (a PR that is
+        already ready, closed or merged is left alone, which is what makes a
+        repeated dispatch safe), and it also yields the ``node_id`` the GraphQL
+        mutation needs. The mutation is the only thing that actually promotes.
+        """
+
+        payload = await self._request("GET", repository, f"/pulls/{number}")
+        current = self._observation(repository, payload)
         if not current.draft or current.state is not PullRequestState.OPEN:
             return current
-        payload = await self._request(
-            "PATCH",
+        node_id = str(payload.get("node_id") or "").strip()
+        if not node_id:
+            raise SCMConflict("GitHub pull request carries no node id to promote")
+        data = await self._graphql(
             repository,
-            f"/pulls/{number}",
-            body={"draft": False},
+            _MARK_READY_FOR_REVIEW,
+            {"pullRequestId": node_id},
             idempotency_key=idempotency_key,
         )
-        return self._observation(repository, payload)
+        promoted = (data.get("markPullRequestReadyForReview") or {}).get("pullRequest") or {}
+        if promoted.get("isDraft") is not False:
+            # The whole reason this method exists. A 200 that changed nothing
+            # is not a success, and reporting it as one is how the undraft
+            # stayed broken through every path for as long as it did.
+            raise SCMConflict(
+                f"GitHub accepted markPullRequestReadyForReview for PR #{number} "
+                "but the pull request is still a draft"
+            )
+        # The mutation is the authority on the field it just changed, and the
+        # GET above is the authority on everything else. A second GET would
+        # only add a round trip and a chance to read GitHub's replication lag
+        # as a failure.
+        return replace(current, draft=False)
 
     async def update_pull_request(
         self, repository: RepositoryRef, number: int, *, body: str, idempotency_key: str
@@ -321,6 +369,59 @@ class GitHubAdapter:
         body: dict[str, object] | None = None,
         idempotency_key: str | None = None,
     ) -> Any:
+        headers = await self._headers(repository, idempotency_key)
+        url = f"{repository.api_base.rstrip('/')}/repos/{repository.owner}/{repository.name}{path}"
+        try:
+            response = await self._client.request(
+                method, url, headers=headers, params=params, json=body
+            )
+        except httpx.HTTPError as error:
+            raise SCMConflict(f"GitHub request failed: {type(error).__name__}") from error
+        self._raise_for_status(response)
+        return response.json()
+
+    async def _graphql(
+        self,
+        repository: RepositoryRef,
+        query: str,
+        variables: dict[str, object],
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """POST one GraphQL operation and read GitHub's 200-with-errors shape.
+
+        GraphQL does not use status codes to report operation failures: a
+        rejected mutation still answers 200, with the reason in an ``errors``
+        array beside a null ``data``. Returning that as success would be the
+        same false-success this adapter is here to stop making, so the array is
+        mapped onto the SCM error taxonomy by its ``type`` and raised.
+        """
+
+        headers = await self._headers(repository, idempotency_key)
+        url = f"{repository.api_base.rstrip('/')}/graphql"
+        try:
+            response = await self._client.post(
+                url, headers=headers, json={"query": query, "variables": variables}
+            )
+        except httpx.HTTPError as error:
+            raise SCMConflict(f"GitHub GraphQL request failed: {type(error).__name__}") from error
+        self._raise_for_status(response)
+        try:
+            body = response.json()
+        except (json.JSONDecodeError, ValueError) as error:
+            raise SCMConflict("GitHub GraphQL answered with a body that is not JSON") from error
+        if not isinstance(body, dict):
+            raise SCMConflict("GitHub GraphQL answered with a body that is not an object")
+        if body.get("errors"):
+            raise self._graphql_error(body["errors"])
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise SCMConflict("GitHub GraphQL answered without data")
+        return data
+
+    async def _headers(
+        self, repository: RepositoryRef, idempotency_key: str | None = None
+    ) -> dict[str, str]:
         supplied = self._token_provider(repository)
         token = (await supplied if inspect.isawaitable(supplied) else supplied).strip()
         if not token:
@@ -332,13 +433,9 @@ class GitHubAdapter:
         }
         if idempotency_key:
             headers["X-RepoMesh-Idempotency-Key"] = idempotency_key
-        url = f"{repository.api_base.rstrip('/')}/repos/{repository.owner}/{repository.name}{path}"
-        try:
-            response = await self._client.request(
-                method, url, headers=headers, params=params, json=body
-            )
-        except httpx.HTTPError as error:
-            raise SCMConflict(f"GitHub request failed: {type(error).__name__}") from error
+        return headers
+
+    def _raise_for_status(self, response: httpx.Response) -> None:
         remaining = response.headers.get("X-RateLimit-Remaining")
         if response.status_code in {401, 403} and remaining != "0":
             raise SCMAuthenticationError("GitHub rejected the installation token")
@@ -355,7 +452,25 @@ class GitHubAdapter:
             )
         if response.status_code >= 400:
             raise SCMConflict(f"GitHub rejected the operation: {self._error_message(response)}")
-        return response.json()
+
+    @staticmethod
+    def _graphql_error(errors: Any) -> SCMError:
+        """Map a GraphQL ``errors`` array onto the adapter's error taxonomy."""
+
+        entries = [item for item in (errors if isinstance(errors, list) else [errors])
+                   if isinstance(item, dict)]
+        kinds = {str(item.get("type") or "").strip().upper() for item in entries}
+        message = "; ".join(
+            str(item.get("message")).strip() for item in entries if item.get("message")
+        )
+        message = message or "GitHub GraphQL reported an error without a message"
+        if "RATE_LIMITED" in kinds:
+            return SCMRateLimited(f"GitHub GraphQL rate limit exceeded: {message}")
+        if kinds & {"FORBIDDEN", "UNAUTHORIZED"}:
+            return SCMAuthenticationError(f"GitHub GraphQL refused the operation: {message}")
+        if "NOT_FOUND" in kinds:
+            return SCMNotFound("GitHub GraphQL did not find the pull request", detail=message)
+        return SCMConflict(f"GitHub GraphQL rejected the operation: {message}")
 
     @staticmethod
     def _error_message(response: httpx.Response) -> str:
