@@ -200,6 +200,9 @@ class ApplicationContainer:
                 topology = await store.get(project_id)
                 return topology.to_view() if topology else None
 
+            async def list_views(self) -> tuple[ProjectAgentTopologyView, ...]:
+                return tuple(topology.to_view() for topology in await store.list_all())
+
         return _Adapter()
 
     def requirement_analyzer(self) -> RequirementAnalyzer | None:

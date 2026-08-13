@@ -259,6 +259,13 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
         assert created.status_code == 201
         assert created.json()["execution_mode"] == "supervised"
 
+        projects = client.get("/api/v1/projects", headers=admin_headers)
+        assert projects.status_code == 200
+        assert projects.json()[0]["project_id"] == str(project_id)
+        assert projects.json()[0]["organization_leader_id"] == str(
+            organization_leader.id
+        )
+
         reviewer_login = client.post(
             "/api/v1/auth/login",
             json={"username": "reviewer", "password": "reviewer-password-123"},

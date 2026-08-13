@@ -146,9 +146,15 @@ class InMemoryProjectTopologyStore:
     async def get(self, project_id: UUID) -> ProjectAgentTopology | None:
         return self._topologies.get(project_id)
 
+    async def list_all(self) -> tuple[ProjectAgentTopology, ...]:
+        return tuple(self._topologies.values())
+
     async def get_view(self, project_id: UUID):
         topology = await self.get(project_id)
         return topology.to_view() if topology is not None else None
+
+    async def list_views(self):
+        return tuple(item.to_view() for item in await self.list_all())
 
     async def get_by_idempotency_key(
         self, idempotency_key: str
@@ -314,9 +320,36 @@ class PostgresProjectTopologyStore:
             ).all()
         return self._to_domain(record, teams)
 
+    async def list_all(self) -> tuple[ProjectAgentTopology, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(ProjectAgentTopologyRecord).order_by(
+                        ProjectAgentTopologyRecord.project_id
+                    )
+                )
+            ).all()
+            team_records = (
+                await session.scalars(
+                    select(ProjectRepositoryTeamRecord).order_by(
+                        ProjectRepositoryTeamRecord.repository_id
+                    )
+                )
+            ).all()
+        teams_by_topology: dict[UUID, list[ProjectRepositoryTeamRecord]] = {}
+        for team in team_records:
+            teams_by_topology.setdefault(team.topology_id, []).append(team)
+        return tuple(
+            self._to_domain(record, teams_by_topology.get(record.id, ()))
+            for record in records
+        )
+
     async def get_view(self, project_id: UUID):
         topology = await self.get(project_id)
         return topology.to_view() if topology is not None else None
+
+    async def list_views(self):
+        return tuple(item.to_view() for item in await self.list_all())
 
     async def get_by_idempotency_key(
         self, idempotency_key: str

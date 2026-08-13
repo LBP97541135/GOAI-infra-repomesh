@@ -136,6 +136,8 @@ class ProjectAgentTopologyView:
 class ProjectTopologyReader(Protocol):
     async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None: ...
 
+    async def list_views(self) -> tuple[ProjectAgentTopologyView, ...]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class CheckpointGateDecision:

@@ -511,6 +511,19 @@ async def get_project_topology(project_id: UUID, request: Request) -> dict:
     return asdict(topology)
 
 
+@router.get("/projects")
+async def list_projects(request: Request) -> list[dict]:
+    actor = await _account(request)
+    projects = await request.app.state.container.topology_reader().list_views()
+    if not actor.is_admin:
+        projects = tuple(
+            project
+            for project in projects
+            if any(grant.human_principal_id == actor.id for grant in project.human_grants)
+        )
+    return [asdict(project) for project in projects]
+
+
 @router.get("/projects/{project_id}/checkpoint-gate")
 async def evaluate_checkpoint_gate(
     project_id: UUID,
