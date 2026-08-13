@@ -1158,3 +1158,111 @@ async def test_a_failed_task_projects_its_reason_and_contributes_no_diff() -> No
     assert task["evidence"]["summary_text"] == reason
     assert task["evidence"]["verified"] is False
     assert detail["diffs"] == []
+
+
+class LiveChangeSets:
+    """The composition root's read-model change-set source, verbatim.
+
+    ``container.py`` wires ``merge_gate`` straight to
+    ``DeliveryService.evaluate_merge_gate``. Every other merge-gate test in
+    this file stubs that call, which is exactly the seam a real regression
+    would hide behind, so this one runs the real evaluator.
+    """
+
+    def __init__(self, delivery, delivery_id: UUID) -> None:
+        self._delivery = delivery
+        self._delivery_id = delivery_id
+
+    async def for_delivery(self, delivery_id: UUID):
+        from repomesh.modules.delivery import delivery_change_set_key
+
+        return await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+
+    async def merge_gate(self, change_set_id: UUID, repository_id: UUID):
+        return await self._delivery.evaluate_merge_gate(change_set_id, repository_id)
+
+
+@pytest.mark.asyncio
+async def test_a_reviewable_candidate_projects_a_real_merge_gate_verdict() -> None:
+    """The decision has to be *visible*, and 'blocked, pending review' is a decision.
+
+    The live shape after a publish converges: PR open, non-draft, required CI
+    green, one approval required and none given. The honest answer is
+    ``allowed: false`` with reasons -- and it must reach the read model, since
+    ``null`` there means "the question is moot", which this is not.
+
+    ``merge_gate`` is computed on read (``attach_merge_gates``), never stored,
+    so what makes it appear is the projection call, not anything a reconciler
+    sweep does or does not write.
+    """
+
+    from repomesh.modules.delivery import (
+        DeliveryService,
+        InMemoryChangeSetStore,
+        delivery_change_set_key,
+    )
+    from repomesh.modules.delivery.contracts import (
+        CIObservationCommand,
+        PrepareChangeSetCommand,
+        PullRequestObservationCommand,
+        RepositoryCandidateInput,
+    )
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    leader_task_id = uuid4()
+    plan = _plan(project_id, repository_id, leader_task_id, ExecutionPlanStatus.COMPLETED)
+    worker = _worker(project_id, repository_id, leader_task_id)
+
+    delivery = DeliveryService(InMemoryChangeSetStore())
+    change_set = await delivery.prepare(
+        PrepareChangeSetCommand(
+            organization_id=uuid4(),
+            project_id=project_id,
+            created_by_agent_id=uuid4(),
+            title="Live shape",
+            validation_snapshot_id=uuid4(),
+            candidates=(
+                RepositoryCandidateInput(
+                    repository_id=repository_id,
+                    task_id=worker.id,
+                    commit_sha="a" * 40,
+                    base_sha="b" * 40,
+                    branch_name="repomesh/a762abba/9dfa78f2",
+                    required_checks=("unit-tests",),
+                    required_approvals=1,
+                ),
+            ),
+        ),
+        idempotency_key=delivery_change_set_key(plan.id),
+    )
+    await delivery.observe_pull_request(
+        PullRequestObservationCommand(
+            change_set.id,
+            repository_id,
+            3,
+            "https://github.com/acme/pricing/pull/3",
+            "a" * 40,
+        )
+    )
+    current = await delivery.observe_ci(
+        CIObservationCommand(change_set.id, repository_id, True, "901", "passed", "unit-tests")
+    )
+    assert current.repositories[0].status is RepositoryDeliveryStatus.REVIEW_PENDING
+
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        LiveChangeSets(delivery, plan.id),
+        StubArchives(),
+    )
+
+    detail = await service.attach_merge_gates(await service.get_delivery(plan.id))
+
+    gate = detail["change_set"]["repositories"][0]["merge_gate"]
+    assert gate is not None, "a reviewable candidate's gate verdict must be visible"
+    assert gate["allowed"] is False
+    assert "required reviews have not passed" in gate["reasons"]
