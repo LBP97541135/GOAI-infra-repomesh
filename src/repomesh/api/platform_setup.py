@@ -5,13 +5,14 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field, HttpUrl
-from sqlalchemy import JSON, DateTime, Integer, String, Text, select
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from repomesh.api.human_control import onboard_repository_agent_team
 from repomesh.api.human_control_models import RepositoryAgentTeamOnboard
+from repomesh.api.organizations import load_organization
 from repomesh.integrations.coding_agents import build_default_registry
 from repomesh.modules.repository_intelligence.application import RegisterRepository
 from repomesh.modules.repository_intelligence.application.scan_remote import scan_org
@@ -30,7 +31,11 @@ class RepositoryOnboardingJobRecord(Base):
     __table_args__ = ({"schema": "platform"},)
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    organization_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("platform.organizations.id"),
+        index=True,
+    )
     org_url: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), index=True)
     phase: Mapped[str] = mapped_column(String(30))
@@ -159,6 +164,11 @@ async def create_onboarding_job(
     job_id = uuid4()
     now = datetime.now(UTC)
     async with request.app.state.container.database.transaction() as session:
+        if await load_organization(session, body.organization_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail="organization does not exist; create it before onboarding",
+            )
         session.add(
             RepositoryOnboardingJobRecord(
                 id=job_id,
@@ -240,6 +250,12 @@ async def onboard_organization_repositories(
     actor = await _authenticated_account(request)
     if not actor.is_admin:
         raise HTTPException(status_code=403, detail="local administrator permission is required")
+    async with request.app.state.container.database.transaction() as session:
+        if await load_organization(session, body.organization_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail="organization does not exist; create it before onboarding",
+            )
     platform = detect_platform(str(body.org_url))
     if platform.value == "local":
         raise HTTPException(status_code=400, detail="organization URL must be GitHub or GitLab")
