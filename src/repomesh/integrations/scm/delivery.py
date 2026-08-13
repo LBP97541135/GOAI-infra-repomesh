@@ -50,6 +50,32 @@ Not an arbitrary "non-terminal" set: it is exactly what ``RepositoryDelivery
 turn a stranded publish into a DeliveryConflict on every sweep.
 """
 
+_UNDRAFTABLE_STATUSES = frozenset(
+    {
+        RepositoryDeliveryStatus.PR_OPEN,
+        RepositoryDeliveryStatus.CI_PENDING,
+        RepositoryDeliveryStatus.REVIEW_PENDING,
+        RepositoryDeliveryStatus.READY_TO_MERGE,
+    }
+)
+"""Candidate states in which promoting a draft pull request is still meaningful.
+
+This used to be ``PR_OPEN`` alone, which quietly made undrafting depend on the
+*order events arrived in* rather than on the candidate's actual state:
+``observe_ci`` recomputes the status on every observation
+(``RepositoryDelivery._readiness_status``), so the first CI fact moves a
+candidate out of PR_OPEN forever. On the webhook path that was survivable by
+luck -- a ``pull_request`` opened event usually arrives before the first
+``check_run``, and undraft runs after every observation. On the reconciler's
+polling path there is no luck to have: one sweep opens the PR *and* records
+CI, so PR_OPEN never exists at any moment undraft could observe it.
+
+CI_FAILED and REVIEW_CHANGES_REQUESTED are excluded on purpose. Those
+candidates are on their way back to a Worker, and draft is the honest signal
+for "not ready to be looked at"; the merge-request and compensation states
+have nothing left to promote.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class OpenChangeSetPullRequestCommand:
@@ -367,15 +393,20 @@ class ChangeSetSCMCoordinator:
         """Promote draft PRs to ready-for-review once upstream dependencies merged.
 
         A candidate stays draft while any ``depends_on`` repository is not yet
-        merged; once the upstream merge observation arrives the next replay
-        cycle issues an ``UNDRAFT_PULL_REQUEST`` command for every open draft
-        PR. Commands are idempotent per PR, so repeated observations never
-        enqueue a duplicate.
+        merged; once the upstream merge is observed, an
+        ``UNDRAFT_PULL_REQUEST`` command is issued for every open draft PR.
+        A candidate with no dependencies is eligible immediately -- ``all()``
+        over an empty ``depends_on`` is vacuously true, which is exactly right:
+        nothing upstream can be waited for.
+
+        Commands are idempotent per PR (``undraft:<change set>:<repo>:<pr>``),
+        and the direct ``ready_for_review`` path re-reads the PR and skips the
+        PATCH when it is no longer draft, so repeated calls never duplicate.
         """
 
         change_set = await self._delivery.get(change_set_id)
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
-            if candidate.status is not RepositoryDeliveryStatus.PR_OPEN:
+            if candidate.status not in _UNDRAFTABLE_STATUSES:
                 continue
             if candidate.pull_request_number is None:
                 continue
@@ -599,6 +630,17 @@ class ChangeSetSCMCoordinator:
             gate = await self._delivery.evaluate_merge_gate(change_set_id, candidate.repository_id)
             if gate.allowed:
                 current = await self.merge_when_allowed(change_set_id, candidate.repository_id)
+        # Draft-ness is the sweep's third convergence duty, and it belongs
+        # here rather than before the loop. ``undraft_when_allowed`` asks
+        # whether every ``depends_on`` repository is MERGED, and the loop above
+        # is precisely what discovers this sweep's merges -- running it first
+        # would judge a candidate against dependency state one full interval
+        # stale. Nothing is lost by promoting after the gate: this sweep's PR
+        # observation was read while the PR was still draft, and in the wired
+        # deployment the promotion travels through the SCM command queue
+        # anyway, so no ordering inside one sweep could have merged it here.
+        # The next sweep sees a non-draft PR and gates it.
+        await self.undraft_when_allowed(change_set_id)
         return current
 
     @staticmethod

@@ -19,14 +19,20 @@ from repomesh.integrations.scm.contracts import (
 )
 from repomesh.integrations.scm.delivery import ChangeSetSCMCoordinator
 from repomesh.integrations.scm.reconciler import DeliveryReconciler
-from repomesh.modules.delivery import DeliveryService, InMemoryChangeSetStore
+from repomesh.modules.delivery import (
+    DeliveryService,
+    InMemoryChangeSetStore,
+    SCMCommandService,
+)
 from repomesh.modules.delivery.contracts import (
     ChangeSetStatus,
     PrepareChangeSetCommand,
     PullRequestObservationCommand,
     RepositoryCandidateInput,
     RepositoryDeliveryStatus,
+    SCMCommandKind,
 )
+from repomesh.modules.delivery.infrastructure import InMemorySCMCommandStore
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.infrastructure import (
     InMemoryRepositoryCatalog,
@@ -395,3 +401,208 @@ async def test_a_second_sweep_does_not_open_a_second_pull_request() -> None:
     assert len(adapter.created) == 1
     assert adapter.branch_reads == 1
     assert (await service.get(change_set_id)).repositories[0].pull_request_number == 77
+
+
+class DraftPullRequestAdapter:
+    """Open draft PRs with green CI and no reviews -- the live post-publish shape.
+
+    ``ready_for_review`` mirrors ``GitHubAdapter.ready_for_review``: it reads
+    the PR first and only promotes one that is still draft, so ``ready_calls``
+    counts attempts while ``promotions`` counts what actually reached the
+    remote.
+    """
+
+    def __init__(self, *, drafts: dict[int, bool] | None = None) -> None:
+        self.draft_by_number = dict(drafts if drafts is not None else {3: True})
+        self.ready_calls: list[str] = []
+        self.promotions: list[int] = []
+
+    async def get_pull_request(
+        self, repository: RepositoryRef, number: int
+    ) -> PullRequestObservation:
+        return PullRequestObservation(
+            provider=SCMProvider.GITHUB,
+            repository=repository,
+            number=number,
+            url=f"https://github.com/acme/pricing/pull/{number}",
+            state=PullRequestState.OPEN,
+            draft=self.draft_by_number.get(number, False),
+            head_branch="repomesh/a762abba/9dfa78f2",
+            head_sha="a" * 40,
+            base_branch="main",
+            base_sha="b" * 40,
+            mergeable=True,
+        )
+
+    async def list_check_runs(
+        self, repository: RepositoryRef, head_sha: str
+    ) -> tuple[CheckRunObservation, ...]:
+        return (CheckRunObservation("901", "unit-tests", head_sha, True, True, "passed"),)
+
+    async def list_pull_request_reviews(
+        self, repository: RepositoryRef, number: int
+    ) -> tuple[PullRequestReviewObservation, ...]:
+        return ()
+
+    async def ready_for_review(
+        self, repository: RepositoryRef, number: int, *, idempotency_key: str
+    ) -> PullRequestObservation:
+        self.ready_calls.append(idempotency_key)
+        if self.draft_by_number.get(number, False):
+            self.promotions.append(number)
+            self.draft_by_number[number] = False
+        return await self.get_pull_request(repository, number)
+
+    async def merge_pull_request(self, command: MergePullRequestCommand) -> MergePullRequestResult:
+        raise AssertionError("a candidate awaiting review must never be merged")
+
+
+async def draft_delivery(*, with_dependency: bool = False):
+    """A ChangeSet whose PRs are open and draft, exactly as handle_batch leaves them."""
+
+    catalog = InMemoryRepositoryCatalog()
+    consumer_id = uuid4()
+    await catalog.add(
+        RepositoryProfile(id=consumer_id, name="pricing", url="https://github.com/acme/pricing")
+    )
+    producer_id = uuid4()
+    if with_dependency:
+        await catalog.add(
+            RepositoryProfile(id=producer_id, name="api", url="https://github.com/acme/api")
+        )
+
+    def input_for(repository_id, branch, depends_on=()):
+        return RepositoryCandidateInput(
+            repository_id=repository_id,
+            task_id=uuid4(),
+            commit_sha="a" * 40,
+            base_sha="b" * 40,
+            branch_name=branch,
+            depends_on=tuple(depends_on),
+            required_checks=("unit-tests",),
+            required_approvals=1,
+        )
+
+    candidates = (
+        (input_for(producer_id, "repomesh/api"),) if with_dependency else ()
+    ) + (
+        input_for(
+            consumer_id,
+            "repomesh/a762abba/9dfa78f2",
+            depends_on=(producer_id,) if with_dependency else (),
+        ),
+    )
+    store = InMemoryChangeSetStore()
+    service = DeliveryService(store)
+    change_set = await service.prepare(
+        PrepareChangeSetCommand(
+            organization_id=uuid4(),
+            project_id=uuid4(),
+            created_by_agent_id=uuid4(),
+            title="Draft delivery",
+            validation_snapshot_id=uuid4(),
+            candidates=candidates,
+        ),
+        idempotency_key="draft-delivery",
+    )
+    if with_dependency:
+        await service.observe_pull_request(
+            PullRequestObservationCommand(
+                change_set.id, producer_id, 2, "https://github.com/acme/api/pull/2", "a" * 40
+            )
+        )
+    await service.observe_pull_request(
+        PullRequestObservationCommand(
+            change_set.id,
+            consumer_id,
+            3,
+            "https://github.com/acme/pricing/pull/3",
+            "a" * 40,
+        )
+    )
+    return store, catalog, change_set.id, producer_id, consumer_id
+
+
+@pytest.mark.asyncio
+async def test_sweep_undrafts_a_candidate_whose_ci_already_moved_it_past_pr_open() -> None:
+    """The whole point: the reconciler is the only thing driving this deployment.
+
+    A candidate with no dependencies is eligible the moment its PR exists --
+    ``all()`` over an empty ``depends_on`` is vacuously true -- and by the time
+    the sweep asks, this sweep's own CI observation has already moved it out of
+    PR_OPEN. Both halves have to hold or the PR stays draft forever.
+    """
+
+    store, catalog, change_set_id, _, consumer_id = await draft_delivery()
+    service = DeliveryService(store)
+    adapter = DraftPullRequestAdapter()
+    reconciler = DeliveryReconciler(service, ChangeSetSCMCoordinator(service, catalog, adapter))
+
+    await reconciler.run_once()
+
+    assert adapter.promotions == [3]
+    assert len(adapter.ready_calls) == 1
+    candidate = (await service.get(change_set_id)).repositories[0]
+    assert candidate.repository_id == consumer_id
+    # CI was recorded in the same sweep, so the status is no longer PR_OPEN --
+    # the exact state the old guard refused to promote.
+    assert candidate.status is RepositoryDeliveryStatus.REVIEW_PENDING
+
+
+@pytest.mark.asyncio
+async def test_a_second_sweep_does_not_promote_the_pull_request_twice() -> None:
+    store, catalog, change_set_id, _, _ = await draft_delivery()
+    service = DeliveryService(store)
+    adapter = DraftPullRequestAdapter()
+    reconciler = DeliveryReconciler(service, ChangeSetSCMCoordinator(service, catalog, adapter))
+
+    await reconciler.run_once()
+    await reconciler.run_once()
+    await reconciler.run_once()
+
+    # The remote is promoted once; the later attempts are the adapter's
+    # read-then-skip, which is where this path's idempotency lives.
+    assert adapter.promotions == [3]
+    assert len(adapter.ready_calls) == 3
+    assert (await service.get(change_set_id)).repositories[0].pull_request_number == 3
+
+
+@pytest.mark.asyncio
+async def test_repeated_sweeps_queue_exactly_one_undraft_command() -> None:
+    """The wired deployment's path: dedup by idempotency key at the queue."""
+
+    store, catalog, change_set_id, _, consumer_id = await draft_delivery()
+    service = DeliveryService(store)
+    commands = SCMCommandService(InMemorySCMCommandStore())
+    adapter = DraftPullRequestAdapter()
+    reconciler = DeliveryReconciler(
+        service,
+        ChangeSetSCMCoordinator(service, catalog, adapter, command_service=commands),
+    )
+
+    await reconciler.run_once()
+    await reconciler.run_once()
+
+    queued = await commands.list_dispatchable()
+    undrafts = [item for item in queued if item.kind is SCMCommandKind.UNDRAFT_PULL_REQUEST]
+    assert len(undrafts) == 1
+    assert undrafts[0].repository_id == consumer_id
+    assert undrafts[0].payload["pull_request_number"] == 3
+    assert undrafts[0].idempotency_key == f"undraft:{change_set_id}:{consumer_id}:3"
+    # The command service, not the adapter, is what deduplicated here.
+    assert adapter.ready_calls == []
+
+
+@pytest.mark.asyncio
+async def test_sweep_leaves_a_candidate_with_an_unmerged_dependency_draft() -> None:
+    store, catalog, _, _, _ = await draft_delivery(with_dependency=True)
+    service = DeliveryService(store)
+    adapter = DraftPullRequestAdapter(drafts={2: True, 3: True})
+    reconciler = DeliveryReconciler(service, ChangeSetSCMCoordinator(service, catalog, adapter))
+
+    await reconciler.run_once()
+
+    # The producer depends on nothing and is promoted; the consumer waits for
+    # the producer's merge, which has not happened.
+    assert adapter.promotions == [2]
+    assert adapter.draft_by_number[3] is True
