@@ -2,7 +2,7 @@ from dataclasses import asdict
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from repomesh.modules.change_orchestration import ExecutionPlaneUnavailable
@@ -26,9 +26,17 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     IntegratedPlan,
     TaskNode,
 )
+from repomesh.modules.repository_intelligence.contracts import (
+    PlanDiff,
+    diff_plan_graphs,
+)
 from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
+from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (
+    plan_graph_from_snapshot,
+)
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatusSnapshot
+from repomesh.settings import get_settings
 from repomesh.shared.workflow import WorkflowBlocked
 
 from .models import (
@@ -69,6 +77,19 @@ def get_catalog(request: Request) -> RepositoryCatalog:
 
 
 CatalogDependency = Annotated[RepositoryCatalog, Depends(get_catalog)]
+
+
+def _resolve_replan_mode(requested: str, auto_commit: bool) -> str:
+    """Resolve the replan request mode after ``auto`` (PR-4).
+
+    ``auto`` follows the server setting ``REPOMESH_REPLAN_AUTO_COMMIT``:
+    ``True`` preserves the pre-PR-4 behaviour (immediate commit); ``False``
+    requires an explicit approval round-trip (the ``auto`` request runs in
+    ``preview`` mode and a second call with ``mode=commit`` applies it).
+    """
+    if requested == "auto":
+        return "commit" if auto_commit else "preview"
+    return requested
 
 
 def _build_auto_card(body_card) -> AutoCard | None:  # noqa: ANN001
@@ -316,6 +337,9 @@ async def integrate_plan(body: IntegrationRequest, request: Request) -> Integrat
             for t in plan.task_dag
         ],
         execution_batches=[list(b) for b in plan.execution_batches],
+        # Single source of truth for PR-5 frontends: the graph carries nodes,
+        # edges and the materialised projections the top-level fields mirror.
+        graph=plan.graph,
     )
 
 
@@ -385,14 +409,22 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
 async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
     """Trigger a partial replan based on TM feedback.
 
-    Determines the affected repository set via dependency-graph reverse
-    traversal, supersedes the old tasks of those repositories, and (when an
-    integration service can be built) starts a new execution plan batch. The
-    collaboration interrupt notices are pushed by the API layer using the
-    ``affected_repos`` in the response.
+    The affected repository set is derived from the latest immutable
+    plan-layer snapshot (confirmed edges only) when one exists, falling back
+    to world-layer dependency-graph reverse traversal otherwise. In ``commit``
+    mode (the default when ``REPOMESH_REPLAN_AUTO_COMMIT`` is enabled) old
+    tasks of the affected repositories are superseded and, when an
+    integration service can be built, a new execution plan batch is started
+    and persisted as a new immutable snapshot — the response carries the
+    persisted snapshot ``plan_id`` and the graph ``diff``. In ``preview`` mode
+    the same change footprint and diff are computed with **zero side
+    effects**, so callers can approve before committing. The collaboration
+    interrupt notices are pushed by the API layer using the ``affected_repos``
+    in the response.
     """
 
     container = request.app.state.container
+    mode = _resolve_replan_mode(body.mode, get_settings().replan_auto_commit)
 
     # The integration step needs an LLM; without it the bridge still performs
     # impact analysis and supersede, but cannot produce a new local plan.
@@ -406,7 +438,8 @@ async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
 
     bridge = container.plan_execution_bridge()
 
-    # Build the dependency graph from the live catalog for impact analysis.
+    # World-layer graph as a fallback for impact analysis; the plan-layer
+    # snapshot (read inside the bridge) takes precedence when available.
     profiles = await container.repository_catalog.list()
     graph = DependencyGraphService(profiles) if profiles else None
 
@@ -423,6 +456,7 @@ async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
             integration_service=integration_service,
             confirmation_summary=confirmation_summary,
             graph=graph,
+            mode=mode,
         )
     except WorkflowBlocked as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
@@ -436,7 +470,53 @@ async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
         affected_repos=list(result.affected_repos),
         feedback_summary=result.feedback_summary,
         handoff_doc_ids=list(result.handoff_doc_ids),
+        plan_id=result.plan_id,
+        mode=mode,
+        diff=result.diff,
     )
+
+
+@router.get("/plans/{project_id}/diff", response_model=PlanDiff)
+async def diff_plan_versions(
+    project_id: UUID,
+    request: Request,
+    from_version: int | None = Query(default=None, alias="from", ge=1),
+    to_version: int | None = Query(default=None, alias="to", ge=1),
+) -> PlanDiff:
+    """Graph diff between two plan-layer snapshot versions (PR-4).
+
+    Pure read: zero side effects and idempotent. Defaults: ``to`` = the
+    latest version; ``from`` = the version immediately before ``to``. There
+    is no version 0, so a default ``from`` on a one-version project returns
+    404; the caller must then name both versions explicitly.
+    """
+
+    container = request.app.state.container
+    store = container.plan_snapshot_store()
+    versions = await store.list_all(project_id)
+    if not versions:
+        raise HTTPException(status_code=404, detail="no plan snapshots for project")
+    latest = versions[0].plan_version
+
+    to = latest if to_version is None else to_version
+    from_v = to - 1 if from_version is None else from_version
+
+    from_record = await store.get_by_version(project_id, from_v)
+    to_record = await store.get_by_version(project_id, to)
+    if to_record is None:
+        raise HTTPException(
+            status_code=404, detail=f"no plan snapshot v{to} for project"
+        )
+    if from_record is None:
+        raise HTTPException(
+            status_code=404, detail=f"no plan snapshot v{from_v} for project"
+        )
+    diff = diff_plan_graphs(
+        plan_graph_from_snapshot(from_record),
+        plan_graph_from_snapshot(to_record),
+    )
+    assert diff is not None  # both records exist, so both graphs exist
+    return diff
 
 
 # ---------------------------------------------------------------------------

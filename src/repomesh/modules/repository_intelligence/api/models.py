@@ -1,8 +1,10 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
+from repomesh.modules.repository_intelligence.contracts import PlanDiff, PlanGraph
 
 
 class AutoCardCreate(BaseModel):
@@ -159,6 +161,15 @@ class IntegratedPlanView(BaseModel):
     contracts: list[ContractSpecView]
     task_dag: list[TaskNodeView]
     execution_batches: list[list[str]]
+    graph: PlanGraph | None = Field(
+        default=None,
+        description=(
+            "The unified plan-layer dependency graph (nodes + edges + "
+            "materialised projections). Single source of truth: the top-level "
+            "``execution_batches`` / ``contracts`` / ``task_dag`` fields are "
+            "projections of this graph, and frontends render from it (PR-5)."
+        ),
+    )
 
 
 class MaterializeRequest(BaseModel):
@@ -199,6 +210,16 @@ class ReplanRequest(BaseModel):
     plan_version: int = Field(default=1, ge=1)
     requirement: str = Field(default="", max_length=20_000)
     idempotency_prefix: str = Field(min_length=1, max_length=100)
+    mode: Literal["auto", "preview", "commit"] = Field(
+        default="auto",
+        description=(
+            "How the replan executes. ``auto`` follows the server setting "
+            "``REPOMESH_REPLAN_AUTO_COMMIT`` (default: commit, preserving "
+            "pre-PR-4 behaviour). ``preview`` computes impact analysis and "
+            "the graph diff with zero side effects; ``commit`` forces the "
+            "full execution."
+        ),
+    )
     confirmation: ConfirmationSummaryView | None = Field(
         default=None,
         description=(
@@ -218,6 +239,26 @@ class ReplanResponse(BaseModel):
     affected_repos: list[str] = Field(default_factory=list)
     feedback_summary: str = ""
     handoff_doc_ids: list[UUID] = Field(default_factory=list)
+    plan_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Immutable plan-layer snapshot persisted for the re-planned "
+            "version. Present only when the replan produced a new plan and "
+            "the snapshot store was available."
+        ),
+    )
+    mode: Literal["preview", "commit"] = Field(
+        description="The effective mode that was executed (after ``auto`` resolution)."
+    )
+    diff: PlanDiff | None = Field(
+        default=None,
+        description=(
+            "Plan-layer graph diff between the previous snapshot and the "
+            "re-planned version. Present on commit when a new plan was "
+            "produced, and on preview (zero side effects). None for "
+            "cancel-only replans without a new graph."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,11 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     IntegratedPlan,
     TaskNode,
 )
+from repomesh.modules.repository_intelligence.contracts import (  # noqa: E402
+    GraphEdge,
+    GraphNode,
+    PlanGraph,
+)
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile  # noqa: E402
 from repomesh.modules.specification.contracts import (  # noqa: E402
     SpecificationKind,
@@ -201,6 +206,54 @@ class StubCatalog:
         ]
 
 
+class _SavedSnapshot:
+    """Minimal saved-snapshot handle with a persisted id."""
+
+    def __init__(self, snapshot_id: UUID) -> None:
+        self.id = snapshot_id
+
+
+class StubSnapshotWriter:
+    """Records snapshot save calls (PlanSnapshotWriter port)."""
+
+    def __init__(self, initial_version: int = 0) -> None:
+        self.saved: list[dict] = []
+        self.saved_ids: list[UUID] = []
+        self._version = initial_version
+
+    async def next_version(self, project_id: UUID) -> int:
+        self._version += 1
+        return self._version
+
+    async def save(self, **kwargs):
+        self.saved.append(kwargs)
+        snapshot_id = uuid4()
+        self.saved_ids.append(snapshot_id)
+        return _SavedSnapshot(snapshot_id)
+
+
+class StubSnapshotReader:
+    """Returns a fixed plan-layer graph (PlanSnapshotReader port)."""
+
+    def __init__(self, graph: PlanGraph | None) -> None:
+        self._graph = graph
+
+    async def get_latest_graph(self, project_id: UUID) -> PlanGraph | None:
+        return self._graph
+
+
+class StubReplanIntegrator:
+    """Fake PlanIntegrationService returning a fixed re-planned plan."""
+
+    def __init__(self, plan: IntegratedPlan) -> None:
+        self._plan = plan
+        self.calls: list = []
+
+    def integrate(self, requirement: str, confirmation_summary):
+        self.calls.append((requirement, confirmation_summary))
+        return self._plan
+
+
 def _make_topology(
     org_id: UUID,
     project_id: UUID,
@@ -319,6 +372,107 @@ class TestPlanExecutionBridge:
         assert contract_cmd.kind == SpecificationKind.CONTRACT
         assert "ts-a" in contract_cmd.title
         assert "ts-b" in contract_cmd.title
+
+    async def test_materialize_snapshot_persists_graph_edges_and_method(self):
+        """The snapshot must store the plan-layer graph (real edges, tm order)
+        and an integration_method — no more hard-coded empty graph_edges."""
+        repo_a_id, repo_b_id = uuid4(), uuid4()
+        topo = StubTopologyReader(
+            _make_topology(
+                self.org_id,
+                self.project_id,
+                self.leader_id,
+                [(repo_a_id, uuid4()), (repo_b_id, uuid4())],
+            )
+        )
+        catalog = StubCatalog({"ts-a": repo_a_id, "ts-b": repo_b_id})
+        specs = StubSpecService()
+        plans = StubPlanStarter()
+        snapshots = StubSnapshotWriter()
+        bridge = PlanExecutionBridge(
+            specs, plans, topo, catalog, snapshot_store=snapshots
+        )
+        plan = _make_plan(["ts-a", "ts-b"], batches=[["ts-a"], ["ts-b"]])
+
+        await bridge.materialize(
+            plan=plan,
+            requirement="test",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="snap-001",
+        )
+
+        assert len(snapshots.saved) == 1
+        saved = snapshots.saved[0]
+        assert saved["plan_version"] == 1
+        # Manually approved order survives as a confirmed tm edge.
+        assert saved["execution_batches"] == [["ts-a"], ["ts-b"]]
+        assert saved["graph_edges"] == [
+            {
+                "from": "ts-a",
+                "to": "ts-b",
+                "status": "confirmed",
+                "source": "tm",
+                "interface": None,
+                "agreement": None,
+            }
+        ]
+        assert saved["integration_method"] == "llm_only"
+        # Contracts / task DAG serialise through dataclasses.asdict.
+        assert saved["contracts"] == []
+        assert {t["repository"] for t in saved["task_dag"]} == {"ts-a", "ts-b"}
+
+    async def test_materialize_snapshot_contract_edges_have_interfaces(self):
+        """Contract pairs become graph edges with interface/agreement."""
+        repo_a_id, repo_b_id = uuid4(), uuid4()
+        topo = StubTopologyReader(
+            _make_topology(
+                self.org_id,
+                self.project_id,
+                self.leader_id,
+                [(repo_a_id, uuid4()), (repo_b_id, uuid4())],
+            )
+        )
+        catalog = StubCatalog({"ts-a": repo_a_id, "ts-b": repo_b_id})
+        specs = StubSpecService()
+        plans = StubPlanStarter()
+        snapshots = StubSnapshotWriter()
+        bridge = PlanExecutionBridge(
+            specs, plans, topo, catalog, snapshot_store=snapshots
+        )
+        plan = _make_plan(
+            ["ts-a", "ts-b"],
+            contracts=[
+                ContractSpec(
+                    producer="ts-a",
+                    consumer="ts-b",
+                    interface="POST /api/v1/foo",
+                    agreement="ts-a guarantees response format",
+                ),
+            ],
+        )
+
+        await bridge.materialize(
+            plan=plan,
+            requirement="test",
+            project_id=self.project_id,
+            leader_agent_id=self.leader_id,
+            idempotency_prefix="snap-002",
+        )
+
+        saved = snapshots.saved[0]
+        assert saved["graph_edges"] == [
+            {
+                "from": "ts-a",
+                "to": "ts-b",
+                "status": "confirmed",
+                "source": "llm",
+                "interface": "POST /api/v1/foo",
+                "agreement": "ts-a guarantees response format",
+            }
+        ]
+        assert saved["contracts"][0]["interface"] == "POST /api/v1/foo"
+        assert saved["integration_method"] == "llm_only"
 
     async def test_planned_task_with_name_to_uuid_mapping(self):
         """Repo name resolves to UUID via catalog + topology → planned task."""
@@ -840,6 +994,221 @@ async def test_replan_supersedes_only_tasks_in_affected_repositories() -> None:
     assert superseder.calls[0][1] == f"replan-2:supersede:{affected.id}"
 
 
+async def test_replan_affected_set_uses_plan_layer_confirmed_edges() -> None:
+    """Impact analysis reads the plan-layer snapshot: confirmed edges drive
+    the affected set; candidate scan edges never widen the interruption."""
+    project_id = uuid4()
+    producer_id, confirmed_id, candidate_id = uuid4(), uuid4(), uuid4()
+    producer = _task_view(project_id=project_id, repository_id=producer_id)
+    confirmed = _task_view(project_id=project_id, repository_id=confirmed_id)
+    candidate = _task_view(project_id=project_id, repository_id=candidate_id)
+    tasks = (producer, confirmed, candidate)
+    superseder = RecordingSuperseder(tasks)
+    topology = ProjectAgentTopologyView(
+        id=uuid4(),
+        organization_id=uuid4(),
+        project_id=project_id,
+        organization_leader_id=uuid4(),
+        repository_teams=(),
+    )
+    snapshot_reader = StubSnapshotReader(
+        PlanGraph(
+            plan_version=2,
+            nodes=[
+                GraphNode(repository="producer"),
+                GraphNode(repository="confirmed-consumer"),
+                GraphNode(repository="candidate-consumer"),
+            ],
+            edges=[
+                GraphEdge(
+                    from_="producer",
+                    to="confirmed-consumer",
+                    status="confirmed",
+                    source="llm",
+                ),
+                GraphEdge(
+                    from_="producer",
+                    to="candidate-consumer",
+                    status="candidate",
+                    source="scan",
+                ),
+            ],
+        )
+    )
+    bridge = PlanExecutionBridge(
+        StubSpecService(),
+        StubPlanStarter(),
+        StubTopologyReader(topology),
+        StubCatalog(
+            {
+                "producer": producer_id,
+                "confirmed-consumer": confirmed_id,
+                "candidate-consumer": candidate_id,
+            }
+        ),
+        superseder=superseder,
+        task_reader=StubProjectTaskReader(tasks),
+        snapshot_reader=snapshot_reader,
+    )
+
+    result = await bridge.replan(
+        project_id=project_id,
+        leader_agent_id=topology.organization_leader_id,
+        feedback="the public contract changed",
+        change_source_repo="producer",
+        plan_version=2,
+        requirement="implement the feature",
+        idempotency_prefix="replan-planlayer",
+        all_repos=["producer", "confirmed-consumer", "candidate-consumer"],
+    )
+
+    assert set(result.affected_repos) == {"producer", "confirmed-consumer"}
+    superseded_ids = {call[0].task_id for call in superseder.calls}
+    assert superseded_ids == {producer.id, confirmed.id}
+    assert candidate.id not in superseded_ids
+
+
+async def test_replan_mints_version_from_store_and_returns_persisted_plan_id() -> None:
+    """A replan that produces a new plan mints its version from the snapshot
+    store (store wins over ``plan_version + 1``) and persists the re-planned
+    version as an immutable snapshot whose id surfaces in the result."""
+    project_id = uuid4()
+    producer_id, consumer_id = uuid4(), uuid4()
+    leader_id = uuid4()
+    topology = _make_topology(
+        uuid4(),
+        project_id,
+        leader_id,
+        [(producer_id, uuid4()), (consumer_id, uuid4())],
+    )
+    catalog = StubCatalog({"producer": producer_id, "consumer": consumer_id})
+    tasks = (
+        _task_view(project_id=project_id, repository_id=producer_id),
+        _task_view(project_id=project_id, repository_id=consumer_id),
+    )
+    superseder = RecordingSuperseder(tasks)
+    snapshots = StubSnapshotWriter(initial_version=1)
+    new_plan = IntegratedPlan(
+        engineering_spec="re-planned spec",
+        contracts=[],
+        task_dag=[
+            TaskNode(repository="producer", instruction="change producer"),
+            TaskNode(repository="consumer", instruction="change consumer"),
+        ],
+        execution_batches=[["producer"], ["consumer"]],
+        graph=PlanGraph(
+            plan_version=2,
+            nodes=[
+                GraphNode(repository="producer"),
+                GraphNode(repository="consumer"),
+            ],
+            edges=[
+                GraphEdge(
+                    from_="producer",
+                    to="consumer",
+                    status="confirmed",
+                    source="llm",
+                )
+            ],
+        ),
+    )
+    integrator = StubReplanIntegrator(new_plan)
+
+    bridge = PlanExecutionBridge(
+        StubSpecService(),
+        StubPlanStarter(),
+        StubTopologyReader(topology),
+        catalog,
+        snapshot_store=snapshots,
+        snapshot_reader=StubSnapshotReader(new_plan.graph),
+        superseder=superseder,
+        task_reader=StubProjectTaskReader(tasks),
+    )
+
+    result = await bridge.replan(
+        project_id=project_id,
+        leader_agent_id=leader_id,
+        feedback="upstream contract changed",
+        change_source_repo="producer",
+        plan_version=1,
+        requirement="implement the feature",
+        idempotency_prefix="replan-mint",
+        all_repos=["producer", "consumer"],
+        integration_service=integrator,
+        confirmation_summary=object(),
+    )
+
+    # Version minted by the snapshot store (v1 exists → next is v2), not the
+    # caller-supplied ``plan_version + 1`` fallback.
+    assert result.new_plan_version == 2
+    # A new immutable snapshot was persisted with the full plan-layer graph.
+    assert len(snapshots.saved) == 1
+    saved = snapshots.saved[0]
+    assert saved["plan_version"] == 2
+    assert saved["graph_edges"] == [
+        {
+            "from": "producer",
+            "to": "consumer",
+            "status": "confirmed",
+            "source": "llm",
+            "interface": None,
+            "agreement": None,
+        }
+    ]
+    # The persisted snapshot id is reported back so callers can pin the
+    # re-planned version to its immutable record.
+    assert result.plan_id == snapshots.saved_ids[0]
+
+
+async def test_replan_cancel_only_mints_version_without_saving_snapshot() -> None:
+    """A cancel-only replan (no new plan) still advances the version but
+    leaves the last immutable snapshot in place — there is no new graph to
+    record, so no save happens and ``plan_id`` stays None."""
+    project_id = uuid4()
+    repo_id = uuid4()
+    task = _task_view(project_id=project_id, repository_id=repo_id)
+    superseder = RecordingSuperseder((task,))
+    topology = ProjectAgentTopologyView(
+        id=uuid4(),
+        organization_id=uuid4(),
+        project_id=project_id,
+        organization_leader_id=uuid4(),
+        repository_teams=(),
+    )
+    snapshots = StubSnapshotWriter(initial_version=1)
+    bridge = PlanExecutionBridge(
+        StubSpecService(),
+        StubPlanStarter(),
+        StubTopologyReader(topology),
+        StubCatalog({"repo": repo_id}),
+        snapshot_store=snapshots,
+        snapshot_reader=StubSnapshotReader(
+            PlanGraph(
+                plan_version=1,
+                nodes=[GraphNode(repository="repo")],
+                edges=[],
+            )
+        ),
+        superseder=superseder,
+        task_reader=StubProjectTaskReader((task,)),
+    )
+
+    result = await bridge.replan(
+        project_id=project_id,
+        leader_agent_id=topology.organization_leader_id,
+        feedback="cancel the current batch",
+        change_source_repo="repo",
+        plan_version=1,
+        requirement="implement the feature",
+        idempotency_prefix="replan-cancel",
+        all_repos=["repo"],
+    )
+
+    assert result.new_plan_version == 2
+    assert result.plan_id is None
+    assert snapshots.saved == []
+
+
 async def test_materialize_stores_the_verification_commands_on_the_planned_task() -> None:
     """The composition root carries ``tests`` into the execution plan aggregate."""
 
@@ -864,3 +1233,192 @@ async def test_materialize_is_idempotent_for_the_same_prefix() -> None:
 
     assert replay.plan_id == first.plan_id
     assert len(environment.assigner.commands) == assignments
+
+
+async def test_replan_preview_is_zero_side_effect_with_diff() -> None:
+    """Preview (PR-4) computes the change footprint and graph diff the commit
+    would apply, but performs no supersede, no plan start, no snapshot write
+    and no handoff regeneration — nothing observable happens."""
+    project_id = uuid4()
+    producer_id, consumer_id = uuid4(), uuid4()
+    leader_id = uuid4()
+    topology = _make_topology(
+        uuid4(),
+        project_id,
+        leader_id,
+        [(producer_id, uuid4()), (consumer_id, uuid4())],
+    )
+    catalog = StubCatalog({"producer": producer_id, "consumer": consumer_id})
+    tasks = (
+        _task_view(project_id=project_id, repository_id=producer_id),
+        _task_view(project_id=project_id, repository_id=consumer_id),
+    )
+    superseder = RecordingSuperseder(tasks)
+    snapshots = StubSnapshotWriter(initial_version=1)
+    specs = StubSpecService()
+    plans = StubPlanStarter()
+    from_graph = PlanGraph(
+        plan_version=1,
+        nodes=[GraphNode(repository="producer")],
+        edges=[],
+    )
+    new_plan = IntegratedPlan(
+        engineering_spec="re-planned spec",
+        contracts=[],
+        task_dag=[
+            TaskNode(repository="producer", instruction="change producer"),
+            TaskNode(repository="consumer", instruction="change consumer"),
+        ],
+        execution_batches=[["producer"], ["consumer"]],
+        graph=PlanGraph(
+            plan_version=2,
+            nodes=[
+                GraphNode(repository="producer"),
+                GraphNode(repository="consumer"),
+            ],
+            edges=[
+                GraphEdge(
+                    from_="producer",
+                    to="consumer",
+                    status="confirmed",
+                    source="llm",
+                )
+            ],
+        ),
+    )
+    integrator = StubReplanIntegrator(new_plan)
+
+    bridge = PlanExecutionBridge(
+        specs,
+        plans,
+        StubTopologyReader(topology),
+        catalog,
+        snapshot_store=snapshots,
+        snapshot_reader=StubSnapshotReader(from_graph),
+        superseder=superseder,
+        task_reader=StubProjectTaskReader(tasks),
+    )
+
+    result = await bridge.replan(
+        project_id=project_id,
+        leader_agent_id=leader_id,
+        feedback="upstream contract changed",
+        change_source_repo="producer",
+        plan_version=1,
+        requirement="implement the feature",
+        idempotency_prefix="replan-preview",
+        all_repos=["producer", "consumer"],
+        integration_service=integrator,
+        confirmation_summary=object(),
+        mode="preview",
+    )
+
+    # Zero side effects.
+    assert superseder.calls == []
+    assert snapshots.saved == []
+    assert plans.calls == []
+    assert specs.calls == []
+    assert result.superseded_tasks == []
+    assert result.new_tasks == []
+    assert result.handoff_doc_ids == []
+    assert result.plan_id is None
+    # The footprint and diff the commit would apply.
+    assert result.new_plan_version == 2
+    # Impact analysis runs against the OLD snapshot graph (no edges yet), so
+    # only the producer is "interrupted"; the consumer appears exclusively in
+    # the diff's change footprint below.
+    assert set(result.affected_repos) == {"producer"}
+    assert result.diff is not None
+    assert result.diff.from_version == 1
+    assert result.diff.to_version == 2
+    assert [(e.from_, e.to) for e in result.diff.added_edges] == [
+        ("producer", "consumer")
+    ]
+    assert result.diff.added_repos == ["consumer"]
+    assert result.diff.affected_repos == ["consumer"]
+
+
+async def test_replan_commit_reports_diff_between_snapshot_versions() -> None:
+    """A committed replan (PR-4) carries the graph diff between the previous
+    snapshot and the newly persisted one, plus the persisted snapshot id."""
+    project_id = uuid4()
+    producer_id, consumer_id = uuid4(), uuid4()
+    leader_id = uuid4()
+    topology = _make_topology(
+        uuid4(),
+        project_id,
+        leader_id,
+        [(producer_id, uuid4()), (consumer_id, uuid4())],
+    )
+    catalog = StubCatalog({"producer": producer_id, "consumer": consumer_id})
+    tasks = (
+        _task_view(project_id=project_id, repository_id=producer_id),
+        _task_view(project_id=project_id, repository_id=consumer_id),
+    )
+    superseder = RecordingSuperseder(tasks)
+    snapshots = StubSnapshotWriter(initial_version=1)
+    from_graph = PlanGraph(
+        plan_version=1,
+        nodes=[GraphNode(repository="producer")],
+        edges=[],
+    )
+    new_plan = IntegratedPlan(
+        engineering_spec="re-planned spec",
+        contracts=[],
+        task_dag=[
+            TaskNode(repository="producer", instruction="change producer"),
+            TaskNode(repository="consumer", instruction="change consumer"),
+        ],
+        execution_batches=[["producer"], ["consumer"]],
+        graph=PlanGraph(
+            plan_version=2,
+            nodes=[
+                GraphNode(repository="producer"),
+                GraphNode(repository="consumer"),
+            ],
+            edges=[
+                GraphEdge(
+                    from_="producer",
+                    to="consumer",
+                    status="confirmed",
+                    source="llm",
+                )
+            ],
+        ),
+    )
+    integrator = StubReplanIntegrator(new_plan)
+
+    bridge = PlanExecutionBridge(
+        StubSpecService(),
+        StubPlanStarter(),
+        StubTopologyReader(topology),
+        catalog,
+        snapshot_store=snapshots,
+        snapshot_reader=StubSnapshotReader(from_graph),
+        superseder=superseder,
+        task_reader=StubProjectTaskReader(tasks),
+    )
+
+    result = await bridge.replan(
+        project_id=project_id,
+        leader_agent_id=leader_id,
+        feedback="upstream contract changed",
+        change_source_repo="producer",
+        plan_version=1,
+        requirement="implement the feature",
+        idempotency_prefix="replan-commit-diff",
+        all_repos=["producer", "consumer"],
+        integration_service=integrator,
+        confirmation_summary=object(),
+        mode="commit",
+    )
+
+    assert result.plan_id == snapshots.saved_ids[0]
+    assert result.diff is not None
+    assert result.diff.from_version == 1
+    assert result.diff.to_version == 2
+    assert [(e.from_, e.to) for e in result.diff.added_edges] == [
+        ("producer", "consumer")
+    ]
+    assert result.diff.added_repos == ["consumer"]
+    assert result.diff.affected_repos == ["consumer"]

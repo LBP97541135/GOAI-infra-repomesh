@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Bell, Boxes, ListChecks, LogOut, Network, Plus, ShieldCheck, Users, UsersRound } from 'lucide-react'
 import { api, type Account, type ReviewRequest } from './api'
 import { Login } from './Login'
+import { PlanFlowDemo } from './PlanFlowDemo'
 import { ProjectSetup } from './ProjectSetup'
 import { ReviewWorkbench } from './ReviewWorkbench'
 import { TeamSetup } from './TeamSetup'
@@ -11,6 +12,10 @@ import { Workspace } from './Workspace'
 type View = 'setup' | 'reviews' | 'projects' | 'teams' | 'accounts' | 'workspace'
 
 export function App() {
+  // 直接访问 /flow 时展示「方案流程展示」演示页，跳过登录与项目创建
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/flow')) {
+    return <PlanFlowDemo />
+  }
   const [account, setAccount] = useState<Account | null>(null)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState<View>('setup')

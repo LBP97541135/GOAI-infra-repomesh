@@ -21,6 +21,7 @@ import {
   type IntegratedPlan,
   type RequirementAnalysis,
 } from "./api";
+import { PlanFlowTimeline } from "./PlanFlowTimeline";
 
 const MAX_PRD_LENGTH = 20000;
 
@@ -403,20 +404,10 @@ export function PrdPlanner({
         <div className="plan-section">
           <div className="plan-section-head">
             <Layers size={16} />
-            <strong>执行批次</strong>
+            <strong>执行流程</strong>
+            <span className="muted">（按执行批次分组 · 依赖关系以标签标注）</span>
           </div>
-          <div className="batch-list">
-            {plan.execution_batches.map((batch, index) => (
-              <div className="batch-row" key={index}>
-                <span>批次 {index + 1}</span>
-                <div className="chip-row">
-                  {batch.map((repo) => (
-                    <span className="chip" key={repo}>{repo}</span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <PlanFlowTimeline plan={plan} />
         </div>
       </div>
     );

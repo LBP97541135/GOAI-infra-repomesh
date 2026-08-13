@@ -13,6 +13,15 @@ from uuid import UUID, uuid4
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
+from repomesh.modules.repository_intelligence.contracts import (
+    ContractSpec,
+    GraphEdge,
+    GraphNode,
+    IntegratedPlan,
+    PlanGraph,
+    TaskNode,
+    plan_to_graph,
+)
 from repomesh.modules.repository_intelligence.infrastructure.models import (
     PlanSnapshotRecord,
 )
@@ -20,6 +29,63 @@ from repomesh.persistence import Database
 from repomesh.shared.domain import DomainError
 
 _logger = logging.getLogger(__name__)
+
+
+def plan_graph_from_snapshot(record: PlanSnapshotRecord) -> PlanGraph:
+    """Reconstruct the plan-layer graph from an immutable snapshot row.
+
+    The row is the single source of truth: ``plan_version`` + ``task_dag``
+    (nodes) + ``graph_edges`` (edges). Legacy rows saved with an empty
+    ``graph_edges`` are backfilled through the exact materialise-time path
+    (:func:`plan_to_graph` over the row's task DAG, contracts and execution
+    batches — all confirmed llm/tm edges), so *read graph ≡ projection
+    columns* holds for every row, old and new.
+    """
+
+    nodes = [
+        GraphNode(
+            repository=entry["repository"],
+            instruction=entry.get("instruction") or None,
+            tests=list(entry.get("tests") or []),
+        )
+        for entry in record.task_dag
+    ]
+
+    raw_edges: list[dict] = record.graph_edges or []
+    if raw_edges:
+        edges = [GraphEdge.model_validate(entry) for entry in raw_edges]
+    else:
+        # Legacy backfill — identical to materialise-time plan_to_graph so a
+        # legacy row reconstructs the same graph a fresh materialise would.
+        legacy_plan = IntegratedPlan(
+            engineering_spec=record.engineering_spec,
+            contracts=[
+                ContractSpec(
+                    producer=entry["producer"],
+                    consumer=entry["consumer"],
+                    interface=entry.get("interface", ""),
+                    agreement=entry.get("agreement", ""),
+                )
+                for entry in (record.contracts or [])
+            ],
+            task_dag=[
+                TaskNode(
+                    repository=entry["repository"],
+                    instruction=entry.get("instruction", ""),
+                    depends_on=tuple(entry.get("depends_on") or ()),
+                    parallelizable_with=tuple(
+                        entry.get("parallelizable_with") or ()
+                    ),
+                    tests=tuple(entry.get("tests") or ()),
+                )
+                for entry in record.task_dag
+            ],
+            execution_batches=[list(b) for b in (record.execution_batches or [])],
+        )
+        graph = plan_to_graph(legacy_plan)
+        return graph.model_copy(update={"plan_version": record.plan_version})
+
+    return PlanGraph(plan_version=record.plan_version, nodes=nodes, edges=edges)
 
 
 class PlanSnapshotAlreadyExists(DomainError):
@@ -94,11 +160,24 @@ class PlanSnapshotStore:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
+    async def get_latest_graph(self, project_id: UUID) -> PlanGraph | None:
+        """Reconstruct the latest plan-layer graph for a project.
+
+        Returns ``None`` when no snapshot exists yet (e.g. a fresh project
+        before its first materialise). Legacy rows are backfilled at read
+        time, so the returned graph always satisfies
+        *read graph ≡ projection columns*.
+        """
+        record = await self.get_latest(project_id)
+        if record is None:
+            return None
+        return plan_graph_from_snapshot(record)
+
     async def get_by_version(
         self, project_id: UUID, plan_version: int
     ) -> PlanSnapshotRecord | None:
         """Get a specific version."""
-        async with self._database.session() as session:
+        async with self._database.sessions() as session:
             stmt = select(PlanSnapshotRecord).where(
                 PlanSnapshotRecord.project_id == project_id,
                 PlanSnapshotRecord.plan_version == plan_version,
@@ -110,7 +189,7 @@ class PlanSnapshotStore:
         self, project_id: UUID
     ) -> list[PlanSnapshotRecord]:
         """List all snapshots for a project, ordered by version descending."""
-        async with self._database.session() as session:
+        async with self._database.sessions() as session:
             stmt = (
                 select(PlanSnapshotRecord)
                 .where(PlanSnapshotRecord.project_id == project_id)

@@ -187,3 +187,156 @@ main { min-width: 0; }.topbar { height: 91px; padding: 20px 34px; background: #f
   .workspace-tabs { flex-wrap: wrap; }
   .dispatch-summary { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------------------------------------------------------------------------
+   DagGraph（方案流程图：节点 + 依赖边）
+--------------------------------------------------------------------------- */
+.dag-graph { padding: 18px 16px 14px; border-top: 1px solid #e7ebe7; }
+.dag-graph svg { width: 100%; height: auto; display: block; }
+.dag-batch-label { fill: #9aa69d; font-size: 10px; }
+.dag-edge { transition: stroke 0.15s; }
+.dag-node-rect { fill: #f6f8f2; stroke: #cdd6c9; stroke-width: 1.3; transition: fill 0.15s, stroke 0.15s; }
+.dag-node:hover .dag-node-rect { fill: #eef2e5; stroke: #8ba03e; }
+.dag-node.root .dag-node-rect { fill: #f4f7e8; stroke: #a9ba7a; }
+.dag-node-text { fill: #3b493f; font-size: 12px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; }
+.dag-root-tag { fill: #7b8a5f; font-size: 9px; }
+.dag-legend { margin-top: 12px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; color: #8a948c; font-size: 10px; }
+.dag-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
+.dag-legend .legend-root { background: #f4f7e8; border: 1.3px solid #a9ba7a; }
+.dag-legend .legend-edge { height: 2px; border-radius: 0; background: #9aa69d; }
+.dag-edge-count { margin-left: auto; font-family: 'IBM Plex Mono', monospace; }
+
+/*---------------------------------------------------------------------------
+   PlanFlowDemo（/flow 方案流程展示页）
+--------------------------------------------------------------------------- */
+.flow-shell { min-height: 100vh; background: #f2f4ef; }
+.flow-topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: #2c3830; color: #f2f4ef; padding: 13px 26px;
+}
+.flow-brand { display: flex; align-items: center; gap: 11px; }
+.flow-brand .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: #8ba03e; display: grid; place-items: center; }
+.flow-brand strong { font-size: 14px; display: block; }
+.flow-brand span { font-size: 10px; color: #b9c5b0; }
+.flow-live { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #c9d3c2; }
+.flow-live i { width: 8px; height: 8px; border-radius: 50%; background: #8ba03e; }
+.flow-live .pulse { animation: flowPulse 1.6s ease-in-out infinite; }
+@keyframes flowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(139, 160, 62, 0.5); }
+  50% { box-shadow: 0 0 0 7px rgba(139, 160, 62, 0); }
+}
+.flow-main { max-width: 1040px; margin: 0 auto; padding: 26px 22px 80px; display: grid; gap: 20px; }
+.flow-project { background: #fff; border: 1px solid #dfe5dc; border-radius: 12px; padding: 18px 20px; }
+.flow-project-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.flow-project-head h1 { margin: 0; font-size: 17px; }
+.flow-stepper { display: flex; align-items: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.flow-step { display: flex; align-items: center; gap: 7px; padding: 5px 11px 5px 6px; border-radius: 999px; background: #eef0ee; color: #8a948c; }
+.flow-step-dot { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: #dfe4dc; font-size: 11px; font-weight: 700; }
+.flow-step.done .flow-step-dot { background: #8ba03e; color: #fff; }
+.flow-step.active { background: #eef2e5; color: #3b493f; }
+.flow-step.active .flow-step-dot { background: #8ba03e; color: #fff; }
+.flow-step-label { font-size: 12px; }
+.flow-step-tag { font-size: 10px; color: #7b5c27; background: #f8efd9; border-radius: 4px; padding: 2px 6px; font-weight: 600; }
+.flow-score { flex: 0 0 auto; color: #4c604d; font: 11px 'IBM Plex Mono'; background: #eef2e5; border-radius: 4px; padding: 3px 8px; }
+.flow-main .card { background: #fff; border: 1px solid #dfe5dc; border-radius: 12px; padding: 20px; }
+.flow-main .req-text { margin: 0; padding: 14px 16px; background: #f6f8f2; border: 1px solid #e2e8dc; border-radius: 8px; font-size: 13px; color: #44513f; }
+.flow-main .label { color: #55615a; font-size: 11px; font-weight: 600; padding-top: 3px; }
+.flow-main .muted { color: #8a948c; font-size: 11px; }
+.flow-main .mono { font: 11px 'IBM Plex Mono'; color: #3f5a3f; }
+.flow-main .confirm-tone.required { background: #65aa70; }
+
+/*---------------------------------------------------------------------------
+   PlanFlowTimeline（执行流程 · 对标 Cursor 3 / Claude Code 任务流）
+--------------------------------------------------------------------------- */
+.taskflow { display: grid; gap: 14px; }
+.taskflow-progress { display: flex; align-items: center; gap: 12px; }
+.taskflow-progress-track { flex: 1; height: 6px; border-radius: 999px; background: #e8ece7; overflow: hidden; }
+.taskflow-progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #8ba03e, #65aa70); transition: width 0.5s ease; }
+.taskflow-progress-text { color: #758078; font-size: 11px; white-space: nowrap; }
+.taskflow-stages { display: grid; gap: 12px; }
+.taskflow-stage { background: #fff; border: 1px solid #dfe5dc; border-radius: 10px; overflow: hidden; }
+.taskflow-stage.done { border-color: #cfe0c4; }
+.taskflow-stage.running { border-color: #e2cf9a; box-shadow: 0 0 0 1px rgba(197, 146, 55, 0.15); }
+.taskflow-stage-head {
+  display: flex; align-items: center; gap: 8px; padding: 9px 14px;
+  background: #fafbfa; border-bottom: 1px solid #e7ebe7;
+}
+.taskflow-stage-no { font: 600 11px 'IBM Plex Mono'; color: #55615a; letter-spacing: 0.03em; }
+.taskflow-stage-arrow { color: #b3bbb4; }
+.taskflow-stage-meta { color: #8a948c; font-size: 10px; }
+.taskflow-stage-badge { margin-left: auto; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.taskflow-stage-badge.done { color: #3f6b46; background: #e7f2e6; }
+.taskflow-stage-badge.running { color: #7b5c27; background: #f8efd9; }
+.taskflow-stage-badge.pending { color: #758078; background: #eef0ee; }
+.taskflow-tasks { display: grid; }
+.taskflow-task {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px;
+  align-items: start; padding: 11px 14px; border-bottom: 1px solid #eef1ec;
+  transition: background 0.15s;
+}
+.taskflow-task:last-child { border-bottom: 0; }
+.taskflow-task:hover { background: #fbfcf7; }
+.taskflow-task-icon {
+  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+  margin-top: 1px; color: #fff;
+}
+.taskflow-task-icon.done, .taskflow-task-icon.running { background: #65aa70; }
+.taskflow-task.running .taskflow-task-icon { background: #c59237; }
+.taskflow-task-icon.pending { background: #eef0ee; color: #b3bbb4; }
+.taskflow-task-main { min-width: 0; }
+.taskflow-task-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.taskflow-task-head strong { font: 600 12px 'IBM Plex Mono'; color: #3b493f; }
+.taskflow-task-deps { color: #8a948c; font-size: 10px; }
+.taskflow-task p {
+  margin: 3px 0 0; color: #758078; font-size: 12px; line-height: 1.55;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.taskflow-task-badge { font-size: 10px; padding: 2px 8px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
+.taskflow-task-badge.done { color: #3f6b46; background: #e7f2e6; }
+.taskflow-task-badge.running { color: #7b5c27; background: #f8efd9; }
+.taskflow-task-badge.pending { color: #758078; background: #eef0ee; }
+.taskflow-run { animation: taskflowRun 1.2s ease-in-out infinite; }
+@keyframes taskflowRun {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.86); }
+}
+.taskflow-legend { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; color: #8a948c; font-size: 10px; }
+.taskflow-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.taskflow-legend .tl-done { background: #65aa70; }
+.taskflow-legend .tl-run { background: #c59237; }
+.taskflow-legend .tl-pending { background: #eef0ee; border: 1px solid #d9ded9; }
+.taskflow-legend .tl-added { background: #7bbf5f; box-shadow: 0 0 0 2px rgba(123, 191, 95, 0.18); }
+.taskflow-legend .tl-removed { background: #e0745c; box-shadow: 0 0 0 2px rgba(224, 116, 92, 0.16); }
+.taskflow-edge-count { margin-left: auto; font-family: 'IBM Plex Mono', monospace; }
+
+/* --- PR-5 单源投影 + diff UI（新增边绿色高亮 / 删除边红色删除线 / NEW 徽标） --- */
+.taskflow-empty {
+  padding: 22px; text-align: center; color: #8a948c; font-size: 12px;
+  background: #fafbfa; border: 1px dashed #d9ded9; border-radius: 10px;
+}
+.taskflow-dep-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px; border-radius: 999px; background: #f0f2ef;
+  color: #55615a; font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+}
+.taskflow-dep-chip.added {
+  background: #e9f5e3; color: #3f6b46; border: 1px solid #b9dfa4;
+  box-shadow: 0 0 0 2px rgba(123, 191, 95, 0.12);
+}
+.taskflow-dep-new {
+  font-style: normal; font-weight: 700; font-size: 8px; letter-spacing: 0.04em;
+  color: #2f7d3c; background: #cdeec0; padding: 0 4px; border-radius: 4px;
+}
+.taskflow-dep-chip.removed { background: #fdf0ed; color: #a5533f; }
+.taskflow-dep-chip.removed s { opacity: 0.65; }
+.taskflow-diff-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+  padding: 1px 6px; border-radius: 5px;
+}
+.taskflow-diff-badge.new { color: #2f7d3c; background: #e0f4d4; border: 1px solid #b9dfa4; }
+.taskflow-contract-badge {
+  display: inline-block; padding: 1px 6px; border-radius: 5px;
+  background: #eef3fb; border: 1px solid #d3e0f2; color: #3f5d8c;
+  font-family: 'IBM Plex Mono', monospace; font-size: 9px;
+}

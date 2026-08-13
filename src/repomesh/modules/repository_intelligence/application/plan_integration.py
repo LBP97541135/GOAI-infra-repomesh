@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
 from typing import Protocol
 
 from opentelemetry import trace
@@ -39,73 +38,22 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Output data structures
 # ---------------------------------------------------------------------------
+# Defined in ``contracts.integration`` so cross-module consumers (change
+# orchestration) import them through the module boundary; re-exported here
+# for backward compatibility with in-module imports.
 
+from repomesh.modules.repository_intelligence.contracts import (  # noqa: E402, I001
+    ContractSpec,
+    GraphEdge as PlanGraphEdge,
+    GraphNode,
+    IntegratedPlan,
+    PlanGraph,
+    TaskNode,
+    normalize_plan,
+    plan_to_graph,
+)
 
-@dataclass(frozen=True, slots=True)
-class ContractSpec:
-    """A cross-repository interface agreement.
-
-    The *producer* repo changes an API; the *consumer* repo depends on it.
-    """
-
-    producer: str
-    consumer: str
-    interface: str
-    agreement: str
-
-
-@dataclass(frozen=True, slots=True)
-class TaskNode:
-    """A single task in the execution DAG."""
-
-    repository: str
-    instruction: str
-    depends_on: tuple[str, ...] = ()
-    parallelizable_with: tuple[str, ...] = ()
-    tests: tuple[str, ...] = ()
-    """Verification commands the Worker must run before reporting this task.
-
-    They travel down to the Task Specification the Worker executes under and
-    become the Runner's ``test_commands``.  The integration LLM does not emit
-    them yet, so the caller supplies them when materialising a plan.
-    """
-
-
-@dataclass(frozen=True, slots=True)
-class IntegratedPlan:
-    """The complete integrated project plan."""
-
-    engineering_spec: str
-    contracts: list[ContractSpec]
-    task_dag: list[TaskNode]
-    execution_batches: list[list[str]]  # topologically sorted batches
-
-    def to_dict(self) -> dict:
-        """Serialise to a plain dict for JSON output."""
-
-        return {
-            "engineering_spec": self.engineering_spec,
-            "contracts": [
-                {
-                    "producer": c.producer,
-                    "consumer": c.consumer,
-                    "interface": c.interface,
-                    "agreement": c.agreement,
-                }
-                for c in self.contracts
-            ],
-            "task_dag": [
-                {
-                    "repository": t.repository,
-                    "instruction": t.instruction,
-                    "depends_on": list(t.depends_on),
-                    "parallelizable_with": list(t.parallelizable_with),
-                    "tests": list(t.tests),
-                }
-                for t in self.task_dag
-            ],
-            "execution_batches": [list(b) for b in self.execution_batches],
-        }
+__all__ = ["ContractSpec", "IntegratedPlan", "PlanIntegrationService", "TaskNode"]
 
 
 # ---------------------------------------------------------------------------
@@ -448,6 +396,83 @@ def _fallback_plan(repo_names: list[str]) -> IntegratedPlan:
 
 
 # ---------------------------------------------------------------------------
+# Graph merge (single source of truth)
+# ---------------------------------------------------------------------------
+
+
+def _build_plan_graph(
+    *,
+    repo_names: list[str],
+    scan_edges: list[GraphEdge],
+    llm_plan: IntegratedPlan,
+) -> PlanGraph:
+    """Merge the world layer and LLM semantics into the plan-layer graph.
+
+    - Scan ``confirmed`` edges become plan ``confirmed`` edges (source=scan).
+    - Scan ``possible`` edges become plan ``candidate`` edges (discovery
+      only — they never participate in topology).
+    - LLM contracts attach ``interface``/``agreement`` to existing edges and
+      promote possible edges to confirmed; brand-new pairs become confirmed
+      llm edges (contract ⇒ serialization must hold).
+    - LLM ``depends_on`` not already present become confirmed llm edges, so
+      LLM-discovered dependencies enter the execution batches.
+
+    ``plan_version`` is a placeholder (1); the snapshot row owns the real
+    version.
+    """
+
+    nodes = {repo: GraphNode(repository=repo) for repo in repo_names}
+    for task in llm_plan.task_dag:
+        node = nodes.get(task.repository)
+        if node is not None and task.instruction:
+            nodes[task.repository] = node.model_copy(
+                update={"instruction": task.instruction}
+            )
+
+    edges: dict[tuple[str, str], PlanGraphEdge] = {}
+    for scan_edge in scan_edges:
+        edges[(scan_edge.producer, scan_edge.consumer)] = PlanGraphEdge(
+            from_=scan_edge.producer,
+            to=scan_edge.consumer,
+            status="confirmed" if scan_edge.confidence == "confirmed" else "candidate",
+            source="scan",
+        )
+    for contract in llm_plan.contracts:
+        key = (contract.producer, contract.consumer)
+        existing = edges.get(key)
+        if existing is not None:
+            edges[key] = existing.model_copy(
+                update={
+                    "status": "confirmed",
+                    "interface": contract.interface or existing.interface,
+                    "agreement": contract.agreement or existing.agreement,
+                }
+            )
+        else:
+            edges[key] = PlanGraphEdge(
+                from_=contract.producer,
+                to=contract.consumer,
+                status="confirmed",
+                source="llm",
+                interface=contract.interface,
+                agreement=contract.agreement,
+            )
+    for task in llm_plan.task_dag:
+        for dep in task.depends_on:
+            key = (dep, task.repository)
+            if key not in edges:
+                edges[key] = PlanGraphEdge(
+                    from_=dep, to=task.repository, status="confirmed", source="llm"
+                )
+
+    return PlanGraph(
+        plan_version=1,
+        nodes=list(nodes.values()),
+        edges=list(edges.values()),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
@@ -500,7 +525,11 @@ class PlanIntegrationService:
         else:
             messages = _build_integration_prompt(requirement, all_results)
             raw = self._llm.chat(messages, temperature=0.1)
-            plan = _parse_integrated_plan(raw, repo_names)
+            llm_plan = _parse_integrated_plan(raw, repo_names)
+            # Single source of truth even without a scan graph: backfill the
+            # plan-layer graph from the LLM output and normalise to its
+            # projections (contract ⇒ serialization stays guaranteed).
+            plan = normalize_plan(llm_plan, plan_to_graph(llm_plan))
 
         span = trace.get_current_span()
         span.set_attribute("repomesh.integration.task_count", len(plan.task_dag))
@@ -530,9 +559,14 @@ class PlanIntegrationService:
         raw = self._llm.chat(messages, temperature=0.1)
         llm_plan = _parse_integrated_plan(raw, repo_names)
 
-        return IntegratedPlan(
-            engineering_spec=llm_plan.engineering_spec,
-            contracts=llm_plan.contracts,
-            task_dag=llm_plan.task_dag,
-            execution_batches=batches if batches else llm_plan.execution_batches,
+        # The plan-layer graph becomes the single source of truth: scan
+        # edges (possible ⇒ candidate) plus LLM semantics written back
+        # (contracts → edge metadata, new depends_on → confirmed llm edges).
+        # Execution batches therefore contain LLM-discovered dependencies and
+        # never contain possible edges.
+        graph = _build_plan_graph(
+            repo_names=repo_names,
+            scan_edges=edges,
+            llm_plan=llm_plan,
         )
+        return normalize_plan(llm_plan, graph)

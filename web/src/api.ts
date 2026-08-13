@@ -124,6 +124,64 @@ export type IntegratedPlan = {
     tests: string[];
   }[];
   execution_batches: string[][];
+  /** PR-5: unified plan-layer graph — single source of truth. Top-level
+   * fields above are its materialised projections; frontends render from
+   * the graph, not by splicing the projections. */
+  graph?: PlanGraph | null;
+};
+
+export type GraphNode = {
+  repository: string;
+  instruction: string | null;
+  tests: string[];
+};
+
+export type GraphEdge = {
+  from: string; // producer (depended upon)
+  to: string; // consumer (dependent)
+  status: "candidate" | "confirmed";
+  source: "scan" | "tm" | "llm";
+  interface: string | null;
+  agreement: string | null;
+};
+
+export type PlanGraph = {
+  plan_version: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  execution_batches: string[][];
+  contracts: {
+    producer: string;
+    consumer: string;
+    interface: string;
+    agreement: string | null;
+  }[];
+  task_dag: {
+    repository: string;
+    instruction: string | null;
+    depends_on: string[];
+    tests: string[];
+  }[];
+};
+
+export type DiffEdge = GraphEdge;
+
+export type EdgeChangeView = {
+  from: string;
+  to: string;
+  old: GraphEdge | null;
+  new: GraphEdge | null;
+};
+
+export type PlanDiff = {
+  from_version: number;
+  to_version: number;
+  added_edges: DiffEdge[];
+  removed_edges: DiffEdge[];
+  changed_edges: EdgeChangeView[];
+  added_repos: string[];
+  removed_repos: string[];
+  affected_repos: string[];
 };
 
 export type MaterializePayload = {
@@ -233,6 +291,14 @@ export const api = {
     request<ReviewRequest[]>(
       `/review-requests${status ? `?status=${status}` : ""}`,
     ),
+  /** PR-4: edge-level diff between two immutable plan snapshot versions. */
+  planDiff: (projectId: string, from?: number, to?: number) => {
+    const params = new URLSearchParams();
+    if (from != null) params.set("from", String(from));
+    if (to != null) params.set("to", String(to));
+    const qs = params.toString();
+    return request<PlanDiff>(`/plans/${projectId}/diff${qs ? `?${qs}` : ""}`);
+  },
   decide: (review: ReviewRequest, decision: string, reason: string) =>
     request<object>(`/projects/${review.project_id}/checkpoint-decisions`, {
       method: "POST",

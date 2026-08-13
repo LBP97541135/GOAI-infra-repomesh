@@ -71,6 +71,15 @@ class Settings(BaseSettings):
     delivery_contract_gate: bool = False
     delivery_pr_label: bool = False
     delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
+    replan_auto_commit: bool = True
+    """Default replan mode when the request says ``auto`` (PR-4).
+
+    ``True`` preserves the pre-PR-4 behaviour — a replan request executes the
+    full commit immediately. Set ``REPOMESH_REPLAN_AUTO_COMMIT=false`` to
+    require an explicit approval round-trip: ``auto`` requests then run in
+    ``preview`` mode (zero side effects) and a second call with
+    ``mode=commit`` applies the change.
+    """
     scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)

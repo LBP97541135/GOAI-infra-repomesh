@@ -597,6 +597,7 @@ class ApplicationContainer:
             topologies=self.topology_reader(),
             catalog=self.repository_catalog,
             snapshot_store=self.plan_snapshot_store(),
+            snapshot_reader=self.plan_snapshot_store(),
             superseder=self.task_superseder(),
             task_reader=self.project_task_reader(),
             handoff_docs=self.handoff_doc_service(),
