@@ -1,37 +1,47 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Crown, Plus, UserRoundPlus, UsersRound, X } from 'lucide-react'
-import { api, type AgentPrincipal, type AgentTeamResult } from './api'
+import { api, type AgentPrincipal, type AgentTeam, type AgentTeamResult } from './api'
 
 type FormState = { organizationId: string; name: string; description: string; leaderId: string; memberIds: string[] }
+type BoardTeam = { key: string; name: string; subtitle: string; workerCount: number; badge: string }
 const shortId = (value: string) => value.slice(0, 8)
 
 export function TeamSetup() {
   const [agents, setAgents] = useState<AgentPrincipal[]>([])
+  const [teams, setTeams] = useState<AgentTeam[]>([])
   const [orgNames, setOrgNames] = useState<Record<string, string>>({})
-  const [created, setCreated] = useState<AgentTeamResult[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
+  const loadTeams = () => api.agentTeams().then(setTeams).catch(() => {})
   useEffect(() => { api.agents().then(setAgents).catch((reason) => setError(reason.message)).finally(() => setLoading(false)) }, [])
+  useEffect(() => { loadTeams() }, [])
   useEffect(() => { api.organizations().then((orgs) => setOrgNames(Object.fromEntries(orgs.map((org) => [org.id, org.name])))).catch(() => {}) }, [])
   const leaders = agents.filter((agent) => agent.role === 'repository_leader')
   const workers = agents.filter((agent) => agent.role === 'worker')
-  const persistedTeams = leaders.map((leader) => ({
-    name: leader.repository_id ? `repository-${shortId(leader.repository_id)}` : leader.agentteams_resource_name,
-    leader,
-    workers: workers.filter((worker) => worker.leader_agent_id === leader.id),
-  }))
+  const agentName = (id: string) => agents.find((agent) => agent.id === id)?.agentteams_resource_name || `Leader · ${shortId(id)}`
+  // Prefer the real persisted teams (system of record); fall back to reconstructing
+  // from the agent directory for organizations onboarded before teams were recorded.
+  const boardTeams: BoardTeam[] = teams.length
+    ? teams.map((team) => ({ key: team.id, name: team.name, subtitle: agentName(team.leader_agent_id), workerCount: team.member_agent_ids.length, badge: '已注册' }))
+    : leaders.map((leader) => ({
+        key: leader.id,
+        name: leader.repository_id ? `repository-${shortId(leader.repository_id)}` : leader.agentteams_resource_name,
+        subtitle: leader.agentteams_resource_name,
+        workerCount: workers.filter((worker) => worker.leader_agent_id === leader.id).length,
+        badge: '已恢复',
+      }))
 
   return <section className="content team-page">
     <div className="section-head team-page-head"><div><h2>Repository Teams</h2><p>从已注册的 Agent 中选择负责人和成员，一次完成 AgentTeams 团队装配。</p></div><button className="primary" onClick={() => setOpen(true)}><Plus size={15} />一键配置 Team</button></div>
     {error && <p className="error">{error}</p>}
     <div className="team-stats"><Stat value={new Set(agents.map((agent) => agent.organization_id)).size} label="已接入组织" /><Stat value={leaders.length} label="Repository Leader" /><Stat value={workers.length} label="可分配 Worker" /></div>
     <div className="team-board">
-      <div className="team-board-head"><div><h3>长期仓库团队</h3><p>从持久化 Agent 目录恢复 Leader、Worker 与仓库绑定。</p></div><span>{persistedTeams.length} Teams</span></div>
-      {loading ? <div className="team-empty"><UsersRound size={27} /><strong>正在读取 Agent 目录</strong></div> : persistedTeams.length === 0 ? <div className="team-empty"><UsersRound size={27} /><strong>还没有 Repository Team</strong><p>先通过启动向导接入仓库，或点击右上角手动配置。</p></div> : <div className="team-list">{persistedTeams.map((team) => <div className="team-card" key={team.leader.id}><div className="team-card-icon"><UsersRound size={19} /></div><div><strong>{team.name}</strong><small>{team.leader.agentteams_resource_name}</small></div><div className="team-member-count"><b>{team.workers.length}</b><span>Workers</span></div><span className="ready"><Check size={12} />已注册</span></div>)}{created.filter((result) => !persistedTeams.some((team) => team.leader.id === result.leader.id)).map((result) => <div className="team-card" key={result.team.name}><div className="team-card-icon"><UsersRound size={19} /></div><div><strong>{result.team.name}</strong><small>Leader · {shortId(result.leader.id)}</small></div><div className="team-member-count"><b>{result.members.length}</b><span>Workers</span></div><span className="ready"><Check size={12} />已创建</span></div>)}</div>}
+      <div className="team-board-head"><div><h3>长期仓库团队</h3><p>展示已持久化的 AgentTeams 团队，包含名称、负责人与成员规模。</p></div><span>{boardTeams.length} Teams</span></div>
+      {loading ? <div className="team-empty"><UsersRound size={27} /><strong>正在读取团队记录</strong></div> : boardTeams.length === 0 ? <div className="team-empty"><UsersRound size={27} /><strong>还没有 Repository Team</strong><p>先通过启动向导接入仓库，或点击右上角手动配置。</p></div> : <div className="team-list">{boardTeams.map((team) => <div className="team-card" key={team.key}><div className="team-card-icon"><UsersRound size={19} /></div><div><strong>{team.name}</strong><small>{team.subtitle}</small></div><div className="team-member-count"><b>{team.workerCount}</b><span>Workers</span></div><span className="ready"><Check size={12} />{team.badge}</span></div>)}</div>}
     </div>
-    {open && <TeamDialog agents={agents} orgNames={orgNames} onClose={() => setOpen(false)} onCreated={(result) => { setCreated((current) => [result, ...current]); setOpen(false) }} />}
+    {open && <TeamDialog agents={agents} orgNames={orgNames} onClose={() => setOpen(false)} onCreated={() => { setOpen(false); loadTeams() }} />}
   </section>
 }
 

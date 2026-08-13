@@ -88,6 +88,18 @@ export type Organization = {
   created_at: string;
 };
 
+export type AgentTeam = {
+  id: string;
+  organization_id: string;
+  name: string;
+  description: string | null;
+  leader_agent_id: string;
+  member_agent_ids: string[];
+  agentteams_team_name: string;
+  repository_id: string | null;
+  created_at: string;
+};
+
 export type ProjectTopology = {
   id: string;
   organization_id: string;
@@ -223,6 +235,7 @@ export const api = {
   onboardingJob: (jobId: string) => request<OnboardingJob>(`/setup/repositories/onboarding-jobs/${jobId}`),
   onboardingJobs: () => request<OnboardingJob[]>("/setup/repositories/onboarding-jobs"),
   retryOnboardingJob: (jobId: string, data: object) => request<OnboardingJob>(`/setup/repositories/onboarding-jobs/${jobId}/retry`, { method: "POST", body: JSON.stringify(data) }),
+  agentTeams: () => request<AgentTeam[]>("/agent-teams"),
   createAgentTeam: (data: object) =>
     request<AgentTeamResult>("/agent-teams", {
       method: "POST",
