@@ -1,0 +1,12 @@
+# Developer override: expose the API directly on the host for debugging.
+#
+# The default compose.yaml keeps the API off the host so http://127.0.0.1:5173
+# (the web service) is the single entry. Layer this file to also reach the API
+# and its Swagger UI directly on http://127.0.0.1:8000:
+#
+#   docker compose -f compose.yaml -f compose.dev.yaml --profile platform up -d --build
+#
+services:
+  api:
+    ports:
+      - "8000:8000"

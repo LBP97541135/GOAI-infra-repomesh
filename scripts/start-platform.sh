@@ -86,11 +86,11 @@ if [[ -z "${REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN:-}" ]]; then
   fi
 fi
 
-docker compose --profile platform up -d --build api
+docker compose --profile platform up -d --build api web
 
 ready=0
 for _ in $(seq 1 30); do
-  if curl --fail --silent --max-time 3 http://127.0.0.1:8000/health/ready >/dev/null; then
+  if curl --fail --silent --max-time 3 http://127.0.0.1:5173/health/ready >/dev/null; then
     ready=1
     break
   fi
@@ -98,9 +98,10 @@ for _ in $(seq 1 30); do
 done
 
 if [[ "${ready}" != "1" ]]; then
-  docker compose --profile platform logs --tail 100 api
-  echo "RepoMesh API did not become ready at http://127.0.0.1:8000." >&2
+  docker compose --profile platform logs --tail 100 api web
+  echo "RepoMesh did not become ready at http://127.0.0.1:5173." >&2
   exit 1
 fi
 
-echo "RepoMesh is ready at http://127.0.0.1:8000/docs"
+echo "RepoMesh is ready at http://127.0.0.1:5173"
+echo "API documentation is available at http://127.0.0.1:5173/docs"

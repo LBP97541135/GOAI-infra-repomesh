@@ -154,7 +154,7 @@ if ($ComposeExitCode -ne 0) {
 $Ready = $false
 foreach ($Attempt in 1..30) {
     try {
-        $Health = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "http://127.0.0.1:8000/health/ready"
+        $Health = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "http://127.0.0.1:5173/health/ready"
         if ($Health.StatusCode -eq 200) {
             $Ready = $true
             break
@@ -165,9 +165,9 @@ foreach ($Attempt in 1..30) {
 }
 
 if (-not $Ready) {
-    docker compose --profile platform logs --tail 100 api
-    throw "RepoMesh API did not become ready at http://127.0.0.1:8000."
+    docker compose --profile platform logs --tail 100 api web
+    throw "RepoMesh did not become ready at http://127.0.0.1:5173."
 }
 
-Write-Host "RepoMesh is ready at http://127.0.0.1:8000/docs"
-Write-Host "RepoMesh Control Plane is ready at http://127.0.0.1:5173"
+Write-Host "RepoMesh is ready at http://127.0.0.1:5173"
+Write-Host "API documentation is available at http://127.0.0.1:5173/docs"

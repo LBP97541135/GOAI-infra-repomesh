@@ -38,8 +38,17 @@ to install AgentTeams from the checked-in installer and start the containerized 
 ~~~
 
 The command starts PostgreSQL, AgentTeams, the RepoMesh API, and the production web console.
-Open `http://127.0.0.1:5173` after the readiness check completes. Subsequent starts can omit
+Open `http://127.0.0.1:5173` after the readiness check completes. This single entry serves the
+console and reverse-proxies the API, so `http://127.0.0.1:5173/docs` reaches the API
+documentation; the API is not published on the host by default. Subsequent starts can omit
 `-InstallAgentTeams`.
+
+To also reach the API directly on `http://127.0.0.1:8000` for debugging, layer the developer
+override:
+
+~~~powershell
+docker compose -f compose.yaml -f compose.dev.yaml --profile platform up -d --build
+~~~
 
 On Linux:
 

@@ -55,8 +55,9 @@ services:
       REPOMESH_SCM_COMMAND_DISPATCH_INTERVAL_SECONDS: ${REPOMESH_SCM_COMMAND_DISPATCH_INTERVAL_SECONDS:-5}
       REPOMESH_RUNNER_WORKSPACE_ROOT: /runner-workspaces
       REPOMESH_AGENTTEAMS_STORAGE_ROOT: /agentteams-data/minio/agentteams-storage
-    ports:
-      - "8000:8000"
+    # No host port is published for the API: the web service is the single
+    # public entry and reverse-proxies /api, /health and /docs to api:8000 over
+    # the compose network. Use compose.dev.yaml to expose 8000 for debugging.
     volumes:
       - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/runner-workspaces
       - agentteams-storage:/agentteams-data
