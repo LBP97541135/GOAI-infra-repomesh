@@ -78,7 +78,7 @@ class NativeAgentCreate(BaseModel):
     organization_id: UUID
     role: AgentRole
     resource_name: str = Field(min_length=3, max_length=100)
-    model: str = Field(default="qwen3.6-plus", min_length=1, max_length=100)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
     manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
     worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     leader_agent_id: UUID | None = None
@@ -94,4 +94,13 @@ class RepositoryAgentTeamOnboard(BaseModel):
     leader_runtime: WorkerRuntime = WorkerRuntime.COPAW
     worker_runtime: WorkerRuntime = WorkerRuntime.REPOMESH_RUNNER
     responsibility_paths: list[str] = Field(default_factory=lambda: ["**"])
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ManualAgentTeamCreate(BaseModel):
+    organization_id: UUID
+    name: str = Field(min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]+$")
+    description: str = Field(default="", max_length=255)
+    leader_agent_id: UUID
+    member_agent_ids: list[UUID] = Field(default_factory=list, max_length=20)
     idempotency_key: str = Field(min_length=1, max_length=200)

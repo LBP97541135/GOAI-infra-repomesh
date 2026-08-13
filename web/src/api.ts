@@ -31,6 +31,41 @@ export type AgentPrincipal = {
   status: string;
 };
 
+export type AgentTeamResult = {
+  team: { name: string; phase: string; [key: string]: unknown };
+  leader: AgentPrincipal;
+  members: AgentPrincipal[];
+};
+
+export type SetupStatus = {
+  ready_for_project_creation: boolean;
+  checks: Record<"model" | "database" | "agentteams" | "matrix" | "internal_auth" | "github_app" | "administrator" | "agent_directory" | "repositories", boolean>;
+  counts: { accounts: number; agents: number; repositories: number };
+  next_actions: string[];
+};
+
+export type CodingAgentProbe = {
+  adapter_id: string;
+  display_name: string;
+  installed: boolean;
+  executable: string | null;
+  auth_status: string;
+  detail: string | null;
+  execution_status: string;
+  runnable_by_verified_driver: boolean;
+};
+
+export type RepositoryOnboardResult = {
+  organization_id: string;
+  repositories: Array<{
+    repository_id: string;
+    repository_name: string;
+    scan: "created" | "reused";
+    agent_team: "ready" | "failed";
+    detail?: string;
+  }>;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     credentials: "include",
@@ -60,6 +95,15 @@ export const api = {
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   accounts: () => request<Account[]>("/auth/accounts"),
   agents: () => request<AgentPrincipal[]>("/agents"),
+  setupStatus: () => request<SetupStatus>("/setup/status"),
+  codingAgents: () => request<{ environment: string; note: string; adapters: CodingAgentProbe[] }>("/setup/coding-agents"),
+  createNativeAgent: (data: object) => request<AgentPrincipal>("/agents/native", { method: "POST", body: JSON.stringify(data) }),
+  onboardRepositories: (data: object) => request<RepositoryOnboardResult>("/setup/repositories/onboard", { method: "POST", body: JSON.stringify(data) }),
+  createAgentTeam: (data: object) =>
+    request<AgentTeamResult>("/agent-teams", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   createAccount: (data: object) =>
     request<Account>("/auth/accounts", {
       method: "POST",

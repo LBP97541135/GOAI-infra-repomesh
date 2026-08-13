@@ -13,6 +13,7 @@ from repomesh.api.human_control_models import (
     AutomaticProjectTopologyCreate,
     BootstrapAdmin,
     CheckpointDecisionCreate,
+    ManualAgentTeamCreate,
     NativeAgentCreate,
     ProjectControlCreate,
     ProjectTopologyCreate,
@@ -163,19 +164,20 @@ async def create_native_agent(body: NativeAgentCreate, request: Request) -> dict
         responsibility_paths=tuple(body.responsibility_paths),
         agentteams_resource_name=body.resource_name,
     )
+    model = body.model or get_settings().deepseek_model
     manager = None
     worker = None
     if body.role is AgentRole.ORGANIZATION_LEADER:
         manager = ManagerProjection(
             name=body.resource_name,
-            model=body.model,
+            model=model,
             runtime=body.manager_runtime,
             skills=("project-management", "task-coordination"),
         )
     else:
         worker = WorkerProjection(
             name=body.resource_name,
-            model=body.model,
+            model=model,
             runtime=body.worker_runtime,
             identity=(
                 "Repository Leader" if body.role is AgentRole.REPOSITORY_LEADER else "Coding Worker"
@@ -300,6 +302,72 @@ async def onboard_repository_agent_team(
         "leader": asdict(leader.principal),
         "workers": [asdict(item.principal) for item in workers],
         "team": asdict(team),
+    }
+
+
+@router.post("/agent-teams", status_code=status.HTTP_201_CREATED)
+async def create_manual_agent_team(body: ManualAgentTeamCreate, request: Request) -> dict:
+    """Compose an AgentTeams Team from existing RepoMesh agent principals."""
+    actor = await _account(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    directory = request.app.state.container.agent_directory
+    leader = await directory.get_view(body.leader_agent_id)
+    if leader is None:
+        raise HTTPException(status_code=422, detail="Leader Agent does not exist")
+    if leader.organization_id != body.organization_id:
+        raise HTTPException(status_code=422, detail="Leader Agent belongs to another organization")
+    if leader.role is not AgentRole.REPOSITORY_LEADER:
+        raise HTTPException(status_code=422, detail="Team Leader must be a Repository Leader")
+    if len(set(body.member_agent_ids)) != len(body.member_agent_ids):
+        raise HTTPException(status_code=422, detail="Team members must be unique")
+    if body.leader_agent_id in body.member_agent_ids:
+        raise HTTPException(status_code=422, detail="Leader cannot also be a Team member")
+
+    members = []
+    for agent_id in body.member_agent_ids:
+        member = await directory.get_view(agent_id)
+        if member is None:
+            raise HTTPException(status_code=422, detail=f"Team member does not exist: {agent_id}")
+        if member.organization_id != body.organization_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Team member belongs to another organization",
+            )
+        if member.role is not AgentRole.WORKER or member.leader_agent_id != leader.id:
+            raise HTTPException(
+                status_code=422,
+                detail="Team members must be Workers managed by the selected Leader",
+            )
+        members.append(member)
+
+    control_plane = request.app.state.container.agent_team_control_plane
+    if control_plane is None:
+        raise HTTPException(status_code=503, detail="AgentTeams control plane is not configured")
+    try:
+        team = await control_plane.ensure_team(
+            TeamProjection(
+                name=body.name,
+                description=body.description.strip() or None,
+                members=(
+                    TeamMemberProjection(leader.agentteams_resource_name, TeamRole.LEADER),
+                    *(
+                        TeamMemberProjection(
+                            member.agentteams_resource_name,
+                            TeamRole.WORKER,
+                        )
+                        for member in members
+                    ),
+                ),
+            ),
+            idempotency_key=body.idempotency_key,
+        )
+    except (RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {
+        "team": asdict(team),
+        "leader": asdict(leader),
+        "members": [asdict(member) for member in members],
     }
 
 
