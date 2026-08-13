@@ -606,3 +606,162 @@ async def test_sweep_leaves_a_candidate_with_an_unmerged_dependency_draft() -> N
     # the producer's merge, which has not happened.
     assert adapter.promotions == [2]
     assert adapter.draft_by_number[3] is True
+
+
+class MergeableAdapter:
+    """A non-draft, open, green pull request -- everything the gate asks for.
+
+    Faithful on one point that matters: once merged, GitHub reports the PR as
+    merged. A fake that kept answering "open" would let the sweep re-decide a
+    finished merge, which is a property of the fake and not of the system.
+    """
+
+    def __init__(self) -> None:
+        self.merges: list[int] = []
+        self.merged_numbers: set[int] = set()
+
+    async def get_pull_request(
+        self, repository: RepositoryRef, number: int
+    ) -> PullRequestObservation:
+        merged = number in self.merged_numbers
+        return PullRequestObservation(
+            provider=SCMProvider.GITHUB,
+            repository=repository,
+            number=number,
+            url=f"https://github.com/acme/pricing/pull/{number}",
+            state=PullRequestState.MERGED if merged else PullRequestState.OPEN,
+            draft=False,
+            head_branch="repomesh/a762abba/9dfa78f2",
+            head_sha="a" * 40,
+            base_branch="main",
+            base_sha="b" * 40,
+            mergeable=True,
+            merge_sha="d" * 40 if merged else None,
+        )
+
+    async def list_check_runs(
+        self, repository: RepositoryRef, head_sha: str
+    ) -> tuple[CheckRunObservation, ...]:
+        return (CheckRunObservation("901", "unit-tests", head_sha, True, True, "passed"),)
+
+    async def list_pull_request_reviews(
+        self, repository: RepositoryRef, number: int
+    ) -> tuple[PullRequestReviewObservation, ...]:
+        return ()
+
+    async def ready_for_review(
+        self, repository: RepositoryRef, number: int, *, idempotency_key: str
+    ) -> PullRequestObservation:
+        return await self.get_pull_request(repository, number)
+
+    async def merge_pull_request(self, command: MergePullRequestCommand) -> MergePullRequestResult:
+        self.merges.append(command.number)
+        self.merged_numbers.add(command.number)
+        return MergePullRequestResult(True, "d" * 40, "merged")
+
+
+async def mergeable_delivery():
+    """A candidate the gate will allow: green required check, no approval required."""
+
+    repository_id = uuid4()
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(id=repository_id, name="pricing", url="https://github.com/acme/pricing")
+    )
+    store = InMemoryChangeSetStore()
+    service = DeliveryService(store)
+    change_set = await service.prepare(
+        PrepareChangeSetCommand(
+            organization_id=uuid4(),
+            project_id=uuid4(),
+            created_by_agent_id=uuid4(),
+            title="Mergeable delivery",
+            validation_snapshot_id=uuid4(),
+            candidates=(
+                RepositoryCandidateInput(
+                    repository_id=repository_id,
+                    task_id=uuid4(),
+                    commit_sha="a" * 40,
+                    base_sha="b" * 40,
+                    branch_name="repomesh/a762abba/9dfa78f2",
+                    required_checks=("unit-tests",),
+                    required_approvals=0,
+                ),
+            ),
+        ),
+        idempotency_key="mergeable-delivery",
+    )
+    await service.observe_pull_request(
+        PullRequestObservationCommand(
+            change_set.id, repository_id, 3, "https://github.com/acme/pricing/pull/3", "a" * 40
+        )
+    )
+    return store, catalog, change_set.id, repository_id
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_already_decides_and_merges_once() -> None:
+    """The forward decision is in reconcile_and_merge's main path, not only its
+    already-merged safety branch: an open non-draft PR whose gate opens is
+    merged by the sweep itself, and repeated sweeps do not merge again."""
+
+    store, catalog, change_set_id, _ = await mergeable_delivery()
+    service = DeliveryService(store)
+    adapter = MergeableAdapter()
+    reconciler = DeliveryReconciler(service, ChangeSetSCMCoordinator(service, catalog, adapter))
+
+    await reconciler.run_once()
+    await reconciler.run_once()
+    await reconciler.run_once()
+
+    assert adapter.merges == [3]
+    candidate = (await service.get(change_set_id)).repositories[0]
+    assert candidate.status is RepositoryDeliveryStatus.MERGED
+    assert candidate.merge_sha == "d" * 40
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_queues_exactly_one_merge_command() -> None:
+    """The wired deployment merges through the SCM command queue, not inline."""
+
+    store, catalog, change_set_id, repository_id = await mergeable_delivery()
+    service = DeliveryService(store)
+    commands = SCMCommandService(InMemorySCMCommandStore())
+    adapter = MergeableAdapter()
+    reconciler = DeliveryReconciler(
+        service,
+        ChangeSetSCMCoordinator(service, catalog, adapter, command_service=commands),
+    )
+
+    await reconciler.run_once()
+    await reconciler.run_once()
+    await reconciler.run_once()
+
+    queued = await commands.list_dispatchable()
+    merges = [item for item in queued if item.kind is SCMCommandKind.MERGE_PULL_REQUEST]
+    assert len(merges) == 1
+    assert merges[0].idempotency_key == f"merge:{change_set_id}:{repository_id}:{'a' * 40}"
+    # The adapter is never called directly on this path.
+    assert adapter.merges == []
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_gate_is_a_decision_the_sweep_makes_without_merging() -> None:
+    """required_approvals: 1 with no reviews is an honest 'no', not a hang.
+
+    The verdict itself is computed on read (``attach_merge_gates``), so what
+    the sweep owes here is to reach the decision point and refuse to merge --
+    not to persist a verdict, which nothing stores.
+    """
+
+    store, catalog, change_set_id, _, repository_id = await draft_delivery()
+    service = DeliveryService(store)
+    adapter = MergeableAdapter()
+    reconciler = DeliveryReconciler(service, ChangeSetSCMCoordinator(service, catalog, adapter))
+
+    await reconciler.run_once()
+
+    assert adapter.merges == []
+    gate = await service.evaluate_merge_gate(change_set_id, repository_id)
+    assert gate.allowed is False
+    assert "required reviews have not passed" in gate.reasons
