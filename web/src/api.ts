@@ -66,6 +66,32 @@ export type RepositoryOnboardResult = {
   }>;
 };
 
+export type OnboardingJob = {
+  id: string;
+  organization_id?: string;
+  org_url?: string;
+  status: "queued" | "running" | "completed" | "failed";
+  phase: "queued" | "scanning" | "registering" | "teaming" | "done" | "authorization" | "failed";
+  requires_auth?: boolean;
+  results: RepositoryOnboardResult["repositories"];
+  error?: string | null;
+};
+
+export type ProjectTopology = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  organization_leader_id: string;
+  execution_mode: "auto" | "supervised" | "manual_controlled";
+  operational_status: "active" | "paused" | "cancelled";
+  repository_teams: Array<{
+    repository_id: string;
+    leader_agent_id: string;
+    worker_agent_ids: string[];
+    runtime_status: string;
+  }>;
+};
+
 // ---------------------------------------------------------------------------
 // PRD → 方案制定链路（repository_intelligence /api/v1）
 // ---------------------------------------------------------------------------
@@ -180,6 +206,10 @@ export const api = {
   codingAgents: () => request<{ environment: string; note: string; adapters: CodingAgentProbe[] }>("/setup/coding-agents"),
   createNativeAgent: (data: object) => request<AgentPrincipal>("/agents/native", { method: "POST", body: JSON.stringify(data) }),
   onboardRepositories: (data: object) => request<RepositoryOnboardResult>("/setup/repositories/onboard", { method: "POST", body: JSON.stringify(data) }),
+  createOnboardingJob: (data: object) => request<OnboardingJob>("/setup/repositories/onboarding-jobs", { method: "POST", body: JSON.stringify(data) }),
+  onboardingJob: (jobId: string) => request<OnboardingJob>(`/setup/repositories/onboarding-jobs/${jobId}`),
+  onboardingJobs: () => request<OnboardingJob[]>("/setup/repositories/onboarding-jobs"),
+  retryOnboardingJob: (jobId: string, data: object) => request<OnboardingJob>(`/setup/repositories/onboarding-jobs/${jobId}/retry`, { method: "POST", body: JSON.stringify(data) }),
   createAgentTeam: (data: object) =>
     request<AgentTeamResult>("/agent-teams", {
       method: "POST",
@@ -195,6 +225,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  projects: () => request<ProjectTopology[]>("/projects"),
   requirementAnalysis: (requirement: string) =>
     request<RequirementAnalysis>("/requirement-analysis", {
       method: "POST",

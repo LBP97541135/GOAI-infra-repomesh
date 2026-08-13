@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Bot, Check, ChevronRight, CircleAlert, GitBranch, LoaderCircle, RefreshCw, ServerCog, UserRoundCog } from 'lucide-react'
-import { api, type AgentPrincipal, type CodingAgentProbe, type RepositoryOnboardResult, type SetupStatus } from './api'
+import { api, type AgentPrincipal, type CodingAgentProbe, type OnboardingJob, type RepositoryOnboardResult, type SetupStatus } from './api'
 
 const checkMeta = {
   model: ['模型连接', 'RepoMesh 与 AgentTeams 共用的模型配置'],
@@ -11,7 +11,7 @@ const checkMeta = {
   github_app: ['GitHub App', 'PR 交付时需要，可稍后配置'],
 } as const
 
-type Phase = 'idle' | 'scanning' | 'registering' | 'teaming' | 'done'
+type Phase = 'idle' | 'queued' | 'scanning' | 'registering' | 'teaming' | 'done'
 
 export function SetupWizard({ onReady }: { onReady: () => void }) {
   const [status, setStatus] = useState<SetupStatus | null>(null)
@@ -21,6 +21,8 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [phase, setPhase] = useState<Phase>('idle')
+  const [jobId, setJobId] = useState('')
+  const [retryJob, setRetryJob] = useState<OnboardingJob | null>(null)
   const [results, setResults] = useState<RepositoryOnboardResult['repositories']>([])
   const [organizationId, setOrganizationId] = useState<string>(() => crypto.randomUUID())
   const [leaderName, setLeaderName] = useState('organization-leader')
@@ -31,14 +33,35 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
   const refresh = useCallback(async () => {
     setRefreshing(true); setError('')
     try {
-      const [nextStatus, probeResult, principals] = await Promise.all([api.setupStatus(), api.codingAgents(), api.agents()])
+      const [nextStatus, probeResult, principals, jobs] = await Promise.all([api.setupStatus(), api.codingAgents(), api.agents(), api.onboardingJobs()])
       setStatus(nextStatus); setAdapters(probeResult.adapters); setAgents(principals)
+      const latest = jobs[0]
+      if (latest && latest.status !== 'completed') {
+        setJobId(latest.id); setResults(latest.results || [])
+        setOrgUrl(latest.org_url || '')
+        if (latest.organization_id) setOrganizationId(latest.organization_id)
+        if (latest.status === 'failed') { setRetryJob(latest); setPhase('idle'); setError(latest.error || '上次仓库接入失败，可重新授权后重试') }
+        else setPhase(latest.phase as Phase)
+      }
       const orgLeader = principals.find((agent) => agent.role === 'organization_leader')
       if (orgLeader) setOrganizationId(orgLeader.organization_id)
     } catch (reason) { setError(reason instanceof Error ? reason.message : '检测失败') }
     finally { setLoading(false); setRefreshing(false) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    if (!jobId || phase === 'done' || phase === 'idle') return
+    const timer = window.setInterval(async () => {
+      try {
+        const job = await api.onboardingJob(jobId)
+        setResults(job.results || [])
+        if (job.status === 'completed') { setPhase('done'); setToken(''); await refresh() }
+        else if (job.status === 'failed') { setPhase('idle'); setError(job.error || (job.phase === 'authorization' ? '任务需要重新输入访问 Token' : '仓库接入失败')) }
+        else setPhase(job.phase === 'queued' ? 'queued' : job.phase as Phase)
+      } catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取接入进度') }
+    }, 900)
+    return () => window.clearInterval(timer)
+  }, [jobId, phase, refresh])
 
   const organizationLeader = agents.find((agent) => agent.role === 'organization_leader' && agent.organization_id === organizationId)
   const requiredKeys = ['model', 'database', 'agentteams', 'matrix', 'internal_auth'] as const
@@ -55,14 +78,14 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Organization Leader 创建失败') }
   }
   const onboard = async () => {
-    setError(''); setResults([]); setPhase('scanning')
-    const timers = [window.setTimeout(() => setPhase('registering'), 900), window.setTimeout(() => setPhase('teaming'), 1800)]
+    setError(''); setResults([]); setPhase('queued')
     try {
       const platformToken = orgUrl.includes('gitlab') ? { gitlab_token: token } : { github_token: token }
-      const response = await api.onboardRepositories({ organization_id: organizationId, org_url: orgUrl, ...platformToken, default_worker_count: workerCount, scan_workers: 5 })
-      setResults(response.repositories); setPhase('done'); await refresh()
+      const payload = { organization_id: organizationId, org_url: orgUrl, ...platformToken, default_worker_count: workerCount, scan_workers: 5 }
+      const job: OnboardingJob = retryJob ? await api.retryOnboardingJob(retryJob.id, payload) : await api.createOnboardingJob(payload)
+      setRetryJob(null)
+      setJobId(job.id); setPhase(job.phase as Phase)
     } catch (reason) { setPhase('idle'); setError(reason instanceof Error ? reason.message : '仓库接入失败') }
-    finally { timers.forEach(window.clearTimeout) }
   }
 
   if (loading) return <div className="setup-loader"><LoaderCircle size={24} />正在检测运行环境</div>
@@ -109,4 +132,4 @@ export function SetupWizard({ onReady }: { onReady: () => void }) {
 
 function Step({ number, title, state }: { number: string; title: string; state: 'done' | 'active' }) { return <div className={state}><i>{state === 'done' ? <Check size={13} /> : number}</i><span>{title}</span></div> }
 function SetupSection({ icon: Icon, number, title, copy, children }: { icon: typeof ServerCog; number: string; title: string; copy: string; children: React.ReactNode }) { return <section className="setup-section"><header><span><Icon size={18} /></span><div><small>STEP {number}</small><h3>{title}</h3><p>{copy}</p></div></header><div className="setup-section-body">{children}</div></section> }
-function OnboardProgress({ phase }: { phase: Phase }) { const steps = [['scanning','扫描仓库'],['registering','注册仓库'],['teaming','创建 Agent Team']] as const; const current = phase === 'done' ? 3 : steps.findIndex(([id]) => id === phase); return <div className="onboard-progress">{steps.map(([id,label], index) => <div key={id} className={index < current || phase === 'done' ? 'done' : index === current ? 'running' : ''}><i>{index < current || phase === 'done' ? <Check size={11} /> : index + 1}</i><span>{label}</span></div>)}</div> }
+function OnboardProgress({ phase }: { phase: Phase }) { const steps = [['scanning','扫描仓库'],['registering','注册仓库'],['teaming','创建 Agent Team']] as const; const current = phase === 'done' ? 3 : phase === 'queued' ? -1 : steps.findIndex(([id]) => id === phase); return <div className="onboard-progress">{steps.map(([id,label], index) => <div key={id} className={index < current || phase === 'done' ? 'done' : index === current ? 'running' : ''}><i>{index < current || phase === 'done' ? <Check size={11} /> : index + 1}</i><span>{phase === 'queued' && index === 0 ? '等待后台执行' : label}</span></div>)}</div> }

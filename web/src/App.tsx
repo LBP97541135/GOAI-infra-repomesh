@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react'
-import { Bell, Boxes, ListChecks, LogOut, Network, Plus, ShieldCheck, Users, UsersRound } from 'lucide-react'
-import { api, type Account, type ReviewRequest } from './api'
+import { Bell, Boxes, FolderKanban, ListChecks, LogOut, Network, ShieldCheck, Users, UsersRound } from 'lucide-react'
+import { api, type Account, type ProjectTopology, type ReviewRequest } from './api'
 import { Login } from './Login'
 import { ProjectSetup } from './ProjectSetup'
 import { ReviewWorkbench } from './ReviewWorkbench'
 import { TeamSetup } from './TeamSetup'
 import { SetupWizard } from './SetupWizard'
 import { Workspace } from './Workspace'
+import { ProjectList } from './ProjectList'
 
-type View = 'setup' | 'reviews' | 'projects' | 'teams' | 'accounts' | 'workspace'
+type View = 'setup' | 'project-list' | 'project-create' | 'reviews' | 'teams' | 'accounts' | 'workspace'
 
 export function App() {
   const [account, setAccount] = useState<Account | null>(null)
@@ -19,6 +20,10 @@ export function App() {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => { api.me().then(setAccount).catch(() => null).finally(() => setLoading(false)) }, [])
+  useEffect(() => {
+    if (!account) return
+    api.setupStatus().then((status) => setView(status.ready_for_project_creation && status.counts.repositories > 0 ? 'project-list' : 'setup')).catch(() => setView('setup'))
+  }, [account])
   useEffect(() => {
     if (!account) return
     api.reviews().then(setReviews).catch(() => null)
@@ -36,7 +41,7 @@ export function App() {
   const nav = [
     { key: 'setup' as const, label: '启动向导', icon: ListChecks },
     { key: 'reviews' as const, label: '人工审核', icon: Bell, badge: pending },
-    { key: 'projects' as const, label: '创建项目', icon: Plus },
+    { key: 'project-list' as const, label: '项目', icon: FolderKanban },
     { key: 'teams' as const, label: '团队配置', icon: UsersRound },
     { key: 'accounts' as const, label: '人员与权限', icon: Users },
   ]
@@ -47,10 +52,11 @@ export function App() {
       <div className="sidebar-foot"><div className="account-chip"><span>{account.display_name.slice(0, 1)}</span><div><strong>{account.display_name}</strong><small>{account.is_admin ? '本地管理员' : '审核人员'}</small></div></div><button className="icon-button" title="退出登录" onClick={() => api.logout().finally(() => setAccount(null))}><LogOut size={18} /></button></div>
     </aside>
     <main>
-      <header className="topbar"><div><span className="crumb">组织 / GOAI</span><h1>{view === 'setup' ? '启动与接入' : view === 'reviews' ? '人工审核台' : view === 'projects' ? '创建协作项目' : view === 'teams' ? '团队配置' : view === 'workspace' ? '项目工作台' : '人员与权限'}</h1></div><div className={`live ${connected ? 'online' : ''}`}><i />{connected ? '实时推送已连接' : '正在重连'}</div></header>
-      {view === 'setup' && <SetupWizard onReady={() => setView('projects')} />}
+      <header className="topbar"><div><span className="crumb">组织 / GOAI</span><h1>{view === 'setup' ? '启动与接入' : view === 'reviews' ? '人工审核台' : view === 'project-list' ? '项目' : view === 'project-create' ? '创建协作项目' : view === 'teams' ? '团队配置' : view === 'workspace' ? '项目工作台' : '人员与权限'}</h1></div><div className={`live ${connected ? 'online' : ''}`}><i />{connected ? '实时推送已连接' : '正在重连'}</div></header>
+      {view === 'setup' && <SetupWizard onReady={() => setView('project-list')} />}
+      {view === 'project-list' && <ProjectList onCreate={() => setView('project-create')} onOpen={(project: ProjectTopology) => { setActiveProject({ projectId: project.project_id, leaderAgentId: project.organization_leader_id }); setView('workspace') }} />}
       {view === 'reviews' && <ReviewWorkbench reviews={reviews} onRefresh={() => api.reviews().then(setReviews)} />}
-      {view === 'projects' && <ProjectSetup onCreated={(info) => { setActiveProject(info); setView('workspace') }} />}
+      {view === 'project-create' && <ProjectSetup onCreated={(info) => { setActiveProject(info); setView('workspace') }} />}
       {view === 'teams' && <TeamSetup />}
       {view === 'workspace' && activeProject && <Workspace projectId={activeProject.projectId} leaderAgentId={activeProject.leaderAgentId} />}
       {view === 'accounts' && <AccountPanel current={account} />}

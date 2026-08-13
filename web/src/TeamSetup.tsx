@@ -15,14 +15,19 @@ export function TeamSetup() {
   useEffect(() => { api.agents().then(setAgents).catch((reason) => setError(reason.message)).finally(() => setLoading(false)) }, [])
   const leaders = agents.filter((agent) => agent.role === 'repository_leader')
   const workers = agents.filter((agent) => agent.role === 'worker')
+  const persistedTeams = leaders.map((leader) => ({
+    name: leader.repository_id ? `repository-${shortId(leader.repository_id)}` : leader.agentteams_resource_name,
+    leader,
+    workers: workers.filter((worker) => worker.leader_agent_id === leader.id),
+  }))
 
   return <section className="content team-page">
     <div className="section-head team-page-head"><div><h2>Repository Teams</h2><p>从已注册的 Agent 中选择负责人和成员，一次完成 AgentTeams 团队装配。</p></div><button className="primary" onClick={() => setOpen(true)}><Plus size={15} />一键配置 Team</button></div>
     {error && <p className="error">{error}</p>}
     <div className="team-stats"><Stat value={new Set(agents.map((agent) => agent.organization_id)).size} label="已接入组织" /><Stat value={leaders.length} label="Repository Leader" /><Stat value={workers.length} label="可分配 Worker" /></div>
     <div className="team-board">
-      <div className="team-board-head"><div><h3>本次配置结果</h3><p>Team 会直接创建到 AgentTeams 控制平面。</p></div><span>{created.length} Teams</span></div>
-      {loading ? <div className="team-empty"><UsersRound size={27} /><strong>正在读取 Agent 目录</strong></div> : created.length === 0 ? <div className="team-empty"><UsersRound size={27} /><strong>还没有手动配置的 Team</strong><p>点击右上角按钮，从现有 Leader 和 Worker 中组建团队。</p></div> : <div className="team-list">{created.map((result) => <div className="team-card" key={result.team.name}><div className="team-card-icon"><UsersRound size={19} /></div><div><strong>{result.team.name}</strong><small>Leader · {shortId(result.leader.id)}</small></div><div className="team-member-count"><b>{result.members.length}</b><span>Workers</span></div><span className="ready"><Check size={12} />已创建</span></div>)}</div>}
+      <div className="team-board-head"><div><h3>长期仓库团队</h3><p>从持久化 Agent 目录恢复 Leader、Worker 与仓库绑定。</p></div><span>{persistedTeams.length} Teams</span></div>
+      {loading ? <div className="team-empty"><UsersRound size={27} /><strong>正在读取 Agent 目录</strong></div> : persistedTeams.length === 0 ? <div className="team-empty"><UsersRound size={27} /><strong>还没有 Repository Team</strong><p>先通过启动向导接入仓库，或点击右上角手动配置。</p></div> : <div className="team-list">{persistedTeams.map((team) => <div className="team-card" key={team.leader.id}><div className="team-card-icon"><UsersRound size={19} /></div><div><strong>{team.name}</strong><small>{team.leader.agentteams_resource_name}</small></div><div className="team-member-count"><b>{team.workers.length}</b><span>Workers</span></div><span className="ready"><Check size={12} />已注册</span></div>)}{created.filter((result) => !persistedTeams.some((team) => team.leader.id === result.leader.id)).map((result) => <div className="team-card" key={result.team.name}><div className="team-card-icon"><UsersRound size={19} /></div><div><strong>{result.team.name}</strong><small>Leader · {shortId(result.leader.id)}</small></div><div className="team-member-count"><b>{result.members.length}</b><span>Workers</span></div><span className="ready"><Check size={12} />已创建</span></div>)}</div>}
     </div>
     {open && <TeamDialog agents={agents} onClose={() => setOpen(false)} onCreated={(result) => { setCreated((current) => [result, ...current]); setOpen(false) }} />}
   </section>
