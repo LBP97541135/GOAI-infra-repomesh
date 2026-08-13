@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from repomesh.api.agent_teams import router as agent_teams_router
 from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
 from repomesh.api.organizations import router as organizations_router
@@ -17,6 +18,7 @@ api_router = APIRouter()
 api_router.include_router(health_router)
 api_router.include_router(platform_setup_router)
 api_router.include_router(organizations_router)
+api_router.include_router(agent_teams_router)
 api_router.include_router(worker_mcp_router)
 api_router.include_router(repository_intelligence_router, prefix="/api/v1")
 api_router.include_router(agent_runtime_router, prefix="/api/v1")

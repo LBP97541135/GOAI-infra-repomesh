@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
+from repomesh.api.agent_teams import persist_agent_team
 from repomesh.api.human_control_models import (
     AccountCreate,
     AccountCredentials,
@@ -296,6 +297,17 @@ async def onboard_repository_agent_team(
         )
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    await persist_agent_team(
+        request.app.state.container.database,
+        organization_id=body.organization_id,
+        name=team.name,
+        description=f"Long-lived repository team for {repository.name}",
+        leader_agent_id=leader.principal.id,
+        member_agent_ids=[item.principal.id for item in workers],
+        agentteams_team_name=team.name,
+        repository_id=repository_id,
+        idempotency_key=body.idempotency_key,
+    )
     return {
         "repository_id": repository_id,
         "repository_name": repository.name,
@@ -364,6 +376,17 @@ async def create_manual_agent_team(body: ManualAgentTeamCreate, request: Request
         )
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    await persist_agent_team(
+        request.app.state.container.database,
+        organization_id=body.organization_id,
+        name=team.name,
+        description=body.description.strip() or None,
+        leader_agent_id=leader.id,
+        member_agent_ids=[member.id for member in members],
+        agentteams_team_name=team.name,
+        repository_id=leader.repository_id,
+        idempotency_key=body.idempotency_key,
+    )
     return {
         "team": asdict(team),
         "leader": asdict(leader),
