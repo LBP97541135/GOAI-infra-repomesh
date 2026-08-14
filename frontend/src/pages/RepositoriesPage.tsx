@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import type { ConsoleRepositoryView } from "../api/contract";
-import { fetchConsoleRepositories, gridSourceMode } from "../api/grid";
+import type { ConsoleAgentView, ConsoleRepositoryView } from "../api/contract";
+import { fetchConsoleAgents, fetchConsoleRepositories, gridSourceMode } from "../api/grid";
 import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, errText, shortId } from "../display";
 import { AddRepositoryCard } from "../components/AddRepositoryCard";
+import { ProvisionTeamModal } from "../components/ProvisionTeamModal";
 import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 
 /** 仓库网格页（CONS-44 / 契约 v0.2 §4.1）。
@@ -23,10 +24,18 @@ import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 
 function RepositoryCard({
   repo,
+  staffed,
+  canProvision,
   onOpenIssue,
+  onProvision,
 }: {
   repo: ConsoleRepositoryView;
+  /** 该仓库在花名册里是否已有活跃 repository leader；null = 花名册还没取到 */
+  staffed: boolean | null;
+  /** 工作区已选定才给建团入口——组织是建团的必填参数，服务端不猜 */
+  canProvision: boolean;
   onOpenIssue: (issueId: string) => void;
+  onProvision: () => void;
 }) {
   const idle = repo.resident_team_count === 0;
 
@@ -67,19 +76,48 @@ function RepositoryCard({
           ))}
         </div>
       ) : (
-        <div className="mt-2 text-[11px] text-tx3">
-          无驻扎团队 · 团队随 issue 范围确认自动组建
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-tx3">
+          {/* 「无驻扎团队」是拓扑事实（没有 issue 驻扎它），与「有没有建过人」
+              是两件事——花名册里可能已有该仓库的 leader。两句话分开说，
+              建团入口只按后者出现，避免给出一个注定撞单例 409 的按钮。 */}
+          <span>无驻扎团队 · 团队随 issue 范围确认自动组建</span>
+          {staffed === true && <span className="text-tx3">· 常驻 leader 已就位</span>}
+          {staffed === false &&
+            (canProvision ? (
+              <button
+                className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2 hover:border-amber hover:text-amber-hi"
+                onClick={onProvision}
+              >
+                + 建团
+              </button>
+            ) : (
+              <span className="text-tx3">· 先在左上角选定工作区即可建团</span>
+            ))}
         </div>
       )}
     </div>
   );
 }
 
-export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: string) => void }) {
+export function RepositoriesPage({
+  organizationId,
+  onOpenIssue,
+  onToast,
+}: {
+  /** 当前选定工作区；null = 未选定（全部工作区），此时不给建团入口 */
+  organizationId: string | null;
+  onOpenIssue: (issueId: string) => void;
+  onToast: (text: string) => void;
+}) {
   const [repos, setRepos] = useState<ConsoleRepositoryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [addOpen, setAddOpen] = useState(false);
+  /** 花名册：只为判断某仓库是否已有常驻 leader。取用失败不挡仓库网格——
+   *  那时 staffed 恒为 null，建团入口整个不出现（宁可少一个按钮，
+   *  也不给一个不知道会不会撞车的按钮）。 */
+  const [agents, setAgents] = useState<ConsoleAgentView[] | null>(null);
+  const [provisionFor, setProvisionFor] = useState<ConsoleRepositoryView | null>(null);
 
   /** 扫描走到终态后刷新列表。**引用必须稳定**：卡片把它作为轮询 effect 的依赖，
    *  每次 render 换一个新函数会让轮询不断重启。 */
@@ -93,6 +131,12 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
     fetchConsoleRepositories()
       .then((rows) => !cancelled && setRepos(rows))
       .catch((err: unknown) => !cancelled && setError(errText(err)));
+    // withRuntime=false：这里只要 role/repository_id 两个持久化字段，
+    // 不值得为它等 Controller 探测（契约 §4.3，实测 0.10s vs 2.12s）。
+    setAgents(null);
+    fetchConsoleAgents(false)
+      .then((rows) => !cancelled && setAgents(rows))
+      .catch(() => !cancelled && setAgents(null));
     return () => {
       cancelled = true;
     };
@@ -137,13 +181,42 @@ export function RepositoriesPage({ onOpenIssue }: { onOpenIssue: (issueId: strin
       ) : (
         <div className="mt-4 grid gap-2">
           {repos.map((repo) => (
-            <RepositoryCard key={repo.repository_id} repo={repo} onOpenIssue={onOpenIssue} />
+            <RepositoryCard
+              key={repo.repository_id}
+              repo={repo}
+              staffed={
+                agents === null
+                  ? null
+                  : agents.some(
+                      (a) =>
+                        a.repository_id === repo.repository_id &&
+                        a.role === "repository_leader" &&
+                        a.status === "active",
+                    )
+              }
+              canProvision={organizationId !== null}
+              onOpenIssue={onOpenIssue}
+              onProvision={() => setProvisionFor(repo)}
+            />
           ))}
         </div>
       )}
 
+      {provisionFor !== null && organizationId !== null && (
+        <ProvisionTeamModal
+          open
+          repositoryId={provisionFor.repository_id}
+          repositoryName={provisionFor.name}
+          organizationId={organizationId}
+          onClose={() => setProvisionFor(null)}
+          onProvisioned={refresh}
+          onToast={onToast}
+        />
+      )}
+
       <p className="pt-4 text-[11px] text-tx3">
-        团队按「issue × 仓库」自动组建（rm-team-*，teamRoom + leaderDM 双房间）。
+        团队按「issue × 仓库」自动组建（rm-team-*，teamRoom + leaderDM 双房间）；
+        也可在接入后先建常驻团队，两条路径复用同一批人（仓库的 leader 是目录单例）。
         仓库的「发现证据」（auto_card）按仓库已存，本版不渲染 ——
         <ProbeNote sourceNote={gridSourceMode() === "live" ? "live · GET /console/repositories（契约 v0.2 §4.1）" : "replay 夹具"} />
       </p>

@@ -21,7 +21,7 @@ from repomesh.api.human_control_models import (
 )
 from repomesh.integrations.agentteams import RegisterNativeAgentRequest
 from repomesh.modules.agent_directory.application import CreateAgentRequest
-from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_directory.contracts import AgentDirectoryError, AgentRole
 from repomesh.modules.agent_runtime.ports.agent_team import (
     ManagerProjection,
     TeamMemberProjection,
@@ -294,6 +294,17 @@ async def onboard_repository_agent_team(
             ),
             idempotency_key=f"{body.idempotency_key}:team",
         )
+    except AgentDirectoryError as error:
+        # Caught ahead of RuntimeError, which it subclasses, because the two
+        # answers mean opposite things to whoever pressed the button. The
+        # directory refuses for reasons no retry outlasts — chiefly the
+        # repository-leader singleton (`repository:{id}:leader`): a repository
+        # whose leader was already provisioned by a console round's
+        # `ProvisionRepositoryAgentTeam` has one, under that path's own name,
+        # and asking for a second is permanently refused. Reporting that as
+        # 503 invites exactly the retry that cannot work; 409 says the
+        # repository is already staffed, which is both true and actionable.
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return {
