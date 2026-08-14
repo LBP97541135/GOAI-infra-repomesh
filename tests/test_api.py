@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from repomesh.modules.agent_directory.application import (
     CreateRepositoryAgentTeamRequest,
 )
 from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_runtime.ports.agent_team import TeamRuntimeRef
 from repomesh.settings import get_settings
 
 
@@ -19,6 +21,26 @@ def test_health(application_container: ApplicationContainer) -> None:
     with TestClient(create_app(application_container)) as client:
         assert client.get("/health/live").json() == {"status": "ok"}
         assert client.get("/health/ready").json() == {"status": "ready"}
+
+
+def test_first_run_setup_status_and_coding_agent_probe(
+    application_container: ApplicationContainer,
+) -> None:
+    with TestClient(create_app(application_container)) as client:
+        status = client.get("/api/v1/setup/status")
+        assert status.status_code == 200
+        assert status.json()["counts"] == {
+            "accounts": 0,
+            "agents": 0,
+            "repositories": 0,
+        }
+        assert "administrator" in status.json()["next_actions"]
+
+        probes = client.get("/api/v1/setup/coding-agents")
+        assert probes.status_code == 200
+        adapters = {item["adapter_id"]: item for item in probes.json()["adapters"]}
+        assert {"claude-code", "codex", "kimi"}.issubset(adapters)
+        assert "auth_status" in adapters["codex"]
 
 
 def test_local_account_bootstrap_login_and_session_authentication(
@@ -65,6 +87,83 @@ def test_local_account_bootstrap_login_and_session_authentication(
             client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code
             == 401
         )
+
+
+def test_admin_can_compose_agentteams_team_from_existing_agents(
+    application_container: ApplicationContainer,
+) -> None:
+    organization_id = uuid4()
+    repository_id = uuid4()
+
+    async def create_agents():
+        organization_leader = await CreateAgent(application_container.agent_directory).execute(
+            CreateAgentRequest(
+                organization_id=organization_id,
+                role=AgentRole.ORGANIZATION_LEADER,
+                agentteams_resource_name="manual-team-org-leader",
+            ),
+            idempotency_key="manual-team-org-leader",
+        )
+        return await CreateRepositoryAgentTeam(application_container.agent_directory).execute(
+            CreateRepositoryAgentTeamRequest(
+                organization_id=organization_id,
+                organization_leader_id=organization_leader.principal.id,
+                repository_id=repository_id,
+                leader_agentteams_resource_name="manual-team-repo-leader",
+                worker_agentteams_resource_names=("manual-team-worker",),
+            ),
+            idempotency_key="manual-team-agents",
+        )
+
+    team_agents = asyncio.run(create_agents())
+
+    class ControlPlane:
+        projection = None
+
+        async def ensure_team(self, projection, *, idempotency_key: str):
+            self.projection = projection
+            return TeamRuntimeRef(
+                name=projection.name,
+                phase="Ready",
+                team_room_id="!manual:matrix.local",
+                leader_room_id="!leader:matrix.local",
+                leader_name=projection.members[0].name,
+                ready_workers=len(projection.members) - 1,
+                total_workers=len(projection.members) - 1,
+            )
+
+    control_plane = ControlPlane()
+    container = replace(application_container, agent_team_control_plane=control_plane)
+    with TestClient(create_app(container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={"username": "admin", "password": "strong-password-123", "display_name": "Admin"},
+        )
+        client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "strong-password-123"},
+        )
+        response = client.post(
+            "/api/v1/agent-teams",
+            json={
+                "organization_id": str(organization_id),
+                "name": "saleor_backend",
+                "description": "Saleor backend team",
+                "leader_agent_id": str(team_agents.leader.id),
+                "member_agent_ids": [str(team_agents.workers[0].id)],
+                "idempotency_key": "manual-team:saleor-backend",
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["team"]["name"] == "saleor_backend"
+    assert response.json()["team"]["phase"] == "Ready"
+    assert response.json()["leader"]["id"] == str(team_agents.leader.id)
+    assert response.json()["members"][0]["id"] == str(team_agents.workers[0].id)
+    assert [member.name for member in control_plane.projection.members] == [
+        "manual-team-repo-leader",
+        "manual-team-worker",
+    ]
 
 
 def test_authenticated_project_mode_and_checkpoint_decision_api(

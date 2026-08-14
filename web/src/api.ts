@@ -31,6 +31,180 @@ export type AgentPrincipal = {
   status: string;
 };
 
+export type AgentTeamResult = {
+  team: { name: string; phase: string; [key: string]: unknown };
+  leader: AgentPrincipal;
+  members: AgentPrincipal[];
+};
+
+export type SetupStatus = {
+  ready_for_project_creation: boolean;
+  checks: Record<"model" | "database" | "agentteams" | "matrix" | "internal_auth" | "github_app" | "administrator" | "agent_directory" | "repositories", boolean>;
+  counts: { accounts: number; agents: number; repositories: number };
+  next_actions: string[];
+};
+
+export type CodingAgentProbe = {
+  adapter_id: string;
+  display_name: string;
+  installed: boolean;
+  executable: string | null;
+  auth_status: string;
+  detail: string | null;
+  execution_status: string;
+  runnable_by_verified_driver: boolean;
+};
+
+export type RepositoryOnboardResult = {
+  organization_id: string;
+  repositories: Array<{
+    repository_id: string;
+    repository_name: string;
+    scan: "created" | "reused";
+    agent_team: "ready" | "failed";
+    detail?: string;
+  }>;
+};
+
+// ---------------------------------------------------------------------------
+// PRD → 方案制定链路（repository_intelligence /api/v1）
+// ---------------------------------------------------------------------------
+
+export type RequirementAnalysis = {
+  sufficient: boolean;
+  confidence: number;
+  missing_dimensions: string[];
+  questions: string[];
+  extracted_keywords: string[];
+};
+
+export type DiscoveryCandidate = {
+  repository_id: string;
+  repository_name: string;
+  score: number;
+  matched_terms: string[];
+  rationale: string;
+  is_entry_point: boolean;
+};
+
+export type RepositoryPlan = {
+  changed_apis: string[];
+  changed_modules: string[];
+  depends_on: string[];
+  impacts: string[];
+  risk: string;
+};
+
+export type ConfirmationResult = {
+  repository: string;
+  status: string;
+  confidence: number;
+  reason: string;
+  plan_summary: string;
+  plan: RepositoryPlan | null;
+  missing_dependencies: string[];
+};
+
+export type ConfirmationSummary = {
+  required: ConfirmationResult[];
+  maybe: ConfirmationResult[];
+  excluded: ConfirmationResult[];
+  supplemented_repos: string[];
+  final_repos: string[];
+};
+
+export type IntegratedPlan = {
+  engineering_spec: string;
+  contracts: { producer: string; consumer: string; interface: string; agreement: string }[];
+  task_dag: {
+    repository: string;
+    instruction: string;
+    depends_on: string[];
+    parallelizable_with: string[];
+    tests: string[];
+  }[];
+  execution_batches: string[][];
+  /** PR-5: unified plan-layer graph — single source of truth. Top-level
+   * fields above are its materialised projections; frontends render from
+   * the graph, not by splicing the projections. */
+  graph?: PlanGraph | null;
+};
+
+export type GraphNode = {
+  repository: string;
+  instruction: string | null;
+  tests: string[];
+};
+
+export type GraphEdge = {
+  from: string; // producer (depended upon)
+  to: string; // consumer (dependent)
+  status: "candidate" | "confirmed";
+  source: "scan" | "tm" | "llm";
+  interface: string | null;
+  agreement: string | null;
+};
+
+export type PlanGraph = {
+  plan_version: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  execution_batches: string[][];
+  contracts: {
+    producer: string;
+    consumer: string;
+    interface: string;
+    agreement: string | null;
+  }[];
+  task_dag: {
+    repository: string;
+    instruction: string | null;
+    depends_on: string[];
+    tests: string[];
+  }[];
+};
+
+export type DiffEdge = GraphEdge;
+
+export type EdgeChangeView = {
+  from: string;
+  to: string;
+  old: GraphEdge | null;
+  new: GraphEdge | null;
+};
+
+export type PlanDiff = {
+  from_version: number;
+  to_version: number;
+  added_edges: DiffEdge[];
+  removed_edges: DiffEdge[];
+  changed_edges: EdgeChangeView[];
+  added_repos: string[];
+  removed_repos: string[];
+  affected_repos: string[];
+};
+
+export type MaterializePayload = {
+  engineering_spec: string;
+  contracts: IntegratedPlan["contracts"];
+  task_dag: IntegratedPlan["task_dag"];
+  execution_batches: string[][];
+  requirement: string;
+  project_id: string;
+  leader_agent_id: string;
+  idempotency_prefix: string;
+  repo_details?: Record<string, RepositoryPlan>;
+};
+
+export type MaterializeResult = {
+  engineering_spec_id: string;
+  contract_spec_ids: string[];
+  task_ids: string[];
+  skipped_repos: string[];
+  plan_id: string | null;
+  handoff_doc_ids: string[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     credentials: "include",
@@ -60,6 +234,15 @@ export const api = {
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   accounts: () => request<Account[]>("/auth/accounts"),
   agents: () => request<AgentPrincipal[]>("/agents"),
+  setupStatus: () => request<SetupStatus>("/setup/status"),
+  codingAgents: () => request<{ environment: string; note: string; adapters: CodingAgentProbe[] }>("/setup/coding-agents"),
+  createNativeAgent: (data: object) => request<AgentPrincipal>("/agents/native", { method: "POST", body: JSON.stringify(data) }),
+  onboardRepositories: (data: object) => request<RepositoryOnboardResult>("/setup/repositories/onboard", { method: "POST", body: JSON.stringify(data) }),
+  createAgentTeam: (data: object) =>
+    request<AgentTeamResult>("/agent-teams", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   createAccount: (data: object) =>
     request<Account>("/auth/accounts", {
       method: "POST",
@@ -70,10 +253,52 @@ export const api = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  requirementAnalysis: (requirement: string) =>
+    request<RequirementAnalysis>("/requirement-analysis", {
+      method: "POST",
+      body: JSON.stringify({ requirement }),
+    }),
+  discovery: (requirement: string, limit = 8) =>
+    request<DiscoveryCandidate[]>("/discovery", {
+      method: "POST",
+      body: JSON.stringify({ requirement, limit }),
+    }),
+  confirmation: (
+    requirement: string,
+    candidateRepos: string[],
+    evidence: Record<string, [string, number][]>,
+  ) =>
+    request<ConfirmationSummary>("/confirmation", {
+      method: "POST",
+      body: JSON.stringify({
+        requirement,
+        candidate_repos: candidateRepos,
+        discovery_evidence: evidence,
+        limit: 15,
+      }),
+    }),
+  integration: (requirement: string, confirmation: ConfirmationSummary) =>
+    request<IntegratedPlan>("/integration", {
+      method: "POST",
+      body: JSON.stringify({ requirement, confirmation }),
+    }),
+  materialize: (payload: MaterializePayload) =>
+    request<MaterializeResult>("/bridge/materialize", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   reviews: (status = "") =>
     request<ReviewRequest[]>(
       `/review-requests${status ? `?status=${status}` : ""}`,
     ),
+  /** PR-4: edge-level diff between two immutable plan snapshot versions. */
+  planDiff: (projectId: string, from?: number, to?: number) => {
+    const params = new URLSearchParams();
+    if (from != null) params.set("from", String(from));
+    if (to != null) params.set("to", String(to));
+    const qs = params.toString();
+    return request<PlanDiff>(`/plans/${projectId}/diff${qs ? `?${qs}` : ""}`);
+  },
   decide: (review: ReviewRequest, decision: string, reason: string) =>
     request<object>(`/projects/${review.project_id}/checkpoint-decisions`, {
       method: "POST",

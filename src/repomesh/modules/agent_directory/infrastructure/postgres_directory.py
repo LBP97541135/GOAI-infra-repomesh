@@ -62,6 +62,9 @@ class PostgresAgentDirectory:
             ).all()
         return tuple(self._to_domain(record) for record in records)
 
+    async def list_views(self):
+        return tuple(item.to_view() for item in await self.list())
+
     async def get_by_idempotency_key(
         self, idempotency_key: str
     ) -> tuple[AgentPrincipal, str] | None:

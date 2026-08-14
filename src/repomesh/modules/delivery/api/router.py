@@ -13,11 +13,13 @@ from repomesh.modules.delivery.contracts import (
     RepositoryCandidateInput,
     ReviewObservationCommand,
 )
+from repomesh.modules.delivery.policy import DeliveryPolicy
 from repomesh.settings import get_settings
 
 from .models import (
     ChangeSetCreate,
     CIObservationCreate,
+    DeliveryPolicyUpdate,
     MergeObservationCreate,
     PullRequestObservationCreate,
     RecoveryActionUpdate,
@@ -26,6 +28,72 @@ from .models import (
 )
 
 router = APIRouter(prefix="/delivery", tags=["delivery"])
+
+
+async def _human(request: Request):
+    authorization = request.headers.get("Authorization", "")
+    token = (
+        authorization.removeprefix("Bearer ").strip()
+        if authorization.startswith("Bearer ")
+        else request.cookies.get("repomesh_session")
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="local authentication is required")
+    try:
+        return await request.app.state.container.local_account_service().authenticate(token)
+    except Exception as error:
+        raise HTTPException(status_code=401, detail="invalid local session") from error
+
+
+async def _administrator(request: Request):
+    actor = await _human(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    return actor
+
+
+@router.put("/organizations/{organization_id}/policy")
+async def put_organization_policy(
+    organization_id: UUID,
+    body: DeliveryPolicyUpdate,
+    request: Request,
+) -> dict:
+    await _administrator(request)
+    policy = DeliveryPolicy(organization_id=organization_id, **body.model_dump())
+    await request.app.state.container.delivery_policy_store().put(policy)
+    return asdict(policy)
+
+
+@router.put("/organizations/{organization_id}/repositories/{repository_id}/policy")
+async def put_repository_policy(
+    organization_id: UUID,
+    repository_id: UUID,
+    body: DeliveryPolicyUpdate,
+    request: Request,
+) -> dict:
+    await _administrator(request)
+    policy = DeliveryPolicy(
+        organization_id=organization_id,
+        repository_id=repository_id,
+        **body.model_dump(),
+    )
+    await request.app.state.container.delivery_policy_store().put(policy)
+    return asdict(policy)
+
+
+@router.get("/organizations/{organization_id}/policy")
+async def get_delivery_policy(
+    organization_id: UUID,
+    request: Request,
+    repository_id: UUID | None = None,
+) -> dict:
+    await _human(request)
+    policy = await request.app.state.container.delivery_policy_store().resolve(
+        organization_id,
+        repository_id,
+        fallback=request.app.state.container.default_delivery_policy(organization_id),
+    )
+    return asdict(policy)
 
 
 def _service(request: Request):

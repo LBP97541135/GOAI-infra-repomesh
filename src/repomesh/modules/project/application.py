@@ -3,6 +3,7 @@ from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalReader,
+    AgentPrincipalStatus,
     AgentPrincipalView,
     AgentRole,
     RepositoryAgentTeamProvisioner,
@@ -49,6 +50,16 @@ class CreateProjectAgentTopologyRequest:
     project_id: UUID
     organization_leader_id: UUID
     repository_teams: tuple[RepositoryTeamAssignment, ...]
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
+    human_grants: tuple[HumanProjectGrantInput, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CreateAutomaticProjectTopologyRequest:
+    organization_id: UUID
+    project_id: UUID
+    repository_ids: tuple[UUID, ...]
     execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
     required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
     human_grants: tuple[HumanProjectGrantInput, ...] = ()
@@ -238,4 +249,93 @@ class EnsureProjectAgentTopology:
                 repository_teams=tuple(assignments),
             ),
             idempotency_key=f"{key}:topology",
+        )
+
+
+class CreateAutomaticProjectTopology:
+    """Resolve a project topology from the long-lived organization agent directory."""
+
+    def __init__(
+        self,
+        directory: AgentPrincipalReader,
+        creator: CreateProjectAgentTopology,
+    ) -> None:
+        self._directory = directory
+        self._creator = creator
+
+    async def execute(
+        self,
+        request: CreateAutomaticProjectTopologyRequest,
+        *,
+        idempotency_key: str,
+    ) -> ProjectAgentTopologyView:
+        if not request.repository_ids:
+            raise ProjectTopologyViolation("at least one repository is required")
+        if len(set(request.repository_ids)) != len(request.repository_ids):
+            raise ProjectTopologyViolation("project repositories must be unique")
+
+        principals = tuple(
+            item
+            for item in await self._directory.list_views()
+            if item.organization_id == request.organization_id
+            and item.status is AgentPrincipalStatus.ACTIVE
+        )
+        leaders = [
+            item for item in principals if item.role is AgentRole.ORGANIZATION_LEADER
+        ]
+        if len(leaders) != 1:
+            raise ProjectTopologyViolation(
+                "organization requires exactly one active organization leader"
+            )
+        organization_leader = leaders[0]
+
+        assignments = []
+        for repository_id in request.repository_ids:
+            repository_leaders = [
+                item
+                for item in principals
+                if item.role is AgentRole.REPOSITORY_LEADER
+                and item.repository_id == repository_id
+                and item.leader_agent_id == organization_leader.id
+            ]
+            if len(repository_leaders) != 1:
+                raise ProjectTopologyViolation(
+                    f"repository {repository_id} requires exactly one active repository leader"
+                )
+            repository_leader = repository_leaders[0]
+            workers = tuple(
+                sorted(
+                    (
+                        item.id
+                        for item in principals
+                        if item.role is AgentRole.WORKER
+                        and item.repository_id == repository_id
+                        and item.leader_agent_id == repository_leader.id
+                    ),
+                    key=str,
+                )
+            )
+            if not workers:
+                raise ProjectTopologyViolation(
+                    f"repository {repository_id} requires at least one active worker"
+                )
+            assignments.append(
+                RepositoryTeamAssignment(
+                    repository_id=repository_id,
+                    leader_agent_id=repository_leader.id,
+                    worker_agent_ids=workers,
+                )
+            )
+
+        return await self._creator.execute(
+            CreateProjectAgentTopologyRequest(
+                organization_id=request.organization_id,
+                project_id=request.project_id,
+                organization_leader_id=organization_leader.id,
+                repository_teams=tuple(assignments),
+                execution_mode=request.execution_mode,
+                required_checkpoints=request.required_checkpoints,
+                human_grants=request.human_grants,
+            ),
+            idempotency_key=idempotency_key,
         )

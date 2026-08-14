@@ -54,7 +54,11 @@ const newRepo = (): Repo => ({
   worker_agent_ids: [""],
 });
 
-export function ProjectSetup({ onCreated }: { onCreated: () => void }) {
+export function ProjectSetup({
+  onCreated,
+}: {
+  onCreated: (info: { projectId: string; leaderAgentId: string }) => void;
+}) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [agents, setAgents] = useState<AgentPrincipal[]>([]);
   const [mode, setMode] = useState("supervised");
@@ -138,7 +142,10 @@ export function ProjectSetup({ onCreated }: { onCreated: () => void }) {
         idempotency_key: `ui-project-${projectId}`,
       });
       setMessage("项目已创建，Agent 到达检查点后会自动推送审核待办。");
-      setTimeout(onCreated, 900);
+      setTimeout(
+        () => onCreated({ projectId, leaderAgentId: organizationLeaderId }),
+        900,
+      );
     } catch (error) {
       setMessage((error as Error).message);
     }

@@ -176,8 +176,16 @@ class RepositoryDiscoveryService:
 def _build_discovery_prompt(
     requirement: str, profiles: list[RepositoryProfile]
 ) -> list[dict[str, str]]:
+    # Keep the payload light: full searchable_text (deps, commits, dirs) for every
+    # profile bloats the prompt and trips provider gateway timeouts at scale.
     repositories = [
-        {"name": profile.name, "signals": profile.searchable_text} for profile in profiles
+        {
+            "name": profile.name,
+            "description": profile.description,
+            "topics": profile.topics,
+            "languages": profile.languages,
+        }
+        for profile in profiles
     ]
     return [
         {

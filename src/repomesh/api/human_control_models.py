@@ -2,6 +2,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, SecretStr
 
+from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_runtime.ports.agent_team import ManagerRuntime, WorkerRuntime
 from repomesh.modules.project.contracts import (
     CheckpointDecisionKind,
     CodeAccessLevel,
@@ -52,6 +54,16 @@ class ProjectTopologyCreate(BaseModel):
     idempotency_key: str
 
 
+class AutomaticProjectTopologyCreate(BaseModel):
+    organization_id: UUID
+    project_id: UUID
+    repository_ids: list[UUID] = Field(min_length=1)
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: set[ProjectCheckpoint] = set()
+    human_grants: list[HumanGrantCreate] = []
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
 class CheckpointDecisionCreate(BaseModel):
     review_request_id: UUID
     decision: CheckpointDecisionKind
@@ -60,3 +72,35 @@ class CheckpointDecisionCreate(BaseModel):
 
 class ProjectControlCreate(BaseModel):
     action: HumanControlAction
+
+
+class NativeAgentCreate(BaseModel):
+    organization_id: UUID
+    role: AgentRole
+    resource_name: str = Field(min_length=3, max_length=100)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
+    worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
+    leader_agent_id: UUID | None = None
+    repository_id: UUID | None = None
+    responsibility_paths: list[str] = Field(default_factory=list)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class RepositoryAgentTeamOnboard(BaseModel):
+    organization_id: UUID
+    worker_count: int = Field(default=1, ge=1, le=20)
+    model: str | None = Field(default=None, min_length=1, max_length=100)
+    leader_runtime: WorkerRuntime = WorkerRuntime.COPAW
+    worker_runtime: WorkerRuntime = WorkerRuntime.REPOMESH_RUNNER
+    responsibility_paths: list[str] = Field(default_factory=lambda: ["**"])
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ManualAgentTeamCreate(BaseModel):
+    organization_id: UUID
+    name: str = Field(min_length=3, max_length=100, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_-]+$")
+    description: str = Field(default="", max_length=255)
+    leader_agent_id: UUID
+    member_agent_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    idempotency_key: str = Field(min_length=1, max_length=200)

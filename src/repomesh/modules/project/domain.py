@@ -33,6 +33,19 @@ class ProjectTopologyViolation(ProjectTopologyError):
     pass
 
 
+def repository_agentteams_team_name(repository_id: UUID) -> str:
+    """Stable AgentTeams Team binding shared by every project using a repository.
+
+    Delegates to :meth:`RepositoryTeam.canonical_agentteams_team_name` so the
+    two lines of development that independently keyed the Team on the
+    repository (A-8 on this branch, platform onboarding on main) mint one
+    spelling. The ``rm-team-`` template is the one existing rooms were made
+    under; the reconcile adopts a repository's real Team either way.
+    """
+
+    return RepositoryTeam.canonical_agentteams_team_name(repository_id)
+
+
 @dataclass(frozen=True, slots=True)
 class HumanProjectGrant:
     human_principal_id: UUID

@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import base64
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -140,10 +141,22 @@ def build_default_container() -> ApplicationContainer:
     )
     scm_adapter = None
     scm_token_provider = None
-    if settings.github_app_id and settings.github_app_private_key_file:
+    github_private_key_loader: Callable[[], bytes] | None = None
+    if settings.github_app_private_key_base64 is not None:
+        encoded_key = settings.github_app_private_key_base64.get_secret_value()
+
+        def load_encoded_github_private_key() -> bytes:
+            return base64.b64decode(encoded_key, validate=True)
+
+        github_private_key_loader = load_encoded_github_private_key
+    elif settings.github_app_private_key_file:
+        github_private_key_loader = private_key_file_loader(
+            settings.github_app_private_key_file
+        )
+    if settings.github_app_id and github_private_key_loader is not None:
         scm_token_provider = GitHubAppTokenProvider(
             settings.github_app_id,
-            private_key_file_loader(settings.github_app_private_key_file),
+            github_private_key_loader,
         )
         scm_adapter = GitHubAdapter(scm_token_provider)
         resources = (*resources, scm_adapter, scm_token_provider)

@@ -71,7 +71,7 @@ class ReconcileProjectAgentTopology:
                 team.with_runtime(
                     status=(
                         ProjectTeamRuntimeStatus.READY
-                        if runtime_team.phase.lower() == "ready"
+                        if runtime_team.phase.lower() in {"ready", "active", "running"}
                         else ProjectTeamRuntimeStatus.PENDING
                     ),
                     room_id=runtime_team.team_room_id,
