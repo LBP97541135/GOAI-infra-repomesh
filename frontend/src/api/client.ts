@@ -1,6 +1,7 @@
 /** 读模型 API typed client。端点与 JSON 形状唯一来源：
  *  docs/contracts/ 交付读模型契约 v0.1/v0.2/v0.3 全部消费端点。 */
 import type {
+  CodingAgentsProbe,
   ConsoleAgentsResponse,
   ConsoleOrgScanRequest,
   ConsoleRepoScanRequest,
@@ -36,6 +37,7 @@ import type {
   RoomListResponse,
   RoomStreamPage,
   ScanTaskView,
+  SetupStatusView,
   UrlIdentification,
 } from "./contract";
 
@@ -154,6 +156,15 @@ export function createApiClient(config: ApiClientConfig) {
         "GET",
         `/console/agents${opts?.withRuntime === false ? "?with_runtime=false" : ""}`,
       ),
+
+    /** 平台就绪检查（迁移 3）。**无鉴权**：后端 `platform_setup.py` 只给 onboard
+     *  那条挂了管理员判定。`checks` 九项里只有前五项参与
+     *  `ready_for_project_creation`，那个判定由服务端做，前端不重算。 */
+    getSetupStatus: () => request<SetupStatusView>(config, "GET", `/setup/status`),
+
+    /** Coding Agent 探测（迁移 3）。探的是 **API 进程所在环境**，Runner 容器要
+     *  自己暴露 probe——响应里的 `note` 就是这句，原样透出不改写。 */
+    getCodingAgents: () => request<CodingAgentsProbe>(config, "GET", `/setup/coding-agents`),
 
     /** 添加仓库 A-0：**无鉴权、纯解析、无出站**（后端与读端点同一 router），
      *  所以可以随用户输入防抖直调，不必怕它打到平台上去。裸路径而非 console

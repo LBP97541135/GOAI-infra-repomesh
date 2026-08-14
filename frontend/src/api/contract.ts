@@ -1214,3 +1214,43 @@ export interface DiscoveryApprovalRequest {
    *  批的必须是它实际看到的那份证据。 */
   evidence_version: string;
 }
+
+
+/* ── 平台就绪与 Coding Agent 探测（迁移 3：main 装机向导的读面）─────────────
+   两个端点均无鉴权（后端 platform_setup.py 只给 onboard 挂了管理员判定）。 */
+
+/** 后端 `AuthStatus` 三态。`unknown` 是「探不出来」，**不是**「没认上」——
+ *  两者措辞必须分开，否则探测不到的适配器会被读成配置错误。 */
+export type AdapterAuthStatus = "authorized" | "unauthorized" | "unknown";
+
+export interface CodingAgentAdapterView {
+  adapter_id: string;
+  display_name: string;
+  installed: boolean;
+  /** 找到的可执行文件路径；未安装时 null */
+  executable: string | null;
+  auth_status: AdapterAuthStatus;
+  /** 探测细节原文（如 `binary_not_found`），原样展示不翻译 */
+  detail: string | null;
+  /** 清单登记的执行状态（`unverified` / `superseded_by_driver` / …） */
+  execution_status: string;
+  runnable_by_verified_driver: boolean;
+}
+
+export interface CodingAgentsProbe {
+  /** 恒为 `repomesh-api`：探的是 **API 进程所在环境**，不是 Runner 容器 */
+  environment: string;
+  note: string;
+  adapters: CodingAgentAdapterView[];
+}
+
+/** `/setup/status` 的九项检查。前五项（model / database / agentteams / matrix /
+ *  internal_auth）是 `ready_for_project_creation` 的必检项，其余四项不参与那个
+ *  判定——后端的 `required` 元组是唯一事实，前端不另立一套。 */
+export interface SetupStatusView {
+  ready_for_project_creation: boolean;
+  checks: Record<string, boolean>;
+  counts: { accounts: number; agents: number; repositories: number };
+  /** 未通过项的名字，后端已算好 */
+  next_actions: string[];
+}
