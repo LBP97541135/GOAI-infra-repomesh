@@ -10,22 +10,58 @@
     {
       "id": "github",
       "source": "https://github.com/github/github-mcp-server",
-      "pin": "required-before-deployment",
-      "roles": ["organization_leader", "repository_leader"]
+      "pin": "git:0ea1f775a7c73eff1bd2e25904d01136756bbfe2",
+      "verifiedAt": "2026-08-14",
+      "roles": ["organization_leader", "repository_leader"],
+      "contract": {
+        "protocol": "mcp",
+        "entrypoint": "stdio or streamable-http through the runtime broker",
+        "auth": "GitHub credentials are injected by the credential broker; agents never receive tokens.",
+        "inputSchema": "MCP tool schemas advertised by the pinned server at startup.",
+        "outputSchema": "MCP tool results plus RepoMesh audit envelope containing agent, project, repository, task and run ids.",
+        "timeoutSeconds": 30,
+        "retryPolicy": "Retry read-only calls up to 2 times with the same audit id; do not retry write calls unless the tool exposes an idempotency key.",
+        "audit": "Record server id, tool name, args hash, result status, latency and redacted error.",
+        "degradedMode": "Block SCM-dependent planning or delivery and report a governed blocker."
+      }
     },
     {
       "id": "context7",
       "source": "https://github.com/upstash/context7",
-      "pin": "required-before-deployment",
-      "roles": ["repository_leader", "worker"]
+      "pin": "git:0e3298e6435f2506e26477d0798441b7ff4d1014",
+      "verifiedAt": "2026-08-14",
+      "roles": ["repository_leader", "worker"],
+      "contract": {
+        "protocol": "mcp",
+        "entrypoint": "stdio or streamable-http through the runtime broker",
+        "auth": "Public documentation access or brokered credentials when configured.",
+        "inputSchema": "MCP tool schemas advertised by the pinned server at startup.",
+        "outputSchema": "MCP tool results plus RepoMesh audit envelope containing agent, project, repository, task and run ids.",
+        "timeoutSeconds": 20,
+        "retryPolicy": "Retry read-only lookups up to 2 times with the same audit id.",
+        "audit": "Record server id, tool name, query hash, source refs, result status, latency and redacted error.",
+        "degradedMode": "Continue only when approved repository context is sufficient; otherwise report a blocker."
+      }
     },
     {
       "id": "playwright",
       "source": "https://github.com/microsoft/playwright-mcp",
-      "pin": "required-before-deployment",
+      "pin": "git:7e0457a7cbf88823bf0146d12c46ae12c6818247",
+      "verifiedAt": "2026-08-14",
       "roles": ["worker"],
       "requiredTaskFeatures": ["web_e2e"],
-      "runtimeArgs": ["--isolated"]
+      "runtimeArgs": ["--isolated"],
+      "contract": {
+        "protocol": "mcp",
+        "entrypoint": "stdio or streamable-http through the runtime broker",
+        "auth": "No direct secrets; browser sessions are isolated per task unless a brokered profile is explicitly approved.",
+        "inputSchema": "MCP tool schemas advertised by the pinned server at startup.",
+        "outputSchema": "MCP tool results plus RepoMesh audit envelope containing agent, project, repository, task and run ids.",
+        "timeoutSeconds": 60,
+        "retryPolicy": "Retry navigation and read-only inspection once; do not retry form submission or mutation without an idempotency key.",
+        "audit": "Record server id, tool name, URL origin, screenshot/artifact refs, result status, latency and redacted error.",
+        "degradedMode": "Mark web_e2e evidence missing and return the task for alternate validation."
+      }
     }
   ]
 }

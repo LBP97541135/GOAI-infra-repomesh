@@ -122,16 +122,24 @@ Implemented and contract-tested:
 - health/version, ensure Manager/Worker/Team and Worker lifecycle calls;
 - bearer authentication and external error mapping;
 - idempotent Matrix task delivery;
-- composition-root wiring, client shutdown, and optional/required readiness modes.
+- composition-root wiring, client shutdown, and optional/required readiness modes;
 - minimal Agent principals with strict Leader hierarchy and native resource bindings;
 - role-ceiling visibility and tool-policy evaluation with explicit denies;
-- idempotent Agent principal registration and direct Team references to native Workers.
+- idempotent Agent principal registration and direct Team references to native Workers;
+- confirmed RepoMesh project projection into AgentTeams Teams;
+- Worker assignment publication through Team-scoped storage plus Matrix notification;
+- `repomesh-task-control.start_assigned_task` as the Worker MCP execution entry;
+- RepoMesh Runner dispatch, task-scoped test execution, commit creation and result write-back.
 
-Still required for an end-to-end demo:
+Live validation evidence is recorded in
+`docs/test-results/live-github-delivery-e2e-20260810.md`: user intake, project planning,
+Repository Leader tasking, Worker MCP start, coding-agent execution, tests, commits, Draft PRs,
+CI/review observations, governance readiness and dependency-ordered merge all completed.
 
-- start an AgentTeams v1.2 stack and run the live compatibility test;
-- persist RepoMesh-to-AgentTeams resource bindings and observed generations;
-- project a confirmed RepoMesh project into a Team after its agents have been provisioned;
-- route Matrix events back as observations and feedback, without treating chat as business state;
-- connect an AgentTeams Worker assignment to the Coding Agent Runtime launch plan.
-- add a runtime-neutral AgentTeams `toolPolicy` contract for hard builtin-tool enforcement.
+Remaining hardening work:
+
+- persist observed AgentTeams resource generations for drift auditing;
+- route Matrix inbound feedback into structured collaboration observations without treating chat as
+  business state;
+- add a runtime-neutral AgentTeams `toolPolicy` contract for hard builtin-tool enforcement;
+- move static MCP gateway token lists to dynamic Worker key registration, rotation and revocation.

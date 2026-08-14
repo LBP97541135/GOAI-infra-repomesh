@@ -11,6 +11,7 @@
 ## 架构
 
 - [模块与 Owner](architecture/module-map.md)
+- [Agent Identity 清单](architecture/agent-identity-catalog.md)
 - [依赖规则](architecture/dependency-rules.md)
 - [数据库所有权](architecture/database-ownership.md)
 - [上下文管理](architecture/context-management.md)

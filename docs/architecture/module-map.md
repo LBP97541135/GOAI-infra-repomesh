@@ -21,6 +21,7 @@ when the repository moves into an organization.
 | Delivery | quality-delivery | ChangeSets, Push/PR, SCM approval facts, CI gates, merge order, rollback | code generation and internal review content |
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
+| Runtime | runtime-integrations | planned runtime-neutral contracts, cross-plane execution policy and gateway schemas | coding run state, CLI process execution, concrete AgentTeams or vendor adapters |
 
 ## Runtime component and integration ownership
 

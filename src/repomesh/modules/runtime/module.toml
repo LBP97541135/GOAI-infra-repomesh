@@ -1,0 +1,15 @@
+name = "runtime"
+owner = "runtime-integrations"
+status = "planned"
+schema = "runtime"
+responsibilities = [
+  "runtime-neutral contracts",
+  "cross-plane execution policy",
+  "gateway and tool boundary schemas",
+]
+excludes = [
+  "coding run lifecycle",
+  "CLI process execution",
+  "AgentTeams controller implementation",
+  "vendor-specific adapters",
+]
