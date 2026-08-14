@@ -19,7 +19,7 @@ import {
   type GovernanceAgent,
 } from "../api/decisions";
 import type { RoundHistoryState } from "../components/RoundsPanel";
-import { fetchIssueDetail, fetchRepositoryPlan, fetchRooms } from "../api/rooms";
+import { fetchIssueDetail, fetchPlanGraphEdges, fetchRepositoryPlan, fetchRooms } from "../api/rooms";
 import { ApiError } from "../api/client";
 import { resolveDataSourceMode } from "../api/source";
 import { submitRollback } from "../api/rollback";
@@ -251,11 +251,25 @@ export function IssueDetailContainer({
     let cancelled = false;
     setPlanState({ status: "loading" });
     fetchRepositoryPlan(issueId, anchorRepositoryId)
-      .then(
-        (plan) =>
-          !cancelled &&
-          setPlanState({ status: "ready", plan, anchorName: anchorRepositoryName, anchorFromCandidate }),
-      )
+      .then(async (plan) => {
+        if (cancelled) return;
+        // 先把图画出来，再补边语义：语义是加注，等它会让整面多等一个来回。
+        setPlanState({
+          status: "ready",
+          plan,
+          graphEdges: null,
+          anchorName: anchorRepositoryName,
+          anchorFromCandidate,
+        });
+        // issue_id 即 project_id（§0 语义等式）。取不到一律 null，不改变面板可用性。
+        const graphEdges = await fetchPlanGraphEdges(issueId, plan.plan_version);
+        if (cancelled || graphEdges === null) return;
+        setPlanState((prev) =>
+          prev.status === "ready" && prev.plan.plan_version === plan.plan_version
+            ? { ...prev, graphEdges }
+            : prev,
+        );
+      })
       .catch((err: unknown) => {
         if (cancelled) return;
         // 404 = 无计划快照。服务端把「issue 不存在」与「issue 从未规划」写成同一个

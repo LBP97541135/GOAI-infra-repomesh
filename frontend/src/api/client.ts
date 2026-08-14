@@ -28,6 +28,7 @@ import type {
   OrganizationCreateRequest,
   OrganizationCreateResponse,
   OrganizationsResponse,
+  PlanSnapshotView,
   RepositoryPlanView,
   RollbackReceipt,
   RollbackRequest,
@@ -269,6 +270,16 @@ export function createApiClient(config: ApiClientConfig) {
     /** §5.4：单仓 DAG·PLAN·SPEC 纸面 */
     getRepositoryPlan: (issueId: string, repositoryId: string) =>
       request<RepositoryPlanView>(config, "GET", `/issues/${issueId}/repositories/${repositoryId}/plan`),
+
+    /** 迁移 4：计划快照原件，用于给 §5.4 的连线补边语义（interface/agreement）
+     *  与 `integration_method`。**读端点无鉴权守卫**，走动作 token 通道即可。
+     *  404 = 该版本不存在（issue 从未规划，或版本号越界）。 */
+    getPlanSnapshot: (projectId: string, version: number) =>
+      request<PlanSnapshotView>(
+        config,
+        "GET",
+        `/plans/${encodeURIComponent(projectId)}/versions/${version}`,
+      ),
 
     getIssueDetail: (issueId: string) => request<IssueDetailView>(config, "GET", `/issues/${issueId}`),
 

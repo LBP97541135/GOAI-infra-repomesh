@@ -1254,3 +1254,50 @@ export interface SetupStatusView {
   /** 未通过项的名字，后端已算好 */
   next_actions: string[];
 }
+
+/* ── 计划层依赖图（迁移 4：main 单图方案的边语义）──────────────────────────
+   `GET /plans/{project_id}/versions/{version}` 的快照行。issue_id 即 project_id
+   （契约 v0.2 §0 语义等式），故详情页可以拿 issue_id 直接调。
+
+   **与 §5.4 `dag.edges` 的关系**：那是读模型按 `task_dag.depends_on` 投影出来的
+   连线，只有两端；这里是**同一批边的事实源**，多出 status/source 与契约语义
+   （interface/agreement）。两者应当一致——单图方案的验收红线就是「读图 ≡ 投影列」，
+   所以本类型只用来给既有连线**补语义**，不用来另画一张图。 */
+
+/** 边的确认状态。只有 confirmed 进拓扑投影；candidate 是扫描出的待确认边。 */
+export type GraphEdgeStatus = "candidate" | "confirmed";
+
+/** 边的来源：scan=世界层扫描、tm=人工批次顺序派生、llm=集成时模型给出。 */
+export type GraphEdgeSource = "scan" | "tm" | "llm";
+
+/** 计划层的一条边。**两端是仓库名不是 id**（与 `execution_batches` 同口径），
+ *  故与 §5.4 的节点匹配要按 `name`。序列化用 `from` 别名（`from` 是 TS 保留字
+ *  在对象字面量里无妨，但后端 alias 就是它）。 */
+export interface PlanGraphEdgeView {
+  from: string;
+  to: string;
+  status: GraphEdgeStatus;
+  source: GraphEdgeSource;
+  /** 契约接口名；无契约语义的纯依赖边为空串 */
+  interface: string;
+  agreement: string;
+}
+
+/** 一份计划快照。字段与 `PlanSnapshotView` 对齐，前端只消费其中几项。 */
+export interface PlanSnapshotView {
+  id: string;
+  project_id: string;
+  plan_version: number;
+  created_at: string;
+  created_by_agent_id: string | null;
+  engineering_spec: string;
+  contracts: Array<Record<string, unknown>>;
+  task_dag: Array<Record<string, unknown>>;
+  execution_batches: string[][];
+  graph_edges: PlanGraphEdgeView[];
+  execution_plan_id: string | null;
+  requirement_text: string | null;
+  /** `graph_assisted` = 图里有扫描出的边参与；`llm_only` = 全靠模型给。
+   *  null = 老快照没记这一列。 */
+  integration_method: string | null;
+}
