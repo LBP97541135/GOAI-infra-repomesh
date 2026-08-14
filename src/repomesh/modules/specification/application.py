@@ -14,11 +14,11 @@ from repomesh.modules.identity_access.contracts import (
     AuthorizationAction,
     AuthorizationRequest,
 )
-from repomesh.modules.project.checkpoint_fallback import TopologyAwareCheckpointFallback
 from repomesh.modules.project.contracts import (
     ProjectCheckpoint,
     ProjectCheckpointGateway,
     ProjectTopologyReader,
+    TopologyAwareCheckpointFallback,
 )
 from repomesh.modules.specification.contracts import (
     ApproveSpecificationCommand,

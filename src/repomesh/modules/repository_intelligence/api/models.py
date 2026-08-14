@@ -177,6 +177,14 @@ class MaterializeRequest(BaseModel):
     contracts: list[ContractSpecView] = Field(default_factory=list)
     task_dag: list[TaskNodeView] = Field(default_factory=list)
     execution_batches: list[list[str]] = Field(default_factory=list)
+    graph: PlanGraph | None = Field(
+        default=None,
+        description=(
+            "The unified plan-layer dependency graph produced by integration. "
+            "When present, materialization persists this graph as evidence "
+            "instead of reconstructing a lossy fallback from projections."
+        ),
+    )
     requirement: str = ""
     project_id: UUID
     leader_agent_id: UUID

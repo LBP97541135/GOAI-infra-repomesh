@@ -24,18 +24,18 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 from uuid import UUID
 
 from opentelemetry import trace
 
-from repomesh.modules.project.checkpoint_fallback import TopologyAwareCheckpointFallback
 from repomesh.modules.project.contracts import (
     ProjectCheckpoint,
     ProjectCheckpointGateway,
     ProjectTopologyReader,
+    TopologyAwareCheckpointFallback,
 )
 from repomesh.modules.repository_intelligence.contracts import (
     IntegratedPlan,
@@ -47,7 +47,6 @@ from repomesh.modules.repository_intelligence.contracts import (
     normalize_plan,
     plan_to_graph,
 )
-from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification.contracts import (
     CreateSpecificationCommand,
     SpecificationKind,
@@ -62,7 +61,12 @@ from repomesh.modules.task_orchestration.contracts import (
 from repomesh.shared.workflow import WorkflowBlocked
 from repomesh.telemetry import SpanAttributes, traced
 
-from .contracts import MaterializationResult, ReplanMode, ReplanResult
+from .contracts import (
+    ExecutionPlaneUnavailable,
+    MaterializationResult,
+    ReplanMode,
+    ReplanResult,
+)
 from .ports import (
     ExecutionPlanStarter,
     HandoffDocGenerator,
@@ -73,22 +77,23 @@ from .ports import (
     TaskSupersederGateway,
 )
 
-if TYPE_CHECKING:
-    from repomesh.modules.repository_intelligence.application.confirmation import (
-        ConfirmationSummary,
-    )
-    from repomesh.modules.repository_intelligence.application.dependency_graph import (
-        DependencyGraphService,
-    )
-    from repomesh.modules.repository_intelligence.application.plan_integration import (
-        PlanIntegrationService,
-    )
-
 _logger = logging.getLogger(__name__)
 
 
-class ExecutionPlaneUnavailable(RuntimeError):
-    """The task orchestration plane is not configured; materialization refused."""
+class RepositoryCatalogReader(Protocol):
+    async def list(self) -> Sequence[Any]: ...
+
+
+class WorldDependencyEdge(Protocol):
+    consumer: str
+
+
+class WorldDependencyGraph(Protocol):
+    def reverse_dependencies(self, repo_name: str) -> Sequence[WorldDependencyEdge]: ...
+
+
+class ReplanIntegrator(Protocol):
+    def integrate(self, requirement: str, confirmation_summary: Any) -> IntegratedPlan: ...
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +133,7 @@ class PlanExecutionBridge:
         specifications: SpecificationCreator,
         plans: ExecutionPlanStarter | None,
         topologies: ProjectTopologyReader,
-        catalog: RepositoryCatalog,
+        catalog: RepositoryCatalogReader,
         snapshot_store: PlanSnapshotWriter | None = None,
         snapshot_reader: PlanSnapshotReader | None = None,
         superseder: TaskSupersederGateway | None = None,
@@ -323,7 +328,7 @@ class PlanExecutionBridge:
                 plan_version = await self._snapshots.next_version(project_id)
                 # The row owns the real plan_version; align the graph with it.
                 snapshot_graph = graph.model_copy(update={"plan_version": plan_version})
-                await self._snapshots.save(
+                saved = await self._snapshots.save(
                     project_id=project_id,
                     plan_version=plan_version,
                     engineering_spec=plan.engineering_spec or requirement,
@@ -342,8 +347,16 @@ class PlanExecutionBridge:
                     requirement_text=requirement,
                     integration_method=integration_method(snapshot_graph),
                 )
+                plan_snapshot_id = getattr(saved, "id", None)
+                if plan_snapshot_id is not None:
+                    _logger.info(
+                        "Saved materialized plan snapshot %s for project %s",
+                        plan_snapshot_id,
+                        project_id,
+                    )
             except Exception:
-                _logger.warning("Failed to save plan snapshot", exc_info=True)
+                _logger.exception("Failed to save plan snapshot")
+                raise
 
         # --- 5b. Generate handoff documents (if store configured) ------------
         # One PENDING document per repository so the repository owner can
@@ -366,9 +379,8 @@ class PlanExecutionBridge:
                     plan_version,
                 )
             except Exception:
-                _logger.warning(
-                    "Failed to generate handoff documents", exc_info=True
-                )
+                _logger.exception("Failed to generate handoff documents")
+                raise
 
         return MaterializationResult(
             engineering_spec=eng_spec,
@@ -391,9 +403,9 @@ class PlanExecutionBridge:
         requirement: str,
         idempotency_prefix: str,
         all_repos: list[str],
-        integration_service: PlanIntegrationService | None = None,
-        confirmation_summary: ConfirmationSummary | None = None,
-        graph: DependencyGraphService | None = None,
+        integration_service: ReplanIntegrator | None = None,
+        confirmation_summary: Any | None = None,
+        graph: WorldDependencyGraph | None = None,
         mode: ReplanMode = "commit",
     ) -> ReplanResult:
         """Partially replan after a BLOCKED task reports an upstream change.
@@ -679,7 +691,7 @@ class PlanExecutionBridge:
         change_source_repo: str,
         all_repos: list[str],
         plan_graph: PlanGraph | None = None,
-        graph: DependencyGraphService | None = None,
+        graph: WorldDependencyGraph | None = None,
     ) -> list[str]:
         """Return the affected repository set for a change source.
 
@@ -720,8 +732,8 @@ class PlanExecutionBridge:
     @staticmethod
     def _local_replan(
         *,
-        integration_service: PlanIntegrationService,
-        confirmation_summary: ConfirmationSummary,
+        integration_service: ReplanIntegrator,
+        confirmation_summary: Any,
         requirement: str,
         feedback: str,
         affected_repos: list[str],
@@ -742,7 +754,7 @@ class PlanExecutionBridge:
 
     @staticmethod
     def _handoff_details_from_summary(
-        confirmation_summary: ConfirmationSummary | None,
+        confirmation_summary: Any | None,
         affected_repos: list[str],
     ) -> Mapping[str, Mapping[str, Any]] | None:
         """Project per-repository adjustment plans onto the affected repos.

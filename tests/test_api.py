@@ -330,26 +330,79 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
         assert cannot_resume.status_code == 403
 
 
-def test_register_and_discover_repository(application_container: ApplicationContainer) -> None:
+def test_register_and_discover_repository(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "planning-secret")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer planning-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            created = client.post(
+                "/api/v1/repositories",
+                headers=headers,
+                json={
+                    "name": "billing-api",
+                    "url": "https://github.com/example/billing",
+                    "description": "Invoice and payment service",
+                    "topics": ["billing", "payment"],
+                    "languages": ["python"],
+                },
+            )
+            assert created.status_code == 201
+
+            discovered = client.post(
+                "/api/v1/discovery",
+                headers=headers,
+                json={"requirement": "Add payment invoice support"},
+            )
+            assert discovered.status_code == 200
+            assert discovered.json()[0]["repository_name"] == "billing-api"
+            assert discovered.json()[0]["matched_terms"] == ["invoice", "payment"]
+    finally:
+        get_settings.cache_clear()
+
+
+def test_repository_intelligence_posts_require_authentication(
+    application_container: ApplicationContainer,
+) -> None:
     with TestClient(create_app(application_container)) as client:
-        created = client.post(
+        response = client.post(
             "/api/v1/repositories",
             json={
                 "name": "billing-api",
                 "url": "https://github.com/example/billing",
-                "description": "Invoice and payment service",
-                "topics": ["billing", "payment"],
-                "languages": ["python"],
             },
         )
-        assert created.status_code == 201
+    assert response.status_code == 401
 
-        discovered = client.post(
-            "/api/v1/discovery", json={"requirement": "Add payment invoice support"}
-        )
-        assert discovered.status_code == 200
-        assert discovered.json()[0]["repository_name"] == "billing-api"
-        assert discovered.json()[0]["matched_terms"] == ["invoice", "payment"]
+
+def test_runner_control_requires_configured_token(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    monkeypatch.delenv("REPOMESH_RUNNER_CONTROL_TOKEN", raising=False)
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.get("/api/v1/runtime/runner-tasks/next")
+        assert response.status_code == 503
+        assert response.json()["detail"] == "runner control token is not configured"
+
+        monkeypatch.setenv("REPOMESH_RUNNER_CONTROL_TOKEN", "runner-secret")
+        get_settings.cache_clear()
+        with TestClient(create_app(application_container)) as client:
+            unauthorized = client.get(
+                "/api/v1/runtime/runner-tasks/next",
+                headers={"Authorization": "Bearer wrong"},
+            )
+            authorized = client.get(
+                "/api/v1/runtime/runner-tasks/next",
+                headers={"Authorization": "Bearer runner-secret"},
+            )
+        assert unauthorized.status_code == 401
+        assert authorized.status_code == 204
+    finally:
+        get_settings.cache_clear()
 
 
 def test_worker_start_action_requires_internal_token(

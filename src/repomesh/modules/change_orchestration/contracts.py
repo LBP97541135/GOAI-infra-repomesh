@@ -18,6 +18,10 @@ ReplanMode = Literal["preview", "commit"]
 """
 
 
+class ExecutionPlaneUnavailable(RuntimeError):
+    """The task orchestration plane is not configured; the workflow refused side effects."""
+
+
 @dataclass(frozen=True, slots=True)
 class StartedExecutionPlan:
     """Execution plan and initially released tasks."""
@@ -59,6 +63,7 @@ class ReplanResult:
 
 
 __all__ = [
+    "ExecutionPlaneUnavailable",
     "MaterializationResult",
     "ReplanMode",
     "ReplanResult",

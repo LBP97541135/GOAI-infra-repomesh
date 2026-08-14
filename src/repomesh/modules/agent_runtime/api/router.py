@@ -41,7 +41,9 @@ async def receive_runner_event(body: dict[str, Any], request: Request) -> dict[s
 
 def _authorize_runner(request: Request) -> None:
     expected = get_settings().runner_control_token
-    if expected and request.headers.get("Authorization") != f"Bearer {expected}":
+    if not expected:
+        raise HTTPException(status_code=503, detail="runner control token is not configured")
+    if request.headers.get("Authorization") != f"Bearer {expected}":
         raise HTTPException(status_code=401, detail="invalid runner control token")
 
 

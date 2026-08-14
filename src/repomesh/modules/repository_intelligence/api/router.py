@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from repomesh.modules.change_orchestration import ExecutionPlaneUnavailable
+from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
     HandoffDocError,
@@ -79,6 +79,41 @@ def get_catalog(request: Request) -> RepositoryCatalog:
 CatalogDependency = Annotated[RepositoryCatalog, Depends(get_catalog)]
 
 
+def _agent_action_authorized(request: Request) -> bool:
+    expected = get_settings().agent_action_token
+    return bool(expected and request.headers.get("Authorization") == f"Bearer {expected}")
+
+
+async def _human(request: Request):
+    authorization = request.headers.get("Authorization", "")
+    token = (
+        authorization.removeprefix("Bearer ").strip()
+        if authorization.startswith("Bearer ")
+        else request.cookies.get("repomesh_session")
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="local authentication is required")
+    try:
+        return await request.app.state.container.local_account_service().authenticate(token)
+    except Exception as error:
+        raise HTTPException(status_code=401, detail="invalid local session") from error
+
+
+async def _human_or_agent_action(request: Request):
+    if _agent_action_authorized(request):
+        return None
+    return await _human(request)
+
+
+async def _administrator_or_agent_action(request: Request):
+    if _agent_action_authorized(request):
+        return None
+    actor = await _human(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    return actor
+
+
 def _resolve_replan_mode(requested: str, auto_commit: bool) -> str:
     """Resolve the replan request mode after ``auto`` (PR-4).
 
@@ -106,8 +141,9 @@ def _build_auto_card(body_card) -> AutoCard | None:  # noqa: ANN001
 
 @router.post("/repositories", response_model=RepositoryView, status_code=201)
 async def register_repository(
-    body: RepositoryCreate, catalog: CatalogDependency
+    body: RepositoryCreate, request: Request, catalog: CatalogDependency
 ) -> RepositoryProfile:
+    await _administrator_or_agent_action(request)
     profile = RepositoryProfile(
         name=body.name,
         url=str(body.url),
@@ -126,12 +162,16 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
 
 
 @router.post("/repositories/scan-org", response_model=OrgScanResult)
-async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) -> OrgScanResult:
+async def scan_organization(
+    body: OrgScanRequest, request: Request, catalog: CatalogDependency
+) -> OrgScanResult:
     """Batch-scan all repos under a GitHub/GitLab organization.
 
     Fetches file trees, dependency files, and commits for every repo,
     builds AutoCards, and registers them in the catalog.
     """
+    await _administrator_or_agent_action(request)
+
     from repomesh.modules.repository_intelligence.application.scan_remote import (
         scan_org,
     )
@@ -187,6 +227,7 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
 async def discover_repositories(
     body: DiscoveryRequest, catalog: CatalogDependency, request: Request
 ) -> list[DiscoveryCandidate]:
+    await _human_or_agent_action(request)
     client = request.app.state.container.llm_client
     service = RepositoryDiscoveryService(catalog, llm_client=client)
     evidence = await service.discover(
@@ -214,6 +255,7 @@ async def analyze_requirement(
     body: RequirementAnalysisRequest, request: Request
 ) -> RequirementAnalysisView:
     """Evaluate whether a requirement has sufficient business information."""
+    await _human_or_agent_action(request)
     container = request.app.state.container
     analyzer = container.requirement_analyzer()
     if analyzer is None:
@@ -248,6 +290,7 @@ async def confirm_repositories(
     body: ConfirmationRequest, request: Request
 ) -> ConfirmationSummaryView:
     """Phase 2: Team Managers confirm involvement and produce plans."""
+    await _human_or_agent_action(request)
     container = request.app.state.container
     llm = container.llm_client
 
@@ -307,6 +350,7 @@ def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
 @router.post("/integration", response_model=IntegratedPlanView)
 async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
     """Phase 3: Leader integrates per-repo plans into a project-level plan."""
+    await _human_or_agent_action(request)
     container = request.app.state.container
     llm = container.llm_client
 
@@ -346,6 +390,7 @@ async def integrate_plan(body: IntegrationRequest, request: Request) -> Integrat
 @router.post("/bridge/materialize", response_model=MaterializeResponse)
 async def materialize_plan(body: MaterializeRequest, request: Request) -> MaterializeResponse:
     """Create Engineering Spec + Contract Specs + an execution plan from an IntegratedPlan."""
+    await _human_or_agent_action(request)
     container = request.app.state.container
     bridge = container.plan_execution_bridge()
 
@@ -371,6 +416,7 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
             for t in body.task_dag
         ],
         execution_batches=[list(b) for b in body.execution_batches],
+        graph=body.graph,
     )
 
     try:
@@ -394,6 +440,8 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ExecutionPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
 
     return MaterializeResponse(
         engineering_spec_id=result.engineering_spec.id,
@@ -423,6 +471,7 @@ async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
     in the response.
     """
 
+    await _human_or_agent_action(request)
     container = request.app.state.container
     mode = _resolve_replan_mode(body.mode, get_settings().replan_auto_commit)
 
@@ -578,6 +627,7 @@ async def decide_handoff_doc(
     plan version must be re-decided on its regenerated copy.
     """
 
+    await _human_or_agent_action(request)
     container = request.app.state.container
     try:
         doc = await container.handoff_doc_service().decide(
