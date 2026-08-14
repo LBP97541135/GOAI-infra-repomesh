@@ -395,14 +395,18 @@ def test_the_chain_walks_four_steps_and_lands_on_one_snapshot(
             final = chain.read()
             assert final["step"] == 4
             assert final["step_state"] == "done"
-            # batch_count is 1, not the 2 the scripted model proposed: when a
-            # dependency graph is available the integration takes its batching
-            # from the graph and lets the model write only semantic content.
+            # batch_count comes from the plan-layer graph, which is a merge of
+            # scanned facts and model semantics — not from the scan alone.
             # Neither seeded repository declares a dependency on the other, so
-            # they are one parallel batch.
+            # the scan contributes no edge and would batch them in parallel;
+            # but the model states a contract (ts-notify → ts-order) and the
+            # matching depends_on, and contract ⇒ serialization, so that pair
+            # becomes one confirmed ``llm`` edge and the batches are two. Same
+            # rule as test_plan_integration.py's
+            # test_llm_depends_on_new_edge_enters_batches.
             assert final["integration"] == {
                 "task_dag_count": 2,
-                "batch_count": 1,
+                "batch_count": 2,
                 "contract_count": 1,
             }
             # §2.3/§2.4: one round, one row, still version 1.
