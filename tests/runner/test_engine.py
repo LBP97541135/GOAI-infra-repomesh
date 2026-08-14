@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -14,6 +15,9 @@ from repomesh_runner import (
     RunnerPermissions,
     RunnerResultStatus,
     RunnerTask,
+    RunnerTaskValidationError,
+    StrictRunnerTaskValidator,
+    WorkspaceAssignment,
 )
 from repomesh_runner import (
     TestCommandResult as CommandOutcome,
@@ -49,6 +53,21 @@ def make_task() -> RunnerTask:
         issued_at=NOW,
         credential_refs=("credential://github/project-2",),
     )
+
+
+@pytest.mark.asyncio
+async def test_strict_validator_rejects_workspace_escape(tmp_path) -> None:
+    outside = tmp_path.parent.resolve()
+    task = replace(
+        make_task(),
+        worker_agent_id=UUID("00000000-0000-0000-0000-000000000008"),
+        workspace=WorkspaceAssignment("workspace-1", str(outside), "main"),
+        context_bundle=replace(make_task().context_bundle, coding_package_hash=SHA256),
+        permissions=RunnerPermissions(allowed_paths=("src/**",)),
+    )
+
+    with pytest.raises(RunnerTaskValidationError, match="outside_configured_root"):
+        await StrictRunnerTaskValidator(tmp_path).validate(task)
 
 
 class RecordingSink:
