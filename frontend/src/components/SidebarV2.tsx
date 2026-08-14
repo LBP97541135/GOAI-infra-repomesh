@@ -14,10 +14,11 @@ import { errText } from "../display";
  *  真的没有条目）是两个态，不合并。创建工作区 = 建组织 + 登记 Org Leader——
  *  leader 是期望态登记行，不是已拉起的运行时（§2.3 诚实边界）。 */
 
-export type NavKey = "issues" | "repositories" | "teams" | "agents" | "settings";
+export type NavKey = "issues" | "reviews" | "repositories" | "teams" | "agents" | "settings";
 
 const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
   { key: "issues", label: "issue" },
+  { key: "reviews", label: "审核" },
   { key: "repositories", label: "仓库" },
   { key: "teams", label: "团队" },
   { key: "agents", label: "智能体" },
@@ -30,6 +31,13 @@ function NavIcon({ nav }: { nav: NavKey }) {
       <svg viewBox="0 0 24 24" {...common}>
         <circle cx="12" cy="12" r="9" />
         <circle cx="12" cy="12" r="3" />
+      </svg>
+    );
+  if (nav === "reviews")
+    return (
+      <svg viewBox="0 0 24 24" {...common}>
+        <path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+        <path d="m8.5 12.5 2.5 2.5 4.5-5" />
       </svg>
     );
   if (nav === "repositories")
@@ -70,6 +78,7 @@ export function SidebarV2({
   account,
   nav,
   issueCount,
+  reviewCount,
   workspaces,
   workspaceNote,
   selectedWorkspaceId,
@@ -84,6 +93,8 @@ export function SidebarV2({
   nav: NavKey;
   /** issue 导航计数；null = 数据源未提供（不显示计数，不编造） */
   issueCount: number | null;
+  /** 待办审核数；null = 取不到（未登录/流断），此时不显示计数而不是显示 0 */
+  reviewCount: number | null;
   /** null = 不适用/取用失败（见 workspaceNote）；[] = 注册表为空 */
   workspaces: OrganizationView[] | null;
   workspaceNote: string | null;
@@ -278,7 +289,8 @@ export function SidebarV2({
       <nav className="mt-2 grid gap-0.5">
         {NAV_ITEMS.map((item) => {
           const active = nav === item.key;
-          const count = item.key === "issues" ? issueCount : null;
+          const count =
+            item.key === "issues" ? issueCount : item.key === "reviews" ? reviewCount : null;
           return (
             <button
               key={item.key}

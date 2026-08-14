@@ -7,10 +7,13 @@ import type { IssueListResponse, OrganizationView } from "./api/contract";
 import { createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
 import { createWorkspace, fetchWorkspaces } from "./api/workspaces";
 import { errText, shortId } from "./display";
+import type { HumanReviewRequestView } from "./api/reviewDesk";
+import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
 import { RepositoriesPage } from "./pages/RepositoriesPage";
+import { ReviewDeskPage } from "./pages/ReviewDeskPage";
 import { RoomViewContainer } from "./pages/RoomViewContainer";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TeamsPage } from "./pages/TeamsPage";
@@ -56,6 +59,13 @@ export default function ConsoleShell() {
   const [workspaceNote, setWorkspaceNote] = useState<string | null>(null);
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspacesReload, setWorkspacesReload] = useState(0);
+
+  // 审核待办（迁移 2）。SSE 推 pending 列表，侧栏徽标与页面共用这一份——
+  // 两处各取一次会让徽标和列表在刷新间隙互相矛盾。
+  const [reviews, setReviews] = useState<HumanReviewRequestView[] | null>(null);
+  const [reviewsError, setReviewsError] = useState<string | null>(null);
+  const [reviewsStreaming, setReviewsStreaming] = useState(true);
+  const [reviewsReload, setReviewsReload] = useState(0);
   /** 列表代际号（A3）：主取数 effect 每次执行 +1，「加载更多」按代际丢弃过期响应 */
   const issuesEpoch = useRef(0);
 
@@ -135,6 +145,33 @@ export default function ConsoleShell() {
       cancelled = true;
     };
   }, [authState, issueTab, issuesReload, workspaceId]);
+
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    let cancelled = false;
+    setReviewsError(null);
+    // 先一次性取一份垫底：SSE 的首帧要等到 store 有变化或首轮循环，
+    // 空手等它会让首屏在两秒里说不清是「没有待办」还是「还没取到」。
+    fetchReviewRequests("pending")
+      .then((rows) => !cancelled && setReviews(rows))
+      .catch((err: unknown) => !cancelled && setReviewsError(errText(err)));
+    const unsubscribe = subscribeReviewRequests(
+      (rows) => {
+        if (cancelled) return;
+        setReviews(rows);
+        setReviewsStreaming(true);
+        setReviewsError(null);
+      },
+      () => {
+        // 流断不清空列表：最后一份结果仍然有用，页面会说明它不再更新。
+        if (!cancelled) setReviewsStreaming(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [authState, reviewsReload]);
 
   const loadMoreIssues = () => {
     const cursor = issues?.next_cursor;
@@ -234,6 +271,7 @@ export default function ConsoleShell() {
         account={account}
         nav={route.nav}
         issueCount={issues?.open_count ?? null}
+        reviewCount={reviews?.length ?? null}
         workspaces={workspaces}
         workspaceNote={workspaceNote}
         selectedWorkspaceId={workspaceId}
@@ -279,6 +317,15 @@ export default function ConsoleShell() {
               onToast={showToast}
             />
           ))}
+        {route.nav === "reviews" && (
+          <ReviewDeskPage
+            rows={reviews}
+            error={reviewsError}
+            streaming={reviewsStreaming}
+            onRefresh={() => setReviewsReload((n) => n + 1)}
+            onToast={showToast}
+          />
+        )}
         {route.nav === "repositories" && (
           <RepositoriesPage
             organizationId={workspaceId}
