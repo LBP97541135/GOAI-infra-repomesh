@@ -1259,8 +1259,16 @@ class DeliveryReadModelService:
 
         The DAG is repository-grained: nodes are the planned repositories,
         layers are execution_batches and edges come from task_dag[].depends_on.
-        graph_edges is not projected — the column is persisted but its only
-        producer writes an empty list, so it would render as an empty DAG.
+
+        ``graph_edges`` is still not projected here, but the reason changed with
+        the 2026-08-14 single-graph merge: the column is now live (materialize
+        writes the plan-layer edges on both the draft and the new-version path),
+        it is simply a *different* grain — plan-layer edges carry interface and
+        agreement, and are addressed by repository **name**. The console reads
+        them separately from ``/plans/{project_id}/versions/{v}`` and uses them
+        to annotate the connections this sheet draws, not to draw them. Keep the
+        two apart: projecting them here would put candidate edges, which have no
+        place in a confirmed topology, into the executed DAG.
         """
 
         snapshots = await self._snapshots.for_project(issue_id)
