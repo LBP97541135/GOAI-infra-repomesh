@@ -168,7 +168,28 @@ rename-follow、`api/human_control.py`(main 的 onboard 复用其处理函数)�
 
 | # | 决议 | 状态 |
 | --- | --- | --- |
-| D-1 | `repository_agent_teams` 取复合唯一 `(project_id, agentteams_team_name)` + main 的确定性铸名/复用逻辑;main 0019 重写为纯索引迁移 | **建议案,待主脑确认**(§2 硬点 1) |
-| D-2 | 迁移链:本分支链不动,main 两迁移重排链尾 | 随 D-1 |
-| D-3 | 快照序列化修复:两边等价,合并取本分支版本(带成因注释) | 无争议 |
+| D-1 | `repository_agent_teams` 取复合唯一 `(project_id, agentteams_team_name)` + main 的确定性铸名/复用逻辑;main 0019 重写为纯索引迁移 | **已按建议案执行**(2026-08-14,可复议) |
+| D-2 | 迁移链:本分支链不动,main 两迁移重排链尾 | 已执行 |
+| D-3 | 快照序列化修复:两边等价,合并取本分支版本(带成因注释) | 已执行 |
 | D-4 | PRD 入口以 frontend 发现面板为准;web 双前端短期并存 | 合并后立项,本次不动 |
+
+## 7. 执行结果(2026-08-14)
+
+合并提交 `9780c75`(merge origin/main `f6fc082`)。全过程与 §5 计划一致,补充事实:
+
+- **铸名统一**:双方连确定性铸名都独立实现了(本分支 `rm-team-{hex}`、main `rm-repo-{hex}`)。
+  取本分支模板(存量房间用它铸的),main 的模块级函数 `repository_agentteams_team_name`
+  改为委托 `RepositoryTeam.canonical_agentteams_team_name`,main 侧调用方零改动。
+- **materialize 融合**:v0.4 草稿消费路径保留,两条路径(填草稿 / 开新版本)都写对齐
+  `plan_version` 后的 `graph_edges` + 推断 `integration_method`——控制台回合的行与脚本
+  save 遵守同一条单图不变量。`set_integration` 为此加了 `graph_edges` 参数(端口 + 存储 + 测试桩)。
+- **rename-follow 缺口**:git 把本分支对 `contracts.py` 的修改自动跟进了
+  `contracts/repository.py`,但 main 写的包 `__init__.py` 只导出自己认识的名字;
+  发现链边界(`IssueIntakeCommand`、`GUI_STEP_OF` 等 14 个名)靠 AST 全量对账补齐。
+- **迁移**:新链尾 `20260814_0028`(纯索引)、`20260814_0029`(delivery_policies 原文),
+  一次性 postgres 从空库跑通全链,复合约束/索引/新表/快照三列并存确认。
+- **测试适配 4 处**:main 的 `StubSnapshotWriter` 补 `current_draft`;main 的
+  `/integration` 测试补 v0.4 动作 token;本分支两处快照断言从「按位置」改「按名」
+  (normalize_plan 会排序投影、并把契约 consumer 折进图节点——这是 main 的既定语义,
+  顺手把「草稿行也写 graph_edges」钉进断言)。
+- **回归**:322 个定向测试全绿(两侧套件并集);`frontend/`、`web/` 各自 `tsc -b` 干净。
