@@ -9,6 +9,7 @@ import type {
   RollbackRepositoryState,
   RuntimeBlock,
 } from "./api/contract";
+import type { ProjectCheckpoint } from "./api/reviewDesk";
 
 /** issue 与网格页的展示辅助。**纯格式化**，不含任何状态派生——state/phase/
  *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。 */
@@ -84,6 +85,56 @@ export function tierOf(status: string): DiscoveryTier | null {
 export function tierStatusLabel(status: string): string {
   const tier = tierOf(status);
   return tier ? TIER_LABEL[tier] : status;
+}
+
+/** 六个人工检查点的**展示次序**（迁移 5-1a）。这里排的是**流程先后**——
+ *  确定仓库范围 → 定规格 → 执行 → 验证 → 交付，异常升级压尾（它不在主线上，
+ *  是出事才走的旁路）。
+ *
+ *  **为什么必须自己排**：这份集合有两个来路，两个都不是人理解流程的顺序。
+ *   - 拓扑端点（`GET /projects/{id}/topology`）上它是后端的 `frozenset`，
+ *     序列化成数组**顺序不确定**，同一个项目每次刷新卡点次序都在跳；
+ *   - 读模型 §3 那一份是 `sorted()` 的**字母序**，于是「交付」排在「执行」前面。
+ *  两处都过这道排序，同一份策略在哪儿看都是一个样。 */
+export const CHECKPOINT_ORDER: readonly ProjectCheckpoint[] = [
+  "repository_scope",
+  "specification",
+  "execution",
+  "validation",
+  "delivery",
+  "exception_escalation",
+];
+
+/** 检查点措辞唯一表（同 PHASE_SKIN 的做法）。审核台与 issue 详情页共用一份：
+ *  两处各写一张表，日后漏改一处就成了「同一个卡点在两屏两个名字」。 */
+export const CHECKPOINT_LABEL: Record<ProjectCheckpoint, string> = {
+  repository_scope: "仓库范围",
+  specification: "规格",
+  execution: "执行",
+  validation: "验证",
+  delivery: "交付",
+  exception_escalation: "异常升级",
+};
+
+/** 按一份固定次序给**来源无序**的集合定序。后端多处用 `frozenset`
+ *  （`required_checkpoints`、`control_actions`），序列化成 JSON 数组后顺序不保证
+ *  稳定——直接渲染会让同一份数据每次刷新排列都不同，读者会以为它变了。
+ *
+ *  认不出的值**原样透出**排在已知项之后，不静默丢弃：服务端先于前端新增一个枚举值时，
+ *  界面上少一项比多一个陌生词危险得多（少一个卡点会让人以为那一步没人把关）。
+ *  未知项内部按字母序，保证同一份输入的输出稳定。 */
+export function orderByFixed(values: readonly string[], order: readonly string[]): string[] {
+  const known = order.filter((item) => values.includes(item));
+  const unknown = values.filter((value) => !order.includes(value)).slice().sort();
+  return [...known, ...unknown];
+}
+
+export function orderCheckpoints(values: readonly string[]): string[] {
+  return orderByFixed(values, CHECKPOINT_ORDER);
+}
+
+export function checkpointLabel(value: string): string {
+  return CHECKPOINT_LABEL[value as ProjectCheckpoint] ?? value;
 }
 
 /** uuid 短版。`issue_key` 恒 null（无 Project 注册表，§0/§6.1），所以 issue 的

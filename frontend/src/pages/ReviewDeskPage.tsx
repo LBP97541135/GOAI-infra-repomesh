@@ -3,11 +3,10 @@ import {
   type CheckpointDecisionKind,
   type HumanReviewRequestView,
   type HumanReviewStatus,
-  type ProjectCheckpoint,
   fetchReviewRequests,
   recordCheckpointDecision,
 } from "../api/reviewDesk";
-import { dayLabel, errText, shortId } from "../display";
+import { checkpointLabel, dayLabel, errText, shortId } from "../display";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 
 /** 人工审核台（迁移 2：main 的 ReviewWorkbench 进控制台）。
@@ -30,14 +29,8 @@ import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
  *  **实时性**：SSE（`/review-requests/events`，2s 比对、变了才推）。流断了退回一次性
  *  取数的结果并显示提示，不静默——一个不再更新却看起来正常的待办队列比空白更危险。 */
 
-const CHECKPOINT_LABEL: Record<ProjectCheckpoint, string> = {
-  repository_scope: "仓库范围",
-  specification: "规格",
-  execution: "执行",
-  validation: "验证",
-  delivery: "交付",
-  exception_escalation: "异常升级",
-};
+/* 检查点措辞表已上提到 display.ts（迁移 5-1a）：issue 详情页的监管策略段要用同一份，
+   两处各存一张表迟早会漏改一处，同一个卡点就在两屏有了两个名字。 */
 
 const STATUS_LABEL: Record<HumanReviewStatus, string> = {
   pending: "待审",
@@ -93,7 +86,7 @@ function ReviewCard({
           {STATUS_LABEL[review.status]}
         </span>
         <span className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2">
-          {CHECKPOINT_LABEL[review.checkpoint] ?? review.checkpoint}
+          {checkpointLabel(review.checkpoint)}
         </span>
         <span className="ml-auto font-mono text-[10.5px] text-tx3" title={`项目 ${review.project_id}`}>
           #{shortId(review.project_id)} · {dayLabel(review.created_at)}

@@ -20,6 +20,8 @@ import {
 } from "../api/decisions";
 import type { RoundHistoryState } from "../components/RoundsPanel";
 import { fetchIssueDetail, fetchPlanGraphEdges, fetchRepositoryPlan, fetchRooms } from "../api/rooms";
+import { fetchProjectTopology } from "../api/humanControl";
+import { AuthError } from "../api/auth";
 import { ApiError } from "../api/client";
 import { resolveDataSourceMode } from "../api/source";
 import { submitRollback } from "../api/rollback";
@@ -31,7 +33,7 @@ import type { PlanDagState } from "../components/PlanDagPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 import { errText, shortId } from "../display";
 import { approvalForDecision, dagExecutionFromAggregate, evidenceFromAggregate } from "../viewmodel";
-import { IssueDetailPage } from "./IssueDetailPage";
+import { IssueDetailPage, type SupervisionState } from "./IssueDetailPage";
 
 /** issue 详情取数容器（§3 概览 + §5.1 房间清单 + §4.3 决策夹 + §4.4 写回路）。
  *
@@ -124,6 +126,11 @@ export function IssueDetailContainer({
   // 稳定引用：发现面板把它存进 ref，内联箭头函数每次 render 换 identity 会让下游空转
   const handleCandidateAnchor = useCallback((anchor: PlanAnchor | null) => setCandidateAnchor(anchor), []);
 
+  /** 监管策略（迁移 5-1a）：项目拓扑的执行方式 / 人工检查点 / 授权人，只读。
+   *  与本页其它取数一样单区块降级——它 403 或失败都不该动到概览、房间与决策夹。 */
+  const [supervision, setSupervision] = useState<SupervisionState>({ status: "loading" });
+  const [supervisionReload, setSupervisionReload] = useState(0);
+
   /** 证据面（B-3）：决策夹取数时保留的本轮聚合 + 当前打开的单仓证据 */
   const [deckAggregate, setDeckAggregate] = useState<DeliveryAggregate | null>(null);
   const [evidence, setEvidence] = useState<EvidenceView | null>(null);
@@ -153,6 +160,49 @@ export function IssueDetailContainer({
       cancelled = true;
     };
   }, [issueId, reload]);
+
+  /** 监管策略取数（迁移 5-1a）。与概览并发发出，不排在它后面——两者互不依赖，
+   *  串起来只会让这一段白等一个来回。
+   *
+   *  三个非成功码**分开落态**，因为下一步完全不同：404 = 还没设定（不是错误，
+   *  也正是 5-1b 配置入口该出现的条件）、403 = 存在但当前账号无权读、其余 = 真失败。
+   *  合并成一个 error 会把「还没设」说成「坏了」。
+   *
+   *  跟着 `reload` 重取：物化会顺手建出拓扑（`EnsureProjectAgentTopology`），
+   *  物化成功后刷页时这一段必须跟着从「尚未设定」翻成实际策略。 */
+  useEffect(() => {
+    // 回放模式没有 human_control 面的夹具（审核台等同面模块也一样）。发这个请求会
+    // 打到真后端、对一个夹具 issue id 答 404，于是「回放世界里设了检查点」会被渲染成
+    // 「尚未设定」——那是拿一次取数失败去反驳夹具自己的事实。
+    if (resolveDataSourceMode() === "replay") {
+      setSupervision({ status: "replay" });
+      return;
+    }
+    let cancelled = false;
+    setSupervision({ status: "loading" });
+    fetchProjectTopology(issueId)
+      .then((topology) => !cancelled && setSupervision({ status: "ready", topology }))
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const status = err instanceof AuthError ? err.status : 0;
+        setSupervision(
+          status === 404
+            ? { status: "absent" }
+            : status === 403
+              ? { status: "forbidden", detail: errText(err) }
+              : status === 401
+                ? // 会话过期走独立一态：`error` 那一态给的是重试按钮，而过期会话
+                  // 重试永远不会成功，那个按钮按到天亮也没用。
+                  { status: "unauthenticated", detail: errText(err) }
+                : { status: "error", message: errText(err) },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issueId, reload, supervisionReload]);
+
+  const handleSupervisionReload = useCallback(() => setSupervisionReload((n) => n + 1), []);
 
   const roundId = detail?.active_round_id ?? detail?.latest_round_id ?? null;
   const organizationId = detail?.organization_id ?? null;
@@ -608,6 +658,8 @@ export function IssueDetailContainer({
         onRetryPlan={handlePlanReload}
         onPlanGenerated={handlePlanReload}
         onCandidateAnchor={handleCandidateAnchor}
+        supervision={supervision}
+        onRetrySupervision={handleSupervisionReload}
         materialize={{
           roundCount: detail.rounds.length,
           planRepositoryCount,

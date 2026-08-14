@@ -198,8 +198,16 @@ export interface IssueDetailView extends IssueListItemView {
   teams: IssueTeamRef[];
   contract: DeliveryContractView | null;
   human_grants: HumanGrantView[];
-  /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest。本字段只用于提示「本 issue 设有
-   *  人工检查点」并链接 main 既有审核台，前端不得据此自造决策项 */
+  /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest，前端不得据此自造决策项。
+   *
+   *  消费方是 issue 详情页的「监管策略」段（迁移 5-1a）：它与 `execution_mode` 一起
+   *  回答「这个项目会不会为某一步停下来等人」。⚠ 这一份是 `sorted()` 的**字母序**
+   *  （`api/read_models/service.py`），于是「交付」会排在「执行」前面——渲染前一律过
+   *  `display.ts` 的 `orderCheckpoints()` 按流程先后定序，别直接 `join`。
+   *
+   *  （原注写作「只用于提示『本 issue 设有人工检查点』并链接 main 既有审核台」，
+   *  那个按钮已被 5-1a 撤掉：它只在卡点非空时才出现，而活体库多数项目卡点为空，
+   *  于是最该说的「这个项目没有任何人工把关」一个字都没有。） */
   required_checkpoints: string[];
   /** 契约 v0.4 §3.3：发现链两个标量，**恒存在**（从未发起发现时为 1 / "idle"），
    *  与 §3.1 的 `step`/`step_state` 同源同实现。

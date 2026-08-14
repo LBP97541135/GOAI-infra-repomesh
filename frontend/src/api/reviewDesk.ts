@@ -27,7 +27,9 @@ export type HumanReviewStatus = "pending" | "approved" | "rejected" | "changes_r
 export type CheckpointDecisionKind = "approved" | "rejected" | "changes_requested";
 
 /** 项目控制动作（后端 `HumanControlAction`）。审核台只用得到暂停/恢复/取消三种；
- *  其余三个是授权语义里的**权限名**，不是可发起的动作，故不在此列举为按钮。 */
+ *  其余四个（`view_decisions` / `approve_checkpoint` / `request_changes` /
+ *  `edit_specification`）是授权语义里的**权限名**，不是可发起的动作，故不在此
+ *  列举为按钮。完整七项的类型见 `api/humanControl.ts` 的 `HumanControlAction`。 */
 export type ProjectControlAction = "pause_project" | "resume_project" | "cancel_project";
 
 export interface HumanReviewRequestView {

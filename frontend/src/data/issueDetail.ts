@@ -76,7 +76,10 @@ export const issueDetailFixture: IssueDetailView = {
     { team_id: "t-0003", agentteams_team_name: "rm-team-90cc11", repository_id: REPO_DOCS, runtime_status: "pending" },
   ],
   contract: null,
-  human_grants: [{ human_principal_id: "h-0001", role: "delivery_owner", code_access: "write" }],
+  // role 取后端 `HumanProjectRole` 的真实取值。原先写的 `delivery_owner` 后端根本没有
+  // 这一档，5-1a 把 human_grants 渲染出来之后，回放模式会直接把这个不存在的英文角色名
+  // 摆在界面上——夹具的作用是演示真实形态，不是演示一个后端答不出来的形态。
+  human_grants: [{ human_principal_id: "h-0001", role: "project_supervisor", code_access: "write" }],
   required_checkpoints: ["specification", "delivery"],
   // 契约 v0.4 §3.3 两标量，恒存在。与本 issue 的发现夹具默认形态（done）一致——
   // 这一单已经跑完整条发现链，计划快照就是它产出的。
