@@ -74,17 +74,44 @@
 AccountCreate: { username, password, display_name, is_admin=false }
 ```
 
-### ⚠ 落地前必须先补的一个洞
+### ⚠ 落地前必须先修的一处报错映射
 
-**后端对密码长度/强度没有任何校验。** `AccountCredentials.password` 只是
-`SecretStr`，没有 `min_length`；`local_accounts.py` 的创建路径也不检查。
-`web/` 表单上那个 `minLength={12}` **是纯前端约束**，绕过表单直接打接口，
-一位密码也能建成账号。
+> **更正（08-14）**：本节初稿断言「后端对密码长度没有任何校验」，**那是错的**，
+> 提交 `e3e8b5c2` 的提交信息里也照抄了这个错误说法（提交已推送，无法改写，以本节为准）。
+> 成因是一条 `grep` 被 `head` 截断，没看到校验那一行。
 
-迁过来时二选一，不要默认照抄前端约束：
+**校验是有的，而且位置正确。** `LocalAccountService._create`
+（`modules/identity_access/local_accounts.py:137`）强制密码至少 12 个字符，
+另有显示名非空、用户名格式（≥3 字符、只允许字母数字与 `. _ -`、转小写）、
+用户名不重复三项。`bootstrap_admin` 与 `create_account` **都**走这个
+`_create`，所以绕过表单直接打接口也拦得住。前端表单写「至少 12 位」是诚实的。
 
-- **建议**：在 `AccountCredentials` 上加 `min_length`，让约束落在后端，前端只做回显；
-- 或者明确接受现状，但**别在 UI 上把它写成「密码策略」**——那是把前端校验说成了系统保证。
+**真正的缺陷是这些校验失败被当成权限失败报出去了：**
+
+| 路由 | 现状 | 问题 |
+| --- | --- | --- |
+| `POST /auth/accounts` | 所有 `LocalAuthenticationError` → **403** | 「密码太短」「用户名已存在」和「你不是管理员」同一个码 |
+| `POST /auth/bootstrap` | 所有 `LocalAuthenticationError` → **409** | 校验失败被说成状态冲突 |
+
+前端表单据此没法决定是让用户改输入，还是告诉他没权限——而这两件事的下一步完全不同。
+这与上一批修 `onboard_repository_agent_team`（`AgentDirectoryError` 被吞成 503，
+实为永久拒绝，改判 409）是同一族缺陷，改法也一致。
+
+**改法**：在 `local_accounts.py` 给错误分型，加两个
+`LocalAuthenticationError` 的**子类**——`LocalAccountValidationError`（输入不合规）
+与 `LocalAccountConflict`（用户名已存在、bootstrap 已完成），基类留给真正的认证/授权
+失败。路由按 422 / 409 / 403 拆开捕获。
+
+⚠ **必须是子类，且子类要写在基类前面**。`login` 会经过 `_normalize_username`，
+它的处理器现在 `except LocalAuthenticationError → 401`：用子类，`login` 行为分毫不变；
+用并列类型，格式非法的用户名登录会变成 **500**。捕获顺序写反则永远命中基类，等于没改
+——这正是原缺陷的成因。
+
+附带澄清一处**与本次改动无关的既有行为**：`login` 的 handler 是 `detail=str(error)`，
+所以拿一个格式非法的用户名登录，返回的一直是 `401 {"detail": "username format is
+invalid"}`。子类化前后这句措辞完全一样，它**不是**本次引入的。如果认为这句本身是不该
+露的信息（它把「用户名不存在」和「用户名格式不对」区分开了），那是一个独立的裁决，
+不在本批范围内。
 
 ### 落点
 

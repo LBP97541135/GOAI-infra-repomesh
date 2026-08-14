@@ -11,7 +11,37 @@ from repomesh.shared.domain import new_id
 
 
 class LocalAuthenticationError(RuntimeError):
-    pass
+    """The caller is not who, or not what, they need to be.
+
+    Reserved for authentication and authorization failures: bad credentials,
+    an expired session, a disabled account, a non-administrator asking for an
+    administrator action. Account *shaping* failures are the subclasses below.
+    """
+
+
+class LocalAccountValidationError(LocalAuthenticationError):
+    """The submitted account fields cannot make an account.
+
+    A subclass rather than a sibling on purpose: ``login`` normalizes the
+    username through the same code path, and its handler catches the base
+    class. As a subclass, a malformed username at login keeps returning the
+    flat 401 it always returned; as a sibling it would escape that handler and
+    become a 500.
+
+    It does not change what login *says*. That handler passes ``str(error)``
+    through, so a malformed username has always answered 401 with "username
+    format is invalid" — before this split and after it. Whether login should
+    distinguish a malformed username from an unknown one at all is a separate
+    question this class does not settle.
+    """
+
+
+class LocalAccountConflict(LocalAuthenticationError):
+    """The account store is already in a state that refuses this request.
+
+    Username taken, bootstrap already done. Subclass for the same reason as
+    ``LocalAccountValidationError``.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +103,7 @@ class LocalAccountService:
         self, username: str, password: str, display_name: str
     ) -> LocalHumanAccountView:
         if await self._store.count() != 0:
-            raise LocalAuthenticationError("local account bootstrap is already complete")
+            raise LocalAccountConflict("local account bootstrap is already complete")
         return await self._create(username, password, display_name, is_admin=True)
 
     async def create_account(
@@ -135,11 +165,11 @@ class LocalAccountService:
     ) -> LocalHumanAccountView:
         normalized = self._normalize_username(username)
         if len(password) < 12:
-            raise LocalAuthenticationError("password must contain at least 12 characters")
+            raise LocalAccountValidationError("password must contain at least 12 characters")
         if not display_name.strip():
-            raise LocalAuthenticationError("display name is required")
+            raise LocalAccountValidationError("display name is required")
         if await self._store.get_account_by_username(normalized) is not None:
-            raise LocalAuthenticationError("username already exists")
+            raise LocalAccountConflict("username already exists")
         salt = secrets.token_hex(16)
         password_hash = await asyncio.to_thread(self._password_hash, password, salt)
         account = LocalHumanAccount(
@@ -158,7 +188,7 @@ class LocalAccountService:
         if len(normalized) < 3 or not all(
             character.isalnum() or character in "._-" for character in normalized
         ):
-            raise LocalAuthenticationError("username format is invalid")
+            raise LocalAccountValidationError("username format is invalid")
         return normalized
 
     @staticmethod

@@ -1,7 +1,9 @@
 """Organizations, users, authorization policies, and credential references."""
 from .contracts import AuthorizationAction, AuthorizationDecision, AuthorizationRequest
 from .local_accounts import (
+    LocalAccountConflict,
     LocalAccountService,
+    LocalAccountValidationError,
     LocalAuthenticationError,
     LocalHumanAccountView,
 )
@@ -11,7 +13,9 @@ __all__ = [
     "AuthorizationAction",
     "AuthorizationDecision",
     "AuthorizationRequest",
+    "LocalAccountConflict",
     "LocalAccountService",
+    "LocalAccountValidationError",
     "LocalAuthenticationError",
     "LocalHumanAccountView",
     "PolicyAuthorizationGateway",

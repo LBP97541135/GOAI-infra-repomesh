@@ -30,6 +30,8 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     WorkerProjection,
 )
 from repomesh.modules.identity_access import (
+    LocalAccountConflict,
+    LocalAccountValidationError,
     LocalAuthenticationError,
     LocalHumanAccountView,
 )
@@ -78,6 +80,13 @@ async def bootstrap(body: BootstrapAdmin, request: Request) -> dict:
         account = await request.app.state.container.local_account_service().bootstrap_admin(
             body.username, body.password.get_secret_value(), body.display_name
         )
+    # Subclasses first, base last: both subclass LocalAuthenticationError, so
+    # any other order makes the base clause swallow them and this endpoint goes
+    # back to calling a twelve-character password rule a conflict.
+    except LocalAccountValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except LocalAccountConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except LocalAuthenticationError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return asdict(account)
@@ -126,7 +135,16 @@ async def create_account(body: AccountCreate, request: Request) -> dict:
             body.display_name,
             is_admin=body.is_admin,
         )
+    # Subclasses before the base, or the base clause wins every time — which is
+    # exactly how "password must contain at least 12 characters" and "username
+    # already exists" both used to leave here as 403, telling the form it had a
+    # permission problem when it had a typing problem.
+    except LocalAccountValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except LocalAccountConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except LocalAuthenticationError as error:
+        # What is left is the genuine one: the actor is not an administrator.
         raise HTTPException(status_code=403, detail=str(error)) from error
     return asdict(account)
 

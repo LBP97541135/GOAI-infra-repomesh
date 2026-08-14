@@ -89,6 +89,130 @@ def test_local_account_bootstrap_login_and_session_authentication(
         )
 
 
+def test_account_creation_separates_bad_input_conflict_and_permission(
+    application_container: ApplicationContainer,
+) -> None:
+    """One LocalAuthenticationError used to become 403 for all three.
+
+    The form on the other end has to know whether to highlight a field, say
+    the name is taken, or say the operator may not do this at all.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={
+                "username": "admin",
+                "password": "strong-password-123",
+                "display_name": "Administrator",
+            },
+        )
+        admin_headers = {
+            "Authorization": "Bearer "
+            + client.post(
+                "/api/v1/auth/login",
+                json={"username": "admin", "password": "strong-password-123"},
+            ).json()["access_token"]
+        }
+
+        short_password = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={"username": "reviewer", "password": "short", "display_name": "Reviewer"},
+        )
+        assert short_password.status_code == 422
+        assert short_password.json()["detail"] == "password must contain at least 12 characters"
+
+        blank_display_name = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={"username": "reviewer", "password": "reviewer-password-123", "display_name": " "},
+        )
+        assert blank_display_name.status_code == 422
+
+        created = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={
+                "username": "reviewer",
+                "password": "reviewer-password-123",
+                "display_name": "Reviewer",
+            },
+        )
+        assert created.status_code == 201
+
+        duplicate = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={
+                "username": "REVIEWER",
+                "password": "reviewer-password-456",
+                "display_name": "Twin",
+            },
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "username already exists"
+
+        reviewer_headers = {
+            "Authorization": "Bearer "
+            + client.post(
+                "/api/v1/auth/login",
+                json={"username": "reviewer", "password": "reviewer-password-123"},
+            ).json()["access_token"]
+        }
+        forbidden = client.post(
+            "/api/v1/auth/accounts",
+            headers=reviewer_headers,
+            json={
+                "username": "other",
+                "password": "another-password-123",
+                "display_name": "Other",
+            },
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "local administrator permission is required"
+
+
+def test_bootstrap_rejects_weak_password_as_input_not_conflict(
+    application_container: ApplicationContainer,
+) -> None:
+    with TestClient(create_app(application_container)) as client:
+        weak = client.post(
+            "/api/v1/auth/bootstrap",
+            json={"username": "admin", "password": "short", "display_name": "Administrator"},
+        )
+        assert weak.status_code == 422
+        assert weak.json()["detail"] == "password must contain at least 12 characters"
+
+
+def test_login_with_malformed_username_still_answers_401(
+    application_container: ApplicationContainer,
+) -> None:
+    """Regression pin for the error-typing split.
+
+    ``login`` normalizes the username through the same validator that now
+    raises LocalAccountValidationError. Because that type subclasses
+    LocalAuthenticationError, the login handler still catches it and answers
+    401 — a sibling type would have escaped the handler and become a 500.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={
+                "username": "admin",
+                "password": "strong-password-123",
+                "display_name": "Administrator",
+            },
+        )
+        refused = client.post(
+            "/api/v1/auth/login",
+            json={"username": "no spaces allowed", "password": "strong-password-123"},
+        )
+        assert refused.status_code == 401
+        assert refused.json()["detail"] == "username format is invalid"
+
+
 def test_admin_can_compose_agentteams_team_from_existing_agents(
     application_container: ApplicationContainer,
 ) -> None:
