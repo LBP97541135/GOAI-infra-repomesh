@@ -24,3 +24,6 @@ build/
 htmlcov/
 
 .repomesh_cache/
+
+# 本机凭据文件，绝不入库
+admininfo.txt

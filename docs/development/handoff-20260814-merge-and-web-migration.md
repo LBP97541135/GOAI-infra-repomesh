@@ -143,7 +143,7 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 5280,8100 -State
 | --- | --- | --- |
 | 5280 | vite dev server | 主工作树，`VITE_API_TOKEN=console-dev-token`，proxy → 8100 |
 | 8100 | uvicorn `repomesh.main:app` | 主工作树，连 5533 |
-| 5533 | `cons-live-pg` 容器 | 联调库，schema `20260814_0029`，账号 `jack1`(admin) |
+| 5533 | `cons-live-pg` 容器 | 联调库，schema **`20260814_0030`**（08-14 已升，见 §4.1），账号 `jack1`(admin) |
 | 8090 / 6167 | `repomesh-agentteams-forwarder` | socat → 本机 `agentteams-controller` 容器 |
 | 18001/18080/18088 | `agentteams-controller` | 本机 |
 | 9000 | `repomesh-minio-forwarder` | 本机 |
@@ -156,8 +156,50 @@ powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 5280,8100 -State
 | `repository_intelligence.repositories` | 5 | 全是 `repomesh-e2e-*` 夹具仓库 |
 | `project.repository_agent_teams` | 22 | |
 | `project.agent_topologies` | 14 | |
-| `project.human_review_requests` | **0** | 没有受控项目产生检查点，审核台空是对的 |
+| `project.human_review_requests` | ~~**0**~~ → **1** | 08-14 监管策略端到端验收后不再为 0；那一条是合成 issue `88539db4` 的 `repository_scope`，已 `approved` |
 | `delivery.delivery_policies` | **0** | 空表 = 三级回退落在 env 默认层，正是 main 的设计语义 |
+
+### 4.1 ⚠ 重启 8100 前必读：`.env` 是过期的，必须带齐覆盖变量
+
+**`.env` 里的值不是 8100 实际在用的值。** 那个后端一直靠环境变量覆盖启动，
+照着 `.env` 直接起会踩两个坑，而且第二个的报错完全指不到病因：
+
+| 变量 | `.env` 里写的 | 实际必须用的 | 照 `.env` 起会怎样 |
+| --- | --- | --- | --- |
+| `REPOMESH_DATABASE_URL` | `localhost:**5432**` | `127.0.0.1:**5533**` | 5432 **根本没有进程在监听**；若那台真起来了，就是往「谱系不符、禁跑本分支迁移」的库上写 |
+| `REPOMESH_WORKER_TASK_CONTROL_URL` | `host.docker.internal:**8000**` | `host.docker.internal:**8100**` | 物化答 409 `existing AgentTeams worker differs in: mcpServers`——**报错里没有任何字样指向端口** |
+| `REPOMESH_AGENTTEAMS_CONTROLLER_URL` | `http://agentteams-controller:8090`（docker 内部名） | `http://127.0.0.1:8090`（走 forwarder） | 宿主机解析不了该主机名 |
+| `REPOMESH_AGENTTEAMS_MATRIX_URL` | `http://agentteams-controller:6167` | `http://127.0.0.1:6167` | 同上 |
+
+第二行是 08-14 实际踩到的：AgentTeams 里现存的 `rm-leader-*` worker 是上一个后端用
+**8100** 建的，新起的后端拿 **8000** 去比对，`_assert_fields` 判定 `mcpServers` 不一致
+就拒绝建团（`integrations/agentteams/control_plane.py:340`）。诊断方法是拿
+`REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN` 只读查 controller 里那个 worker 的 `mcpServers`，
+与配置值逐字对。
+
+可直接用的启动行：
+
+```bash
+REPOMESH_DATABASE_URL="postgresql+asyncpg://repomesh:repomesh@127.0.0.1:5533/repomesh" \
+REPOMESH_AGENTTEAMS_CONTROLLER_URL="http://127.0.0.1:8090" \
+REPOMESH_AGENTTEAMS_MATRIX_URL="http://127.0.0.1:6167" \
+REPOMESH_AGENT_ACTION_TOKEN="console-dev-token" \
+REPOMESH_WORKER_TASK_CONTROL_URL="http://host.docker.internal:8100/api/v1/mcp/worker" \
+.venv/Scripts/python.exe -m uvicorn repomesh.main:app --host 127.0.0.1 --port 8100
+```
+
+### 4.2 ⚠ 5533 的存量数据：没有任何一个 issue 能物化
+
+08-14 实测发现的死结，**不是缺陷，是那份数据的状态**：
+
+- 唯一一个发现链走完、尚未物化的 issue（`a2c0c2f9` 优惠码）属于组织 `5debe538`（`e2e-fix-verify`）；
+- 全部 14 个拓扑、所有仓库的 repository leader 都属于 `d68a5926`（`console-demo`）；
+- 拿 console-demo 的 leader 去物化那个 issue → **403 `the issue belongs to a different organization`**；
+- 拿它自己组织的 leader 物化 → **409 `repository … already has a leader in another organization`**。
+
+两道门各自都对（仓库 leader 不跨组织、发起人组织须与 issue 一致），夹在一起就没有出路。
+**要在 5533 上做端到端验证，只能在 `console-demo` 组织里新建 issue 从头走发现链**
+（08-14 就是这么做的，见 §3.x 的监管策略验收）。
 
 要开干净的自验环境仍可另起：
 
@@ -184,6 +226,11 @@ cd frontend && REPOMESH_API_TARGET=http://127.0.0.1:8101 npx vite --port 5281
 - 空库要先 bootstrap 管理员才能过登录门（`POST /api/v1/auth/bootstrap`，用 `--data-binary @file` 传 JSON，直接 `-d` 带中文会 400）
 - **5432 活体库谱系与本分支不符，别对它跑本分支迁移**（既有纪律）
 - 一次性容器用完即删
+- **`git push` 挂住十分钟不动、不报错也不超时**：先查 `git-credential-manager.exe`。
+  它卡住时整条推送链会一起吊着——GitHub 本身 `curl https://github.com` 照样 200，
+  所以很容易误判成网络问题。解法是把 `git.exe` / `git-remote-https.exe` /
+  `git-credential-manager.exe` 一起 `Stop-Process -Force` 再推，实测 2 秒完成。
+  推送是纯网络操作，中途杀掉不会损坏本地仓库。
 - **Docker Desktop 起不来、报 `removing stale socket: ...userAnalyticsOtlpHttp.sock`**：
   那个 socket 是损坏的文件系统条目（`ls` 看得见但 `stat` 失败、权限位全 `?`），
   `rm -f` / `cmd del` / .NET `File.Delete` 全部删不掉。解法是把整个
