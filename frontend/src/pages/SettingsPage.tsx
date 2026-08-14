@@ -9,10 +9,11 @@ import type {
 } from "../api/contract";
 import { fetchConsoleAgents, gridSourceMode } from "../api/grid";
 import { fetchCodingAgents, fetchSetupStatus } from "../api/platformSetup";
+import { LocalAccountsPanel } from "../components/LocalAccountsPanel";
 import { errText } from "../display";
 import { useRuntimeRows } from "./useRuntimeRows";
 
-/** 设置页（CONS-44，首版**只读**）。
+/** 设置页（CONS-44）。
  *
  *  原型这一页画的是「claude-code · 已配置 · CLI v2.1 · 4 个 worker 在用」这样的
  *  适配器卡片。那句「没有一项有数据源」在 main 合并之前是对的；`/setup/coding-agents`
@@ -28,7 +29,13 @@ import { useRuntimeRows } from "./useRuntimeRows";
  *   2. **缺口清单**：写路径与观测缺口逐条写明补齐路径，而不是留白。
  *
  *  运行时种类（`runtime_kind`）只在探测通时才有值，故按可得情况呈现，一条都没有
- *  就说「Controller 未回报」，不列一份看起来已配置好的假清单。 */
+ *  就说「Controller 未回报」，不列一份看起来已配置好的假清单。
+ *
+ *  **本页曾自称「首版只读」，迁移 5-2 之后不再是**：「人员与权限」段能建本地账号
+ *  （`components/LocalAccountsPanel.tsx`），这是整页唯一的写路径。顶部徽标据此改了
+ *  措辞——留着「只读」比没有徽标更糟，它会让人以为这一页点不坏任何东西。
+ *  账号管理落在设置页而不是新开一个导航项：它是低频管理动作，与平台就绪、适配器
+ *  清单同类；为它单开一栏会让侧栏多一个常年没人点的入口。 */
 
 function Row({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
@@ -160,7 +167,7 @@ export function SettingsPage({ account }: { account: Account }) {
     <div className="max-w-[860px]">
       <div className="flex items-baseline gap-3 border-b border-line pb-3">
         <h1 className="text-[16px] font-semibold text-cream">设置</h1>
-        <span className="microlabel">首版只读</span>
+        <span className="microlabel">只读 · 唯一写路径：新增账号</span>
       </div>
 
       <Section title="平台就绪">
@@ -214,6 +221,11 @@ export function SettingsPage({ account }: { account: Account }) {
             </p>
           </>
         )}
+      </Section>
+
+      {/* 紧挨平台就绪：那一段末尾报的「账号 N」正是这一段管的东西 */}
+      <Section title="人员与权限">
+        <LocalAccountsPanel account={account} />
       </Section>
 
       <Section title="连接健康">
@@ -290,6 +302,12 @@ export function SettingsPage({ account }: { account: Account }) {
             尚未统一——统一到单一主体化凭据另立项。
           </li>
           <li>· 工作区（组织）删除与改名未接入；列表、切换与创建已接入（契约 v0.3 §2）。</li>
+          <li>
+            · 本地账号<b className="text-tx2">只能新建</b>：停用、改密、改显示名后端都没有端点
+            （/auth/accounts 只有 GET 与 POST），所以上面的「已停用」只读得到、改不了。
+            把账号<b className="text-tx2">授权成某个项目的审核人</b>是另一件事，落在项目拓扑的
+            human_grants 上，随监管策略入口一并迁入（迁移 5-1）。
+          </li>
         </ul>
       </Section>
     </div>

@@ -23,6 +23,17 @@ export interface Account {
   active: boolean;
 }
 
+/** 建账号的请求体（后端 `AccountCreate`）。
+ *
+ *  `is_admin` 可省：默认值是**后端的**（false），前端不镜像一份——镜像的默认值
+ *  日后与后端漂移时不会有任何东西提醒我们。 */
+export interface AccountCreateRequest {
+  username: string;
+  password: string;
+  display_name: string;
+  is_admin?: boolean;
+}
+
 export class AuthError extends Error {
   readonly status: number;
   constructor(status: number, message: string) {
@@ -83,4 +94,28 @@ export const authApi = {
     }),
 
   logout: () => sessionRequest<void>("/auth/logout", { method: "POST" }),
+
+  /** 列出全部本地账号。**要管理员**。
+   *
+   *  非管理员拿到的是 403 而**不是空列表**：后端先认会话、再查 `is_admin`。调用方
+   *  据此说「权限不够」，不得画成「一个账号都没有」——那是把一次拒绝说成了一个事实。 */
+  accounts: () => sessionRequest<Account[]>("/auth/accounts"),
+
+  /** 新建一个本地账号。**要管理员**。
+   *
+   *  三种可预期的失败各有各的下一步，detail 一律原文上抛不归并：
+   *   - 422 输入不合规——规则在后端（`local_accounts.py` 的 `_create` 与
+   *     `_normalize_username`：密码 ≥12 字符、显示名非空、用户名 ≥3 字符且只含
+   *     字母数字与 `. _ -`）。**前端不复刻这些判定**，只回显规则与服务端原话，
+   *     否则同一条规则会有两份实现，改后端时前端悄悄拦下本该通过的输入；
+   *   - 409 用户名已存在；
+   *   - 403 当前账号不是管理员——这不是填写问题，改输入重试没有用。
+   *
+   *  用户名会被后端 `strip().lower()` 归一，所以回显以返回体为准，不要拿表单原值
+   *  当结果——那两个值可以不一样。 */
+  createAccount: (payload: AccountCreateRequest) =>
+    sessionRequest<Account>("/auth/accounts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };
