@@ -7,19 +7,18 @@ import type {
 } from "../api/contract";
 import type {
   CodeAccessLevel,
-  HumanControlAction,
   HumanProjectRole,
   ProjectAgentTopologyView,
   ProjectExecutionMode,
 } from "../api/humanControl";
 import type { DagExecutionView, Decision, PlanAnchor } from "../types";
 import { DecisionDeck } from "../components/DecisionDeck";
-import { DiscoveryPanel, type MaterializeContext } from "../components/DiscoveryPanel";
+import { DiscoveryPanel, type MaterializeContext, type PolicyGate } from "../components/DiscoveryPanel";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
-import { PHASE_SKIN, PHASE_SKIN_FALLBACK, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, checkpointLabel, dayLabel, eventTime, openedBy, orderByFixed, orderCheckpoints, shortId } from "../display";
+import { CODE_ACCESS_LABEL, CONTROL_ACTION_ORDER, PHASE_SKIN, PHASE_SKIN_FALLBACK, ROLE_LABEL, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, checkpointLabel, controlActionLabel, dayLabel, eventTime, openedBy, orderByFixed, orderCheckpoints, shortId } from "../display";
 
 /** issue 详情页（CONS-42）。版式按原型 redesign-issue-centric.html 的 `#v-detail`：
  *  标题+元数据+徽标 → 原始需求卡 → 关联仓库·团队芯片 → 房间区（每仓 teamRoom + leaderDM）。
@@ -201,6 +200,29 @@ export type SupervisionState =
   /** 回放模式：human_control 面没有夹具，这一段改由读模型（此时即夹具）作答。 */
   | { status: "replay" };
 
+/** 拓扑取数四态 → 草稿卡片的门（迁移 5-1b · F4，设计文档 §3.4）。
+ *
+ *  **这一判只做一次，在这里**：草稿卡片要问的「有没有真档案了」与本段问的是同一个
+ *  问题，发现面板自己再取一遍拓扑，就会在物化那一瞬间出现两个互相矛盾的答案。
+ *
+ *  `forbidden` 归 `sealed` 不是保守处理，是后端语义：`get_project_topology` 的 404
+ *  判定在权限判定之前，所以能答 403 就意味着**档案确实存在**（见 `humanControl.ts`
+ *  那段三码分述）。`unauthenticated` / `error` / `replay` 一律 `unknown`——不知道就
+ *  不出卡片，而不是赌一把「多半还没物化」。 */
+function policyGateOf(state: SupervisionState): PolicyGate {
+  switch (state.status) {
+    case "absent":
+      return "open";
+    case "ready":
+    case "forbidden":
+      return "sealed";
+    case "loading":
+      return "resolving";
+    default:
+      return "unknown";
+  }
+}
+
 const EXECUTION_MODE_LABEL: Record<ProjectExecutionMode, string> = {
   auto: "全自动",
   supervised: "人工监督",
@@ -226,37 +248,8 @@ const EXECUTION_MODE_MEANING: Record<ProjectExecutionMode, string> = {
   manual_controlled: "六个检查点全部生效（后端强制集齐，少一个都不收），每一步都要人点头。",
 };
 
-const ROLE_LABEL: Record<HumanProjectRole, string> = {
-  organization_supervisor: "组织监督人",
-  project_supervisor: "项目监督人",
-  repository_supervisor: "仓库监督人",
-};
-
-const CODE_ACCESS_LABEL: Record<CodeAccessLevel, string> = {
-  none: "不读代码",
-  read: "可读代码",
-  write: "可写代码",
-};
-
-const CONTROL_ACTION_ORDER: HumanControlAction[] = [
-  "view_decisions",
-  "approve_checkpoint",
-  "request_changes",
-  "edit_specification",
-  "pause_project",
-  "resume_project",
-  "cancel_project",
-];
-
-const CONTROL_ACTION_LABEL: Record<HumanControlAction, string> = {
-  view_decisions: "看决策",
-  approve_checkpoint: "批卡点",
-  request_changes: "要求修改",
-  edit_specification: "改规格",
-  pause_project: "暂停项目",
-  resume_project: "恢复项目",
-  cancel_project: "取消项目",
-};
+// 身份 / 代码权限 / 控制动作三张措辞表已移入 `display.ts`（5-1b）：配置弹窗要用
+// 同一批词，抄第二份就会漂移。
 
 /** 授权行 + **它来自哪个来源**。
  *
@@ -336,7 +329,7 @@ function GrantRow({ grant }: { grant: PolicyGrant }) {
                 key={action}
                 className="rounded-hard border border-line px-1.5 py-px text-[10.5px] text-tx2"
               >
-                {CONTROL_ACTION_LABEL[action as HumanControlAction] ?? action}
+                {controlActionLabel(action)}
               </span>
             ))
           )}
@@ -526,8 +519,12 @@ function SupervisionBlock({
             「尚未设定」与「设成了全自动」是两回事，前者还改得动。
           </p>
           <p className="mt-1.5 text-[11.5px] leading-[1.7] text-tx3">
-            配置入口随迁移 5-1b 迁入。⚠ 设定是有时限的：首次物化时后端会自动补一个
-            「全自动 + 零卡点」的拓扑，而全仓没有任何更新拓扑的端点——过了首次物化，
+            {/* 入口**只有一处**（迁移 5-1b · F6）。这里刻意不再放第二个配置按钮：
+                「同一件事两个入口」正是这批迁移一直在还的那笔债，而策略必须挨着
+                物化按钮设——它要回答的是「这一次开工，谁来盯着」。 */}
+            配置入口在上方「发现」区块的底部：发现链走完后，物化按钮的正上方会出现一张
+            「监管策略」卡片，从那里设。⚠ 设定是有时限的：首次物化时后端会按草稿建出档案
+            （没设过就是「全自动 + 零卡点」），而全仓没有任何更新拓扑的端点——过了首次物化，
             这个项目的监管策略就定死了。
             <button className="ml-2 text-amber hover:text-amber-hi" onClick={onRetry}>
               重新取一次
@@ -611,7 +608,8 @@ function SupervisionBlock({
           </>
         )}
         。<b className="text-tx2">本段只读</b>
-        ——改执行方式、加人工检查点、授权审核人的入口随迁移 5-1b 迁入。
+        ——改执行方式、加人工检查点、授权审核人在上方「发现」区块底部的「监管策略」卡片，
+        且只在<b className="text-tx2">首次物化之前</b>可设（全仓没有更新拓扑的端点）。
       </p>
     </>
   );
@@ -807,11 +805,13 @@ export function IssueDetailPage({
       <ErrorBoundary block="发现" resetKey={key}>
         <DiscoveryPanel
           issueId={detail.issue_id}
+          issueTitle={detail.title}
           organizationId={detail.organization_id}
           onToast={onToast}
           onPlanGenerated={onPlanGenerated}
           onCandidateAnchor={onCandidateAnchor}
           materialize={materialize}
+          policyGate={policyGateOf(supervision)}
           onMaterialized={onMaterialized}
         />
       </ErrorBoundary>
