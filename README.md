@@ -70,9 +70,16 @@ uv run ruff check .
 uv run pytest
 ```
 
+## License
+
+RepoMesh is licensed under the Apache License, Version 2.0. See `LICENSE`.
+
 ## Team entry points
 
 - Documentation index: `docs/README.md`
+- Skill lifecycle: `capabilities/skills/README.md`
+- Open source readiness: `docs/open-source-readiness.md`
+- Third-party notices: `THIRD_PARTY_NOTICES.md`
 - Team handoff and next development: `docs/development/team-handoff.md`
 - Parallel work plan: `docs/development/parallel-work-plan.md`
 - Public contracts: `docs/contracts/public-contracts-v0.1.md`

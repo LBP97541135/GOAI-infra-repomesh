@@ -12,6 +12,7 @@
 
 - [模块与 Owner](architecture/module-map.md)
 - [Agent Identity 清单](architecture/agent-identity-catalog.md)
+- [云产品与官方 Skill 接入](architecture/cloud-skill-integration.md)
 - [依赖规则](architecture/dependency-rules.md)
 - [数据库所有权](architecture/database-ownership.md)
 - [上下文管理](architecture/context-management.md)
@@ -28,6 +29,7 @@
 
 - [数据库基础](database.md)
 - [产品方向与验证方案](agentic-delivery-product-brief.md)
+- [开源就绪清单](open-source-readiness.md)
 
 文档描述语义，模块 `contracts.py` 是可执行契约。两者不一致时停止联调，由生产模块 Owner
 在同一个 PR 中修正，禁止消费方自行兼容未声明字段。
