@@ -30,6 +30,7 @@ from repomesh.modules.delivery.infrastructure import (
 from repomesh.modules.project.infrastructure import (
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
+    TopologyPolicyDraftRecord,
 )
 from repomesh.modules.repository_intelligence.infrastructure.models import (
     PlanSnapshotRecord,
@@ -67,6 +68,7 @@ _REGISTERED_MODELS = (
     ChangeSetRepositoryRecord,
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
+    TopologyPolicyDraftRecord,
     RepositoryRecord,
     PlanSnapshotRecord,
     ValidationSnapshotRecord,

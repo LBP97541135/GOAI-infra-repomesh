@@ -23,7 +23,7 @@ from repomesh.modules.project.domain import (
     ProjectTopologyViolation,
     RepositoryTeam,
 )
-from repomesh.modules.project.ports import ProjectTopologyStore
+from repomesh.modules.project.ports import ProjectTopologyStore, TopologyPolicyDraftStore
 from repomesh.shared.idempotency import command_fingerprint
 
 
@@ -187,10 +187,22 @@ class EnsureProjectAgentTopology:
       round inside a workspace that already exists);
     - one worker per repository, the smallest team that can be assigned a task.
 
-    ``execution_mode`` and ``required_checkpoints`` are left at their defaults
-    deliberately. A topology created on the way to work is not the place to
+    ``execution_mode`` and ``required_checkpoints`` are deliberately not
+    decided here. A topology created on the way to work is not the place to
     decide a project's supervision policy; the admin face
     (``POST /projects/topologies``) still owns that.
+
+    What that face now has is somewhere to leave the decision in advance, so
+    these three fields — the two above plus ``human_grants`` — are no longer
+    always the defaults: they are read from the project's
+    :class:`~repomesh.modules.project.domain.TopologyPolicyDraft` when one
+    exists. This class still decides nothing about supervision; it carries a
+    decision across a gap that used to swallow it, because the policy is set
+    minutes before there is a topology to hold it. A project with no draft
+    takes the same defaults it always did, byte for byte — the request this
+    class hands the creator is identical, fingerprint included, which is the
+    whole of the backward compatibility story for the projects already
+    materialized.
     """
 
     def __init__(
@@ -198,10 +210,12 @@ class EnsureProjectAgentTopology:
         store: ProjectTopologyStore,
         teams: RepositoryAgentTeamProvisioner,
         creator: CreateProjectAgentTopology,
+        policy_drafts: TopologyPolicyDraftStore,
     ) -> None:
         self._store = store
         self._teams = teams
         self._creator = creator
+        self._policy_drafts = policy_drafts
 
     async def ensure(
         self,
@@ -223,6 +237,15 @@ class EnsureProjectAgentTopology:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
+
+        # Read before provisioning: a store that cannot answer should cost
+        # nothing, and provisioning mints agent principals that would outlive
+        # the failure. A draft whose grant names a repository the plan later
+        # dropped is *not* caught here — ``ProjectAgentTopology`` owns that
+        # rule because only it has the teams to check against, and it refuses
+        # loudly rather than dropping the grant (silently unwatching a project
+        # that someone asked to watch).
+        draft = await self._policy_drafts.get(project_id)
 
         assignments = []
         # Sorted so the same repository set produces the same team order, and
@@ -247,6 +270,36 @@ class EnsureProjectAgentTopology:
                 project_id=project_id,
                 organization_leader_id=organization_leader_id,
                 repository_teams=tuple(assignments),
+                # Spelled out even when there is no draft so the defaults are
+                # visible next to the thing that overrides them. The values are
+                # the field defaults, so the command fingerprint of a
+                # draft-less project is unchanged and a replay still matches.
+                execution_mode=(
+                    draft.execution_mode if draft else ProjectExecutionMode.AUTO
+                ),
+                required_checkpoints=(
+                    draft.required_checkpoints if draft else frozenset()
+                ),
+                # The draft already holds ``HumanProjectGrant``; it goes back
+                # out through the request's input type rather than sneaking a
+                # domain object past it, because the request type is what
+                # ``CreateProjectAgentTopology`` publishes and one caller
+                # bypassing it would make it a lie.
+                human_grants=(
+                    tuple(
+                        HumanProjectGrantInput(
+                            human_principal_id=grant.human_principal_id,
+                            role=grant.role,
+                            code_access=grant.code_access,
+                            control_actions=grant.control_actions,
+                            repository_id=grant.repository_id,
+                            path_patterns=grant.path_patterns,
+                        )
+                        for grant in draft.human_grants
+                    )
+                    if draft
+                    else ()
+                ),
             ),
             idempotency_key=f"{key}:topology",
         )

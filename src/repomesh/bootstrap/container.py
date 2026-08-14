@@ -311,7 +311,25 @@ class ApplicationContainer:
             self.project_topology_store,
             ProvisionRepositoryAgentTeam(self.agent_directory),
             self.project_topology_creator(),
+            self.topology_policy_draft_store(),
         )
+
+    @cached_service
+    def topology_policy_draft_store(self):
+        """Where the admin face leaves a supervision policy for materialization.
+
+        One instance for both directions on purpose: the endpoints write
+        through it over an admin session, ``EnsureProjectAgentTopology`` reads
+        through it in-process. That asymmetry is the whole design — the shared
+        console action token gains no way to set a policy, only to trigger one
+        an admin already set.
+        """
+
+        from repomesh.modules.project.infrastructure import (
+            PostgresTopologyPolicyDraftStore,
+        )
+
+        return PostgresTopologyPolicyDraftStore(self.database)
 
     def topology_runtime_projector(self):
         """Contract v0.4 §8: the step that makes a round's rooms exist.

@@ -10,7 +10,25 @@ from repomesh.modules.project.domain import (
     HumanReviewRequest,
     ProjectAgentTopology,
     ProjectCheckpointDecision,
+    TopologyPolicyDraft,
 )
+
+
+class TopologyPolicyDraftStore(Protocol):
+    """Where a project's supervision policy waits between being set and used.
+
+    Two callers that never meet: the admin face writes through it over a
+    session, and ``EnsureProjectAgentTopology`` reads through it in-process
+    while materializing. Keeping the read in-process is what lets the write
+    stay behind ``is_admin`` without the shared console action token gaining
+    any way to set a policy.
+    """
+
+    async def get(self, project_id: UUID) -> TopologyPolicyDraft | None: ...
+
+    async def upsert(self, draft: TopologyPolicyDraft) -> TopologyPolicyDraft: ...
+
+    async def delete(self, project_id: UUID) -> bool: ...
 
 
 class ProjectTopologyStore(Protocol):

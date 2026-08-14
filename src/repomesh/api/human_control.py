@@ -18,6 +18,7 @@ from repomesh.api.human_control_models import (
     ProjectControlCreate,
     ProjectTopologyCreate,
     RepositoryAgentTeamOnboard,
+    TopologyPolicyDraftPut,
 )
 from repomesh.integrations.agentteams import RegisterNativeAgentRequest
 from repomesh.modules.agent_directory.application import CreateAgentRequest
@@ -45,8 +46,10 @@ from repomesh.modules.project import (
 )
 from repomesh.modules.project.contracts import HumanReviewStatus, ProjectCheckpoint
 from repomesh.modules.project.domain import (
+    HumanProjectGrant,
     ProjectTopologyConflict,
     ProjectTopologyError,
+    TopologyPolicyDraft,
     repository_agentteams_team_name,
 )
 from repomesh.settings import get_settings
@@ -483,6 +486,12 @@ async def create_project_topology(body: ProjectTopologyCreate, request: Request)
             ),
             idempotency_key=body.idempotency_key,
         )
+    # Subclass before base, or the base clause takes both — which is how "this
+    # project already has a topology" and "your grant is scoped wrong" left
+    # here under the same code, telling a caller who cannot fix anything to go
+    # fix their request. Same family as the two account clauses above.
+    except ProjectTopologyConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ProjectTopologyError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return asdict(topology)
@@ -522,6 +531,13 @@ async def create_automatic_project_topology(
             ),
             idempotency_key=body.idempotency_key,
         )
+    # The same two clauses as its sibling above, for the same reason:
+    # ``CreateAutomaticProjectTopology.execute`` delegates to
+    # ``CreateProjectAgentTopology.execute``, so both conflict flavours arrive
+    # here too. Fixing only the sibling would have been worse than fixing
+    # neither — a half-fixed error map reads as a finished one.
+    except ProjectTopologyConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ProjectTopologyError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return asdict(topology)
@@ -538,6 +554,110 @@ async def get_project_topology(project_id: UUID, request: Request) -> dict:
     ):
         raise HTTPException(status_code=403, detail="human project membership is required")
     return asdict(topology)
+
+
+@router.put("/projects/{project_id}/policy-draft")
+async def put_project_policy_draft(
+    project_id: UUID, body: TopologyPolicyDraftPut, request: Request
+) -> dict:
+    """Set the supervision policy that materialization will read back.
+
+    Behind an admin session while materialization stays behind the console's
+    shared action token, and that asymmetry is the point: a holder of the
+    shared token can still *trigger* a policy — it always could, that is what
+    the materialize button is — but has no way to *set* one, and triggering can
+    only make supervision stricter than it was.
+
+    Whole-document overwrite. ``PUT`` rather than ``POST`` because a
+    requirement holds one supervision intent and changing your mind replaces
+    it; there is no second draft to be idempotent about, so no idempotency key
+    either.
+    """
+
+    actor = await _account(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    account_service = request.app.state.container.local_account_service()
+    for grant in body.human_grants:
+        if await account_service.get_account(grant.human_principal_id) is None:
+            raise HTTPException(status_code=422, detail="human grant account does not exist")
+    try:
+        # Real ``HumanProjectGrant`` objects, not payload rows forwarded to
+        # ``assert_supervision_policy``. That function takes a Protocol and
+        # reads two fields off each grant; the four rules about a *single*
+        # grant — a repository supervisor needs a repository, the other two
+        # roles may not have one, path scope needs repository scope, at least
+        # one control action — are in ``HumanProjectGrant.__post_init__`` and
+        # run only if the object is actually constructed. Handing over
+        # something merely shaped like a grant would let a draft save with a
+        # repository supervisor scoped to nothing and then refuse to
+        # materialize, minutes later and somewhere else.
+        draft = TopologyPolicyDraft(
+            project_id=project_id,
+            created_by=actor.id,
+            execution_mode=body.execution_mode,
+            required_checkpoints=frozenset(body.required_checkpoints),
+            human_grants=tuple(
+                HumanProjectGrant(
+                    human_principal_id=item.human_principal_id,
+                    role=item.role,
+                    code_access=item.code_access,
+                    control_actions=frozenset(item.control_actions),
+                    repository_id=item.repository_id,
+                    path_patterns=tuple(item.path_patterns),
+                )
+                for item in body.human_grants
+            ),
+        )
+    # Verbatim, never folded into a generic "invalid request": every sentence
+    # here names the rule and the field, and the caller is the person who has
+    # to change one of them. The one rule that cannot be answered now is
+    # whether a grant's repository survives into the plan — only the topology
+    # has the teams to check that — so materialization keeps the right to
+    # refuse, loudly.
+    except ProjectTopologyError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    stored = await request.app.state.container.topology_policy_draft_store().upsert(draft)
+    return asdict(stored)
+
+
+@router.get("/projects/{project_id}/policy-draft")
+async def get_project_policy_draft(project_id: UUID, request: Request) -> dict:
+    """Read the draft. Absent is 404, the same word ``GET .../topology`` uses.
+
+    Not a 200 with an empty policy: "nobody has decided yet" and "someone
+    decided on nothing in particular" are different facts, and the console
+    already branches on the 404 for the topology.
+    """
+
+    actor = await _account(request)
+    draft = await request.app.state.container.topology_policy_draft_store().get(project_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="project policy draft does not exist")
+    if not actor.is_admin and not any(
+        grant.human_principal_id == actor.id for grant in draft.human_grants
+    ):
+        raise HTTPException(status_code=403, detail="human project membership is required")
+    return asdict(draft)
+
+
+@router.delete("/projects/{project_id}/policy-draft", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_project_policy_draft(project_id: UUID, request: Request) -> None:
+    """Withdraw the draft, putting the project back to running unattended.
+
+    Admin session, for the same reason the write is: this is the one way to
+    make a project *less* supervised, and the shared action token must not
+    reach it. Nothing to withdraw answers 404 rather than a cheerful 204 —
+    ``delete`` returns that fact on purpose, and an admin who thinks they just
+    cancelled a policy that some other admin cancelled first should be told.
+    """
+
+    actor = await _account(request)
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
+    withdrawn = await request.app.state.container.topology_policy_draft_store().delete(project_id)
+    if not withdrawn:
+        raise HTTPException(status_code=404, detail="project policy draft does not exist")
 
 
 @router.get("/projects/{project_id}/checkpoint-gate")

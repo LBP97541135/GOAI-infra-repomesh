@@ -5,6 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     JSON,
+    DateTime,
     ForeignKey,
     String,
     Text,
@@ -36,11 +37,58 @@ from repomesh.modules.project.domain import (
     ProjectCheckpointDecision,
     ProjectTopologyConflict,
     RepositoryTeam,
+    TopologyPolicyDraft,
 )
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
+
+def grant_payloads(grants: Sequence[HumanProjectGrant]) -> list[dict[str, object]]:
+    """The stored JSON shape of a project's human grants.
+
+    Shared by ``agent_topologies`` and ``topology_policy_drafts`` on purpose,
+    not copied: materialization moves a draft's ``human_grants`` column into
+    the topology's ``human_grants`` column whole. Two independent spellings of
+    this dict would have to agree forever for that to keep working, and the day
+    they stopped agreeing the failure would land at materialization, far from
+    whichever of the two was edited.
+    """
+
+    return [
+        {
+            "human_principal_id": str(grant.human_principal_id),
+            "role": grant.role.value,
+            "code_access": grant.code_access.value,
+            "control_actions": sorted(item.value for item in grant.control_actions),
+            "repository_id": (str(grant.repository_id) if grant.repository_id else None),
+            "path_patterns": list(grant.path_patterns),
+        }
+        for grant in grants
+    ]
+
+
+def grants_from_payloads(
+    payloads: Sequence[dict[str, object]],
+) -> tuple[HumanProjectGrant, ...]:
+    """Read back what :func:`grant_payloads` wrote, for either table."""
+
+    return tuple(
+        HumanProjectGrant(
+            human_principal_id=UUID(str(item["human_principal_id"])),
+            role=HumanProjectRole(str(item["role"])),
+            code_access=CodeAccessLevel(str(item["code_access"])),
+            control_actions=frozenset(
+                HumanControlAction(str(value)) for value in item["control_actions"]
+            ),
+            repository_id=(
+                UUID(str(item["repository_id"])) if item.get("repository_id") else None
+            ),
+            path_patterns=tuple(str(value) for value in item["path_patterns"]),
+        )
+        for item in payloads
+    )
 
 
 class ProjectAgentTopologyRecord(Base):
@@ -63,6 +111,26 @@ class ProjectAgentTopologyRecord(Base):
     human_grants: Mapped[list[dict[str, object]]] = mapped_column(
         JSON_DOCUMENT, default=list
     )
+
+
+class TopologyPolicyDraftRecord(Base):
+    __tablename__ = "topology_policy_drafts"
+    __table_args__ = ({"schema": "project"},)
+
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    execution_mode: Mapped[str] = mapped_column(String(30), default="auto")
+    required_checkpoints: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
+    human_grants: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON_DOCUMENT, default=list
+    )
+    created_by: Mapped[UUID] = mapped_column(Uuid(as_uuid=True))
+    # Spelled out rather than left to the bare ``Mapped[datetime]`` used by the
+    # two records below it: the migration makes these ``timestamptz`` and the
+    # values are ``datetime.now(UTC)``, and a bare annotation maps to
+    # ``TIMESTAMP WITHOUT TIME ZONE``, which asyncpg refuses to bind an aware
+    # datetime to. Every other module in the repository spells it this way.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class ProjectRepositoryTeamRecord(Base):
@@ -119,7 +187,10 @@ class ProjectCheckpointDecisionRecord(Base):
     decision: Mapped[str] = mapped_column(String(30))
     reason: Mapped[str] = mapped_column(Text)
     evidence_version: Mapped[str] = mapped_column(String(200), index=True)
-    decided_at: Mapped[datetime]
+    # Same defect as ``HumanReviewRequestRecord``'s timestamps, one step further
+    # down the same road: a decision can only be recorded against a review
+    # request, so this insert was unreachable while that one was failing.
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class HumanReviewRequestRecord(Base):
@@ -146,8 +217,15 @@ class HumanReviewRequestRecord(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     requested_by_agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     resolved_by_human_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
-    created_at: Mapped[datetime]
-    updated_at: Mapped[datetime]
+    # The bare ``Mapped[datetime]`` these two used to be compiles to TIMESTAMP
+    # WITHOUT TIME ZONE, while the migration created them as timestamptz and
+    # ``HumanReviewRequest`` stamps ``datetime.now(UTC)``. asyncpg then refuses
+    # the aware value outright, so **no review request could ever be written**.
+    # It stayed invisible because every project so far ran `auto`: with no
+    # checkpoints, this insert never happened. Enabling checkpoints — the entire
+    # point of the supervision-policy work — is what makes it fire.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class InMemoryProjectTopologyStore:
@@ -325,7 +403,7 @@ class PostgresProjectTopologyStore:
                         required_checkpoints=sorted(
                             item.value for item in topology.required_checkpoints
                         ),
-                        human_grants=self._grant_payloads(topology),
+                        human_grants=grant_payloads(topology.human_grants),
                     )
                 )
                 session.add_all(self._team_records(topology))
@@ -459,24 +537,7 @@ class PostgresProjectTopologyStore:
             required_checkpoints=frozenset(
                 ProjectCheckpoint(value) for value in record.required_checkpoints
             ),
-            human_grants=tuple(
-                HumanProjectGrant(
-                    human_principal_id=UUID(str(item["human_principal_id"])),
-                    role=HumanProjectRole(str(item["role"])),
-                    code_access=CodeAccessLevel(str(item["code_access"])),
-                    control_actions=frozenset(
-                        HumanControlAction(str(value))
-                        for value in item["control_actions"]
-                    ),
-                    repository_id=(
-                        UUID(str(item["repository_id"]))
-                        if item.get("repository_id")
-                        else None
-                    ),
-                    path_patterns=tuple(str(value) for value in item["path_patterns"]),
-                )
-                for item in record.human_grants
-            ),
+            human_grants=grants_from_payloads(record.human_grants),
             repository_teams=tuple(
                 RepositoryTeam(
                     id=team.id,
@@ -493,21 +554,80 @@ class PostgresProjectTopologyStore:
             ),
         )
 
+
+class PostgresTopologyPolicyDraftStore:
+    """The supervision policy an admin set, waiting for materialization to read it.
+
+    A separate table rather than a field on the discovery snapshot: the policy
+    belongs to this module (``EnsureProjectAgentTopology`` is next door and can
+    read it without reaching across a module boundary), the snapshot's shape is
+    part of the discovery contract, and the draft outlives the snapshot in both
+    directions — it may be set before discovery finishes and it is kept after
+    materialization as the record of what was originally asked for.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def get(self, project_id: UUID) -> TopologyPolicyDraft | None:
+        async with self._database.transaction() as session:
+            record = await session.get(TopologyPolicyDraftRecord, project_id)
+            if record is None:
+                return None
+            return self._to_domain(record)
+
+    async def upsert(self, draft: TopologyPolicyDraft) -> TopologyPolicyDraft:
+        """Overwrite the project's draft, keeping who first set it and when.
+
+        Whole-document replacement, because that is what the endpoint offers:
+        one requirement holds one intent, and ``PUT`` says so. ``created_at``
+        and ``created_by`` survive an overwrite — "who first decided this
+        project needed watching" is a different fact from "who last touched
+        it", and losing the first to record the second would be a poor trade.
+        """
+
+        async with self._database.transaction() as session:
+            record = await session.get(TopologyPolicyDraftRecord, draft.project_id)
+            if record is None:
+                record = TopologyPolicyDraftRecord(
+                    project_id=draft.project_id,
+                    created_by=draft.created_by,
+                    created_at=draft.created_at,
+                )
+                session.add(record)
+            record.execution_mode = draft.execution_mode.value
+            record.required_checkpoints = sorted(
+                item.value for item in draft.required_checkpoints
+            )
+            record.human_grants = grant_payloads(draft.human_grants)
+            record.updated_at = draft.updated_at
+            stored = self._to_domain(record)
+        return stored
+
+    async def delete(self, project_id: UUID) -> bool:
+        """Withdraw the draft. ``False`` means there was nothing to withdraw."""
+
+        async with self._database.transaction() as session:
+            result = await session.execute(
+                delete(TopologyPolicyDraftRecord).where(
+                    TopologyPolicyDraftRecord.project_id == project_id
+                )
+            )
+        return bool(result.rowcount)
+
     @staticmethod
-    def _grant_payloads(topology: ProjectAgentTopology) -> list[dict[str, object]]:
-        return [
-            {
-                "human_principal_id": str(grant.human_principal_id),
-                "role": grant.role.value,
-                "code_access": grant.code_access.value,
-                "control_actions": sorted(item.value for item in grant.control_actions),
-                "repository_id": (
-                    str(grant.repository_id) if grant.repository_id else None
-                ),
-                "path_patterns": list(grant.path_patterns),
-            }
-            for grant in topology.human_grants
-        ]
+    def _to_domain(record: TopologyPolicyDraftRecord) -> TopologyPolicyDraft:
+        return TopologyPolicyDraft(
+            project_id=record.project_id,
+            created_by=record.created_by,
+            execution_mode=ProjectExecutionMode(record.execution_mode),
+            required_checkpoints=frozenset(
+                ProjectCheckpoint(value) for value in record.required_checkpoints
+            ),
+            human_grants=grants_from_payloads(record.human_grants),
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
 
 
 class PostgresProjectCheckpointDecisionStore:
