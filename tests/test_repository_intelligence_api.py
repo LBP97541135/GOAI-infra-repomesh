@@ -18,10 +18,10 @@ from fastapi.testclient import TestClient
 
 from repomesh.bootstrap import create_app
 from repomesh.bootstrap.container import ApplicationContainer
-from repomesh.settings import get_settings
 from repomesh.modules.repository_intelligence.infrastructure import (
     PlanSnapshotStore,
 )
+from repomesh.settings import get_settings
 
 
 class StubLLM:
