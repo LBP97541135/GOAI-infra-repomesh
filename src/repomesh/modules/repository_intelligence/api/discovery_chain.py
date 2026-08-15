@@ -42,6 +42,7 @@ from repomesh.modules.change_orchestration.contracts import (
     RoundNotRecorded,
 )
 from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
+from repomesh.modules.observability.contracts import UsageContext, current_usage_context
 from repomesh.modules.repository_intelligence.application.discovery_chain import (
     DiscoveryActorNotFound,
     DiscoveryChainService,
@@ -203,7 +204,15 @@ def _start(
     record = DiscoveryTaskRecord(id=uuid4(), issue_id=issue_id, step=step, total=total)
     _DISCOVERY_TASKS[record.id] = record
     _forget_old_tasks()
-    record.runner = asyncio.create_task(_drive(record, lambda: run(record)))
+    # Ambient attribution for observability: every chat() this step's worker
+    # threads issue lands in the usage sink tagged with this issue and step.
+    # create_task copies this context, to_thread copies it again into the
+    # worker thread, and chat() itself never learns the issue exists.
+    token = current_usage_context.set(UsageContext(issue_id=issue_id, step=step))
+    try:
+        record.runner = asyncio.create_task(_drive(record, lambda: run(record)))
+    finally:
+        current_usage_context.reset(token)
     return record
 
 

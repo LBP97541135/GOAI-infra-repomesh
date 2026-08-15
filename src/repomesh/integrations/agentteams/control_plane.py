@@ -10,6 +10,7 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     ManagerProjection,
     ManagerRuntimeRef,
     TeamProjection,
+    TeamRole,
     TeamRuntimeRef,
     WorkerProjection,
     WorkerRuntimeRef,
@@ -155,6 +156,16 @@ class AgentTeamsControlPlaneClient:
             return self._team_ref(existing)
         payload: dict[str, Any] = {
             "name": projection.name,
+            # The v1.2.0 controller rejects a Team without a named leader
+            # (400 ``leader.name is required``): the leader is a first-class
+            # field, not just the first ``workerMembers`` entry.
+            "leader": {
+                "name": next(
+                    member.name
+                    for member in projection.members
+                    if member.role is TeamRole.LEADER
+                )
+            },
             "workerMembers": [
                 {"name": member.name, "role": member.role.value} for member in projection.members
             ],
@@ -295,16 +306,23 @@ class AgentTeamsControlPlaneClient:
         fields: dict[str, Any] = {
             "model": expected.model,
             "runtime": expected.runtime.value,
-            "skills": list(expected.skills),
-            "mcpServers": [
+        }
+        # The v1.2.0 controller's GET document omits ``skills`` and
+        # ``mcpServers`` (verified live 2026-08-13), so those two can only be
+        # compared when the document actually carries them — an absent field
+        # must not read as "empty", or every already-provisioned worker looks
+        # like a skills conflict.
+        if "skills" in body:
+            fields["skills"] = list(expected.skills)
+        if "mcpServers" in body:
+            fields["mcpServers"] = [
                 {
                     "name": server.name,
                     "url": server.url,
                     "transport": server.transport,
                 }
                 for server in expected.mcp_servers
-            ],
-        }
+            ]
         if expected.identity:
             fields["identity"] = expected.identity
         if expected.soul:
@@ -319,17 +337,23 @@ class AgentTeamsControlPlaneClient:
                 "dmDenyExtra": list(expected.channel_policy.dm_deny_extra),
             }
         normalized = dict(body)
-        normalized["skills"] = list(body.get("skills") or [])
-        normalized["mcpServers"] = list(body.get("mcpServers") or [])
+        if "skills" in body:
+            normalized["skills"] = list(body.get("skills") or [])
+        if "mcpServers" in body:
+            normalized["mcpServers"] = list(body.get("mcpServers") or [])
         AgentTeamsControlPlaneClient._assert_fields("worker", normalized, fields)
 
     @staticmethod
     def _assert_team_matches(body: dict[str, Any], expected: TeamProjection) -> None:
-        fields = {
-            "workerMembers": [
+        # Same omission as the worker document: the v1.2.0 controller's GET
+        # response for a Team carries no ``workerMembers`` (the members live
+        # on the Worker documents, each naming its Team), so it can only be
+        # compared when the document actually includes it.
+        fields: dict[str, Any] = {}
+        if "workerMembers" in body:
+            fields["workerMembers"] = [
                 {"name": member.name, "role": member.role.value} for member in expected.members
             ]
-        }
         AgentTeamsControlPlaneClient._assert_fields("team", body, fields)
 
     @staticmethod

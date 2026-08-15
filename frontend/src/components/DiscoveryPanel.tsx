@@ -314,7 +314,9 @@ export function DiscoveryPanel({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // 首次加载（view 为空）才显示 loading 骨架；后续 reload 保留旧数据静默刷新，
+    // 避免内容闪烁导致滚动位置丢失。
+    if (!view) setLoading(true);
     setLoadError(null);
     fetchDiscovery(issueId)
       .then((next) => {
@@ -335,6 +337,7 @@ export function DiscoveryPanel({
 
   // 换 issue 时清掉本地草稿与在途键：答复表单是**这个** issue 的追问的答案
   useEffect(() => {
+    setView(null);
     setAnswers({});
     setWriteError(null);
     setApprovalError(null);

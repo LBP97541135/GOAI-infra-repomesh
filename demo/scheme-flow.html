@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepoMesh · 方案流程展示（本地实测）</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f2f4ef; color: #2c3830; line-height: 1.6; padding: 28px 20px 60px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: #2c3830; color: #f2f4ef; border-radius: 12px; padding: 14px 20px; margin-bottom: 18px;
+  }
+  .topbar h1 { font-size: 16px; font-weight: 700; }
+  .topbar .tag { font-size: 12px; color: #b9c5b0; font-family: "Consolas", monospace; }
+  .card { background: #fff; border: 1px solid #dfe5dc; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .card-head {
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+    border-bottom: 1px solid #e7ebe7; font-size: 13px; font-weight: 700; color: #2c3830;
+  }
+  .card-head .count { color: #8a948c; font-weight: 500; font-size: 12px; }
+  .card-body { padding: 14px 16px; }
+  .req-text { background: #f6f8f2; border: 1px solid #e2e8dc; border-radius: 8px; padding: 12px 14px; font-size: 13px; color: #44513f; }
+  .spec-pre {
+    background: #f6f8f2; border: 1px solid #e2e8dc; border-radius: 8px; padding: 12px 14px;
+    font-family: "Consolas", "IBM Plex Mono", monospace; font-size: 12px; color: #3b493f;
+    white-space: pre-wrap; line-height: 1.7; max-height: 300px; overflow: auto;
+  }
+  .contract { border: 1px solid #e7ebe7; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .contract:last-child { margin-bottom: 0; }
+  .contract .c-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; margin-bottom: 6px; }
+  .contract .c-role { display: inline-block; background: #eef2e5; color: #5c6b4f; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; }
+  .contract .c-arrow { color: #8a948c; font-size: 12px; }
+  .contract .c-interface { font-family: "Consolas", monospace; font-size: 11px; color: #7b8a5f; }
+  .contract .c-agree { font-size: 12px; color: #55615a; margin-top: 4px; }
+  .task { border: 1px solid #e7ebe7; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .task:last-child { margin-bottom: 0; }
+  .task .t-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 5px; }
+  .task .t-name { font-family: "Consolas", monospace; font-size: 12px; font-weight: 700; color: #3b493f; }
+  .task .t-dep { font-size: 11px; color: #8a948c; }
+  .task .t-ins { font-size: 12px; color: #55615a; }
+  .dag-graph { padding: 4px 4px 2px; }
+  .dag-graph svg { width: 100%; height: auto; display: block; }
+  .dag-batch-label { fill: #9aa69d; font-size: 10px; font-family: "Consolas", monospace; }
+  .dag-node-rect { fill: #f6f8f2; stroke: #cdd6c9; stroke-width: 1.3; transition: fill .15s, stroke .15s; }
+  .dag-node:hover .dag-node-rect { fill: #eef2e5; stroke: #8ba03e; }
+  .dag-node.root .dag-node-rect { fill: #f4f7e8; stroke: #a9ba7a; }
+  .dag-node-text { fill: #3b493f; font-size: 12px; font-weight: 600; font-family: "Consolas", monospace; }
+  .dag-root-tag { fill: #7b8a5f; font-size: 9px; font-family: "Consolas", monospace; }
+  .dag-legend { margin-top: 12px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; color: #8a948c; font-size: 11px; }
+  .dag-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
+  .dag-legend .legend-root { background: #f4f7e8; border: 1.3px solid #a9ba7a; }
+  .dag-legend .legend-edge { height: 2px; border-radius: 0; background: #9aa69d; }
+  .dag-edge-count { margin-left: auto; font-family: "Consolas", monospace; }
+  .batch-list { display: grid; gap: 10px; }
+  .batch-row { display: flex; align-items: center; gap: 11px; }
+  .batch-row > span { min-width: 56px; color: #758078; font: 11px "Consolas", monospace; }
+  .chip { display: inline-block; background: #eef0ee; color: #4d5a50; border-radius: 6px; padding: 3px 10px; font-size: 12px; font-family: "Consolas", monospace; }
+  .foot { color: #8a948c; font-size: 11px; text-align: center; margin-top: 18px; }
+  .foot code { background: #e8ece5; border-radius: 4px; padding: 1px 6px; font-family: "Consolas", monospace; }
+  .note { background: #fbf6e8; border: 1px solid #eadfae; color: #6d5f2a; border-radius: 8px; padding: 9px 13px; font-size: 12px; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>RepoMesh · 方案流程展示</h1>
+    <span class="tag">本地实测 · 真实 LLM 链路数据</span>
+  </div>
+
+  <div class="note">数据来自本地跑通的完整链路：需求分析 → 仓库发现 → TM 确认 → 方案集成（DeepSeek-V4-Flash）。流程图由集成方案的 <code>task_dag</code> 与 <code>execution_batches</code> 渲染。</div>
+
+  <!-- 需求 -->
+  <div class="card">
+    <div class="card-head">提交的需求（PRD）</div>
+    <div class="card-body">
+      <div class="req-text">实现用户登录功能：支持邮箱密码登录和手机验证码登录，签发 JWT，并记录登录日志。</div>
+    </div>
+  </div>
+
+  <!-- 方案说明 -->
+  <div class="card">
+    <div class="card-head">方案说明（Engineering Spec）</div>
+    <div class="card-body">
+      <pre class="spec-pre" id="spec">加载中…</pre>
+    </div>
+  </div>
+
+  <!-- 契约 -->
+  <div class="card">
+    <div class="card-head">契约列表（Contracts）<span class="count" id="contractCount"></span></div>
+    <div class="card-body" id="contracts"></div>
+  </div>
+
+  <!-- 任务 -->
+  <div class="card">
+    <div class="card-head">Task DAG <span class="count" id="taskCount"></span></div>
+    <div class="card-body" id="tasks"></div>
+  </div>
+
+  <!-- 流程图 -->
+  <div class="card">
+    <div class="card-head">方案流程图（依赖边 · 执行批次）</div>
+    <div class="card-body dag-graph" id="dag"></div>
+  </div>
+
+  <!-- 执行批次 -->
+  <div class="card">
+    <div class="card-head">执行批次 <span class="count" id="batchCount"></span></div>
+    <div class="card-body"><div class="batch-list" id="batches"></div></div>
+  </div>
+
+  <div class="foot">RepoMesh demo · 数据源：<code>POST /api/v1/integration</code>（2026-08-13 本地实测）</div>
+</div>
+
+<script>
+// 真实 integration 响应（本地实测 2026-08-13）
+const plan = {
+  engineering_spec: "This project adds user login with two flows: email/password and mobile verification code. The service split keeps ts-user-service as the public user-facing API and owner of user records; ts-auth-service owns JWT issuance and authoritative login logging; ts-verification-code-service owns one-time phone-code lifecycle; ts-notification-service owns SMS code delivery. The authoritative dependency graph allows only ts-user-service -> ts-auth-service and ts-auth-service -> ts-verification-code-service, so ts-user-service must not depend directly on ts-verification-code-service. For email/password login, ts-user-service validates the password locally against UserRepository, then calls ts-auth-service with a verified assertion to obtain a JWT. For phone-code login, ts-user-service looks up the user by phone and calls ts-auth-service; ts-auth-service verifies the code through ts-verification-code-service before issuing the JWT. Both services may record login logs: ts-auth-service records the audit/token-issuance log, while ts-user-service records user-facing login history. ts-verification-code-service and ts-notification-service are built first; ts-auth-service next; ts-user-service last.",
+  contracts: [
+    {
+      producer: "ts-auth-service", consumer: "ts-user-service",
+      interface: "POST /api/v1/auth/login, POST /api/v1/auth/login/email, POST /api/v1/auth/login/mobile",
+      agreement: "For email login, ts-user-service sends {subject, email, authMethod=EMAIL_PASSWORD, verified=true, verifiedAssertion, roles}; ts-auth-service validates the verifiedAssertion signature and returns {accessToken, tokenType=Bearer, expiresIn}. For phone-code login, ts-user-service sends {subject, phone, code, authMethod=PHONE_CODE, roles}; ts-auth-service verifies the code with ts-verification-code-service and returns the same JWT response. ts-auth-service must not require the user password after user-service verification; it records one LoginLog row per login attempt."
+    },
+    {
+      producer: "ts-verification-code-service", consumer: "ts-auth-service",
+      interface: "POST /verification-code/verify",
+      agreement: "Request body: {phone, code, scene=LOGIN}. Success is HTTP 200 with {valid:true}, and the code must be atomically consumed/deleted so it cannot be reused. Invalid/expired code returns HTTP 200 with {valid:false} or a 4xx error. Codes are single-use and expire after 5 minutes. ts-auth-service must treat any invalid/expired result as a login failure and must not issue a JWT."
+    }
+  ],
+  task_dag: [
+    {
+      repository: "ts-notification-service",
+      instruction: "Add SMS verification-code notification support. Expose POST /api/v1/notifications/phone-code and POST /api/v1/notifications/send; add an SMS sender, a Freemarker template for login codes, and an AMQP consumer for PhoneCodeSendRequest messages. Keep existing email notification behavior unchanged. This service should be deployable independently and should not block on other services.",
+      depends_on: [], parallelizable_with: ["ts-verification-code-service"], tests: []
+    },
+    {
+      repository: "ts-verification-code-service",
+      instruction: "Implement POST /verification-code/generate and POST /verification-code/verify. Store generated codes by phone and scene with a 5-minute TTL and single-use consumption. On generate, publish a PhoneCodeSendRequest to ts-notification-service's AMQP queue (or call POST /api/v1/notifications/phone-code when configured) so the SMS is sent. Do not add a build-time dependency on ts-notification-service; use asynchronous messaging so the batch-1 parallel build remains valid.",
+      depends_on: [], parallelizable_with: ["ts-notification-service"], tests: []
+    },
+    {
+      repository: "ts-auth-service",
+      instruction: "Add POST /api/v1/auth/login/email, POST /api/v1/auth/login/mobile, and POST /api/v1/auth/login to AuthController/AuthService. For mobile login, call ts-verification-code-service POST /verification-code/verify and issue a JWT only after a valid phone code. For email login, validate the verifiedAssertion provided by ts-user-service instead of reading the user database directly. Issue JWT via JwtTokenProvider and persist login log entries in LoginLogRepository for success and failure, capturing userId, auth method, timestamp, and IP. Implement the generic POST /api/v1/auth/login as the token-issuance endpoint used by ts-user-service after local credential verification.",
+      depends_on: ["ts-verification-code-service"], parallelizable_with: [], tests: []
+    },
+    {
+      repository: "ts-user-service",
+      instruction: "Add POST /api/v1/userservice/login/email and POST /api/v1/userservice/login/phone to UserController/UserService. For email login, load the user by email via UserRepository, verify the password hash locally, build a verified assertion, send it to ts-auth-service to obtain a JWT, and record the login in the new LoginLog entity/repository. For phone login, load the user by phone, call ts-auth-service POST /api/v1/auth/login/mobile with phone/code/subject, and rely on ts-auth-service for verification-code validation. Do not call ts-verification-code-service directly; preserve the authoritative dependency graph. Also create the LoginLog entity and repository.",
+      depends_on: ["ts-auth-service"], parallelizable_with: [], tests: []
+    }
+  ],
+  execution_batches: [
+    ["ts-notification-service", "ts-verification-code-service"],
+    ["ts-auth-service"],
+    ["ts-user-service"]
+  ]
+};
+
+const requirement = "实现用户登录功能：支持邮箱密码登录和手机验证码登录，签发 JWT，并记录登录日志。";
+
+// ---------- 渲染文本区块 ----------
+document.getElementById("spec").textContent = plan.engineering_spec;
+document.getElementById("contractCount").textContent = `（${plan.contracts.length}）`;
+document.getElementById("taskCount").textContent = `（${plan.task_dag.length}）`;
+document.getElementById("batchCount").textContent = `（${plan.execution_batches.length}）`;
+
+const contractsEl = document.getElementById("contracts");
+plan.contracts.forEach((c) => {
+  const el = document.createElement("div");
+  el.className = "contract";
+  el.innerHTML =
+    '<div class="c-head">' +
+    '<span class="c-role">生产者 ' + c.producer + '</span>' +
+    '<span class="c-arrow">→</span>' +
+    '<span class="c-role">消费者 ' + c.consumer + '</span>' +
+    '<span class="c-interface">' + c.interface + '</span>' +
+    '</div>' +
+    '<div class="c-agree">' + c.agreement + '</div>';
+  contractsEl.appendChild(el);
+});
+
+const tasksEl = document.getElementById("tasks");
+plan.task_dag.forEach((t) => {
+  const el = document.createElement("div");
+  el.className = "task";
+  const dep = (t.depends_on && t.depends_on.length)
+    ? '依赖：' + t.depends_on.join('、')
+    : '无上游依赖（入口）';
+  el.innerHTML =
+    '<div class="t-head"><span class="t-name">' + t.repository + '</span><span class="t-dep">' + dep + '</span></div>' +
+    '<div class="t-ins">' + t.instruction + '</div>';
+  tasksEl.appendChild(el);
+});
+
+const batchesEl = document.getElementById("batches");
+plan.execution_batches.forEach((batch, i) => {
+  const row = document.createElement("div");
+  row.className = "batch-row";
+  row.innerHTML = '<span>批次 ' + (i + 1) + '</span>' +
+    batch.map((name) => '<span class="chip">' + name + '</span>').join('');
+  batchesEl.appendChild(row);
+});
+
+// ---------- 流程图渲染（与 DagGraph.tsx 相同布局算法） ----------
+const NODE_W = 150, NODE_H = 46, H_GAP = 44, V_GAP = 78, MARGIN = 36;
+
+function renderDag() {
+  const rows = plan.execution_batches.filter((b) => b.length > 0);
+  const nodePos = new Map();
+  rows.forEach((batch, row) => batch.forEach((name, col) => nodePos.set(name, { row, col })));
+  const maxCols = rows.reduce((m, r) => Math.max(m, r.length), 0);
+
+  const edges = [];
+  const seen = new Set();
+  for (const task of plan.task_dag) {
+    for (const dep of (task.depends_on || [])) {
+      if (nodePos.has(dep) && nodePos.has(task.repository)) {
+        const key = dep + '->' + task.repository;
+        if (!seen.has(key)) { seen.add(key); edges.push({ source: dep, target: task.repository }); }
+      }
+    }
+  }
+
+  const cx = (name) => MARGIN + (nodePos.get(name).col * (NODE_W + H_GAP)) + NODE_W / 2;
+  const cy = (name) => MARGIN + (nodePos.get(name).row * (NODE_H + V_GAP)) + NODE_H / 2;
+  const width = Math.max(MARGIN * 2 + maxCols * (NODE_W + H_GAP) - H_GAP, 320);
+  const height = Math.max(MARGIN * 2 + rows.length * (NODE_H + V_GAP) - V_GAP, 120);
+
+  const edgePath = (s, t) => {
+    const sx = cx(s), sy = cy(s), tx = cx(t), ty = cy(t);
+    const sRow = nodePos.get(s).row, tRow = nodePos.get(t).row;
+    if (sRow === tRow) {
+      const dir = tx > sx ? 1 : -1;
+      const ox = sx + dir * (NODE_W / 2), ix = tx - dir * (NODE_W / 2), ctrl = (sx + tx) / 2;
+      return 'M ' + ox + ' ' + sy + ' C ' + ctrl + ' ' + (sy - 26) + ', ' + ctrl + ' ' + (sy - 26) + ', ' + ix + ' ' + ty;
+    }
+    const oy = sy + NODE_H / 2, iy = ty - NODE_H / 2, ctrlY = (oy + iy) / 2;
+    return 'M ' + sx + ' ' + oy + ' C ' + sx + ' ' + ctrlY + ', ' + tx + ' ' + ctrlY + ', ' + tx + ' ' + iy;
+  };
+
+  let svg =
+    '<svg viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="方案依赖流程图">' +
+    '<defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">' +
+    '<path d="M0,0 L9,4.5 L0,9 Z" fill="#9aa69d"/></marker></defs>';
+
+  rows.forEach((batch, row) => {
+    svg += '<text x="' + (MARGIN - 14) + '" y="' + (MARGIN + row * (NODE_H + V_GAP) + NODE_H / 2) +
+      '" text-anchor="end" dominant-baseline="middle" class="dag-batch-label">批次 ' + (row + 1) + '</text>';
+  });
+
+  edges.forEach((e) => {
+    svg += '<path d="' + edgePath(e.source, e.target) + '" fill="none" stroke="#9aa69d" stroke-width="1.6" marker-end="url(#arrow)" class="dag-edge"/>';
+  });
+
+  rows.forEach((batch, row) => batch.forEach((name, col) => {
+    const x = MARGIN + col * (NODE_W + H_GAP);
+    const y = MARGIN + row * (NODE_H + V_GAP);
+    const isRoot = !edges.some((e) => e.target === name);
+    svg += '<g class="dag-node' + (isRoot ? ' root' : '') + '">' +
+      '<rect x="' + x + '" y="' + y + '" width="' + NODE_W + '" height="' + NODE_H + '" rx="9" class="dag-node-rect"/>' +
+      '<text x="' + (x + NODE_W / 2) + '" y="' + (y + NODE_H / 2) + '" text-anchor="middle" dominant-baseline="middle" class="dag-node-text">' + name + '</text>' +
+      (isRoot ? '<text x="' + (x + NODE_W - 8) + '" y="' + (y + 13) + '" text-anchor="end" class="dag-root-tag">入口</text>' : '') +
+      '</g>';
+  }));
+
+  svg += '</svg>';
+
+  const nodeCount = rows.flat().length;
+  svg += '<div class="dag-legend">' +
+    '<span><i class="legend-root"></i>入口仓库（无上游依赖）</span>' +
+    '<span><i class="legend-edge"></i>依赖方向</span>' +
+    '<span class="dag-edge-count">边 ' + edges.length + ' 条 · 节点 ' + nodeCount + ' 个</span>' +
+    '</div>';
+
+  document.getElementById("dag").innerHTML = svg;
+}
+
+renderDag();
+</script>
+</body>
+</html>

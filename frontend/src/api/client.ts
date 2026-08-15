@@ -17,6 +17,10 @@ import type {
   DiscoveryStepRequest,
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
+  AlertEventsResponse,
+  AlertRule,
+  AlertRulePayload,
+  AlertRulesResponse,
   DiscoveryView,
   GovernanceDecisionRequest,
   GovernanceDecisionView,
@@ -24,18 +28,25 @@ import type {
   IssueIntakeRequest,
   IssueListItemView,
   IssueListResponse,
+  IssueLogGroupsResponse,
+  LogEntriesResponse,
+  ObserveIssuesResponse,
+  ObserveSummary,
   OrganizationCreateRequest,
   OrganizationCreateResponse,
   OrganizationsResponse,
   RepositoryPlanView,
   RollbackReceipt,
   RollbackRequest,
-  RoundRedispatchReceipt,
-  RoundRedispatchRequest,
   RollbackScopeView,
   RoomListResponse,
   RoomStreamPage,
+  RoundRedispatchReceipt,
+  RoundRedispatchRequest,
   ScanTaskView,
+  TraceEventsResponse,
+  TraceIssueGroupsResponse,
+  TraceSessionsResponse,
   UrlIdentification,
 } from "./contract";
 
@@ -287,5 +298,147 @@ export function createApiClient(config: ApiClientConfig) {
      *  一律 detail 原文上抛，由弹窗呈现。 */
     postRoundRedispatch: (roundId: string, payload: RoundRedispatchRequest) =>
       request<RoundRedispatchReceipt>(config, "POST", `/deliveries/${roundId}/redispatch`, payload),
+
+    /* ── 观测（/api/v1/observe）────────────────────────────────────────── */
+
+    /** 系统级大盘。days 缺省 7、范围 1..90（后端 Query ge=1 le=90 校验，越界 422）。
+     *  两个端点都要求 `Authorization: Bearer <agent_action_token>`：未配置 503，
+     *  不匹配 401。空库不报错——各数组为空、标量归零，前端据此渲染空态。 */
+    observeSummary: (days?: number) => {
+      const q = days !== undefined ? `?days=${days}` : "";
+      return request<ObserveSummary>(config, "GET", `/observe/summary${q}`);
+    },
+
+    /** Issue 级汇总：按最近活跃排序，最多 100 条（用量板块的按 Issue 表）。 */
+    observeIssues: () => request<ObserveIssuesResponse>(config, "GET", `/observe/issues`),
+
+    /** 日志按 issue 分组（最近活跃优先），供日志页「按 issue」视图。 */
+    observeLogIssueGroups: () =>
+      request<IssueLogGroupsResponse>(config, "GET", `/observe/logs/issues`),
+
+    /* ── 告警 ─────────────────────────────────────────────────────────── */
+
+    /** 规则列表（含已禁用）。首次访问会种下 3 条默认规则。 */
+    alertRules: () => request<AlertRulesResponse>(config, "GET", `/observe/alert-rules`),
+
+    /** 创建规则。metric/operator 非法 422。 */
+    createAlertRule: (payload: AlertRulePayload) =>
+      request<AlertRule>(config, "POST", `/observe/alert-rules`, payload),
+
+    /** 更新规则（只送要改的字段）。 */
+    updateAlertRule: (ruleId: string, payload: AlertRulePayload) =>
+      request<AlertRule>(config, "PUT", `/observe/alert-rules/${ruleId}`, payload),
+
+    /** 删除规则（事件级联删除）。 */
+    deleteAlertRule: (ruleId: string) =>
+      request<void>(config, "DELETE", `/observe/alert-rules/${ruleId}`),
+
+    /** 告警历史（firing + resolved），默认 7 天。 */
+    alertEvents: (days?: number) => {
+      const q = days !== undefined ? `?days=${days}` : "";
+      return request<AlertEventsResponse>(config, "GET", `/observe/alerts${q}`);
+    },
+
+    /** 当前正在 firing、未解决的告警。 */
+    activeAlerts: () => request<AlertEventsResponse>(config, "GET", `/observe/alerts/active`),
+
+    /** 立即跑一轮评估，返回当前活跃告警（演示/手动触发用）。 */
+    evaluateAlerts: () =>
+      request<AlertEventsResponse>(config, "POST", `/observe/alerts/evaluate`),
+
+    /* ── 推理轨迹（trace）────────────────────────────────────────────────── */
+
+    /** 会话列表，按 (first_seen_at, id) 倒序 keyset 分页。limit 1..200；
+     *  cursor 指向不存在的行时服务端返回空页（不报错）。
+     *  issueId 把列表收窄到该 issue 活动窗口（±15 分钟）内的会话——近似归因。 */
+    traceSessions: (opts?: {
+      agentName?: string;
+      issueId?: string;
+      limit?: number;
+      cursor?: string;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts?.agentName) params.set("agent_name", opts.agentName);
+      if (opts?.issueId) params.set("issue_id", opts.issueId);
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      const q = params.toString();
+      return request<TraceSessionsResponse>(
+        config,
+        "GET",
+        `/observe/trace/sessions${q ? `?${q}` : ""}`,
+      );
+    },
+
+    /** 轨迹按 issue 分组（近似归因：issue 活动窗口 × 会话时间重叠），
+     *  最近会话优先。供轨迹页「按 Issue」视图。 */
+    observeTraceIssueGroups: () =>
+      request<TraceIssueGroupsResponse>(config, "GET", `/observe/trace/issues`),
+
+    /** 单会话事件流水，按 seq 升序。未知 session_id → 404。 */
+    traceSessionEvents: (
+      sessionId: string,
+      opts?: { limit?: number; afterSeq?: number },
+    ) => {
+      const params = new URLSearchParams();
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts?.afterSeq !== undefined) params.set("after_seq", String(opts.afterSeq));
+      const q = params.toString();
+      return request<TraceEventsResponse>(
+        config,
+        "GET",
+        `/observe/trace/sessions/${encodeURIComponent(sessionId)}/events${q ? `?${q}` : ""}`,
+      );
+    },
+
+    /** 跨会话事件流，按 (ts, id) 倒序 keyset 分页；event_type/status 非法 → 422。 */
+    traceEvents: (opts?: {
+      eventType?: string;
+      status?: string;
+      agentName?: string;
+      limit?: number;
+      cursor?: string;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts?.eventType) params.set("event_type", opts.eventType);
+      if (opts?.status) params.set("status", opts.status);
+      if (opts?.agentName) params.set("agent_name", opts.agentName);
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      const q = params.toString();
+      return request<TraceEventsResponse>(
+        config,
+        "GET",
+        `/observe/trace/events${q ? `?${q}` : ""}`,
+      );
+    },
+
+    /* ── 日志（logs）────────────────────────────────────────────────────── */
+
+    /** 统一日志查询：按 (ts, id) 倒序 keyset 分页。level 非法 → 422；
+     *  cursor 指向不存在的行时服务端返回空页。source/query 为大小写不敏感
+     *  子串匹配；issue_id 精确匹配。 */
+    observeLogs: (opts?: {
+      level?: string;
+      source?: string;
+      issueId?: string;
+      query?: string;
+      limit?: number;
+      cursor?: string;
+    }) => {
+      const params = new URLSearchParams();
+      if (opts?.level) params.set("level", opts.level);
+      if (opts?.source) params.set("source", opts.source);
+      if (opts?.issueId) params.set("issue_id", opts.issueId);
+      if (opts?.query) params.set("query", opts.query);
+      if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      const q = params.toString();
+      return request<LogEntriesResponse>(
+        config,
+        "GET",
+        `/observe/logs${q ? `?${q}` : ""}`,
+      );
+    },
   };
 }

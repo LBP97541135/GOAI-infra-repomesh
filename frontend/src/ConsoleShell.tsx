@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Toast } from "./components/Toast";
 import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListResponse, OrganizationView } from "./api/contract";
@@ -8,6 +9,11 @@ import { errText, shortId } from "./display";
 import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
+import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
+import { ObserveHome } from "./pages/observe/ObserveHome";
+import { ObserveLogs } from "./pages/observe/ObserveLogs";
+import { ObserveTrace } from "./pages/observe/ObserveTrace";
+import { ObserveUsage } from "./pages/observe/ObserveUsage";
 import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { RoomViewContainer } from "./pages/RoomViewContainer";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -116,17 +122,17 @@ export default function ConsoleShell() {
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
-    setRoute({ nav, issueId: null, roomId: null });
+    setRoute({ nav, issueId: null, roomId: null, observeSection: null });
   };
 
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
-    setRoute({ nav: "issues", issueId, roomId: null });
+    setRoute({ nav: "issues", issueId, roomId: null, observeSection: null });
   };
 
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
-    setRoute({ nav: "issues", issueId, roomId });
+    setRoute({ nav: "issues", issueId, roomId, observeSection: null });
   };
 
   /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
@@ -200,6 +206,18 @@ export default function ConsoleShell() {
         {route.nav === "repositories" && <RepositoriesPage onOpenIssue={openIssue} />}
         {route.nav === "teams" && <TeamsPage onOpenIssue={openIssue} onOpenRoom={openRoom} />}
         {route.nav === "agents" && <AgentsPage onOpenIssue={openIssue} />}
+        {route.nav === "observe" &&
+          (route.observeSection === null ? (
+            <ObserveHome />
+          ) : route.observeSection === "usage" ? (
+            <ObserveUsage />
+          ) : route.observeSection === "logs" ? (
+            <ObserveLogs />
+          ) : route.observeSection === "alerts" ? (
+            <ObserveAlerts />
+          ) : (
+            <ObserveTrace />
+          ))}
         {route.nav === "settings" && <SettingsPage />}
       </main>
 
@@ -215,11 +233,7 @@ export default function ConsoleShell() {
         onCreate={handleCreateIssue}
       />
 
-      {toast && (
-        <div className="fixed bottom-[28px] left-1/2 z-[999] -translate-x-1/2 rounded-hard bg-kraft px-4 py-2 text-[12.5px] text-paper-ink">
-          {toast}
-        </div>
-      )}
+      {toast && <Toast text={toast} />}
     </div>
   );
 }

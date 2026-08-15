@@ -1,0 +1,296 @@
+{
+  "agent": {
+    "name": "Friday",
+    "_sys_prompt": "",
+    "toolkit": {
+      "tools": [
+        {
+          "name": "glob_search",
+          "description": "glob search"
+        },
+        {
+          "name": "read_file",
+          "description": "read file"
+        },
+        {
+          "name": "execute_shell_command",
+          "description": "run shell"
+        },
+        {
+          "name": "filesync",
+          "description": "pull shared files"
+        },
+        {
+          "name": "grep_search",
+          "description": "grep search"
+        }
+      ]
+    },
+    "memory": {
+      "content": [
+        [
+          {
+            "id": "msg-user-001",
+            "name": "default",
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "@agt-worker-3a15e2e1daed:matrix-local.agentteams.io:18080 {\"body\": \"A verified RepoMesh task package is ready. Do not edit code directly in this chat session. Call the MCP tool repomesh-task-control.start_assigned_task with:\\n{\\\"task_id\\\":\\\"48de5f6a-73e3-4215-8316-f1addbcc91da\\\",\\\"worker_agent_id\\\":\\\"79106dfe-d241-4eac-a912-5a5d4729a34e\\\"}\", \"correlation_id\": \"48de5f6a-73e3-4215-8316-f1addbcc91da\", \"kind\": \"task_assignment\", \"message_id\": \"6c6e5cb5-932b-4950-9740-d834e4af552e\", \"project_id\": \"359303c1-e650-59f5-ba85-accab78f681f\", \"recipient_agent_id\": \"79106dfe-d241-4eac-a912-5a5d4729a34e\", \"repository_id\": \"3a15e2e1-daed-42b8-8164-8623d2279c99\", \"schema\": \"repomesh.collaboration.v1\", \"sender_agent_id\": \"dad86655-a773-4283-bf46-d702047e3778\", \"subject\": \"Implement changes for ts-preserve-service\", \"task_id\": \"48de5f6a-73e3-4215-8316-f1addbcc91da\"}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:00.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-asst-001",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call-a1",
+                "name": "execute_shell_command",
+                "input": {
+                  "command": "ls -la",
+                  "cwd": "/workspaces/ts-preserve-service"
+                },
+                "raw_input": "{\"command\": \"ls -la\", \"cwd\": \"/workspaces/ts-preserve-service\"}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:01.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-sys-001",
+            "name": "system",
+            "role": "system",
+            "content": [
+              {
+                "type": "tool_result",
+                "id": "call-a1",
+                "name": "execute_shell_command",
+                "output": [
+                  {
+                    "type": "text",
+                    "text": "drwxr-xr-x 4 root root 4096 ."
+                  }
+                ]
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:02.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-asst-002",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call-a2",
+                "name": "glob_search",
+                "input": {
+                  "pattern": "**/*.py",
+                  "cwd": "/workspaces/ts-preserve-service"
+                },
+                "raw_input": "{\"pattern\": \"**/*.py\", \"cwd\": \"/workspaces/ts-preserve-service\"}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:03.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-sys-002",
+            "name": "system",
+            "role": "system",
+            "content": [
+              {
+                "type": "tool_result",
+                "id": "call-a2",
+                "name": "glob_search",
+                "output": [
+                  {
+                    "type": "text",
+                    "text": "[\"src/main.py\", \"tests/test_main.py\"]"
+                  }
+                ]
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:04.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-asst-003",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call-a3",
+                "name": "filesync",
+                "input": {
+                  "action": "pull",
+                  "payload": {
+                    "reason": "Pull latest shared files"
+                  }
+                },
+                "raw_input": "{\"action\": \"pull\", \"payload\": {\"reason\": \"Pull latest shared files\"}}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:05.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-sys-003",
+            "name": "system",
+            "role": "system",
+            "content": [
+              {
+                "type": "tool_result",
+                "id": "call-a3",
+                "name": "filesync",
+                "output": [
+                  {
+                    "type": "text",
+                    "text": "synced 12 files"
+                  }
+                ]
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:06.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-asst-004",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call-a4",
+                "name": "skill_api_design",
+                "input": {
+                  "endpoints": [
+                    "GET /todos",
+                    "POST /todos"
+                  ]
+                },
+                "raw_input": "{\"endpoints\": [\"GET /todos\", \"POST /todos\"]}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:07.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-sys-004",
+            "name": "system",
+            "role": "system",
+            "content": [
+              {
+                "type": "tool_result",
+                "id": "call-a4",
+                "name": "skill_api_design",
+                "output": [
+                  {
+                    "type": "text",
+                    "text": "Skill executed: 2 endpoints designed"
+                  }
+                ]
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:08.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-asst-005",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call-a5",
+                "name": "mcporter.github.create_branch",
+                "input": {
+                  "branch": "feat/todo-api",
+                  "base": "main"
+                },
+                "raw_input": "{\"branch\": \"feat/todo-api\", \"base\": \"main\"}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:09.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-sys-005",
+            "name": "system",
+            "role": "system",
+            "content": [
+              {
+                "type": "tool_result",
+                "id": "call-a5",
+                "name": "mcporter.github.create_branch",
+                "output": [
+                  {
+                    "type": "text",
+                    "text": "Branch created: feat/todo-api"
+                  }
+                ]
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:10.386"
+          },
+          []
+        ],
+        [
+          {
+            "id": "msg-asst-006",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Branch feat/todo-api is ready for the implementation."
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-08-14 11:43:11.386"
+          },
+          []
+        ]
+      ],
+      "_compressed_summary": "compacted earlier context"
+    }
+  }
+}

@@ -27,6 +27,16 @@ from repomesh.modules.context.application import ContextPublicationGateway, GetE
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import LocalAccountService, PolicyAuthorizationGateway
 from repomesh.modules.identity_access.infrastructure import PostgresLocalAccountStore
+from repomesh.modules.observability.infrastructure.alerting import (
+    AlertingEvaluator,
+    AlertingStore,
+)
+from repomesh.modules.observability.infrastructure.log_query import LogQueryStore
+from repomesh.modules.observability.infrastructure.log_recorder import LogRecorder
+from repomesh.modules.observability.infrastructure.trace_ingest import TraceStore
+from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
+from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
+from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
 from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
@@ -264,6 +274,10 @@ class ApplicationContainer:
     mock_coding_agent_factory: Callable[[str], CodingAgent]
     # Planning LLM adapter; None selects the deterministic keyword fallback paths.
     llm_client: LLMClient | None = None
+    # Thread-safe usage sink + background flush service for planning LLM calls.
+    usage_recorder: QueuedUsageRecorder | None = None
+    # Process-log capture + background flush service for the unified log page.
+    log_recorder: LogRecorder | None = None
     agent_team_control_plane: AgentTeamControlPlane | None = None
     agent_team_messenger: AgentTeamMessenger | None = None
     agentteams_probe: ReadinessProbe | None = None
@@ -468,6 +482,33 @@ class ApplicationContainer:
 
     def plan_snapshot_store(self) -> PlanSnapshotStore:
         return PlanSnapshotStore(self.database)
+
+    def usage_query_store(self) -> UsageQueryStore:
+        return UsageQueryStore(self.database)
+
+    @cached_service
+    def alerting_store(self) -> AlertingStore:
+        return AlertingStore(self.database)
+
+    @cached_service
+    def alerting_evaluator(self) -> AlertingEvaluator:
+        return AlertingEvaluator(
+            self.alerting_store(),
+            self.usage_query_store(),
+            trace_query=self.trace_query_store(),
+        )
+
+    @cached_service
+    def trace_store(self) -> TraceStore:
+        return TraceStore(self.database)
+
+    @cached_service
+    def trace_query_store(self) -> TraceQueryStore:
+        return TraceQueryStore(self.database)
+
+    @cached_service
+    def log_query_store(self) -> LogQueryStore:
+        return LogQueryStore(self.database)
 
     @cached_service
     def delivery_service(self):

@@ -13,7 +13,7 @@ import { errText } from "../display";
  *  真的没有条目）是两个态，不合并。创建工作区 = 建组织 + 登记 Org Leader——
  *  leader 是期望态登记行，不是已拉起的运行时（§2.3 诚实边界）。 */
 
-export type NavKey = "issues" | "repositories" | "teams" | "agents" | "settings";
+export type NavKey = "issues" | "repositories" | "teams" | "agents" | "observe" | "settings";
 
 /** 无登录门下唯一的身份呈现（单用户本地部署）。多用户是另立项的能力。 */
 const IDENTITY_NAME = "默认管理员";
@@ -24,6 +24,7 @@ const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
   { key: "repositories", label: "仓库" },
   { key: "teams", label: "团队" },
   { key: "agents", label: "智能体" },
+  { key: "observe", label: "观测" },
 ];
 
 function NavIcon({ nav }: { nav: NavKey }) {
@@ -54,6 +55,13 @@ function NavIcon({ nav }: { nav: NavKey }) {
       <svg viewBox="0 0 24 24" {...common}>
         <rect x="4" y="7" width="16" height="12" rx="2" />
         <path d="M12 4v3M9 12h.01M15 12h.01M9.5 16h5" />
+      </svg>
+    );
+  if (nav === "observe")
+    // 心跳/脉冲线：观测 = 系统在动、看得见。与其余导航同风格（stroke 线形）。
+    return (
+      <svg viewBox="0 0 24 24" {...common}>
+        <path d="M3 12h4l2.5-6 4 12L16 8l2 4h3" />
       </svg>
     );
   return (

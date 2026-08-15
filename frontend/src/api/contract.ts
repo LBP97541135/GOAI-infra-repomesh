@@ -1214,3 +1214,247 @@ export interface DiscoveryApprovalRequest {
    *  批的必须是它实际看到的那份证据。 */
   evidence_version: string;
 }
+
+/* ── 观测（observability · /api/v1/observe）───────────────────────────────
+ * 唯一事实源：src/repomesh/modules/observability/api/models.py —— 后端加字段
+ * 必须同步改这里（文件头注释同款约定）。数据来自 observability.llm_usage：
+ * 规划侧 LLM 调用（deepseek.py）经线程安全队列落库，再由本页聚合展示。 */
+
+/** 发现链步级汇总；`step` 为 null = 不在发现链内的调用（如回放/兜底路径）。 */
+export interface ObserveStepMetric {
+  step: number | null;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+/** 按模型聚合；`estimated_cost_usd` 按单价表估算（服务端校准常量）。 */
+export interface ObserveModelMetric {
+  model: string;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  estimated_cost_usd: number;
+}
+
+/** 时间窗口内按天（UTC，YYYY-MM-DD）分桶。 */
+export interface ObserveDailyPoint {
+  date: string;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+}
+
+/** 一次失败的 LLM 调用（status != "ok"），最新在前，最多 5 条。 */
+export interface ObserveErrorRow {
+  created_at: string;
+  model: string;
+  operation: string;
+  finish_reason: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  latency_ms: number | null;
+}
+
+/** 系统级大盘：尾随窗口（GET /observe/summary?days=，默认 7、范围 1..90）。
+ *  窗口内无记录时标量归零、`success_rate` / 延迟分位 / 首末时间 / 数组为空。 */
+export interface ObserveSummary {
+  calls: number;
+  success_calls: number;
+  error_calls: number;
+  success_rate: number | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  avg_latency_ms: number | null;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  first_usage_at: string | null;
+  last_usage_at: string | null;
+  by_model: ObserveModelMetric[];
+  by_step: ObserveStepMetric[];
+  daily: ObserveDailyPoint[];
+  recent_errors: ObserveErrorRow[];
+}
+
+/** Issue 级汇总：一次 issue 的发现链推理消耗了多少。按最近活跃排序。
+ *  消费方是用量板块的按 Issue 表。日志的 issue 分组见 IssueLogGroupsResponse，
+ *  轨迹的近似 issue 分组见 TraceIssueGroupsResponse——两个源各自独立。 */
+export interface ObserveIssueRow {
+  issue_id: string;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  avg_latency_ms: number | null;
+  last_usage_at: string | null;
+}
+
+export interface ObserveIssuesResponse {
+  issues: ObserveIssueRow[];
+}
+
+/** 日志按 issue 分组的一行（GET /observe/logs/issues），最近活跃优先。 */
+export interface ObserveIssueLogGroup {
+  issue_id: string;
+  count: number;
+  last_at: string | null;
+}
+
+export interface IssueLogGroupsResponse {
+  issues: ObserveIssueLogGroup[];
+}
+
+/** 轨迹按 issue 分组的一行（GET /observe/trace/issues）。
+ *  近似归因：trace 会话按 task 键控，只有与 issue 活动窗口（usage ∪ logs，
+ *  两侧各放宽 15 分钟）在时间上重叠的会话才被计入 suspected_sessions。 */
+export interface ObserveTraceIssueGroup {
+  issue_id: string;
+  activity_start: string | null;
+  activity_end: string | null;
+  suspected_sessions: number;
+  last_session_at: string | null;
+}
+
+export interface TraceIssueGroupsResponse {
+  issues: ObserveTraceIssueGroup[];
+}
+
+/* ── 观测 · 告警（observability alerts）───────────────────────────────────
+ * 唯一事实源：src/repomesh/modules/observability/api/models.py（AlertRuleOut /
+ * AlertEventOut）。数据来自 observability.alert_rules + alert_events：
+ * 规则按尾随窗口（window_minutes）评估 llm_usage 聚合指标，违反→firing、
+ * 恢复→resolved；评估由后台任务（60s）与「立即评估」按钮驱动。 */
+
+/** 规则可评估的指标。服务端校验（SUPPORTED_METRICS），非法值 422。 */
+export type AlertMetric =
+  | "success_rate"
+  | "error_count"
+  | "latency_p95_ms"
+  | "estimated_cost_usd"
+  | "calls";
+
+export type AlertOperator = "lt" | "gt";
+
+/** 告警规则。`window_minutes` 为评估尾随窗口；`enabled` 关闭后不再评估。 */
+export interface AlertRule {
+  id: string;
+  name: string;
+  metric: AlertMetric;
+  operator: AlertOperator;
+  threshold: number;
+  window_minutes: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertRulesResponse {
+  rules: AlertRule[];
+}
+
+/** 创建/更新规则体。更新用 PUT 且只送要改的字段（其余省略）。 */
+export interface AlertRulePayload {
+  name?: string;
+  metric?: AlertMetric;
+  operator?: AlertOperator;
+  threshold?: number;
+  window_minutes?: number;
+  enabled?: boolean;
+}
+
+/** 一次触发/恢复事件。`rule_name` 后端联表回填；`status` = firing | resolved。 */
+export interface AlertEvent {
+  id: string;
+  rule_id: string;
+  rule_name: string | null;
+  status: "firing" | "resolved";
+  message: string;
+  value: number;
+  window_minutes: number;
+  triggered_at: string;
+  resolved_at: string | null;
+}
+
+export interface AlertEventsResponse {
+  events: AlertEvent[];
+}
+
+/* ── 观测 · 推理轨迹（observability trace）─────────────────────────────────
+ * 唯一事实源：src/repomesh/modules/observability/api/models.py（TraceSessionOut /
+ * TraceEventOut）。数据来自 observability.trace_sessions + trace_events：
+ * Agent 容器侧的 .copaw 会话文件（对象存储）经 trace_ingest 轮询解析落库。
+ * 分页均为 keyset：sessions 按 (first_seen_at, id) 倒序、全局 events 按
+ * (ts, id) 倒序、会话事件按 seq 升序；cursor/next_seq 为 null 即无更多页。 */
+
+/** 一个已解析的 Agent 会话（CoPaw）。`event_count` 为该会话已落库事件总数；
+ * `parsing_error` 非空 = 整文件解析失败（对象变化前不重试）。 */
+export interface TraceSession {
+  id: string;
+  session_id: string;
+  agent_name: string;
+  runtime: string;
+  source_key: string;
+  event_count: number;
+  first_seen_at: string;
+  parsed_at: string | null;
+  parsing_error: string | null;
+  object_mtime: string;
+  object_size: number;
+}
+
+export interface TraceSessionsResponse {
+  sessions: TraceSession[];
+  next_cursor: string | null;
+}
+
+/** 归一化后的事件。会话详情视图里 `agent_name`/`session_external_id` 为 null
+ * （由跨会话端点经 JOIN 回填）。`event_type`: chat | tool | skill | mcp |
+ * task；`status`: ok | error | skipped。`payload` 为事件负载的关键字段子集。 */
+export interface TraceEvent {
+  id: string;
+  session_id: string;
+  seq: number;
+  ts: string;
+  event_type: string;
+  name: string;
+  role: string | null;
+  summary: string | null;
+  token_count: number | null;
+  latency_ms: number | null;
+  status: string;
+  payload: Record<string, unknown> | null;
+  agent_name: string | null;
+  session_external_id: string | null;
+}
+
+export interface TraceEventsResponse {
+  events: TraceEvent[];
+  next_seq: number | null;
+  next_cursor: string | null;
+}
+
+/* ── 观测 · 日志（observability logs）───────────────────────────────────────
+ * 唯一事实源：src/repomesh/modules/observability/api/models.py（LogEntryOut /
+ * LogEntriesResponse）。数据来自 observability.log_entries：RepoMesh 进程
+ * 根 logger 经 logging handler → 队列 → 后台批量落库（log_recorder）。
+ * `level` 固定五档（DEBUG..CRITICAL）；`source` 为 logger 名；`issue_id` 来自
+ * `extra` 标记；分页按 (ts, id) 倒序 keyset。 */
+
+/** 一条结构化日志。`exc_info` 为异常堆栈文本（有异常时非空）。 */
+export interface LogEntry {
+  id: string;
+  ts: string;
+  level: string;
+  source: string;
+  issue_id: string | null;
+  message: string;
+  exc_info: string | null;
+}
+
+export interface LogEntriesResponse {
+  logs: LogEntry[];
+  next_cursor: string | null;
+}

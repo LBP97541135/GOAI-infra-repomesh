@@ -9,8 +9,24 @@ export const NAV_HASH: Record<NavKey, string> = {
   repositories: "#/repositories",
   teams: "#/teams",
   agents: "#/agents",
+  observe: "#/observe",
   settings: "#/settings",
 };
+
+/** 观测中心的板块子页面。null = 门户总览（#/observe）。
+ *  每个板块对应赛题可观测要求的一个覆盖面：
+ *  - trace  推理轨迹（Skill/MCP/Agent 会话——赛题点名覆盖项，路线 1）
+ *  - usage  用量大盘（Metrics：LLM token/成本/延迟/成功率）
+ *  - logs   统一日志（Log：结构化日志查询，含按 Issue 分组视图）
+ *  - alerts 在线告警（阈值规则 + 触发历史） */
+export type ObserveSection = "trace" | "usage" | "logs" | "alerts";
+
+export const OBSERVE_SECTIONS: ReadonlyArray<ObserveSection> = [
+  "trace",
+  "usage",
+  "logs",
+  "alerts",
+];
 
 export interface Route {
   nav: NavKey;
@@ -19,6 +35,8 @@ export interface Route {
   /** #/issues/{issue_id}/rooms/{room_id} 命中时为该 room_id；否则 null。
    *  room_id 形如 `!room-core-team:local`，含 `!` 与 `:`，写入 hash 前须编码 */
   roomId: string | null;
+  /** nav === "observe" 时的板块子页；null = 门户总览 */
+  observeSection: ObserveSection | null;
 }
 
 /** B7：hash 可能被手改/外部粘贴出裸 `%`——decodeURIComponent 抛 URIError 的话
@@ -41,15 +59,34 @@ export function parseRoute(hash: string): Route {
       nav: "issues",
       issueId: safeDecode(room[1]),
       roomId: safeDecode(room[2]),
+      observeSection: null,
     };
   }
 
   const detail = h.match(/^\/issues\/([^/?]+)/);
-  if (detail) return { nav: "issues", issueId: safeDecode(detail[1]), roomId: null };
+  if (detail)
+    return {
+      nav: "issues",
+      issueId: safeDecode(detail[1]),
+      roomId: null,
+      observeSection: null,
+    };
+
+  // 观测板块子页：#/observe/usage|logs|alerts|trace（未知段回落门户）
+  const observe = h.match(/^\/observe\/([^/?]+)/);
+  if (observe) {
+    const section = observe[1] as ObserveSection;
+    return {
+      nav: "observe",
+      issueId: null,
+      roomId: null,
+      observeSection: OBSERVE_SECTIONS.includes(section) ? section : null,
+    };
+  }
 
   // 未知 hash 回落到 issue 列表，不留半死路由
   const found = (Object.keys(NAV_HASH) as NavKey[]).find((k) => h.startsWith(NAV_HASH[k].slice(1)));
-  return { nav: found ?? "issues", issueId: null, roomId: null };
+  return { nav: found ?? "issues", issueId: null, roomId: null, observeSection: null };
 }
 
 export function readRoute(): Route {
