@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from repomesh.modules.agent_runtime.ports.agent_team import ManagerRuntime, WorkerRuntime
@@ -63,16 +63,33 @@ class Settings(BaseSettings):
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.
     otlp_endpoint: str | None = None
     otlp_service_name: str = "repomesh-api"
-    # Planning LLM. The bare DEEPSEEK_API_KEY alias predates these settings and is
-    # kept so existing .env files keep working.
+    # The product exposes one default model connection. Legacy planning-specific
+    # names remain aliases so existing deployments can override it independently.
     deepseek_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "REPOMESH_DEEPSEEK_API_KEY"),
+        validation_alias=AliasChoices(
+            "REPOMESH_DEEPSEEK_API_KEY",
+            "REPOMESH_MODEL_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ),
     )
-    deepseek_base_url: str = "https://api.deepseek.com/v1"
-    deepseek_model: str = "deepseek-chat"
+    deepseek_base_url: str = Field(
+        default="https://api.deepseek.com/v1",
+        validation_alias=AliasChoices(
+            "REPOMESH_DEEPSEEK_BASE_URL",
+            "REPOMESH_MODEL_BASE_URL",
+        ),
+    )
+    deepseek_model: str = Field(
+        default="deepseek-chat",
+        validation_alias=AliasChoices(
+            "REPOMESH_DEEPSEEK_MODEL",
+            "REPOMESH_MODEL",
+        ),
+    )
     github_app_id: int | None = None
     github_app_private_key_file: Path | None = None
+    github_app_private_key_base64: SecretStr | None = None
     github_webhook_secret: str | None = None
     delivery_auto_enabled: bool = False
     # Local-dev alternative to the GitHub App pair above: one personal
@@ -86,6 +103,15 @@ class Settings(BaseSettings):
     delivery_pr_label: bool = False
     delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
     delivery_recovery_interval_seconds: int = Field(default=30, ge=5)
+    replan_auto_commit: bool = True
+    """Default replan mode when the request says ``auto`` (PR-4).
+
+    ``True`` preserves the pre-PR-4 behaviour — a replan request executes the
+    full commit immediately. Set ``REPOMESH_REPLAN_AUTO_COMMIT=false`` to
+    require an explicit approval round-trip: ``auto`` requests then run in
+    ``preview`` mode (zero side effects) and a second call with
+    ``mode=commit`` applies the change.
+    """
     scm_observation_replay_interval_seconds: int = Field(default=15, ge=5)
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)

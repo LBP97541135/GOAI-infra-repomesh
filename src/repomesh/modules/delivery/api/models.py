@@ -31,6 +31,15 @@ class ChangeSetCreate(BaseModel):
     idempotency_key: str
 
 
+class DeliveryPolicyUpdate(BaseModel):
+    auto_merge: bool = False
+    base_branch: str = Field(default="main", min_length=1, max_length=255)
+    required_checks: list[str] = Field(default_factory=list)
+    required_approvals: int = Field(default=1, ge=0)
+    contract_gate: bool = False
+    add_label: bool = False
+
+
 class PullRequestObservationCreate(BaseModel):
     repository_id: UUID
     pull_request_number: int

@@ -4,6 +4,7 @@ import type {
   DeliveryEventKind,
   DeliveryEventsPage,
   IssueDetailView,
+  PlanGraphEdgeView,
   RepositoryPlanView,
   RoomListItemView,
   RoomStreamPage,
@@ -83,6 +84,26 @@ export async function fetchRoomStream(roomId: string, cursor?: string): Promise<
 export async function fetchRepositoryPlan(issueId: string, repositoryId: string): Promise<RepositoryPlanView> {
   if (resolveDataSourceMode() === "replay") return repositoryPlanFixture;
   return defaultClient().getRepositoryPlan(issueId, repositoryId);
+}
+
+/** 迁移 4：取该 issue 某版计划快照的边语义（issue_id 即 project_id，§0 语义等式）。
+ *
+ *  **取不到一律当没有，不当错误**：这一层是给既有连线**加注**的，DAG 面本身
+ *  只靠 §5.4 就能画完整。老快照的 `graph_edges` 可能为空（单图方案之前落的行），
+ *  端点也可能 404（版本越界）——两种情况面板都照画，只是没有契约语义可标。
+ *
+ *  回放模式没有这份夹具：返回 null，面板按「无语义」渲染。 */
+export async function fetchPlanGraphEdges(
+  issueId: string,
+  planVersion: number,
+): Promise<PlanGraphEdgeView[] | null> {
+  if (resolveDataSourceMode() === "replay") return null;
+  try {
+    const snapshot = await defaultClient().getPlanSnapshot(issueId, planVersion);
+    return snapshot.graph_edges;
+  } catch {
+    return null;
+  }
 }
 
 /** 该 issue 的当前轮次。环境窗与事件时间线都是**轮次粒度**的消费面，先解析一次

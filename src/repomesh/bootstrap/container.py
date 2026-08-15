@@ -325,7 +325,25 @@ class ApplicationContainer:
             self.project_topology_store,
             ProvisionRepositoryAgentTeam(self.agent_directory),
             self.project_topology_creator(),
+            self.topology_policy_draft_store(),
         )
+
+    @cached_service
+    def topology_policy_draft_store(self):
+        """Where the admin face leaves a supervision policy for materialization.
+
+        One instance for both directions on purpose: the endpoints write
+        through it over an admin session, ``EnsureProjectAgentTopology`` reads
+        through it in-process. That asymmetry is the whole design — the shared
+        console action token gains no way to set a policy, only to trigger one
+        an admin already set.
+        """
+
+        from repomesh.modules.project.infrastructure import (
+            PostgresTopologyPolicyDraftStore,
+        )
+
+        return PostgresTopologyPolicyDraftStore(self.database)
 
     def topology_runtime_projector(self):
         """Contract v0.4 §8: the step that makes a round's rooms exist.
@@ -408,6 +426,14 @@ class ApplicationContainer:
                     raise RuntimeProjectionUnavailable(str(error)) from error
 
         return _RuntimeProjection()
+
+    def automatic_project_topology_creator(self):
+        from repomesh.modules.project import CreateAutomaticProjectTopology
+
+        return CreateAutomaticProjectTopology(
+            self.agent_directory,
+            self.project_topology_creator(),
+        )
 
     def agent_capabilities(self) -> ResolveAgentCapabilities:
         return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
@@ -523,6 +549,27 @@ class ApplicationContainer:
             contract_catalog=(
                 self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
+        )
+
+    @cached_service
+    def delivery_policy_store(self):
+        from repomesh.modules.delivery import PostgresDeliveryPolicyStore
+
+        return PostgresDeliveryPolicyStore(self.database)
+
+    @staticmethod
+    def default_delivery_policy(organization_id):
+        from repomesh.modules.delivery import DeliveryPolicy
+
+        settings = get_settings()
+        return DeliveryPolicy(
+            organization_id=organization_id,
+            auto_merge=settings.delivery_auto_enabled,
+            base_branch=settings.delivery_base_branch,
+            required_checks=settings.delivery_required_checks,
+            required_approvals=settings.delivery_required_approvals,
+            contract_gate=settings.delivery_contract_gate,
+            add_label=settings.delivery_pr_label,
         )
 
     def contract_catalog(self):
@@ -1277,6 +1324,19 @@ class ApplicationContainer:
             raise RuntimeError("automatic delivery requires at least one named CI check")
         if settings.delivery_required_approvals < 1:
             raise RuntimeError("automatic delivery requires at least one PR approval")
+        async def resolve_policy(organization_id, repository_id=None):
+            policy = await self.delivery_policy_store().resolve(
+                organization_id,
+                repository_id,
+                fallback=self.default_delivery_policy(organization_id),
+            )
+            return PlanDeliveryPolicy(
+                base_branch=policy.base_branch,
+                required_checks=policy.required_checks,
+                required_approvals=policy.required_approvals,
+                add_label=policy.add_label,
+            )
+
         return PlanDeliveryFinalizer(
             self.delivery_service(),
             self.changeset_scm_coordinator(),
@@ -1287,6 +1347,7 @@ class ApplicationContainer:
                 required_approvals=settings.delivery_required_approvals,
                 add_label=settings.delivery_pr_label,
             ),
+            policy_resolver=resolve_policy,
             validation=self.validation_snapshot_service(),
             checkpoints=self.project_checkpoint_service(),
             contracts=(self.contract_catalog() if settings.delivery_contract_gate else None),
@@ -1467,6 +1528,7 @@ class ApplicationContainer:
             topologies=self.topology_reader(),
             catalog=self.repository_catalog,
             snapshot_store=self.plan_snapshot_store(),
+            snapshot_reader=self.plan_snapshot_store(),
             superseder=self.task_superseder(),
             task_reader=self.project_task_reader(),
             handoff_docs=self.handoff_doc_service(),

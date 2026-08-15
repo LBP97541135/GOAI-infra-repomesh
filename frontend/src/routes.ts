@@ -6,6 +6,7 @@ import type { NavKey } from "./components/SidebarV2";
 
 export const NAV_HASH: Record<NavKey, string> = {
   issues: "#/issues",
+  reviews: "#/reviews",
   repositories: "#/repositories",
   teams: "#/teams",
   agents: "#/agents",

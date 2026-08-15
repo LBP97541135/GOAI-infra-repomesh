@@ -18,19 +18,39 @@ from repomesh.modules.project.contracts import (
     ProjectTeamRuntimeStatus,
     RepositoryTeamView,
 )
+from repomesh.modules.project.errors import (
+    ProjectTopologyConflict,
+    ProjectTopologyError,
+    ProjectTopologyViolation,
+)
+from repomesh.modules.project.supervision_policy import assert_supervision_policy
 from repomesh.shared.domain import new_id
 
+__all__ = [
+    "HumanProjectGrant",
+    "HumanReviewRequest",
+    "ProjectAgentTopology",
+    "ProjectCheckpointDecision",
+    "ProjectTopologyConflict",
+    "ProjectTopologyError",
+    "ProjectTopologyViolation",
+    "RepositoryTeam",
+    "TopologyPolicyDraft",
+    "repository_agentteams_team_name",
+]
 
-class ProjectTopologyError(RuntimeError):
-    pass
 
+def repository_agentteams_team_name(repository_id: UUID) -> str:
+    """Stable AgentTeams Team binding shared by every project using a repository.
 
-class ProjectTopologyConflict(ProjectTopologyError):
-    pass
+    Delegates to :meth:`RepositoryTeam.canonical_agentteams_team_name` so the
+    two lines of development that independently keyed the Team on the
+    repository (A-8 on this branch, platform onboarding on main) mint one
+    spelling. The ``rm-team-`` template is the one existing rooms were made
+    under; the reconcile adopts a repository's real Team either way.
+    """
 
-
-class ProjectTopologyViolation(ProjectTopologyError):
-    pass
+    return RepositoryTeam.canonical_agentteams_team_name(repository_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,24 +269,14 @@ class ProjectAgentTopology:
             raise ProjectTopologyViolation("an agent cannot join multiple repository teams")
         if any(team.project_id != self.project_id for team in self.repository_teams):
             raise ProjectTopologyViolation("repository team project must match topology project")
-        if self.execution_mode is ProjectExecutionMode.AUTO and self.required_checkpoints:
-            raise ProjectTopologyViolation("automatic projects cannot require human checkpoints")
-        if self.execution_mode is not ProjectExecutionMode.AUTO and not self.human_grants:
-            raise ProjectTopologyViolation("human-controlled projects require a human grant")
-        if self.execution_mode is not ProjectExecutionMode.AUTO and not self.required_checkpoints:
-            raise ProjectTopologyViolation("human-controlled projects require checkpoints")
-        if (
-            self.execution_mode is ProjectExecutionMode.MANUAL_CONTROLLED
-            and self.required_checkpoints != frozenset(ProjectCheckpoint)
-        ):
-            raise ProjectTopologyViolation(
-                "manual-controlled projects require every human checkpoint"
-            )
-        grant_scopes = [
-            (grant.human_principal_id, grant.repository_id) for grant in self.human_grants
-        ]
-        if len(set(grant_scopes)) != len(grant_scopes):
-            raise ProjectTopologyViolation("duplicate human grant scope")
+        # Everything above needs the repository teams; everything in here does
+        # not, which is exactly why it is shared with the policy draft written
+        # before any team exists. See ``supervision_policy`` for the seam.
+        assert_supervision_policy(
+            execution_mode=self.execution_mode,
+            required_checkpoints=self.required_checkpoints,
+            human_grants=self.human_grants,
+        )
         repository_ids = set(repository_ids)
         if any(
             grant.repository_id is not None and grant.repository_id not in repository_ids
@@ -296,3 +306,36 @@ class ProjectAgentTopology:
         ):
             raise ProjectTopologyViolation("cancelled project cannot be resumed")
         return replace(self, operational_status=status)
+
+
+@dataclass(frozen=True, slots=True)
+class TopologyPolicyDraft:
+    """What an admin decided about supervision, before there is a topology.
+
+    Same three fields ``ProjectAgentTopology`` carries, and validated by the
+    same function, so a draft that constructs is a draft that will not be
+    rejected on those grounds later. The one rule it cannot run is the one that
+    needs repository teams — a grant may name a repository that the plan later
+    drops — so materialization stays able to refuse, and must say so rather
+    than silently discard the grant.
+
+    ``project_id`` is the identity: a requirement has one supervision intent,
+    and changing your mind overwrites it. What is worth keeping a history of is
+    the *decisions* made at checkpoints, which ``checkpoint_decisions`` already
+    records; the deliberation before them is not evidence of anything.
+    """
+
+    project_id: UUID
+    created_by: UUID
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
+    human_grants: tuple[HumanProjectGrant, ...] = ()
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        assert_supervision_policy(
+            execution_mode=self.execution_mode,
+            required_checkpoints=self.required_checkpoints,
+            human_grants=self.human_grants,
+        )

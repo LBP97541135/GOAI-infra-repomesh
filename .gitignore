@@ -25,3 +25,6 @@ htmlcov/
 
 .repomesh_cache/
 .agentteams-storage/
+
+# 本机凭据文件，绝不入库
+admininfo.txt

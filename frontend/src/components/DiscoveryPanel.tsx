@@ -10,6 +10,8 @@ import type {
 } from "../api/contract";
 import type { PlanAnchor } from "../types";
 import { ApiError } from "../api/client";
+import { AuthError } from "../api/auth";
+import { fetchPolicyDraft } from "../api/humanControl";
 import {
   fetchDiscovery,
   fetchDiscoveryTask,
@@ -26,6 +28,8 @@ import { resolveDataSourceMode } from "../api/source";
 import { agentLabel, errText, shortId } from "../display";
 import { DiscoveryApproval, type ApprovalPrincipal } from "./DiscoveryApproval";
 import { MaterializeModal } from "./MaterializeModal";
+import { SupervisionPolicyCard, type PolicyDraftState } from "./SupervisionPolicyCard";
+import { SupervisionPolicyDialog } from "./SupervisionPolicyDialog";
 
 /** issue 详情页 · 发现面板（批次 B-1/B-2）。
  *  契约 `docs/contracts/delivery-read-model-v0.4.md`；设计定稿
@@ -69,6 +73,21 @@ export interface MaterializeContext {
   /** 计划里 catalog 查无仓库的节点数，用于弹窗旁注（M 与实际建队数可能不等）。 */
   planUnresolvedCount: number;
 }
+
+/** 监管策略草稿卡片的门（迁移 5-1b · F4，设计文档 §3.4）。
+ *
+ *  **这一判由 issue 详情页的拓扑取数给出，本面板不自己再问一遍**：`GET
+ *  /projects/{id}/topology` 已经是那一段（5-1a）的取数，物化那一瞬间它会从 404 翻成
+ *  200，两个取数点必然在某个时刻给出互相矛盾的答案——一个还说「可以配」，另一个
+ *  已经在显示真档案。
+ *
+ *   - `open`（拓扑 404）＝ 还没有档案，草稿窗口开着，卡片出现；
+ *   - `sealed`（拓扑 200 或 403）＝ 档案已存在（403 的含义是「存在但你读不到」，
+ *     后端 404 的判定在权限判定之前），走 5-1a 的只读显示，**卡片不再出现**——
+ *     不给一个按了也没用的按钮；
+ *   - `resolving` / `unknown` ＝ 还不知道。此时**不出卡片**：出了就得在「配置」按钮
+ *     背后押一把「多半还没物化」，押错就是让人对着一份已锁死的档案填半天表。 */
+export type PolicyGate = "resolving" | "open" | "sealed" | "unknown";
 
 /* ── 步进器 ─────────────────────────────────────────────────────────────── */
 
@@ -255,14 +274,18 @@ function ClarifyBlock({
 
 export function DiscoveryPanel({
   issueId,
+  issueTitle,
   organizationId,
   onToast,
   onPlanGenerated,
   onCandidateAnchor,
   materialize,
+  policyGate,
   onMaterialized,
 }: {
   issueId: string;
+  /** 配置弹窗的抬头「需求：…」。取 issue 详情的标题，本面板不为它再取一次数。 */
+  issueTitle: string;
   /** 审批主体按 issue 所属组织派生（跨组织 leader 会被后端 403） */
   organizationId: string | null;
   onToast: (text: string) => void;
@@ -274,6 +297,8 @@ export function DiscoveryPanel({
   onCandidateAnchor: (anchor: PlanAnchor | null) => void;
   /** C-3 物化开工所需的 issue 侧事实（见 MaterializeContext） */
   materialize: MaterializeContext;
+  /** 5-1b 策略草稿卡片的门（见 PolicyGate）。由容器的拓扑取数派生。 */
+  policyGate: PolicyGate;
   /** 物化成功后请父级刷新**整页**详情：轮次、房间、DAG 着色全都在这一次写里变了 */
   onMaterialized: () => void;
 }) {
@@ -301,6 +326,13 @@ export function DiscoveryPanel({
    *  writeError 不是同一个位置（关掉弹窗就看不见了，那才是真的静默失败）。 */
   const [materializeOpen, setMaterializeOpen] = useState(false);
   const [materializeError, setMaterializeError] = useState<string | null>(null);
+
+  /** 监管策略草稿（5-1b · F4）。**取数放在本面板而不是容器**：卡片、配置弹窗与物化
+   *  弹窗三处要的是同一份，而后两者的其余入参（`effective_tiers`、`task_dag_count`）
+   *  只有本面板有——放容器就得把发现读投影再往上抬一层。 */
+  const [policy, setPolicy] = useState<PolicyDraftState>({ kind: "loading" });
+  const [policyReload, setPolicyReload] = useState(0);
+  const [policyDialogOpen, setPolicyDialogOpen] = useState(false);
 
   /** 幂等键（§4.1「随表单生成」、Q9「每步一个键」）。
    *  一把键代表**一次逻辑触发**：请求失败后原样重试沿用同一把（服务端据此去重，
@@ -345,6 +377,7 @@ export function DiscoveryPanel({
     setTaskLost(false);
     setMaterializeOpen(false);
     setMaterializeError(null);
+    setPolicyDialogOpen(false);
     keys.current = {};
   }, [issueId]);
 
@@ -362,6 +395,55 @@ export function DiscoveryPanel({
 
   const planVersion = view?.plan_version ?? null;
   const runningTaskId = view?.running_task_id ?? null;
+
+  /** 草稿卡片该不该在场。三个条件缺一不可：
+   *   1. 拓扑还不存在（`policyGate === "open"`，见 PolicyGate）；
+   *   2. 发现链已走完（step 4 且 done）——卡片与物化按钮同级，物化按钮不在的时候
+   *      它也不该在；这同时保证了配置弹窗的仓库下拉有分档结果可交集；
+   *   3. 本 issue 还没有轮次——已经开过工的需求，策略早已随首次物化定死。 */
+  const policyWindowOpen =
+    policyGate === "open" &&
+    view?.step === 4 &&
+    view.step_state === "done" &&
+    materialize.roundCount === 0;
+
+  /** 草稿取数。**只在卡片真会出现时才发**：否则每打开一个 issue 详情就多一次注定
+   *  用不上的会话请求。门未落定/已封时不发请求，直接落成对应的门态——物化弹窗要按
+   *  这两态说不同的话（见 MaterializeModal 的策略摘要）。 */
+  useEffect(() => {
+    if (!policyWindowOpen) {
+      setPolicy(
+        policyGate === "sealed"
+          ? { kind: "sealed" }
+          : policyGate === "resolving"
+            ? { kind: "loading" }
+            : { kind: "unknown" },
+      );
+      return;
+    }
+    let cancelled = false;
+    setPolicy({ kind: "loading" });
+    fetchPolicyDraft(issueId)
+      .then((draft) => !cancelled && setPolicy({ kind: "set", draft }))
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const status = err instanceof AuthError ? err.status : 0;
+        // 404 = 还没设过，是正常起点不是错误；401/403 各有各的下一步，不能并进 error
+        // （error 那一态给的是重试按钮，而过期会话与非管理员重试多少次都是同一个结果）。
+        setPolicy(
+          status === 404
+            ? { kind: "unset" }
+            : status === 401
+              ? { kind: "unauthenticated", detail: errText(err) }
+              : status === 403
+                ? { kind: "forbidden", detail: errText(err) }
+                : { kind: "error", message: errText(err) },
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [issueId, policyWindowOpen, policyGate, policyReload]);
 
   /** 回调走 ref，**不进轮询 effect 的依赖**。父级若传来一个每次 render 都换 identity
    *  的箭头函数（内联 `() => setPlanReload(n => n + 1)` 就是），把它列进依赖会让轮询
@@ -858,6 +940,20 @@ export function DiscoveryPanel({
             </p>
           )}
 
+          {/* ── 监管策略（5-1b · F4）───────────────────────────────────────
+              物化区**上方**、与物化按钮同级，**不进步进器**：下面那条注释的判据
+              （发现四步改的是同一份草稿快照，物化建的是执行面的实体）同样适用——
+              配策略改的也是草稿、也不建实体，但它不属于「发现」这件事。发现回答
+              「要动哪些仓库」，策略回答「谁来盯着」，共用一个步进器就要让「走到
+              第几步」这个唯一事实源为一件与发现无关的事让路。 */}
+          {policyWindowOpen && (
+            <SupervisionPolicyCard
+              state={policy}
+              onConfigure={() => setPolicyDialogOpen(true)}
+              onRetry={() => setPolicyReload((n) => n + 1)}
+            />
+          )}
+
           {/* ── 物化并开工（C-3）───────────────────────────────────────────
               出现条件只看两条**事实**：读模型说整链走完（step 4 且 done），
               且 issue 详情说还没有轮次。不看 integration 是否为空去反推——
@@ -947,11 +1043,26 @@ export function DiscoveryPanel({
         taskCount={integration?.task_dag_count ?? 0}
         teamCount={materialize.planRepositoryCount}
         unresolvedCount={materialize.planUnresolvedCount}
+        policy={policy}
         principal={approvalPrincipal(mode, principalResolving, principal)}
         submitting={busy === "materialize"}
         errorText={materializeError}
         onCancel={closeMaterialize}
         onConfirm={handleMaterialize}
+      />
+
+      {/* 配置弹窗（5-1b · F3）。入口**只有一个**——上面那张卡片；详情页的只读段
+          刻意不再放第二个按钮（「同一件事两个入口」是这批迁移一直在还的债）。
+          `taskCount` 取集成计数，计划还没生成时为 null——弹窗的代价预告据此如实说
+          「每个任务各 1 次」，不拿 0 冒充。 */}
+      <SupervisionPolicyDialog
+        open={policyDialogOpen}
+        projectId={issueId}
+        issueTitle={issueTitle}
+        effectiveTiers={view.effective_tiers}
+        taskCount={integration?.task_dag_count ?? null}
+        onClose={() => setPolicyDialogOpen(false)}
+        onSaved={(draft) => setPolicy(draft ? { kind: "set", draft } : { kind: "unset" })}
       />
     </>
   );

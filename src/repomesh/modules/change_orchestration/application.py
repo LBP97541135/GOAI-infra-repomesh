@@ -37,9 +37,15 @@ from repomesh.modules.project.contracts import (
     ProjectCheckpointGateway,
     ProjectTopologyReader,
 )
-from repomesh.modules.repository_intelligence.application.plan_integration import (
+from repomesh.modules.repository_intelligence.contracts import (
     IntegratedPlan,
+    PlanDiff,
+    PlanGraph,
     TaskNode,
+    diff_plan_graphs,
+    integration_method,
+    normalize_plan,
+    plan_to_graph,
 )
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 from repomesh.modules.specification.contracts import (
@@ -59,12 +65,14 @@ from repomesh.telemetry import SpanAttributes, traced
 from .contracts import (
     ExecutionPlaneUnavailable,
     MaterializationResult,
+    ReplanMode,
     ReplanResult,
     RoundNotRecorded,
 )
 from .ports import (
     ExecutionPlanStarter,
     HandoffDocGenerator,
+    PlanSnapshotReader,
     PlanSnapshotWriter,
     ProjectTaskReader,
     SpecificationCreator,
@@ -142,6 +150,7 @@ class PlanExecutionBridge:
         topologies: ProjectTopologyReader,
         catalog: RepositoryCatalog,
         snapshot_store: PlanSnapshotWriter | None = None,
+        snapshot_reader: PlanSnapshotReader | None = None,
         superseder: TaskSupersederGateway | None = None,
         task_reader: ProjectTaskReader | None = None,
         handoff_docs: HandoffDocGenerator | None = None,
@@ -152,6 +161,7 @@ class PlanExecutionBridge:
         self._topologies = topologies
         self._catalog = catalog
         self._snapshots = snapshot_store
+        self._snapshot_reader = snapshot_reader
         self._superseder = superseder
         self._task_reader = task_reader
         self._handoff_docs = handoff_docs
@@ -201,6 +211,15 @@ class PlanExecutionBridge:
                 "gateway — is the Matrix messenger set up?); refusing to "
                 "materialize a plan whose tasks cannot be assigned"
             )
+
+        # --- 0b. Unify on the plan-layer graph --------------------------------
+        # The graph is the single source of truth: execution batches, contracts
+        # and task dependencies are projections of its confirmed edges. Plans
+        # arriving without a graph (manual bridge / legacy callers) are
+        # backfilled from their fields. Everything below therefore operates on
+        # graph-consistent values.
+        graph = plan.graph or plan_to_graph(plan)
+        plan = normalize_plan(plan, graph)
 
         # --- 1. Load topology --------------------------------------------------
         topology = await self._topologies.get_view(project_id)
@@ -355,13 +374,22 @@ class PlanExecutionBridge:
                 draft = await self._snapshots.current_draft(project_id)
                 if draft is not None:
                     plan_version = draft.plan_version
+                    # The row owns the real plan_version; align the graph
+                    # with it so the single-graph invariant (read graph ≡
+                    # projection columns) holds on the consumed draft too.
+                    snapshot_graph = graph.model_copy(
+                        update={"plan_version": plan_version}
+                    )
                     await self._snapshots.set_integration(
                         draft.id,
                         engineering_spec=plan.engineering_spec or requirement,
                         contracts=contracts_payload,
                         task_dag=task_dag_payload,
                         execution_batches=batches_payload,
-                        integration_method="llm_only",
+                        graph_edges=[
+                            e.model_dump(by_alias=True) for e in snapshot_graph.edges
+                        ],
+                        integration_method=integration_method(snapshot_graph),
                     )
                     if plan_id is not None:
                         # Only an actual execution plan consumes the draft. With
@@ -372,6 +400,10 @@ class PlanExecutionBridge:
                         await self._snapshots.link_execution_plan(draft.id, plan_id)
                 else:
                     plan_version = await self._snapshots.next_version(project_id)
+                    # The row owns the real plan_version; align the graph with it.
+                    snapshot_graph = graph.model_copy(
+                        update={"plan_version": plan_version}
+                    )
                     await self._snapshots.save(
                         project_id=project_id,
                         plan_version=plan_version,
@@ -379,11 +411,13 @@ class PlanExecutionBridge:
                         contracts=contracts_payload,
                         task_dag=task_dag_payload,
                         execution_batches=batches_payload,
-                        graph_edges=[],
+                        graph_edges=[
+                            e.model_dump(by_alias=True) for e in snapshot_graph.edges
+                        ],
                         created_by_agent_id=leader_agent_id,
                         execution_plan_id=plan_id,
                         requirement_text=requirement,
-                        integration_method="llm_only",
+                        integration_method=integration_method(snapshot_graph),
                     )
             except Exception as error:
                 # Loud about which project lost its snapshot: the previous
@@ -468,21 +502,31 @@ class PlanExecutionBridge:
         integration_service: PlanIntegrationService | None = None,
         confirmation_summary: ConfirmationSummary | None = None,
         graph: DependencyGraphService | None = None,
+        mode: ReplanMode = "commit",
     ) -> ReplanResult:
         """Partially replan after a BLOCKED task reports an upstream change.
 
         Flow:
 
-        1. **Impact analysis** — use the dependency graph's reverse edges to
-           find every repository that depends on *change_source_repo*. The
-           affected set always contains the change source itself.
+        1. **Impact analysis** — the affected set is derived from the
+           *plan-layer* graph of the latest immutable snapshot (its confirmed
+           edges), so interruption is exact: candidate scan edges never widen
+           the set. When no snapshot exists yet, the world-layer dependency
+           graph is used as a fallback; without either the set collapses to
+           the change source itself. The affected set always contains the
+           change source.
         2. **Local re-integration** (optional) — when an *integration_service*
            is supplied, re-run plan integration scoped to the affected repos
            with a stability constraint appended to the requirement. This is a
            best-effort step; the framework still works without it.
-        3. **Version migration** — supersede the old tasks of the affected
-           repositories so the Runner can interrupt them, then (when a plan
-           starter is configured) start a new execution plan for the new batch.
+        3. **Execution** — ``commit`` supersedes the old tasks of the affected
+           repositories so the Runner can interrupt them, starts a new
+           execution plan for the new batch (when a plan starter is
+           configured), mints the new plan version from the snapshot store
+           (``next_version``) and persists a new immutable snapshot carrying
+           the full plan-layer graph. ``preview`` performs **no side
+           effects**: it reports the same change footprint plus the graph diff
+           so callers can approve the change before committing.
         4. **Notification** — record which Team Managers must be interrupted.
            The actual collaboration push is performed by the API layer, which
            owns the :class:`CollaborationGateway`; the bridge only reports the
@@ -493,16 +537,23 @@ class PlanExecutionBridge:
             leader_agent_id: ORG_LEADER agent UUID authorising the replan.
             feedback: BLOCKED task feedback explaining the upstream change.
             change_source_repo: Repository whose change triggered the replan.
-            plan_version: Current plan version being superseded.
+            plan_version: Current plan version being superseded. Only used as
+                the fallback when no snapshot store is configured.
             requirement: Original requirement text (feedback is appended).
             idempotency_prefix: Unique prefix for idempotency keys.
             all_repos: Every repository in the current plan (for scoping).
             integration_service: Optional service for local re-integration.
             confirmation_summary: Optional prior confirmation to reuse.
-            graph: Dependency graph for impact analysis.
+            graph: World-layer dependency graph, used only when no plan-layer
+                snapshot is available for impact analysis.
+            mode: ``commit`` executes the full replan (default, preserves
+                pre-PR-4 behaviour); ``preview`` computes impact analysis and
+                the graph diff without any side effect.
 
         Returns:
-            :class:`ReplanResult` with superseded/new tasks and affected repos.
+            :class:`ReplanResult` with superseded/new tasks, affected repos,
+            the persisted snapshot id (``plan_id``) and the graph diff
+            (``diff``). Preview returns empty task lists and ``plan_id=None``.
 
         Raises:
             ExecutionPlaneUnavailable: when no superseder is configured. Raised
@@ -517,10 +568,26 @@ class PlanExecutionBridge:
                 "replan when tasks cannot be superseded"
             )
 
+        # --- 0b. Load the latest plan-layer snapshot (best effort) ------------
+        plan_graph: PlanGraph | None = None
+        if self._snapshot_reader is not None:
+            try:
+                plan_graph = await self._snapshot_reader.get_latest_graph(
+                    project_id
+                )
+            except Exception:
+                _logger.warning(
+                    "replan: failed to load latest plan snapshot for %s, "
+                    "falling back to world-layer impact analysis",
+                    project_id,
+                    exc_info=True,
+                )
+
         # --- 1. Impact analysis ------------------------------------------------
         affected_repos = self._compute_affected_repos(
             change_source_repo=change_source_repo,
             all_repos=all_repos,
+            plan_graph=plan_graph,
             graph=graph,
         )
         _logger.info(
@@ -548,65 +615,135 @@ class PlanExecutionBridge:
                 )
                 new_plan = None
 
-        # --- 3. Version migration: supersede old tasks of affected repos -------
-        new_plan_version = plan_version + 1
-        superseded_tasks = await self._supersede_affected_tasks(
-            project_id=project_id,
-            affected_repos=affected_repos,
-            feedback=feedback,
-            idempotency_prefix=idempotency_prefix,
-        )
+        # --- 3. Version minting (read-only) -----------------------------------
+        # The snapshot store is the single source of truth for plan versions
+        # when configured; the caller-supplied version is only a fallback for
+        # deployments without snapshot persistence. ``next_version`` only
+        # reads the latest row, so preview may report the version a commit
+        # would mint without any side effect.
+        if self._snapshots is not None:
+            new_plan_version = await self._snapshots.next_version(project_id)
+        else:
+            new_plan_version = plan_version + 1
 
-        # --- 3b. Start a new execution plan for the affected repos ------------
-        new_tasks: list[TaskView] = []
-        if new_plan is not None and self._plans is not None:
-            new_tasks = await self._start_replan_batch(
-                new_plan=new_plan,
-                affected_repos=affected_repos,
+        if mode == "preview":
+            # --- preview: zero side effects ------------------------------------
+            # No supersede, no plan start, no snapshot write, no handoff
+            # regeneration — only the change footprint and the graph diff the
+            # commit would apply, so callers can approve before committing.
+            superseded_tasks: list[TaskView] = []
+            new_tasks: list[TaskView] = []
+            handoff_doc_ids: list[UUID] = []
+            plan_id: UUID | None = None
+            preview_graph: PlanGraph | None = None
+            if new_plan is not None and new_plan.graph is not None:
+                preview_graph = new_plan.graph.model_copy(
+                    update={"plan_version": new_plan_version}
+                )
+            diff = diff_plan_graphs(plan_graph, preview_graph)
+            _logger.info(
+                "replan: preview for %s at v%d (no side effects)",
+                project_id,
+                new_plan_version,
+            )
+        else:
+            # --- commit: execute the replan ------------------------------------
+            superseded_tasks = await self._supersede_affected_tasks(
                 project_id=project_id,
-                leader_agent_id=leader_agent_id,
+                affected_repos=affected_repos,
+                feedback=feedback,
                 idempotency_prefix=idempotency_prefix,
-                new_plan_version=new_plan_version,
             )
 
-        # --- 3c. Regenerate handoff documents for the affected repos ----------
-        # A replan produces a new plan version: the previous documents of the
-        # affected repositories are superseded and fresh PENDING documents are
-        # generated from the new plan so repository owners re-approve the
-        # adjusted proposal. When no new plan was produced (cancel-only
-        # fallback), the stale documents are still superseded.
-        handoff_doc_ids: list[UUID] = []
-        if self._handoff_docs is not None and affected_repos:
-            try:
-                if new_plan is None:
-                    await self._handoff_docs.supersede_for_repos(
-                        project_id=project_id,
-                        repositories=affected_repos,
-                        superseded_by_version=new_plan_version,
+            # --- 3b. Start a new execution plan for the affected repos --------
+            new_tasks: list[TaskView] = []
+            if new_plan is not None and self._plans is not None:
+                new_tasks = await self._start_replan_batch(
+                    new_plan=new_plan,
+                    affected_repos=affected_repos,
+                    project_id=project_id,
+                    leader_agent_id=leader_agent_id,
+                    idempotency_prefix=idempotency_prefix,
+                    new_plan_version=new_plan_version,
+                )
+
+            # --- 3b2. Persist the re-planned version as an immutable snapshot --
+            # A replan with a new plan mints a fresh snapshot carrying the full
+            # plan-layer graph (same invariant as materialise: read graph ≡
+            # projection columns). Cancel-only replans leave the last snapshot
+            # in place — there is no new graph to record.
+            plan_id: UUID | None = None
+            diff: PlanDiff | None = None
+            if new_plan is not None and self._snapshots is not None:
+                try:
+                    snapshot_graph = new_plan.graph.model_copy(
+                        update={"plan_version": new_plan_version}
                     )
-                else:
-                    docs = await self._handoff_docs.generate_for_plan(
+                    saved = await self._snapshots.save(
                         project_id=project_id,
                         plan_version=new_plan_version,
-                        plan=new_plan,
-                        requirement=requirement,
+                        engineering_spec=new_plan.engineering_spec,
+                        contracts=[asdict(c) for c in new_plan.contracts],
+                        task_dag=[asdict(t) for t in new_plan.task_dag],
+                        execution_batches=[
+                            list(b) for b in new_plan.execution_batches
+                        ],
+                        graph_edges=[
+                            e.model_dump(by_alias=True)
+                            for e in snapshot_graph.edges
+                        ],
                         created_by_agent_id=leader_agent_id,
-                        repositories=affected_repos,
-                        details=self._handoff_details_from_summary(
-                            confirmation_summary, affected_repos
-                        ),
+                        requirement_text=requirement,
+                        integration_method=integration_method(snapshot_graph),
                     )
-                    handoff_doc_ids = [doc.id for doc in docs]
-                _logger.info(
-                    "replan: handoff documents for %s regenerated @ v%d",
-                    affected_repos,
-                    new_plan_version,
-                )
-            except Exception:
-                _logger.warning(
-                    "replan: failed to regenerate handoff documents",
-                    exc_info=True,
-                )
+                    plan_id = saved.id
+                    diff = diff_plan_graphs(plan_graph, snapshot_graph)
+                except Exception:
+                    _logger.warning(
+                        "replan: failed to save plan snapshot v%d for %s",
+                        new_plan_version,
+                        project_id,
+                        exc_info=True,
+                    )
+
+            # --- 3c. Regenerate handoff documents for the affected repos ------
+            # A replan produces a new plan version: the previous documents of
+            # the affected repositories are superseded and fresh PENDING
+            # documents are generated from the new plan so repository owners
+            # re-approve the adjusted proposal. When no new plan was produced
+            # (cancel-only fallback), the stale documents are still superseded.
+            handoff_doc_ids: list[UUID] = []
+            if self._handoff_docs is not None and affected_repos:
+                try:
+                    if new_plan is None:
+                        await self._handoff_docs.supersede_for_repos(
+                            project_id=project_id,
+                            repositories=affected_repos,
+                            superseded_by_version=new_plan_version,
+                        )
+                    else:
+                        docs = await self._handoff_docs.generate_for_plan(
+                            project_id=project_id,
+                            plan_version=new_plan_version,
+                            plan=new_plan,
+                            requirement=requirement,
+                            created_by_agent_id=leader_agent_id,
+                            repositories=affected_repos,
+                            details=self._handoff_details_from_summary(
+                                confirmation_summary, affected_repos
+                            ),
+                        )
+                        handoff_doc_ids = [doc.id for doc in docs]
+                    _logger.info(
+                        "replan: handoff documents for %s regenerated @ v%d",
+                        affected_repos,
+                        new_plan_version,
+                    )
+                except Exception:
+                    _logger.warning(
+                        "replan: failed to regenerate handoff documents",
+                        exc_info=True,
+                    )
 
         # --- 4. Notification: record who needs to be interrupted --------------
         # The bridge does not own a CollaborationGateway; the API layer reads
@@ -636,6 +773,8 @@ class PlanExecutionBridge:
             affected_repos=list(affected_repos),
             feedback_summary=feedback_summary,
             handoff_doc_ids=handoff_doc_ids,
+            plan_id=plan_id,
+            diff=diff,
         )
 
     # ------------------------------------------------------------------
@@ -647,19 +786,35 @@ class PlanExecutionBridge:
         *,
         change_source_repo: str,
         all_repos: list[str],
-        graph: DependencyGraphService | None,
+        plan_graph: PlanGraph | None = None,
+        graph: DependencyGraphService | None = None,
     ) -> list[str]:
         """Return the affected repository set for a change source.
 
         The set is ``{change_source_repo}`` plus every consumer that depends
-        on it (reverse dependencies). When no graph is available, the set
-        collapses to the change source itself — the minimal safe assumption.
+        on it. The plan-layer snapshot's **confirmed** edges are
+        authoritative: candidate edges never widen the interruption set. When
+        no plan-layer graph is available, the world-layer dependency graph is
+        used as a fallback; without either the set collapses to the change
+        source itself — the minimal safe assumption.
         """
 
         known = set(all_repos)
         affected: set[str] = set()
         if change_source_repo in known or not known:
             affected.add(change_source_repo)
+
+        if plan_graph is not None:
+            for edge in plan_graph.edges:
+                # ``edge.from_`` is the producer; its consumers (``edge.to``)
+                # are affected when the producer changes.
+                if (
+                    edge.status == "confirmed"
+                    and edge.from_ == change_source_repo
+                    and (not known or edge.to in known)
+                ):
+                    affected.add(edge.to)
+            return sorted(affected)
 
         if graph is None:
             return sorted(affected)

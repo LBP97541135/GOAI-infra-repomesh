@@ -9,6 +9,8 @@ import type {
   RollbackRepositoryState,
   RuntimeBlock,
 } from "./api/contract";
+import type { ProjectCheckpoint } from "./api/reviewDesk";
+import type { CodeAccessLevel, HumanControlAction, HumanProjectRole } from "./api/humanControl";
 
 /** issue 与网格页的展示辅助。**纯格式化**，不含任何状态派生——state/phase/
  *  phase_note/runtime.phase 一律由读模型给出（契约红线）。多页共用同一份，避免漂移。 */
@@ -84,6 +86,124 @@ export function tierOf(status: string): DiscoveryTier | null {
 export function tierStatusLabel(status: string): string {
   const tier = tierOf(status);
   return tier ? TIER_LABEL[tier] : status;
+}
+
+/** 六个人工检查点的**展示次序**（迁移 5-1a）。这里排的是**流程先后**——
+ *  确定仓库范围 → 定规格 → 执行 → 验证 → 交付，异常升级压尾（它不在主线上，
+ *  是出事才走的旁路）。
+ *
+ *  **为什么必须自己排**：这份集合有两个来路，两个都不是人理解流程的顺序。
+ *   - 拓扑端点（`GET /projects/{id}/topology`）上它是后端的 `frozenset`，
+ *     序列化成数组**顺序不确定**，同一个项目每次刷新卡点次序都在跳；
+ *   - 读模型 §3 那一份是 `sorted()` 的**字母序**，于是「交付」排在「执行」前面。
+ *  两处都过这道排序，同一份策略在哪儿看都是一个样。 */
+export const CHECKPOINT_ORDER: readonly ProjectCheckpoint[] = [
+  "repository_scope",
+  "specification",
+  "execution",
+  "validation",
+  "delivery",
+  "exception_escalation",
+];
+
+/** 检查点措辞唯一表（同 PHASE_SKIN 的做法）。审核台与 issue 详情页共用一份：
+ *  两处各写一张表，日后漏改一处就成了「同一个卡点在两屏两个名字」。 */
+export const CHECKPOINT_LABEL: Record<ProjectCheckpoint, string> = {
+  repository_scope: "仓库范围",
+  specification: "规格",
+  execution: "执行",
+  validation: "验证",
+  delivery: "交付",
+  exception_escalation: "异常升级",
+};
+
+/** 按一份固定次序给**来源无序**的集合定序。后端多处用 `frozenset`
+ *  （`required_checkpoints`、`control_actions`），序列化成 JSON 数组后顺序不保证
+ *  稳定——直接渲染会让同一份数据每次刷新排列都不同，读者会以为它变了。
+ *
+ *  认不出的值**原样透出**排在已知项之后，不静默丢弃：服务端先于前端新增一个枚举值时，
+ *  界面上少一项比多一个陌生词危险得多（少一个卡点会让人以为那一步没人把关）。
+ *  未知项内部按字母序，保证同一份输入的输出稳定。 */
+export function orderByFixed(values: readonly string[], order: readonly string[]): string[] {
+  const known = order.filter((item) => values.includes(item));
+  const unknown = values.filter((value) => !order.includes(value)).slice().sort();
+  return [...known, ...unknown];
+}
+
+export function orderCheckpoints(values: readonly string[]): string[] {
+  return orderByFixed(values, CHECKPOINT_ORDER);
+}
+
+export function checkpointLabel(value: string): string {
+  return CHECKPOINT_LABEL[value as ProjectCheckpoint] ?? value;
+}
+
+/** 监管策略的**界面三档**及其措辞唯一表（迁移 5-1b，设计文档 §4）。
+ *
+ *  **这是界面概念，不是后端取值**——后端只认 `auto` / `supervised` /
+ *  `manual_controlled`，而那三个词对刚走完发现链的人毫无意义。档位在配置弹窗里由
+ *  「选了哪些卡点」推导（弹窗的 `tierOf`），在策略卡片里由回读的 `execution_mode`
+ *  反推（卡片的 `tierOfMode`）——两条来路，同一张措辞表。
+ *
+ *  **为什么在这里而不是留在弹窗里**：卡片要把「已设」显示成用户当初选的那一档，
+ *  用户在弹窗里选的是「关键处我看一眼」，回到卡片必须还叫「关键处我看一眼」。
+ *  抄第二份就是把 `CHECKPOINT_LABEL` 那条注释（「两处各写一张表，日后漏改一处就成了
+ *  同一件事在两屏说两种话」）再犯一次。放在弹窗里导出也不行——`react/only-export-components`
+ *  会因此告警，那条规则的原话就是「用一个新文件来共享常量」。 */
+export type PolicyTier = "unattended" | "key_points" | "every_step";
+
+export const POLICY_TIER_TITLE: Record<PolicyTier, string> = {
+  unattended: "AI 自己干完",
+  key_points: "关键处我看一眼",
+  every_step: "每一步都要我点头",
+};
+
+/** 授权三要素的措辞唯一表（身份 / 代码权限 / 控制动作）。
+ *
+ *  **为什么在这里而不是各页自己写一份**：这三张表此前是 `IssueDetailPage` 的私有
+ *  常量，只读显示（迁移 5-1a）是唯一消费方。5-1b 的配置弹窗要用**同一批词**——
+ *  用户在弹窗里勾的是「批卡点」，回到详情页必须还叫「批卡点」，否则同一条授权在
+ *  设它的地方和看它的地方是两个名字。抄一份到弹窗里就是把 CHECKPOINT_LABEL 那条
+ *  注释（「两处各写一张表，日后漏改一处就成了同一件事在两屏说两种话」）再犯一次。
+ *
+ *  ⚠ 设计文档 §4.6 线框里写的是「看决定 / 批准卡点 / 要求返工」，与这里不同。
+ *  以**这里**为准：5-1a 已经上线了这套词，改线框那套等于让已有界面跟着变。 */
+export const ROLE_LABEL: Record<HumanProjectRole, string> = {
+  organization_supervisor: "组织监督人",
+  project_supervisor: "项目监督人",
+  repository_supervisor: "仓库监督人",
+};
+
+export const CODE_ACCESS_LABEL: Record<CodeAccessLevel, string> = {
+  none: "不读代码",
+  read: "可读代码",
+  write: "可写代码",
+};
+
+/** 七个控制动作的**展示次序**：先「看与批」，再「改规格」，最后三个生命周期动作。
+ *  同 `CHECKPOINT_ORDER`，来源是后端 `frozenset`，顺序不确定，必须自己定序。 */
+export const CONTROL_ACTION_ORDER: readonly HumanControlAction[] = [
+  "view_decisions",
+  "approve_checkpoint",
+  "request_changes",
+  "edit_specification",
+  "pause_project",
+  "resume_project",
+  "cancel_project",
+];
+
+export const CONTROL_ACTION_LABEL: Record<HumanControlAction, string> = {
+  view_decisions: "看决策",
+  approve_checkpoint: "批卡点",
+  request_changes: "要求修改",
+  edit_specification: "改规格",
+  pause_project: "暂停项目",
+  resume_project: "恢复项目",
+  cancel_project: "取消项目",
+};
+
+export function controlActionLabel(value: string): string {
+  return CONTROL_ACTION_LABEL[value as HumanControlAction] ?? value;
 }
 
 /** uuid 短版。`issue_key` 恒 null（无 Project 注册表，§0/§6.1），所以 issue 的

@@ -1,4 +1,4 @@
-import type { RepositoryPlanView, TaskDisplayStatus } from "../api/contract";
+import type { PlanGraphEdgeView, RepositoryPlanView, TaskDisplayStatus } from "../api/contract";
 import type { DagExecutionView } from "../types";
 import { unverifiedMarkerLabel } from "../display";
 import { UnverifiedMarker } from "./AgentVerificationBlock";
@@ -34,6 +34,15 @@ const HEAD_H = 20; // 批次标题行
 
 const nodeX = (col: number) => PAD + col * (NODE_W + COL_GAP);
 const nodeY = (row: number) => PAD + HEAD_H + row * (NODE_H + ROW_GAP);
+
+/** 边来源的中文措辞（迁移 4）。三者是**不同性质的事实**，不合并：
+ *  `scan` 是从代码里扫出来的依赖，`llm` 是集成时模型判定的，`tm` 是人工批次
+ *  顺序反推的。一条边可信到什么程度，取决于它是哪一种。 */
+const EDGE_SOURCE_LABEL: Record<string, string> = {
+  scan: "扫描（代码依赖）",
+  llm: "集成模型判定",
+  tm: "人工批次顺序派生",
+};
 
 /** 节点的稳定标识＝`name + batch_index`。**不能用 `repository_id`**：契约 §5.4
  *  勘正后它可为 null（catalog 无此名 / issue 域外重名歧义），多个未解析节点会
@@ -191,7 +200,15 @@ function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutio
   );
 }
 
-function DagCanvas({ dag, execution }: { dag: RepositoryPlanView["dag"]; execution: DagExecutionView | null }) {
+function DagCanvas({
+  dag,
+  graphEdges,
+  execution,
+}: {
+  dag: RepositoryPlanView["dag"];
+  graphEdges: PlanGraphEdgeView[] | null;
+  execution: DagExecutionView | null;
+}) {
   const { placed, batches, rows } = layout(dag.nodes);
   const width = PAD * 2 + batches.length * NODE_W + Math.max(0, batches.length - 1) * COL_GAP;
   const gridBottom = PAD + HEAD_H + rows * NODE_H + Math.max(0, rows - 1) * ROW_GAP;
@@ -200,6 +217,16 @@ function DagCanvas({ dag, execution }: { dag: RepositoryPlanView["dag"]; executi
    *  取先出现的那个位置——画一条到「其中一个」的线，好过整条边消失。 */
   const byId = new Map<string, Placed>();
   for (const p of placed) if (p.node.repository_id !== null && !byId.has(p.node.repository_id)) byId.set(p.node.repository_id, p);
+
+  /** 名字 → 边语义。**只索引 confirmed 边**：candidate 是待确认的扫描边，
+   *  没有进拓扑投影，拿它给一条已投影的连线加注就是把待定说成已定。 */
+  const pairKey = (fromName: string, toName: string) => `${fromName}\n${toName}`;
+  const semanticByPair = new Map<string, PlanGraphEdgeView>();
+  for (const edge of graphEdges ?? []) {
+    if (edge.status === "confirmed") semanticByPair.set(pairKey(edge.from, edge.to), edge);
+  }
+  const semanticsOf = (fromName: string, toName: string) =>
+    semanticByPair.get(pairKey(fromName, toName)) ?? null;
 
   const resolved = dag.edges
     .map((edge) => ({ from: byId.get(edge.from_repository_id), to: byId.get(edge.to_repository_id) }))
@@ -246,6 +273,10 @@ function DagCanvas({ dag, execution }: { dag: RepositoryPlanView["dag"]; executi
           ))}
 
           {resolved.map(({ from, to }) => {
+            // 边语义按**仓库名**匹配：graph_edges 两端存的是名字（与
+            // execution_batches 同口径），而这里的连线按 id 寻址。名字是两者
+            // 唯一的公共键。
+            const semantic = semanticsOf(from.node.name, to.node.name);
             const x1 = nodeX(from.col) + NODE_W;
             const y1 = nodeY(from.row) + NODE_H / 2;
             const x2 = nodeX(to.col);
@@ -271,10 +302,27 @@ function DagCanvas({ dag, execution }: { dag: RepositoryPlanView["dag"]; executi
                 key={key}
                 d={d}
                 fill="none"
+                // 带契约的边画实一点：它比一条纯执行顺序依赖多一份约定。
+                // 只用粗细区分，不新增颜色语义（页脚的配色约定不扩张）。
                 className="stroke-paper-dim/70"
-                strokeWidth={1.2}
+                strokeWidth={semantic?.interface ? 1.9 : 1.2}
                 markerEnd="url(#plan-dag-arrow)"
-              />
+              >
+                {semantic && (
+                  // 原生 <title>：hover 出提示，且进可访问性树。
+                  // 没有 interface 的边只报来源，不编一个契约名出来。
+                  <title>
+                    {[
+                      `${from.node.name} → ${to.node.name}`,
+                      semantic.interface ? `接口：${semantic.interface}` : null,
+                      semantic.agreement ? `约定：${semantic.agreement}` : null,
+                      `来源：${EDGE_SOURCE_LABEL[semantic.source] ?? semantic.source}`,
+                    ]
+                      .filter(Boolean)
+                      .join("\n")}
+                  </title>
+                )}
+              </path>
             );
           })}
         </svg>
@@ -347,6 +395,10 @@ export type PlanDagState =
   | {
       status: "ready";
       plan: RepositoryPlanView;
+      /** 迁移 4：该版快照的计划层边（含 interface/agreement）。**null = 没取到**
+       *  （老快照 graph_edges 为空 / 端点 404 / 回放模式），此时连线照画、只是
+       *  没有语义可标——这一层是给既有连线加注的，不是画图的前提。 */
+      graphEdges: PlanGraphEdgeView[] | null;
       anchorName: string;
       /** 锚点取自发现链候选块而非 issue 拓扑（草稿 issue 的范围尚未冻结）。
        *  这不是同一件事实，页脚必须说出来：拓扑锚点意味着范围已定，候选锚点不意味着。 */
@@ -389,6 +441,7 @@ export function PlanDagPanel({
       {state.status === "ready" && (
         <PlanDagSheet
           plan={state.plan}
+          graphEdges={state.graphEdges}
           anchorName={state.anchorName}
           anchorFromCandidate={state.anchorFromCandidate}
           execution={execution}
@@ -400,11 +453,13 @@ export function PlanDagPanel({
 
 function PlanDagSheet({
   plan,
+  graphEdges,
   anchorName,
   anchorFromCandidate,
   execution,
 }: {
   plan: RepositoryPlanView;
+  graphEdges: PlanGraphEdgeView[] | null;
   anchorName: string;
   anchorFromCandidate: boolean;
   execution: DagExecutionView | null;
@@ -455,7 +510,7 @@ function PlanDagSheet({
         </p>
       ) : (
         <div className="pt-3">
-          <DagCanvas dag={plan.dag} execution={execution} />
+          <DagCanvas dag={plan.dag} graphEdges={graphEdges} execution={execution} />
         </div>
       )}
 
@@ -534,7 +589,17 @@ function PlanDagSheet({
         )}
         <div>
           本图只画 depends_on 投影出的边；无法解析或落在批次之外的依赖名在服务端被丢弃、
-          <b>只进服务端日志</b>，故本图不等于完整依赖图。任务级 / 接口级依赖边（graph_edges）恒空，另立项。
+          <b>只进服务端日志</b>，故本图不等于完整依赖图。
+        </div>
+        {/* 「graph_edges 恒空」在单图方案合并之前是对的，现在那一列是活的：
+            边有了 status/source 与契约语义。取不到时如实说取不到，而不是
+            退回那句已经过时的断言。 */}
+        <div>
+          {graphEdges === null
+            ? "边的契约语义未取到（老快照未记 graph_edges，或该版本快照取用失败）：连线只画依赖方向，hover 无接口说明。"
+            : graphEdges.length === 0
+              ? "本快照的计划层图没有边：hover 无接口说明。"
+              : `已按计划层图为连线加注：${graphEdges.filter((e) => e.status === "confirmed" && e.interface).length} 条带接口契约（线更粗），hover 可看接口与约定。`}
         </div>
       </div>
     </div>

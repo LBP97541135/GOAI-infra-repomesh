@@ -1,26 +1,31 @@
 import { useEffect, useRef, useState } from "react";
+import type { Account } from "../api/auth";
 import type { OrganizationView } from "../api/contract";
 import { errText } from "../display";
 
 /** v2 侧栏（CONS-40 → B-2 接线）：工作区切换器 → 新建 issue → 四导航 → 设置底锚 → 身份块。
  *  信息架构见 frontend-prototype/DESIGN-DECISION-V2.md §2、原型 redesign-issue-centric.html。
  *
- *  身份块：控制台无登录门（裁决 2026-08-12），没有会话也就没有「当前账号」这个
- *  事实，故如实写死「默认管理员」——不冒充某个真实账号，也不留退出登录的死按钮。
+ *  身份块：登录门于 2026-08-14 恢复（human_control 面认本地账号会话），故这里
+ *  重新呈现真实账号——写死的「默认管理员」在有会话可读之后就成了冒充。
  *
  *  工作区 = Organization（契约 v0.3 §2 注册表）。`workspaces === null` 表示
  *  「数据源不适用或取用失败」（文案由 workspaceNote 说明），与空列表 []（注册表
  *  真的没有条目）是两个态，不合并。创建工作区 = 建组织 + 登记 Org Leader——
  *  leader 是期望态登记行，不是已拉起的运行时（§2.3 诚实边界）。 */
 
-export type NavKey = "issues" | "repositories" | "teams" | "agents" | "observe" | "settings";
-
-/** 无登录门下唯一的身份呈现（单用户本地部署）。多用户是另立项的能力。 */
-const IDENTITY_NAME = "默认管理员";
-const IDENTITY_ROLE = "管理员";
+export type NavKey =
+  | "issues"
+  | "reviews"
+  | "repositories"
+  | "teams"
+  | "agents"
+  | "observe"
+  | "settings";
 
 const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
   { key: "issues", label: "issue" },
+  { key: "reviews", label: "审核" },
   { key: "repositories", label: "仓库" },
   { key: "teams", label: "团队" },
   { key: "agents", label: "智能体" },
@@ -34,6 +39,13 @@ function NavIcon({ nav }: { nav: NavKey }) {
       <svg viewBox="0 0 24 24" {...common}>
         <circle cx="12" cy="12" r="9" />
         <circle cx="12" cy="12" r="3" />
+      </svg>
+    );
+  if (nav === "reviews")
+    return (
+      <svg viewBox="0 0 24 24" {...common}>
+        <path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
+        <path d="m8.5 12.5 2.5 2.5 4.5-5" />
       </svg>
     );
   if (nav === "repositories")
@@ -78,8 +90,10 @@ const navBase =
   "flex w-full items-center gap-2.5 rounded-hard border-l-2 px-2.5 py-[7px] text-left text-[13px]";
 
 export function SidebarV2({
+  account,
   nav,
   issueCount,
+  reviewCount,
   workspaces,
   workspaceNote,
   selectedWorkspaceId,
@@ -87,11 +101,15 @@ export function SidebarV2({
   onCreateWorkspace,
   onNavigate,
   onNewIssue,
+  onLogout,
   onToast,
 }: {
+  account: Account;
   nav: NavKey;
   /** issue 导航计数；null = 数据源未提供（不显示计数，不编造） */
   issueCount: number | null;
+  /** 待办审核数；null = 取不到（未登录/流断），此时不显示计数而不是显示 0 */
+  reviewCount: number | null;
   /** null = 不适用/取用失败（见 workspaceNote）；[] = 注册表为空 */
   workspaces: OrganizationView[] | null;
   workspaceNote: string | null;
@@ -103,6 +121,7 @@ export function SidebarV2({
   onCreateWorkspace: (name: string, idempotencyKey: string) => Promise<void>;
   onNavigate: (nav: NavKey) => void;
   onNewIssue: () => void;
+  onLogout: () => void;
   onToast: (text: string) => void;
 }) {
   const [dropOpen, setDropOpen] = useState(false);
@@ -147,7 +166,7 @@ export function SidebarV2({
     return () => document.removeEventListener("click", onDocClick);
   }, [dropOpen]);
 
-  const initial = IDENTITY_NAME.slice(0, 1);
+  const initial = (account.display_name || account.username).slice(0, 1);
 
   return (
     <aside className="relative flex w-[236px] flex-none flex-col overflow-y-auto border-r border-line bg-ink-deep px-3 pt-3.5 pb-3">
@@ -175,8 +194,11 @@ export function SidebarV2({
                 {initial}
               </span>
               <div className="min-w-0">
-                <div className="truncate text-[12.5px] text-tx">{IDENTITY_NAME}</div>
-                <div className="truncate font-mono text-[10.5px] text-tx2">本地部署 · 无登录门</div>
+                <div className="truncate text-[12.5px] text-tx">{account.display_name || account.username}</div>
+                <div className="truncate font-mono text-[10.5px] text-tx2">
+                  {account.username}
+                  {account.is_admin ? " · ADMIN" : ""}
+                </div>
               </div>
             </div>
 
@@ -259,6 +281,15 @@ export function SidebarV2({
                 )}
               </>
             )}
+            <button
+              className="flex w-full items-center gap-2 border-t border-line px-2.5 pt-2 pb-1 text-left text-[12.5px] text-salmon hover:bg-salmon/10"
+              onClick={() => {
+                setDropOpen(false);
+                onLogout();
+              }}
+            >
+              ［→ 退出登录
+            </button>
           </div>
         )}
       </div>
@@ -273,7 +304,8 @@ export function SidebarV2({
       <nav className="mt-2 grid gap-0.5">
         {NAV_ITEMS.map((item) => {
           const active = nav === item.key;
-          const count = item.key === "issues" ? issueCount : null;
+          const count =
+            item.key === "issues" ? issueCount : item.key === "reviews" ? reviewCount : null;
           return (
             <button
               key={item.key}
@@ -315,8 +347,10 @@ export function SidebarV2({
             {initial}
           </span>
           <div className="min-w-0">
-            <b className="block truncate text-[12px] text-tx">{IDENTITY_NAME}</b>
-            <small className="block truncate text-[10.5px] text-tx2">{IDENTITY_ROLE}</small>
+            <b className="block truncate text-[12px] text-tx">{account.display_name || account.username}</b>
+            <small className="block truncate text-[10.5px] text-tx2">
+              {account.is_admin ? "管理员" : "本地账户"}
+            </small>
           </div>
         </div>
       </div>

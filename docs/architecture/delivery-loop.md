@@ -45,7 +45,12 @@ ExecutionPlan completed
 
 ## Required configuration
 
-Set `REPOMESH_GITHUB_APP_ID`, `REPOMESH_GITHUB_APP_PRIVATE_KEY_FILE`, and
+RepoMesh uses one platform GitHub App. Each customer organization installs that App on its selected
+repositories; users do not create or enter a separate App ID. The token provider resolves the
+installation from each repository and issues short-lived tokens.
+
+Set `REPOMESH_GITHUB_APP_ID`, either `REPOMESH_GITHUB_APP_PRIVATE_KEY_FILE` (host process) or
+`REPOMESH_GITHUB_APP_PRIVATE_KEY_BASE64` (container Secret), and
 `REPOMESH_GITHUB_WEBHOOK_SECRET`. Configure named checks in
 `REPOMESH_DELIVERY_REQUIRED_CHECKS`, keep at least one required approval, then set
 `REPOMESH_DELIVERY_AUTO_ENABLED=true`. The reconciliation interval defaults to 60 seconds and is

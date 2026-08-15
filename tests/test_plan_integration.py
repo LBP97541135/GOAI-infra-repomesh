@@ -8,10 +8,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from repomesh.modules.repository_intelligence.application.confirmation import (  # noqa: E402
+from repomesh.modules.repository_intelligence.application.confirmation import (  # noqa: E402, I001
     ConfirmationResult,
     ConfirmationSummary,
     RepositoryPlan,
+)
+from repomesh.modules.repository_intelligence.application.dependency_graph import (  # noqa: E402, I001
+    GraphEdge as ScanEdge,
+    TopoResult,
 )
 from repomesh.modules.repository_intelligence.application.plan_integration import (  # noqa: E402
     ContractSpec,
@@ -20,6 +24,12 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     TaskNode,
     _parse_integrated_plan,
     _topological_batches,
+    normalize_plan,
+    plan_to_graph,
+)
+from repomesh.modules.repository_intelligence.contracts import (  # noqa: E402, I001
+    GraphEdge as PlanGraphEdge,
+    integration_method,
 )
 
 # ---------------------------------------------------------------------------
@@ -336,3 +346,370 @@ class TestPlanIntegrationService:
 
         # Ensure JSON serialisable
         json.dumps(d)
+
+
+class TestPlanToGraphBackfill:
+    """plan_to_graph must backfill a plan-layer graph whose projections
+    reproduce the plan fields — including manually approved batch order."""
+
+    @staticmethod
+    def _plan(
+        repos: list[str],
+        *,
+        depends_on: dict[str, tuple[str, ...]] | None = None,
+        batches: list[list[str]] | None = None,
+        contracts: list[ContractSpec] | None = None,
+    ) -> IntegratedPlan:
+        depends_on = depends_on or {}
+        dag = [
+            TaskNode(
+                repository=r,
+                instruction=f"change {r}",
+                depends_on=depends_on.get(r, ()),
+            )
+            for r in repos
+        ]
+        return IntegratedPlan(
+            engineering_spec="Test",
+            contracts=contracts or [],
+            task_dag=dag,
+            execution_batches=batches if batches is not None else [repos],
+        )
+
+    def test_tm_edges_preserve_explicit_batch_order(self):
+        """Approved batch order without dependency facts must survive the
+        graph round-trip via source=tm edges."""
+        plan = self._plan(["A", "B"], batches=[["A"], ["B"]])
+
+        graph = plan_to_graph(plan)
+        tm_edges = [e for e in graph.edges if e.source == "tm"]
+        assert tm_edges == [
+            PlanGraphEdge(from_="A", to="B", status="confirmed", source="tm")
+        ]
+
+        normalized = normalize_plan(plan, graph)
+        assert normalized.execution_batches == [["A"], ["B"]]
+        assert normalized.task_dag[1].depends_on == ("A",)
+
+    def test_three_batch_chain_reproduced(self):
+        plan = self._plan(["A", "B", "C"], batches=[["A"], ["B"], ["C"]])
+
+        normalized = normalize_plan(plan, plan_to_graph(plan))
+        assert normalized.execution_batches == [["A"], ["B"], ["C"]]
+        sources = {e.source for e in normalized.graph.edges}
+        assert sources == {"tm"}
+
+    def test_single_batch_adds_no_tm_edges(self):
+        plan = self._plan(["A", "B"], batches=[["A", "B"]])
+        graph = plan_to_graph(plan)
+        assert graph.edges == []
+        assert normalize_plan(plan, graph).execution_batches == [["A", "B"]]
+
+    def test_dependency_facts_win_over_conflicting_batches(self):
+        """A manual order contradicting a real dependency must not override
+        the dependency edge."""
+        plan = self._plan(
+            ["A", "B"],
+            depends_on={"A": ("B",)},  # B must finish before A
+            batches=[["A"], ["B"]],  # contradictory manual order
+        )
+
+        normalized = normalize_plan(plan, plan_to_graph(plan))
+        # Dependency fact kept, manual order dropped.
+        assert normalized.task_dag[0].depends_on == ("B",)
+        assert normalized.execution_batches == [["B"], ["A"]]
+
+    def test_contract_upgrades_dependency_edge_instead_of_duplicating(self):
+        plan = self._plan(
+            ["A", "B"],
+            depends_on={"B": ("A",)},
+            batches=[["A"], ["B"]],
+            contracts=[
+                ContractSpec(
+                    producer="A",
+                    consumer="B",
+                    interface="API",
+                    agreement="same key",
+                )
+            ],
+        )
+
+        graph = plan_to_graph(plan)
+        assert len(graph.edges) == 1
+        edge = graph.edges[0]
+        assert edge.from_ == "A" and edge.to == "B"
+        assert edge.status == "confirmed"
+        assert edge.interface == "API"
+        assert edge.agreement == "same key"
+        # Contracts projection picks up the upgraded edge.
+        assert [(c.producer, c.consumer, c.interface) for c in graph.contracts] == [
+            ("A", "B", "API")
+        ]
+
+    def test_contract_pair_not_in_dag_becomes_edge(self):
+        plan = self._plan(
+            ["A", "B"],
+            batches=[["A", "B"]],
+            contracts=[
+                ContractSpec(
+                    producer="A", consumer="B", interface="API", agreement="ok"
+                )
+            ],
+        )
+        graph = plan_to_graph(plan)
+        assert len(graph.edges) == 1
+        assert graph.edges[0].from_ == "A" and graph.edges[0].to == "B"
+
+
+class TestNormalizePlan:
+    def test_idempotent_when_already_consistent(self):
+        plan = IntegratedPlan(
+            engineering_spec="Spec",
+            contracts=[
+                ContractSpec(
+                    producer="A", consumer="B", interface="API", agreement="ok"
+                )
+            ],
+            task_dag=[
+                TaskNode(repository="A", instruction="do A"),
+                TaskNode(repository="B", instruction="do B", depends_on=("A",)),
+            ],
+            execution_batches=[["A"], ["B"]],
+        )
+        graph = plan_to_graph(plan)
+
+        normalized = normalize_plan(plan, graph)
+        assert normalized.execution_batches == [["A"], ["B"]]
+        assert normalized.contracts == plan.contracts
+        assert normalized.task_dag[1].depends_on == ("A",)
+        assert normalized.graph is graph
+
+    def test_rebuilds_projection_columns_from_graph(self):
+        """Graph wins over inconsistent plan fields."""
+        graph = plan_to_graph(
+            IntegratedPlan(
+                engineering_spec="Spec",
+                contracts=[],
+                task_dag=[
+                    TaskNode(repository="A", instruction=""),
+                    TaskNode(repository="B", instruction="", depends_on=("A",)),
+                    TaskNode(repository="C", instruction="", depends_on=("B",)),
+                ],
+                execution_batches=[["A"], ["B"], ["C"]],
+            )
+        )
+        plan = IntegratedPlan(
+            engineering_spec="Spec",
+            contracts=[],
+            task_dag=[
+                TaskNode(repository="A", instruction=""),
+                TaskNode(repository="B", instruction=""),
+                TaskNode(repository="C", instruction=""),
+            ],
+            execution_batches=[["A", "B", "C"]],  # wrong vs graph
+        )
+
+        normalized = normalize_plan(plan, graph)
+        assert normalized.execution_batches == [["A"], ["B"], ["C"]]
+        assert normalized.task_dag[2].depends_on == ("B",)
+
+    def test_carries_llm_metadata_keyed_by_repository(self):
+        plan = IntegratedPlan(
+            engineering_spec="Spec",
+            contracts=[],
+            task_dag=[
+                TaskNode(
+                    repository="A",
+                    instruction="do A",
+                    parallelizable_with=("C",),
+                    tests=("pytest",),
+                ),
+                TaskNode(repository="B", instruction="do B", depends_on=("A",)),
+            ],
+            execution_batches=[["A"], ["B"]],
+        )
+
+        normalized = normalize_plan(plan, plan_to_graph(plan))
+        node_a = next(t for t in normalized.task_dag if t.repository == "A")
+        assert node_a.instruction == "do A"
+        assert node_a.parallelizable_with == ("C",)
+        assert node_a.tests == ("pytest",)
+
+
+class StubGraphService:
+    """Duck-typed DependencyGraphService for graph-assisted integration."""
+
+    def __init__(
+        self,
+        edges: list[ScanEdge],
+        batches: list[list[str]],
+        cyclic_repos: list[str] | None = None,
+    ) -> None:
+        self._edges = edges
+        self._batches = batches
+        self._cyclic = cyclic_repos or []
+
+    def edges_in(self, repos: list[str]) -> list[ScanEdge]:
+        return self._edges
+
+    def topological_batches(self, repos: list[str]) -> TopoResult:
+        return TopoResult(batches=self._batches, cyclic_repos=self._cyclic)
+
+
+def _llm_response(*, task_dag: list[dict], contracts: list[dict] | None = None) -> str:
+    return json.dumps(
+        {
+            "engineering_spec": "Graph-assisted plan",
+            "contracts": contracts or [],
+            "task_dag": task_dag,
+        }
+    )
+
+
+class TestGraphAssistedIntegration:
+    def test_scan_edges_and_batches_are_authoritative(self):
+        graph_service = StubGraphService(
+            edges=[
+                ScanEdge(
+                    producer="A",
+                    consumer="B",
+                    confidence="confirmed",
+                    match_reason="exact",
+                )
+            ],
+            batches=[["A"], ["B"]],
+        )
+        llm = StubLLM(
+            _llm_response(
+                task_dag=[
+                    {"repository": "A", "instruction": "do A", "depends_on": []},
+                    # LLM claims no dependency; the graph supplies it.
+                    {"repository": "B", "instruction": "do B", "depends_on": []},
+                ]
+            )
+        )
+        service = PlanIntegrationService(llm, graph=graph_service)
+
+        plan = service.integrate(
+            "requirement",
+            _make_summary(_make_result("A"), _make_result("B")),
+        )
+
+        assert plan.execution_batches == [["A"], ["B"]]
+        assert plan.graph is not None
+        scan_edges = [e for e in plan.graph.edges if e.source == "scan"]
+        assert scan_edges == [
+            PlanGraphEdge(from_="A", to="B", status="confirmed", source="scan")
+        ]
+        assert plan.task_dag[1].depends_on == ("A",)
+        assert integration_method(plan.graph) == "graph_assisted"
+
+    def test_possible_edges_never_enter_batches(self):
+        graph_service = StubGraphService(
+            edges=[
+                ScanEdge(
+                    producer="A",
+                    consumer="B",
+                    confidence="confirmed",
+                    match_reason="exact",
+                ),
+                ScanEdge(
+                    producer="B",
+                    consumer="C",
+                    confidence="possible",
+                    match_reason="substring",
+                ),
+            ],
+            # World-layer topo includes the possible edge; the plan must not.
+            batches=[["A"], ["B"], ["C"]],
+        )
+        llm = StubLLM(
+            _llm_response(
+                task_dag=[
+                    {"repository": "A", "instruction": "do A", "depends_on": []},
+                    {"repository": "B", "instruction": "do B", "depends_on": []},
+                    {"repository": "C", "instruction": "do C", "depends_on": []},
+                ]
+            )
+        )
+        service = PlanIntegrationService(llm, graph=graph_service)
+
+        plan = service.integrate(
+            "requirement",
+            _make_summary(_make_result("A"), _make_result("B"), _make_result("C")),
+        )
+
+        # C is not serialised after B: the possible edge is candidate-only.
+        assert plan.execution_batches == [["A", "C"], ["B"]]
+        candidate = [e for e in plan.graph.edges if e.status == "candidate"]
+        assert candidate == [
+            PlanGraphEdge(from_="B", to="C", status="candidate", source="scan")
+        ]
+        node_c = next(t for t in plan.task_dag if t.repository == "C")
+        assert node_c.depends_on == ()
+
+    def test_contract_promotes_possible_edge_and_adds_interface(self):
+        graph_service = StubGraphService(
+            edges=[
+                ScanEdge(
+                    producer="B",
+                    consumer="C",
+                    confidence="possible",
+                    match_reason="substring",
+                )
+            ],
+            batches=[["B", "C"]],
+        )
+        llm = StubLLM(
+            _llm_response(
+                task_dag=[
+                    {"repository": "B", "instruction": "do B", "depends_on": []},
+                    {"repository": "C", "instruction": "do C", "depends_on": []},
+                ],
+                contracts=[
+                    {
+                        "producer": "B",
+                        "consumer": "C",
+                        "interface": "API",
+                        "agreement": "both sides",
+                    }
+                ],
+            )
+        )
+        service = PlanIntegrationService(llm, graph=graph_service)
+
+        plan = service.integrate(
+            "requirement",
+            _make_summary(_make_result("B"), _make_result("C")),
+        )
+
+        edge = [e for e in plan.graph.edges if e.from_ == "B" and e.to == "C"][0]
+        assert edge.status == "confirmed"
+        assert edge.source == "scan"  # promoted, provenance preserved
+        assert edge.interface == "API"
+        assert plan.execution_batches == [["B"], ["C"]]
+        assert [(c.producer, c.consumer) for c in plan.contracts] == [("B", "C")]
+        assert integration_method(plan.graph) == "graph_assisted"
+
+    def test_llm_depends_on_new_edge_enters_batches(self):
+        graph_service = StubGraphService(edges=[], batches=[["A", "B"]])
+        llm = StubLLM(
+            _llm_response(
+                task_dag=[
+                    {"repository": "A", "instruction": "do A", "depends_on": []},
+                    {"repository": "B", "instruction": "do B", "depends_on": ["A"]},
+                ]
+            )
+        )
+        service = PlanIntegrationService(llm, graph=graph_service)
+
+        plan = service.integrate(
+            "requirement",
+            _make_summary(_make_result("A"), _make_result("B")),
+        )
+
+        # The LLM-discovered dependency is a confirmed llm edge and therefore
+        # enters the execution batches even though the scan graph was empty.
+        assert plan.execution_batches == [["A"], ["B"]]
+        assert [e.source for e in plan.graph.edges] == ["llm"]
+        assert integration_method(plan.graph) == "llm_only"

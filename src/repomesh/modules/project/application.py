@@ -3,6 +3,7 @@ from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalReader,
+    AgentPrincipalStatus,
     AgentPrincipalView,
     AgentRole,
     RepositoryAgentTeamProvisioner,
@@ -22,7 +23,7 @@ from repomesh.modules.project.domain import (
     ProjectTopologyViolation,
     RepositoryTeam,
 )
-from repomesh.modules.project.ports import ProjectTopologyStore
+from repomesh.modules.project.ports import ProjectTopologyStore, TopologyPolicyDraftStore
 from repomesh.shared.idempotency import command_fingerprint
 
 
@@ -49,6 +50,16 @@ class CreateProjectAgentTopologyRequest:
     project_id: UUID
     organization_leader_id: UUID
     repository_teams: tuple[RepositoryTeamAssignment, ...]
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
+    human_grants: tuple[HumanProjectGrantInput, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CreateAutomaticProjectTopologyRequest:
+    organization_id: UUID
+    project_id: UUID
+    repository_ids: tuple[UUID, ...]
     execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
     required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
     human_grants: tuple[HumanProjectGrantInput, ...] = ()
@@ -176,10 +187,22 @@ class EnsureProjectAgentTopology:
       round inside a workspace that already exists);
     - one worker per repository, the smallest team that can be assigned a task.
 
-    ``execution_mode`` and ``required_checkpoints`` are left at their defaults
-    deliberately. A topology created on the way to work is not the place to
+    ``execution_mode`` and ``required_checkpoints`` are deliberately not
+    decided here. A topology created on the way to work is not the place to
     decide a project's supervision policy; the admin face
     (``POST /projects/topologies``) still owns that.
+
+    What that face now has is somewhere to leave the decision in advance, so
+    these three fields — the two above plus ``human_grants`` — are no longer
+    always the defaults: they are read from the project's
+    :class:`~repomesh.modules.project.domain.TopologyPolicyDraft` when one
+    exists. This class still decides nothing about supervision; it carries a
+    decision across a gap that used to swallow it, because the policy is set
+    minutes before there is a topology to hold it. A project with no draft
+    takes the same defaults it always did, byte for byte — the request this
+    class hands the creator is identical, fingerprint included, which is the
+    whole of the backward compatibility story for the projects already
+    materialized.
     """
 
     def __init__(
@@ -187,10 +210,12 @@ class EnsureProjectAgentTopology:
         store: ProjectTopologyStore,
         teams: RepositoryAgentTeamProvisioner,
         creator: CreateProjectAgentTopology,
+        policy_drafts: TopologyPolicyDraftStore,
     ) -> None:
         self._store = store
         self._teams = teams
         self._creator = creator
+        self._policy_drafts = policy_drafts
 
     async def ensure(
         self,
@@ -212,6 +237,15 @@ class EnsureProjectAgentTopology:
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
+
+        # Read before provisioning: a store that cannot answer should cost
+        # nothing, and provisioning mints agent principals that would outlive
+        # the failure. A draft whose grant names a repository the plan later
+        # dropped is *not* caught here — ``ProjectAgentTopology`` owns that
+        # rule because only it has the teams to check against, and it refuses
+        # loudly rather than dropping the grant (silently unwatching a project
+        # that someone asked to watch).
+        draft = await self._policy_drafts.get(project_id)
 
         assignments = []
         # Sorted so the same repository set produces the same team order, and
@@ -236,6 +270,125 @@ class EnsureProjectAgentTopology:
                 project_id=project_id,
                 organization_leader_id=organization_leader_id,
                 repository_teams=tuple(assignments),
+                # Spelled out even when there is no draft so the defaults are
+                # visible next to the thing that overrides them. The values are
+                # the field defaults, so the command fingerprint of a
+                # draft-less project is unchanged and a replay still matches.
+                execution_mode=(
+                    draft.execution_mode if draft else ProjectExecutionMode.AUTO
+                ),
+                required_checkpoints=(
+                    draft.required_checkpoints if draft else frozenset()
+                ),
+                # The draft already holds ``HumanProjectGrant``; it goes back
+                # out through the request's input type rather than sneaking a
+                # domain object past it, because the request type is what
+                # ``CreateProjectAgentTopology`` publishes and one caller
+                # bypassing it would make it a lie.
+                human_grants=(
+                    tuple(
+                        HumanProjectGrantInput(
+                            human_principal_id=grant.human_principal_id,
+                            role=grant.role,
+                            code_access=grant.code_access,
+                            control_actions=grant.control_actions,
+                            repository_id=grant.repository_id,
+                            path_patterns=grant.path_patterns,
+                        )
+                        for grant in draft.human_grants
+                    )
+                    if draft
+                    else ()
+                ),
             ),
             idempotency_key=f"{key}:topology",
+        )
+
+
+class CreateAutomaticProjectTopology:
+    """Resolve a project topology from the long-lived organization agent directory."""
+
+    def __init__(
+        self,
+        directory: AgentPrincipalReader,
+        creator: CreateProjectAgentTopology,
+    ) -> None:
+        self._directory = directory
+        self._creator = creator
+
+    async def execute(
+        self,
+        request: CreateAutomaticProjectTopologyRequest,
+        *,
+        idempotency_key: str,
+    ) -> ProjectAgentTopologyView:
+        if not request.repository_ids:
+            raise ProjectTopologyViolation("at least one repository is required")
+        if len(set(request.repository_ids)) != len(request.repository_ids):
+            raise ProjectTopologyViolation("project repositories must be unique")
+
+        principals = tuple(
+            item
+            for item in await self._directory.list_views()
+            if item.organization_id == request.organization_id
+            and item.status is AgentPrincipalStatus.ACTIVE
+        )
+        leaders = [
+            item for item in principals if item.role is AgentRole.ORGANIZATION_LEADER
+        ]
+        if len(leaders) != 1:
+            raise ProjectTopologyViolation(
+                "organization requires exactly one active organization leader"
+            )
+        organization_leader = leaders[0]
+
+        assignments = []
+        for repository_id in request.repository_ids:
+            repository_leaders = [
+                item
+                for item in principals
+                if item.role is AgentRole.REPOSITORY_LEADER
+                and item.repository_id == repository_id
+                and item.leader_agent_id == organization_leader.id
+            ]
+            if len(repository_leaders) != 1:
+                raise ProjectTopologyViolation(
+                    f"repository {repository_id} requires exactly one active repository leader"
+                )
+            repository_leader = repository_leaders[0]
+            workers = tuple(
+                sorted(
+                    (
+                        item.id
+                        for item in principals
+                        if item.role is AgentRole.WORKER
+                        and item.repository_id == repository_id
+                        and item.leader_agent_id == repository_leader.id
+                    ),
+                    key=str,
+                )
+            )
+            if not workers:
+                raise ProjectTopologyViolation(
+                    f"repository {repository_id} requires at least one active worker"
+                )
+            assignments.append(
+                RepositoryTeamAssignment(
+                    repository_id=repository_id,
+                    leader_agent_id=repository_leader.id,
+                    worker_agent_ids=workers,
+                )
+            )
+
+        return await self._creator.execute(
+            CreateProjectAgentTopologyRequest(
+                organization_id=request.organization_id,
+                project_id=request.project_id,
+                organization_leader_id=organization_leader.id,
+                repository_teams=tuple(assignments),
+                execution_mode=request.execution_mode,
+                required_checkpoints=request.required_checkpoints,
+                human_grants=request.human_grants,
+            ),
+            idempotency_key=idempotency_key,
         )

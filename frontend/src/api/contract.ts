@@ -198,8 +198,16 @@ export interface IssueDetailView extends IssueListItemView {
   teams: IssueTeamRef[];
   contract: DeliveryContractView | null;
   human_grants: HumanGrantView[];
-  /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest。本字段只用于提示「本 issue 设有
-   *  人工检查点」并链接 main 既有审核台，前端不得据此自造决策项 */
+  /** §3 + Q6：v0.2 决策夹**不含** ReviewRequest，前端不得据此自造决策项。
+   *
+   *  消费方是 issue 详情页的「监管策略」段（迁移 5-1a）：它与 `execution_mode` 一起
+   *  回答「这个项目会不会为某一步停下来等人」。⚠ 这一份是 `sorted()` 的**字母序**
+   *  （`api/read_models/service.py`），于是「交付」会排在「执行」前面——渲染前一律过
+   *  `display.ts` 的 `orderCheckpoints()` 按流程先后定序，别直接 `join`。
+   *
+   *  （原注写作「只用于提示『本 issue 设有人工检查点』并链接 main 既有审核台」，
+   *  那个按钮已被 5-1a 撤掉：它只在卡点非空时才出现，而活体库多数项目卡点为空，
+   *  于是最该说的「这个项目没有任何人工把关」一个字都没有。） */
   required_checkpoints: string[];
   /** 契约 v0.4 §3.3：发现链两个标量，**恒存在**（从未发起发现时为 1 / "idle"），
    *  与 §3.1 的 `step`/`step_state` 同源同实现。
@@ -1457,4 +1465,89 @@ export interface LogEntry {
 export interface LogEntriesResponse {
   logs: LogEntry[];
   next_cursor: string | null;
+
+/* ── 平台就绪与 Coding Agent 探测（迁移 3：main 装机向导的读面）─────────────
+   两个端点均无鉴权（后端 platform_setup.py 只给 onboard 挂了管理员判定）。 */
+
+/** 后端 `AuthStatus` 三态。`unknown` 是「探不出来」，**不是**「没认上」——
+ *  两者措辞必须分开，否则探测不到的适配器会被读成配置错误。 */
+export type AdapterAuthStatus = "authorized" | "unauthorized" | "unknown";
+
+export interface CodingAgentAdapterView {
+  adapter_id: string;
+  display_name: string;
+  installed: boolean;
+  /** 找到的可执行文件路径；未安装时 null */
+  executable: string | null;
+  auth_status: AdapterAuthStatus;
+  /** 探测细节原文（如 `binary_not_found`），原样展示不翻译 */
+  detail: string | null;
+  /** 清单登记的执行状态（`unverified` / `superseded_by_driver` / …） */
+  execution_status: string;
+  runnable_by_verified_driver: boolean;
+}
+
+export interface CodingAgentsProbe {
+  /** 恒为 `repomesh-api`：探的是 **API 进程所在环境**，不是 Runner 容器 */
+  environment: string;
+  note: string;
+  adapters: CodingAgentAdapterView[];
+}
+
+/** `/setup/status` 的九项检查。前五项（model / database / agentteams / matrix /
+ *  internal_auth）是 `ready_for_project_creation` 的必检项，其余四项不参与那个
+ *  判定——后端的 `required` 元组是唯一事实，前端不另立一套。 */
+export interface SetupStatusView {
+  ready_for_project_creation: boolean;
+  checks: Record<string, boolean>;
+  counts: { accounts: number; agents: number; repositories: number };
+  /** 未通过项的名字，后端已算好 */
+  next_actions: string[];
+}
+
+/* ── 计划层依赖图（迁移 4：main 单图方案的边语义）──────────────────────────
+   `GET /plans/{project_id}/versions/{version}` 的快照行。issue_id 即 project_id
+   （契约 v0.2 §0 语义等式），故详情页可以拿 issue_id 直接调。
+
+   **与 §5.4 `dag.edges` 的关系**：那是读模型按 `task_dag.depends_on` 投影出来的
+   连线，只有两端；这里是**同一批边的事实源**，多出 status/source 与契约语义
+   （interface/agreement）。两者应当一致——单图方案的验收红线就是「读图 ≡ 投影列」，
+   所以本类型只用来给既有连线**补语义**，不用来另画一张图。 */
+
+/** 边的确认状态。只有 confirmed 进拓扑投影；candidate 是扫描出的待确认边。 */
+export type GraphEdgeStatus = "candidate" | "confirmed";
+
+/** 边的来源：scan=世界层扫描、tm=人工批次顺序派生、llm=集成时模型给出。 */
+export type GraphEdgeSource = "scan" | "tm" | "llm";
+
+/** 计划层的一条边。**两端是仓库名不是 id**（与 `execution_batches` 同口径），
+ *  故与 §5.4 的节点匹配要按 `name`。序列化用 `from` 别名（`from` 是 TS 保留字
+ *  在对象字面量里无妨，但后端 alias 就是它）。 */
+export interface PlanGraphEdgeView {
+  from: string;
+  to: string;
+  status: GraphEdgeStatus;
+  source: GraphEdgeSource;
+  /** 契约接口名；无契约语义的纯依赖边为空串 */
+  interface: string;
+  agreement: string;
+}
+
+/** 一份计划快照。字段与 `PlanSnapshotView` 对齐，前端只消费其中几项。 */
+export interface PlanSnapshotView {
+  id: string;
+  project_id: string;
+  plan_version: number;
+  created_at: string;
+  created_by_agent_id: string | null;
+  engineering_spec: string;
+  contracts: Array<Record<string, unknown>>;
+  task_dag: Array<Record<string, unknown>>;
+  execution_batches: string[][];
+  graph_edges: PlanGraphEdgeView[];
+  execution_plan_id: string | null;
+  requirement_text: string | null;
+  /** `graph_assisted` = 图里有扫描出的边参与；`llm_only` = 全靠模型给。
+   *  null = 老快照没记这一列。 */
+  integration_method: string | null;
 }

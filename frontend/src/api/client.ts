@@ -1,6 +1,7 @@
 /** 读模型 API typed client。端点与 JSON 形状唯一来源：
  *  docs/contracts/ 交付读模型契约 v0.1/v0.2/v0.3 全部消费端点。 */
 import type {
+  CodingAgentsProbe,
   ConsoleAgentsResponse,
   ConsoleOrgScanRequest,
   ConsoleRepoScanRequest,
@@ -35,6 +36,7 @@ import type {
   OrganizationCreateRequest,
   OrganizationCreateResponse,
   OrganizationsResponse,
+  PlanSnapshotView,
   RepositoryPlanView,
   RollbackReceipt,
   RollbackRequest,
@@ -47,6 +49,7 @@ import type {
   TraceEventsResponse,
   TraceIssueGroupsResponse,
   TraceSessionsResponse,
+  SetupStatusView,
   UrlIdentification,
 } from "./contract";
 
@@ -166,6 +169,15 @@ export function createApiClient(config: ApiClientConfig) {
         `/console/agents${opts?.withRuntime === false ? "?with_runtime=false" : ""}`,
       ),
 
+    /** 平台就绪检查（迁移 3）。**无鉴权**：后端 `platform_setup.py` 只给 onboard
+     *  那条挂了管理员判定。`checks` 九项里只有前五项参与
+     *  `ready_for_project_creation`，那个判定由服务端做，前端不重算。 */
+    getSetupStatus: () => request<SetupStatusView>(config, "GET", `/setup/status`),
+
+    /** Coding Agent 探测（迁移 3）。探的是 **API 进程所在环境**，Runner 容器要
+     *  自己暴露 probe——响应里的 `note` 就是这句，原样透出不改写。 */
+    getCodingAgents: () => request<CodingAgentsProbe>(config, "GET", `/setup/coding-agents`),
+
     /** 添加仓库 A-0：**无鉴权、纯解析、无出站**（后端与读端点同一 router），
      *  所以可以随用户输入防抖直调，不必怕它打到平台上去。裸路径而非 console
      *  命名空间——它不是 console 专属的写面，是一次字符串判定。 */
@@ -269,6 +281,16 @@ export function createApiClient(config: ApiClientConfig) {
     /** §5.4：单仓 DAG·PLAN·SPEC 纸面 */
     getRepositoryPlan: (issueId: string, repositoryId: string) =>
       request<RepositoryPlanView>(config, "GET", `/issues/${issueId}/repositories/${repositoryId}/plan`),
+
+    /** 迁移 4：计划快照原件，用于给 §5.4 的连线补边语义（interface/agreement）
+     *  与 `integration_method`。**读端点无鉴权守卫**，走动作 token 通道即可。
+     *  404 = 该版本不存在（issue 从未规划，或版本号越界）。 */
+    getPlanSnapshot: (projectId: string, version: number) =>
+      request<PlanSnapshotView>(
+        config,
+        "GET",
+        `/plans/${encodeURIComponent(projectId)}/versions/${version}`,
+      ),
 
     getIssueDetail: (issueId: string) => request<IssueDetailView>(config, "GET", `/issues/${issueId}`),
 

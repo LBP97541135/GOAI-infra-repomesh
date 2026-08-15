@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 from uuid import UUID
 
-from repomesh.modules.repository_intelligence.application.plan_integration import IntegratedPlan
+from repomesh.modules.repository_intelligence.contracts import IntegratedPlan, PlanGraph
 from repomesh.modules.specification.contracts import CreateSpecificationCommand, SpecificationView
 from repomesh.modules.task_orchestration.contracts import (
     PlannedRepositoryTaskView,
@@ -59,6 +59,7 @@ class PlanSnapshotWriter(Protocol):
         contracts: list[dict],
         task_dag: list[dict],
         execution_batches: list[list[str]],
+        graph_edges: list[dict] | None = ...,
         integration_method: str | None = ...,
     ) -> None: ...
 
@@ -81,6 +82,17 @@ class PlanSnapshotWriter(Protocol):
         requirement_text: str | None = ...,
         integration_method: str | None = ...,
     ) -> object: ...
+
+
+class PlanSnapshotReader(Protocol):
+    """Read access to the latest immutable plan-layer snapshot.
+
+    The plan-layer graph is the single source of truth for replan impact
+    analysis: its confirmed edges drive the affected set exactly, unlike the
+    world-layer scan graph which also carries candidate edges.
+    """
+
+    async def get_latest_graph(self, project_id: UUID) -> PlanGraph | None: ...
 
 
 class TaskSupersederGateway(Protocol):
@@ -114,6 +126,7 @@ class HandoffDocGenerator(Protocol):
 __all__ = [
     "ExecutionPlanStarter",
     "HandoffDocGenerator",
+    "PlanSnapshotReader",
     "PlanSnapshotWriter",
     "ProjectTaskReader",
     "SpecificationCreator",

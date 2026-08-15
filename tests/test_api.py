@@ -1,4 +1,6 @@
 import asyncio
+from dataclasses import replace
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from repomesh.modules.agent_directory.application import (
     CreateRepositoryAgentTeamRequest,
 )
 from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_runtime.ports.agent_team import TeamRuntimeRef
 from repomesh.settings import get_settings
 
 
@@ -19,6 +22,26 @@ def test_health(application_container: ApplicationContainer) -> None:
     with TestClient(create_app(application_container)) as client:
         assert client.get("/health/live").json() == {"status": "ok"}
         assert client.get("/health/ready").json() == {"status": "ready"}
+
+
+def test_first_run_setup_status_and_coding_agent_probe(
+    application_container: ApplicationContainer,
+) -> None:
+    with TestClient(create_app(application_container)) as client:
+        status = client.get("/api/v1/setup/status")
+        assert status.status_code == 200
+        assert status.json()["counts"] == {
+            "accounts": 0,
+            "agents": 0,
+            "repositories": 0,
+        }
+        assert "administrator" in status.json()["next_actions"]
+
+        probes = client.get("/api/v1/setup/coding-agents")
+        assert probes.status_code == 200
+        adapters = {item["adapter_id"]: item for item in probes.json()["adapters"]}
+        assert {"claude-code", "codex", "kimi"}.issubset(adapters)
+        assert "auth_status" in adapters["codex"]
 
 
 def test_local_account_bootstrap_login_and_session_authentication(
@@ -65,6 +88,207 @@ def test_local_account_bootstrap_login_and_session_authentication(
             client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code
             == 401
         )
+
+
+def test_account_creation_separates_bad_input_conflict_and_permission(
+    application_container: ApplicationContainer,
+) -> None:
+    """One LocalAuthenticationError used to become 403 for all three.
+
+    The form on the other end has to know whether to highlight a field, say
+    the name is taken, or say the operator may not do this at all.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={
+                "username": "admin",
+                "password": "strong-password-123",
+                "display_name": "Administrator",
+            },
+        )
+        admin_headers = {
+            "Authorization": "Bearer "
+            + client.post(
+                "/api/v1/auth/login",
+                json={"username": "admin", "password": "strong-password-123"},
+            ).json()["access_token"]
+        }
+
+        short_password = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={"username": "reviewer", "password": "short", "display_name": "Reviewer"},
+        )
+        assert short_password.status_code == 422
+        assert short_password.json()["detail"] == "password must contain at least 12 characters"
+
+        blank_display_name = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={"username": "reviewer", "password": "reviewer-password-123", "display_name": " "},
+        )
+        assert blank_display_name.status_code == 422
+
+        created = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={
+                "username": "reviewer",
+                "password": "reviewer-password-123",
+                "display_name": "Reviewer",
+            },
+        )
+        assert created.status_code == 201
+
+        duplicate = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={
+                "username": "REVIEWER",
+                "password": "reviewer-password-456",
+                "display_name": "Twin",
+            },
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "username already exists"
+
+        reviewer_headers = {
+            "Authorization": "Bearer "
+            + client.post(
+                "/api/v1/auth/login",
+                json={"username": "reviewer", "password": "reviewer-password-123"},
+            ).json()["access_token"]
+        }
+        forbidden = client.post(
+            "/api/v1/auth/accounts",
+            headers=reviewer_headers,
+            json={
+                "username": "other",
+                "password": "another-password-123",
+                "display_name": "Other",
+            },
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "local administrator permission is required"
+
+
+def test_bootstrap_rejects_weak_password_as_input_not_conflict(
+    application_container: ApplicationContainer,
+) -> None:
+    with TestClient(create_app(application_container)) as client:
+        weak = client.post(
+            "/api/v1/auth/bootstrap",
+            json={"username": "admin", "password": "short", "display_name": "Administrator"},
+        )
+        assert weak.status_code == 422
+        assert weak.json()["detail"] == "password must contain at least 12 characters"
+
+
+def test_login_with_malformed_username_still_answers_401(
+    application_container: ApplicationContainer,
+) -> None:
+    """Regression pin for the error-typing split.
+
+    ``login`` normalizes the username through the same validator that now
+    raises LocalAccountValidationError. Because that type subclasses
+    LocalAuthenticationError, the login handler still catches it and answers
+    401 — a sibling type would have escaped the handler and become a 500.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={
+                "username": "admin",
+                "password": "strong-password-123",
+                "display_name": "Administrator",
+            },
+        )
+        refused = client.post(
+            "/api/v1/auth/login",
+            json={"username": "no spaces allowed", "password": "strong-password-123"},
+        )
+        assert refused.status_code == 401
+        assert refused.json()["detail"] == "username format is invalid"
+
+
+def test_admin_can_compose_agentteams_team_from_existing_agents(
+    application_container: ApplicationContainer,
+) -> None:
+    organization_id = uuid4()
+    repository_id = uuid4()
+
+    async def create_agents():
+        organization_leader = await CreateAgent(application_container.agent_directory).execute(
+            CreateAgentRequest(
+                organization_id=organization_id,
+                role=AgentRole.ORGANIZATION_LEADER,
+                agentteams_resource_name="manual-team-org-leader",
+            ),
+            idempotency_key="manual-team-org-leader",
+        )
+        return await CreateRepositoryAgentTeam(application_container.agent_directory).execute(
+            CreateRepositoryAgentTeamRequest(
+                organization_id=organization_id,
+                organization_leader_id=organization_leader.principal.id,
+                repository_id=repository_id,
+                leader_agentteams_resource_name="manual-team-repo-leader",
+                worker_agentteams_resource_names=("manual-team-worker",),
+            ),
+            idempotency_key="manual-team-agents",
+        )
+
+    team_agents = asyncio.run(create_agents())
+
+    class ControlPlane:
+        projection = None
+
+        async def ensure_team(self, projection, *, idempotency_key: str):
+            self.projection = projection
+            return TeamRuntimeRef(
+                name=projection.name,
+                phase="Ready",
+                team_room_id="!manual:matrix.local",
+                leader_room_id="!leader:matrix.local",
+                leader_name=projection.members[0].name,
+                ready_workers=len(projection.members) - 1,
+                total_workers=len(projection.members) - 1,
+            )
+
+    control_plane = ControlPlane()
+    container = replace(application_container, agent_team_control_plane=control_plane)
+    with TestClient(create_app(container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={"username": "admin", "password": "strong-password-123", "display_name": "Admin"},
+        )
+        client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "strong-password-123"},
+        )
+        response = client.post(
+            "/api/v1/agent-teams",
+            json={
+                "organization_id": str(organization_id),
+                "name": "saleor_backend",
+                "description": "Saleor backend team",
+                "leader_agent_id": str(team_agents.leader.id),
+                "member_agent_ids": [str(team_agents.workers[0].id)],
+                "idempotency_key": "manual-team:saleor-backend",
+            },
+        )
+
+    assert response.status_code == 201
+    assert response.json()["team"]["name"] == "saleor_backend"
+    assert response.json()["team"]["phase"] == "Ready"
+    assert response.json()["leader"]["id"] == str(team_agents.leader.id)
+    assert response.json()["members"][0]["id"] == str(team_agents.workers[0].id)
+    assert [member.name for member in control_plane.projection.members] == [
+        "manual-team-repo-leader",
+        "manual-team-worker",
+    ]
 
 
 def test_authenticated_project_mode_and_checkpoint_decision_api(
@@ -677,3 +901,452 @@ def test_single_repo_scan_failures_do_not_echo_the_underlying_error(
     assert response.status_code == 502
     assert response.json()["detail"] == "repository scan failed"
     assert "10.0.0.7" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# The supervision-policy draft: PUT / GET / DELETE
+# ---------------------------------------------------------------------------
+
+
+def _admin_headers(client: TestClient) -> dict[str, str]:
+    client.post(
+        "/api/v1/auth/bootstrap",
+        json={
+            "username": "admin",
+            "password": "strong-password-123",
+            "display_name": "Administrator",
+        },
+    )
+    return {
+        "Authorization": "Bearer "
+        + client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "strong-password-123"},
+        ).json()["access_token"]
+    }
+
+
+def _member(
+    client: TestClient, admin_headers: dict[str, str], username: str
+) -> tuple[dict, dict[str, str]]:
+    password = f"{username}-password-123"
+    account = client.post(
+        "/api/v1/auth/accounts",
+        headers=admin_headers,
+        json={
+            "username": username,
+            "password": password,
+            "display_name": username.title(),
+        },
+    ).json()
+    headers = {
+        "Authorization": "Bearer "
+        + client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        ).json()["access_token"]
+    }
+    return account, headers
+
+
+def _grant(human_principal_id: str, **overrides: object) -> dict:
+    grant = {
+        "human_principal_id": human_principal_id,
+        "role": "project_supervisor",
+        "code_access": "read",
+        "control_actions": ["view_decisions", "approve_checkpoint", "request_changes"],
+        "repository_id": None,
+        "path_patterns": [],
+    }
+    grant.update(overrides)
+    return grant
+
+
+def _draft_body(human_principal_id: str, **overrides: object) -> dict:
+    body = {
+        "execution_mode": "supervised",
+        "required_checkpoints": ["repository_scope", "delivery"],
+        "human_grants": [_grant(human_principal_id)],
+    }
+    body.update(overrides)
+    return body
+
+
+def _instant(value: str) -> datetime:
+    """Compare two timestamps as instants, not as strings.
+
+    The endpoint answers out of the record it just wrote, so the first PUT
+    returns the aware ``datetime`` it stored (``...Z``) while the second returns
+    the one SQLite read back, which carries no offset — the same instant spelled
+    two ways, and only under the test database. Postgres holds these columns as
+    ``timestamptz`` and hands both back aware, so normalising here hides a
+    fixture artefact rather than a behaviour.
+    """
+
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+
+
+def test_policy_draft_is_overwritten_read_and_withdrawn(
+    application_container: ApplicationContainer,
+) -> None:
+    """The lifecycle of the one supervision intent a requirement holds.
+
+    ``PUT`` twice is 200 twice — whole-document overwrite, no idempotency key —
+    and the pair of timestamps carries the distinction the store exists to keep:
+    who first decided this project needed watching stays put, when it was last
+    touched moves.
+    """
+
+    project_id = uuid4()
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, reviewer_headers = _member(client, admin_headers, "reviewer")
+        _, outsider_headers = _member(client, admin_headers, "outsider")
+
+        assert (
+            client.get(
+                f"/api/v1/projects/{project_id}/policy-draft", headers=admin_headers
+            ).status_code
+            == 404
+        )
+
+        first = client.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(reviewer["id"]),
+        )
+        assert first.status_code == 200
+        assert first.json()["execution_mode"] == "supervised"
+        assert sorted(first.json()["required_checkpoints"]) == [
+            "delivery",
+            "repository_scope",
+        ]
+
+        second = client.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(reviewer["id"], required_checkpoints=["delivery"]),
+        )
+        assert second.status_code == 200
+        assert second.json()["required_checkpoints"] == ["delivery"]
+        assert _instant(second.json()["created_at"]) == _instant(first.json()["created_at"])
+        assert _instant(second.json()["updated_at"]) > _instant(first.json()["updated_at"])
+        assert second.json()["created_by"] == first.json()["created_by"]
+
+        # Readable by the same rule as GET .../topology: administrators, or the
+        # people the policy itself names.
+        granted = client.get(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=reviewer_headers
+        )
+        assert granted.status_code == 200
+        assert granted.json()["human_grants"][0]["human_principal_id"] == reviewer["id"]
+        refused = client.get(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=outsider_headers
+        )
+        assert refused.status_code == 403
+        assert refused.json()["detail"] == "human project membership is required"
+
+        withdrawn = client.delete(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=admin_headers
+        )
+        assert withdrawn.status_code == 204
+        again = client.delete(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=admin_headers
+        )
+        assert again.status_code == 404
+        assert again.json()["detail"] == "project policy draft does not exist"
+
+
+def test_policy_draft_writes_are_admin_only(
+    application_container: ApplicationContainer,
+) -> None:
+    """Setting a policy is the one thing the console's shared token must not reach.
+
+    The whole design rests on it: materialization keeps its own guard and merely
+    *reads* what an admin left, so a write that leaked to any authenticated
+    session — or to none — would put the policy back inside the blast radius of
+    the shared action token.
+    """
+
+    project_id = uuid4()
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, reviewer_headers = _member(client, admin_headers, "reviewer")
+
+        forbidden = client.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            headers=reviewer_headers,
+            json=_draft_body(reviewer["id"]),
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "local administrator permission is required"
+        assert (
+            client.delete(
+                f"/api/v1/projects/{project_id}/policy-draft", headers=reviewer_headers
+            ).status_code
+            == 403
+        )
+
+    with TestClient(create_app(application_container)) as anonymous:
+        unauthenticated = anonymous.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            json=_draft_body(str(uuid4())),
+        )
+        assert unauthenticated.status_code == 401
+        assert unauthenticated.json()["detail"] == "local authentication is required"
+
+
+def test_policy_draft_runs_the_single_grant_rules_by_building_a_real_grant(
+    application_container: ApplicationContainer,
+) -> None:
+    """The two refusals below only happen if the endpoint builds a HumanProjectGrant.
+
+    ``assert_supervision_policy`` takes a Protocol and reads two fields off each
+    grant, so forwarding the request rows straight to it would type-check, pass,
+    and store a draft that materialization later refuses — the exact
+    two-verdicts-on-one-policy failure the shared module was cut out to prevent.
+    The four single-grant rules live in ``HumanProjectGrant.__post_init__`` and
+    run only when the object is really constructed; these are the regression
+    pins for that, and the sentences are the domain's own rather than Pydantic's.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, _ = _member(client, admin_headers, "reviewer")
+
+        unscoped_supervisor = client.put(
+            f"/api/v1/projects/{uuid4()}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(
+                reviewer["id"],
+                human_grants=[_grant(reviewer["id"], role="repository_supervisor")],
+            ),
+        )
+        assert unscoped_supervisor.status_code == 422
+        assert (
+            unscoped_supervisor.json()["detail"]
+            == "repository supervisor requires repository scope"
+        )
+
+        no_actions = client.put(
+            f"/api/v1/projects/{uuid4()}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(
+                reviewer["id"],
+                human_grants=[_grant(reviewer["id"], control_actions=[])],
+            ),
+        )
+        assert no_actions.status_code == 422
+        assert no_actions.json()["detail"] == "human grant requires control actions"
+
+        unknown_account = client.put(
+            f"/api/v1/projects/{uuid4()}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(str(uuid4())),
+        )
+        assert unknown_account.status_code == 422
+        assert unknown_account.json()["detail"] == "human grant account does not exist"
+
+
+def test_policy_draft_reports_each_broken_policy_rule_verbatim(
+    application_container: ApplicationContainer,
+) -> None:
+    """A draft is judged now by the same function that will judge it at materialization."""
+
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, _ = _member(client, admin_headers, "reviewer")
+
+        cases = (
+            (
+                {
+                    "execution_mode": "auto",
+                    "required_checkpoints": ["delivery"],
+                    "human_grants": [],
+                },
+                "automatic projects cannot require human checkpoints",
+            ),
+            (
+                {
+                    "execution_mode": "supervised",
+                    "required_checkpoints": ["delivery"],
+                    "human_grants": [],
+                },
+                "human-controlled projects require a human grant",
+            ),
+            (
+                {
+                    "execution_mode": "supervised",
+                    "required_checkpoints": [],
+                    "human_grants": [_grant(reviewer["id"])],
+                },
+                "human-controlled projects require checkpoints",
+            ),
+            (
+                {
+                    "execution_mode": "manual_controlled",
+                    "required_checkpoints": [
+                        "repository_scope",
+                        "specification",
+                        "execution",
+                        "validation",
+                        "delivery",
+                    ],
+                    "human_grants": [_grant(reviewer["id"])],
+                },
+                "manual-controlled projects require every human checkpoint",
+            ),
+            (
+                {
+                    "execution_mode": "supervised",
+                    "required_checkpoints": ["delivery"],
+                    "human_grants": [_grant(reviewer["id"]), _grant(reviewer["id"])],
+                },
+                "duplicate human grant scope",
+            ),
+        )
+        for body, detail in cases:
+            refused = client.put(
+                f"/api/v1/projects/{uuid4()}/policy-draft",
+                headers=admin_headers,
+                json=body,
+            )
+            assert refused.status_code == 422, detail
+            assert refused.json()["detail"] == detail
+
+
+# ---------------------------------------------------------------------------
+# "already has a topology" is a conflict, on both endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_both_topology_endpoints_answer_409_for_a_project_that_already_has_one(
+    application_container: ApplicationContainer,
+) -> None:
+    """One defect in two copies, plus the control cases that keep the fix honest.
+
+    ``ProjectTopologyConflict`` subclasses ``ProjectTopologyError``, so a lone
+    ``except ProjectTopologyError`` gave "this project already has a topology"
+    and "your request is wrong" the same 422 — telling a caller who cannot fix
+    anything to go fix their request. The subclass clause has to come first, and
+    the automatic endpoint carried its own copy of the defect because it
+    delegates to the same creator. The two 422 assertions are what fails if the
+    pair is ever collapsed or reversed.
+    """
+
+    organization_id = uuid4()
+    repository_id = uuid4()
+
+    async def agents():
+        leader = await CreateAgent(application_container.agent_directory).execute(
+            CreateAgentRequest(
+                organization_id=organization_id,
+                role=AgentRole.ORGANIZATION_LEADER,
+                agentteams_resource_name="conflict-org-leader",
+            ),
+            idempotency_key="conflict-org-leader",
+        )
+        team = await CreateRepositoryAgentTeam(application_container.agent_directory).execute(
+            CreateRepositoryAgentTeamRequest(
+                organization_id=organization_id,
+                organization_leader_id=leader.principal.id,
+                repository_id=repository_id,
+                leader_agentteams_resource_name="conflict-repo-leader",
+                worker_agentteams_resource_names=("conflict-worker",),
+            ),
+            idempotency_key="conflict-repo-team",
+        )
+        return leader.principal, team
+
+    organization_leader, team = asyncio.run(agents())
+
+    def explicit(project_id, key: str, **overrides: object) -> dict:
+        body = {
+            "organization_id": str(organization_id),
+            "project_id": str(project_id),
+            "organization_leader_id": str(organization_leader.id),
+            "repository_teams": [
+                {
+                    "repository_id": str(repository_id),
+                    "leader_agent_id": str(team.leader.id),
+                    "worker_agent_ids": [str(team.workers[0].id)],
+                }
+            ],
+            "idempotency_key": key,
+        }
+        body.update(overrides)
+        return body
+
+    def automatic(project_id, key: str, **overrides: object) -> dict:
+        body = {
+            "organization_id": str(organization_id),
+            "project_id": str(project_id),
+            "repository_ids": [str(repository_id)],
+            "idempotency_key": key,
+        }
+        body.update(overrides)
+        return body
+
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+
+        explicit_project = uuid4()
+        created = client.post(
+            "/api/v1/projects/topologies",
+            headers=admin_headers,
+            json=explicit(explicit_project, "explicit-first"),
+        )
+        assert created.status_code == 201
+        # A fresh idempotency key, so this is the store refusing a second
+        # topology for the project rather than the replay path answering.
+        repeated = client.post(
+            "/api/v1/projects/topologies",
+            headers=admin_headers,
+            json=explicit(explicit_project, "explicit-second"),
+        )
+        assert repeated.status_code == 409
+        assert repeated.json()["detail"] == "project topology already exists"
+
+        malformed = client.post(
+            "/api/v1/projects/topologies",
+            headers=admin_headers,
+            json=explicit(
+                uuid4(),
+                "explicit-violation",
+                execution_mode="auto",
+                required_checkpoints=["delivery"],
+            ),
+        )
+        assert malformed.status_code == 422
+        assert malformed.json()["detail"] == "automatic projects cannot require human checkpoints"
+
+        automatic_project = uuid4()
+        auto_created = client.post(
+            "/api/v1/projects/automatic-topologies",
+            headers=admin_headers,
+            json=automatic(automatic_project, "automatic-first"),
+        )
+        assert auto_created.status_code == 201
+        auto_repeated = client.post(
+            "/api/v1/projects/automatic-topologies",
+            headers=admin_headers,
+            json=automatic(automatic_project, "automatic-second"),
+        )
+        assert auto_repeated.status_code == 409
+        assert auto_repeated.json()["detail"] == "project topology already exists"
+
+        auto_malformed = client.post(
+            "/api/v1/projects/automatic-topologies",
+            headers=admin_headers,
+            json=automatic(
+                uuid4(),
+                "automatic-violation",
+                execution_mode="auto",
+                required_checkpoints=["delivery"],
+            ),
+        )
+        assert auto_malformed.status_code == 422
+        assert (
+            auto_malformed.json()["detail"]
+            == "automatic projects cannot require human checkpoints"
+        )

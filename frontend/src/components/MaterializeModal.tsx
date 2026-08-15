@@ -1,5 +1,6 @@
 import { Modal } from "./Modal";
 import type { ApprovalPrincipal } from "./DiscoveryApproval";
+import { PolicyDigest, type PolicyDraftState } from "./SupervisionPolicyCard";
 
 /** 「物化并开工」确认弹窗（批次 C-3，设计定稿 `full-loop-gui-design-20260812.md` ③）。
  *
@@ -20,6 +21,7 @@ export function MaterializeModal({
   taskCount,
   teamCount,
   unresolvedCount,
+  policy,
   principal,
   submitting,
   errorText,
@@ -35,6 +37,10 @@ export function MaterializeModal({
   teamCount: number | null;
   /** 计划里 catalog 查无仓库的节点数（>0 时 M 与实际建队数可能不等） */
   unresolvedCount: number;
+  /** 监管策略草稿（迁移 5-1b · F5，设计文档 §3.3）。**这一行的理由不是「顺便也显示
+   *  一下」**：按下这个按钮之后档案就锁死了（全仓没有更新拓扑的端点），所以最后一次
+   *  能看到自己选了什么的机会必须在按钮旁边。 */
+  policy: PolicyDraftState;
   principal: ApprovalPrincipal;
   submitting: boolean;
   /** 服务端 detail 原文（409 等）。**不翻译不软化**，原样贴出来 */
@@ -83,6 +89,46 @@ export function MaterializeModal({
           <b className="text-cream">{teamCount === null ? "若干" : `${teamCount} 个`}团队</b>
           （每仓一队，各带 teamRoom 与 leaderDM 双房间）。任务按计划的执行批次自行转起。
         </p>
+
+        {/* ── 监管策略摘要（§3.3）───────────────────────────────────────────
+            物化会顺手建出项目档案（`EnsureProjectAgentTopology`），档案的三个策略
+            字段就取自这份草稿；建完之后全仓**没有任何更新拓扑的端点**，所以这是
+            用户最后一次能看见自己选了什么的时刻。取不到时如实说取不到，不拿
+            「大概是全自动」顶替——猜错的那一半会把「设过了」说成「没设过」。 */}
+        <div className="mt-3 rounded-hard border border-line bg-panel-2 px-3 py-2.5">
+          <span className="block font-mono text-[9.5px] tracking-[0.1em] text-tx2">监管策略</span>
+          <div className="mt-1">
+            {policy.kind === "set" ? (
+              <PolicyDigest draft={policy.draft} />
+            ) : policy.kind === "unset" ? (
+              // 与卡片同一句话，同一个语气：这是陈述不是警告，全自动是默认值不是故障
+              <p className="text-[12px] leading-[1.75] text-tx">
+                <b className="text-cream">未设定</b>——本次将以全自动运行，没有任何人工卡点，
+                这个需求不会产生任何审核待办。
+                <span className="block text-[11px] text-tx3">
+                  要改还来得及：取消本弹窗，用上方「监管策略」卡片的「配置」。
+                </span>
+              </p>
+            ) : policy.kind === "sealed" ? (
+              <p className="text-[12px] leading-[1.7] text-tx3">
+                本需求已有项目档案，本次不再读草稿——策略以下方「监管策略」段显示的那份为准。
+              </p>
+            ) : policy.kind === "loading" ? (
+              <p className="text-[12px] text-tx2">读取中…</p>
+            ) : (
+              <p className="text-[12px] leading-[1.7] text-tx3">
+                这一次没取到策略草稿（
+                {policy.kind === "unauthenticated" || policy.kind === "forbidden"
+                  ? policy.detail
+                  : policy.kind === "error"
+                    ? policy.message
+                    : "拓扑状态未落定"}
+                ）。<b className="text-tx2">界面不猜</b>：物化仍会按服务端那边真实存在的草稿建档案，
+                而这里说不出那是哪一份。
+              </p>
+            )}
+          </div>
+        </div>
 
         {/* 不可逆提示：设计定稿把这一步与 merge 审批并列为两个不可逆感知点。
             措辞不许诺「可以撤销」——界面没有反向按钮，退出动线是另一件事。 */}

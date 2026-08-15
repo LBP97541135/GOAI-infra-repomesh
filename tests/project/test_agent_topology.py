@@ -19,6 +19,8 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
 )
 from repomesh.modules.project import (
     CodeAccessLevel,
+    CreateAutomaticProjectTopology,
+    CreateAutomaticProjectTopologyRequest,
     CreateProjectAgentTopology,
     CreateProjectAgentTopologyRequest,
     HumanAuthorizationRequest,
@@ -33,6 +35,62 @@ from repomesh.modules.project import (
 )
 from repomesh.modules.project.domain import ProjectTopologyConflict, ProjectTopologyViolation
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
+
+
+@pytest.mark.asyncio
+async def test_automatic_topology_resolves_long_lived_repository_team() -> None:
+    directory, organization_id, organization_leader, teams = await build_agents(1)
+    store = InMemoryProjectTopologyStore()
+    service = CreateAutomaticProjectTopology(
+        directory,
+        CreateProjectAgentTopology(directory, store),
+    )
+
+    first = await service.execute(
+        CreateAutomaticProjectTopologyRequest(
+            organization_id=organization_id,
+            project_id=uuid4(),
+            repository_ids=(teams[0].repository_id,),
+        ),
+        idempotency_key="automatic-project-one",
+    )
+    second = await service.execute(
+        CreateAutomaticProjectTopologyRequest(
+            organization_id=organization_id,
+            project_id=uuid4(),
+            repository_ids=(teams[0].repository_id,),
+        ),
+        idempotency_key="automatic-project-two",
+    )
+
+    first_team = first.repository_teams[0]
+    second_team = second.repository_teams[0]
+    assert first.organization_leader_id == organization_leader.id
+    assert first_team.leader_agent_id == teams[0].leader.id
+    assert first_team.worker_agent_ids == tuple(
+        sorted((worker.id for worker in teams[0].workers), key=str)
+    )
+    assert first_team.agentteams_team_name == second_team.agentteams_team_name
+    assert first_team.agentteams_team_name == f"rm-team-{teams[0].repository_id.hex}"
+
+
+@pytest.mark.asyncio
+async def test_automatic_topology_rejects_repository_without_registered_team() -> None:
+    directory, organization_id, _, _ = await build_agents(1)
+    service = CreateAutomaticProjectTopology(
+        directory,
+        CreateProjectAgentTopology(directory, InMemoryProjectTopologyStore()),
+    )
+
+    with pytest.raises(ProjectTopologyViolation, match="repository leader"):
+        await service.execute(
+            CreateAutomaticProjectTopologyRequest(
+                organization_id=organization_id,
+                project_id=uuid4(),
+                repository_ids=(uuid4(),),
+            ),
+            idempotency_key="automatic-missing-repository",
+        )
 
 
 @pytest.mark.asyncio
