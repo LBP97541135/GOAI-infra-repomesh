@@ -31,3 +31,6 @@ htmlcov/
 
 # 本机凭据文件，绝不入库
 admininfo.txt
+# 本地生成物（演示产物、per-project 工作目录）
+output/
+projects/
