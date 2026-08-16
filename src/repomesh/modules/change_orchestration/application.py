@@ -25,7 +25,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -66,6 +66,7 @@ from .contracts import (
     MaterializationResult,
     ReplanMode,
     ReplanResult,
+    RoundNotRecorded,
 )
 from .ports import (
     ExecutionPlanStarter,
@@ -106,6 +107,24 @@ def _truncate(text: str, limit: int = 60) -> str:
 
     text = text.strip()
     return text[:limit] + "…" if len(text) > limit else text
+
+
+def _jsonable(item: object) -> dict:
+    """Serialise one plan element for the snapshot's JSON columns.
+
+    ``ContractSpec`` and ``TaskNode`` are frozen slotted dataclasses with no
+    ``to_dict`` — the previous ``dict(item)`` fallback raised ``TypeError`` on
+    every one of them, and the enclosing ``except Exception`` turned that into
+    a log line, so materialize wrote no snapshot at all while reporting
+    success. ``asdict`` is the conversion those dataclasses actually support.
+    """
+
+    to_dict = getattr(item, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if is_dataclass(item) and not isinstance(item, type):
+        return asdict(item)
+    return dict(item)  # type: ignore[call-overload]
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +202,10 @@ class PlanExecutionBridge:
             ExecutionPlaneUnavailable: when no task orchestrator is configured.
                 Raised before any spec is created so a refused materialization
                 leaves no partial state behind.
+            RoundNotRecorded: when a plan was started but the snapshot could
+                not be made to name it. The opposite bargain to the one above:
+                the side effects stand, and the failure is reported so the
+                round is not silently lost.
         """
 
         # --- 0. Fail closed before any side effect ----------------------------
@@ -293,6 +316,8 @@ class PlanExecutionBridge:
             name_to_repo_id=name_to_repo_id,
             teamed_repository_ids=set(repo_id_to_team),
             skipped=skipped,
+            verification=self._verification_commands(profiles),
+            verification_paths=self._verification_paths(profiles),
         )
         if batches:
             started = await self._plans.start_plan(
@@ -321,42 +346,116 @@ class PlanExecutionBridge:
         span.set_attribute("repomesh.materialize.task_count", len(tasks_created))
         span.set_attribute("repomesh.materialize.skipped_repos", list(skipped))
 
-        # --- 5. Save plan snapshot (if store configured) ---------------------
+        # --- 5. Record the plan snapshot (if store configured) ---------------
+        #
+        # Contract v0.4 §2.4 / Q3 case (b): when the round already has a draft
+        # snapshot — which it does whenever the issue was created through the
+        # console, and whenever the discovery chain ran — materialize fills
+        # that row in and consumes it rather than writing a second one.
+        #
+        # The alternative was to keep writing a fresh version here. That works,
+        # but it makes every console round cost two versions (draft v1 holding
+        # the discovery archive, execution v2 holding the plan) and pushes
+        # `rounds[].plan_version` to start at 2, with the round's own discovery
+        # evidence sitting on a different row from the plan it produced.
+        # Reusing the draft keeps v1 meaning "the first round" and keeps the
+        # archive and the plan on one row.
+        #
+        # The script path is untouched: with no draft — nothing created the
+        # issue through intake — this still allocates the next version and
+        # inserts, which is what a replan-style second materialize does too.
         plan_version: int | None = None
         if self._snapshots is not None:
             try:
-                plan_version = await self._snapshots.next_version(project_id)
-                # The row owns the real plan_version; align the graph with it.
-                snapshot_graph = graph.model_copy(update={"plan_version": plan_version})
-                saved = await self._snapshots.save(
-                    project_id=project_id,
-                    plan_version=plan_version,
-                    engineering_spec=plan.engineering_spec or requirement,
-                    contracts=[
-                        asdict(c) for c in plan.contracts
-                    ],
-                    task_dag=[
-                        asdict(t) for t in plan.task_dag
-                    ],
-                    execution_batches=[list(b) for b in plan.execution_batches],
-                    graph_edges=[
-                        e.model_dump(by_alias=True) for e in snapshot_graph.edges
-                    ],
-                    created_by_agent_id=leader_agent_id,
-                    execution_plan_id=plan_id,
-                    requirement_text=requirement,
-                    integration_method=integration_method(snapshot_graph),
-                )
-                plan_snapshot_id = getattr(saved, "id", None)
-                if plan_snapshot_id is not None:
-                    _logger.info(
-                        "Saved materialized plan snapshot %s for project %s",
-                        plan_snapshot_id,
-                        project_id,
+                # Inside the try, deliberately: a snapshot problem must not
+                # undo tasks that have already been created. That leniency is
+                # also what hid the serialisation bug for the life of this
+                # feature, so it now ends where a plan begins — see the
+                # `plan_id is not None` re-raise below.
+                contracts_payload = [_jsonable(c) for c in plan.contracts]
+                task_dag_payload = [_jsonable(t) for t in plan.task_dag]
+                batches_payload = [list(b) for b in plan.execution_batches]
+                draft = await self._snapshots.current_draft(project_id)
+                if draft is not None:
+                    plan_version = draft.plan_version
+                    # The row owns the real plan_version; align the graph
+                    # with it so the single-graph invariant (read graph ≡
+                    # projection columns) holds on the consumed draft too.
+                    snapshot_graph = graph.model_copy(
+                        update={"plan_version": plan_version}
                     )
-            except Exception:
-                _logger.exception("Failed to save plan snapshot")
-                raise
+                    await self._snapshots.set_integration(
+                        draft.id,
+                        engineering_spec=plan.engineering_spec or requirement,
+                        contracts=contracts_payload,
+                        task_dag=task_dag_payload,
+                        execution_batches=batches_payload,
+                        graph_edges=[
+                            e.model_dump(by_alias=True) for e in snapshot_graph.edges
+                        ],
+                        integration_method=integration_method(snapshot_graph),
+                    )
+                    if plan_id is not None:
+                        # Only an actual execution plan consumes the draft. With
+                        # nothing schedulable the row stays open, because a
+                        # snapshot that claims to have been executed when no
+                        # plan started is the dishonesty this column exists to
+                        # avoid.
+                        await self._snapshots.link_execution_plan(draft.id, plan_id)
+                else:
+                    plan_version = await self._snapshots.next_version(project_id)
+                    # The row owns the real plan_version; align the graph with it.
+                    snapshot_graph = graph.model_copy(
+                        update={"plan_version": plan_version}
+                    )
+                    await self._snapshots.save(
+                        project_id=project_id,
+                        plan_version=plan_version,
+                        engineering_spec=plan.engineering_spec or requirement,
+                        contracts=contracts_payload,
+                        task_dag=task_dag_payload,
+                        execution_batches=batches_payload,
+                        graph_edges=[
+                            e.model_dump(by_alias=True) for e in snapshot_graph.edges
+                        ],
+                        created_by_agent_id=leader_agent_id,
+                        execution_plan_id=plan_id,
+                        requirement_text=requirement,
+                        integration_method=integration_method(snapshot_graph),
+                    )
+            except Exception as error:
+                # Loud about which project lost its snapshot: the previous
+                # message named neither the project nor the round, so the one
+                # line this bug ever produced was indistinguishable from noise.
+                _logger.warning(
+                    "Failed to record the plan snapshot for project %s (v%s); "
+                    "the plan executed but the DAG panel has nothing to read",
+                    project_id,
+                    plan_version,
+                    exc_info=True,
+                )
+                if plan_id is not None:
+                    # A started plan that no snapshot names is not a degraded
+                    # panel, it is a round the server has lost track of: the
+                    # draft still reads as unconsumed, so §8's "already
+                    # materialised" 409 cannot fire and the next attempt starts
+                    # a second execution plan against the same repositories.
+                    # Answering 200 there is the one outcome nobody can repair,
+                    # because nothing is left that says a repair is due.
+                    #
+                    # Failing instead is repairable, and only because of the
+                    # replay machinery this sits on: the receipt records the
+                    # failure and lends its prefix onward, `start_plan` finds
+                    # the plan it already wrote and hands it back without
+                    # reassigning anyone, and the link is simply attempted
+                    # again. The tasks stay; only the verdict changes.
+                    raise RoundNotRecorded(
+                        f"execution plan {plan_id} was started for project "
+                        f"{project_id} but its plan snapshot could not be "
+                        f"updated ({error}); the work is running and the round "
+                        "is not on record — materialize again to finish "
+                        "recording it"
+                    ) from error
 
         # --- 5b. Generate handoff documents (if store configured) ------------
         # One PENDING document per repository so the repository owner can
@@ -379,8 +478,9 @@ class PlanExecutionBridge:
                     plan_version,
                 )
             except Exception:
-                _logger.exception("Failed to generate handoff documents")
-                raise
+                _logger.warning(
+                    "Failed to generate handoff documents", exc_info=True
+                )
 
         return MaterializationResult(
             engineering_spec=eng_spec,
@@ -867,6 +967,8 @@ class PlanExecutionBridge:
             name_to_repo_id=name_to_repo_id,
             teamed_repository_ids=set(repo_id_to_team),
             skipped=skipped,
+            verification=self._verification_commands(profiles),
+            verification_paths=self._verification_paths(profiles),
         )
         # Keep only batches that touch an affected repository.
         affected_set = set(affected_repos)
@@ -916,6 +1018,8 @@ class PlanExecutionBridge:
         name_to_repo_id: dict[str, UUID],
         teamed_repository_ids: set[UUID],
         skipped: list[str],
+        verification: dict[str, tuple[str, ...]] | None = None,
+        verification_paths: dict[str, tuple[str, ...]] | None = None,
     ) -> tuple[tuple[PlannedRepositoryTaskView, ...], ...]:
         """Translate the batched task DAG into planned repository tasks.
 
@@ -923,6 +1027,26 @@ class PlanExecutionBridge:
         without a repository team in the project topology) are logged and
         collected in *skipped* instead of entering the execution plan: an
         execution plan must only contain assignable work.
+
+        ``verification`` is the catalog's answer to defect A-19: how each
+        repository is checked. ``TaskNode.tests`` states that the integration
+        LLM does not emit verification commands and "the caller supplies them
+        when materialising a plan" — the script era's caller did, and the
+        console's supplied nothing, so every console round dispatched
+        ``testCommands: []`` and the Runner verified nothing under a green tick.
+
+        It is applied *here* rather than on the plan the console reads back,
+        and that placement is load-bearing: ``materialize`` writes the plan it
+        was handed into the draft's ``task_dag``, and that column is what §8's
+        retry fingerprints. A plan mutated before that write fingerprints
+        differently on the second attempt, so a retry under a new key would
+        stop inheriting the failed attempt's prefix and fork the round — the
+        exact failure A-5 exists to prevent. Injecting at the last translation
+        keeps the snapshot the LLM's and the execution plan verified.
+
+        A node that states its own tests keeps them, so the request body of
+        ``/bridge/materialize`` still outranks the catalog and the catalog only
+        fills what nobody stated.
         """
 
         batches: list[tuple[PlannedRepositoryTaskView, ...]] = []
@@ -960,13 +1084,65 @@ class PlanExecutionBridge:
                         or f"Implement changes for {repo_name}",
                         acceptance=self._derive_task_acceptance(task_node),
                         leader_task_id=None,
-                        tests=task_node.tests,
+                        tests=task_node.tests or (verification or {}).get(repo_name, ()),
+                        # Added to the Worker's allowed paths downstream, never
+                        # substituted for them (defect A-21).
+                        test_paths=(verification_paths or {}).get(repo_name, ()),
                     )
                 )
                 _logger.info("Planned repository task for %s (batch %d)", repo_name, batch_index)
             if planned:
                 batches.append(tuple(planned))
         return tuple(batches)
+
+    @staticmethod
+    def _verification_commands(profiles) -> dict[str, tuple[str, ...]]:
+        """Catalog verification commands by repository name (defect A-19)."""
+
+        return PlanExecutionBridge._by_name(profiles, "test_commands", "test commands")
+
+    @staticmethod
+    def _verification_paths(profiles) -> dict[str, tuple[str, ...]]:
+        """Catalog test paths by repository name (defect A-21).
+
+        Where a repository keeps the files its verification commands read. They
+        are added to a Worker's allowed paths so the agent may write the test
+        its own command will look for — the contradiction that voided a live
+        run on ``changed_path_denied: tests/test_discount.py``.
+        """
+
+        return PlanExecutionBridge._by_name(profiles, "test_paths", "test paths")
+
+    @staticmethod
+    def _by_name(profiles, attribute: str, label: str) -> dict[str, tuple[str, ...]]:
+        """One catalog list per repository name, refusing to guess on collisions.
+
+        ``repositories.name`` carries no unique constraint — two owners' ``api``
+        are both legitimate rows — so two rows of one name that disagree resolve
+        to nothing rather than to whichever came last. For commands, running
+        another repository's is worse than running none: it fails as
+        *verification*, the one signal delivery trusts. For paths it is worse
+        still — it would hand a Worker write permission somewhere on the
+        strength of a name collision.
+        """
+
+        found: dict[str, tuple[str, ...]] = {}
+        ambiguous: set[str] = set()
+        for profile in profiles:
+            declared = tuple(getattr(profile, attribute, ()) or ())
+            if not declared:
+                continue
+            if profile.name in found and found[profile.name] != declared:
+                ambiguous.add(profile.name)
+            found.setdefault(profile.name, declared)
+        for name in ambiguous:
+            _logger.warning(
+                "repository name %s has conflicting catalog %s; tasks for it will carry none",
+                name,
+                label,
+            )
+            found.pop(name, None)
+        return found
 
     @staticmethod
     def _find_task(plan: IntegratedPlan, repo_name: str) -> TaskNode | None:

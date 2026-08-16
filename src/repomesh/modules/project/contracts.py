@@ -137,6 +137,32 @@ class ProjectTopologyReader(Protocol):
     async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None: ...
 
 
+class ProjectTopologyProvisioner(Protocol):
+    """Give a project the topology its execution plane requires, once.
+
+    Published as a contract for one caller: a console round reaches
+    materialization with a plan and no topology, because nothing on the console
+    path creates one — a workspace gets an organization leader and repositories
+    get catalog rows, and that is all. Somebody has to bridge the two, and it
+    must not be a browser posting a team roster.
+
+    ``ensure`` is idempotent by existence, not by key: a project that already
+    has a topology gets that topology back untouched, whatever repositories are
+    named. Rebuilding one under a running project would reassign work that is
+    already in flight.
+    """
+
+    async def ensure(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        organization_leader_id: UUID,
+        repository_ids: tuple[UUID, ...],
+        idempotency_key: str,
+    ) -> ProjectAgentTopologyView: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CheckpointGateDecision:
     allowed: bool

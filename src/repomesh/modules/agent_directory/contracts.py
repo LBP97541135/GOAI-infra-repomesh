@@ -4,6 +4,20 @@ from typing import Protocol
 from uuid import UUID
 
 
+class AgentDirectoryError(RuntimeError):
+    """Base of this module's refusals; declared here (not in domain) so
+    consumers of the contracts can catch them without importing the domain
+    layer — importing ``domain`` from here would be circular, since the
+    domain package itself imports these contracts."""
+
+
+class AgentHierarchyViolation(AgentDirectoryError):
+    """A repository's leader singleton is global: converging on a repository
+    already staffed by another organization (or another leader) raises this.
+    Callers translate it into their own refusal shape — the discovery
+    materialize endpoint maps it to 409 (it used to leak as a 500)."""
+
+
 class AgentRole(StrEnum):
     ORGANIZATION_LEADER = "organization_leader"
     REPOSITORY_LEADER = "repository_leader"
@@ -44,3 +58,27 @@ class RepositoryAgentTeamCreated:
     repository_id: UUID
     leader: AgentPrincipalView
     workers: tuple[AgentPrincipalView, ...]
+
+
+class RepositoryAgentTeamProvisioner(Protocol):
+    """Give a repository the leader-and-worker pair a project topology needs.
+
+    Published as a contract because the caller is another module: building a
+    topology (``project``) requires principals (``agent_directory``), and the
+    alternative to this protocol is the project module importing this one's
+    application layer.
+
+    ``provision`` is *ensure*, not *create*: a repository's leader is a
+    directory singleton (``repository:{id}:leader``), so a repository that
+    already has a team must yield that team rather than a conflict. Two
+    projects touching the same repository is ordinary, not an error.
+    """
+
+    async def provision(
+        self,
+        *,
+        organization_id: UUID,
+        organization_leader_id: UUID,
+        repository_id: UUID,
+        idempotency_key: str,
+    ) -> RepositoryAgentTeamCreated: ...

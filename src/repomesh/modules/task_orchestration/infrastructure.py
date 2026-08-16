@@ -17,8 +17,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
-from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
+from repomesh.modules.task_orchestration.contracts import (
+    ExecutionPlanStatus,
+    TaskOrigin,
+    TaskStatus,
+)
 from repomesh.modules.task_orchestration.domain import (
+    DeliveryRefusal,
     ExecutionPlan,
     PlannedRepositoryTask,
     Task,
@@ -28,6 +33,17 @@ from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
+
+def _as_utc(value: datetime) -> datetime:
+    """A stored timestamp read back as an aware one.
+
+    SQLite (the test variant) hands back naive datetimes and an ISO string
+    written without an offset parses naive, so the tz is restored rather than
+    assumed downstream.
+    """
+
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 class TaskRecord(Base):
@@ -50,6 +66,7 @@ class TaskRecord(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     result_summary: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer)
+    origin: Mapped[str] = mapped_column(String(30), server_default=TaskOrigin.PLANNED.value)
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_fingerprint: Mapped[str] = mapped_column(String(71))
 
@@ -72,6 +89,15 @@ class ExecutionPlanRecord(Base):
     version: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    delivery_refusal: Mapped[dict[str, object] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True, default=None
+    )
+    """Defect A-19: the delivering side's last stated refusal for this batch.
+
+    NULL means delivery has made no complaint about the current batch — which
+    is not the same as an empty object, and is the value a resolved refusal
+    returns to.
+    """
 
 
 class ExecutionPlanTaskRecord(Base):
@@ -116,6 +142,12 @@ class InMemoryTaskStore:
         task_id, fingerprint = binding
         return self.tasks[task_id], fingerprint
 
+    async def assignment_key(self, task_id: UUID) -> str | None:
+        for key, (bound_id, _) in self.idempotency.items():
+            if bound_id == task_id:
+                return key
+        return None
+
     async def update(self, task: Task, *, expected_version: int) -> None:
         current = self.tasks.get(task.id)
         if current is None or current.version != expected_version:
@@ -124,6 +156,9 @@ class InMemoryTaskStore:
 
     async def list_by_project(self, project_id: UUID) -> tuple[Task, ...]:
         return tuple(task for task in self.tasks.values() if task.project_id == project_id)
+
+    async def list_all(self) -> tuple[Task, ...]:
+        return tuple(self.tasks.values())
 
     async def list_by_parent(self, parent_task_id: UUID) -> tuple[Task, ...]:
         return tuple(task for task in self.tasks.values() if task.parent_task_id == parent_task_id)
@@ -159,6 +194,9 @@ class InMemoryExecutionPlanStore:
                 if any(planned.leader_task_id == leader_task_id for planned in batch):
                     return plan
         return None
+
+    async def list_all(self) -> tuple[ExecutionPlan, ...]:
+        return tuple(self.plans.values())
 
 
 class PostgresTaskStore:
@@ -202,6 +240,12 @@ class PostgresTaskStore:
             return None
         return self._to_domain(record), record.request_fingerprint
 
+    async def assignment_key(self, task_id: UUID) -> str | None:
+        async with self._database.transaction() as session:
+            return await session.scalar(
+                select(TaskRecord.idempotency_key).where(TaskRecord.id == task_id)
+            )
+
     async def update(self, task: Task, *, expected_version: int) -> None:
         async with self._database.transaction() as session:
             result = await session.execute(
@@ -224,6 +268,16 @@ class PostgresTaskStore:
                     .where(TaskRecord.project_id == project_id)
                     .order_by(TaskRecord.id)
                 )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
+    async def list_all(self) -> tuple[Task, ...]:
+        """Every task; the read model's repository grid and roster count across
+        projects, and querying project by project would be one round trip each."""
+
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(select(TaskRecord).order_by(TaskRecord.id))
             ).all()
         return tuple(self._to_domain(record) for record in records)
 
@@ -254,6 +308,7 @@ class PostgresTaskStore:
             "status": task.status.value,
             "result_summary": task.result_summary,
             "version": task.version,
+            "origin": task.origin.value,
         }
 
     @staticmethod
@@ -272,6 +327,9 @@ class PostgresTaskStore:
             status=TaskStatus(record.status),
             result_summary=record.result_summary,
             version=record.version,
+            # Rows written before origin existed read back as the column
+            # default; the migration backfills the rework ones.
+            origin=TaskOrigin(record.origin or TaskOrigin.PLANNED.value),
         )
 
 
@@ -296,6 +354,7 @@ class PostgresExecutionPlanStore:
                         version=plan.version,
                         created_at=now,
                         updated_at=now,
+                        delivery_refusal=self._encode_refusal(plan),
                     )
                 )
                 await self._sync_leader_tasks(session, plan)
@@ -330,6 +389,7 @@ class PostgresExecutionPlanStore:
                     batches=self._encode(plan),
                     version=plan.version,
                     updated_at=datetime.now(UTC),
+                    delivery_refusal=self._encode_refusal(plan),
                 )
             )
             if result.rowcount != 1:
@@ -345,6 +405,15 @@ class PostgresExecutionPlanStore:
                 else None
             )
         return self._to_domain(record) if record is not None else None
+
+    async def list_all(self) -> tuple[ExecutionPlan, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(ExecutionPlanRecord).order_by(ExecutionPlanRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
 
     async def _sync_leader_tasks(self, session, plan: ExecutionPlan) -> None:
         assigned = {
@@ -394,11 +463,41 @@ class PostgresExecutionPlanStore:
                         str(planned.leader_task_id) if planned.leader_task_id is not None else None
                     ),
                     "tests": list(planned.tests),
+                    "test_paths": list(planned.test_paths),
                 }
                 for planned in batch
             ]
             for batch in plan.batches
         ]
+
+    @staticmethod
+    def _encode_refusal(plan: ExecutionPlan) -> dict[str, object] | None:
+        refusal = plan.delivery_refusal
+        if refusal is None:
+            return None
+        return {
+            "reason": refusal.reason,
+            "batch_index": refusal.batch_index,
+            "at": refusal.at.isoformat(),
+            "repository_id": (
+                str(refusal.repository_id) if refusal.repository_id is not None else None
+            ),
+            "task_id": str(refusal.task_id) if refusal.task_id is not None else None,
+        }
+
+    @staticmethod
+    def _decode_refusal(payload: dict[str, object] | None) -> DeliveryRefusal | None:
+        if not payload:
+            return None
+        repository_id = payload.get("repository_id")
+        task_id = payload.get("task_id")
+        return DeliveryRefusal(
+            reason=str(payload.get("reason") or ""),
+            batch_index=int(payload.get("batch_index") or 0),
+            at=_as_utc(datetime.fromisoformat(str(payload["at"]))),
+            repository_id=UUID(str(repository_id)) if repository_id else None,
+            task_id=UUID(str(task_id)) if task_id else None,
+        )
 
     @staticmethod
     def _to_domain(record: ExecutionPlanRecord) -> ExecutionPlan:
@@ -410,6 +509,10 @@ class PostgresExecutionPlanStore:
             status=ExecutionPlanStatus(record.status),
             current_batch_index=record.current_batch_index,
             version=record.version,
+            # Rows written before defect A-19 have no column value at all.
+            delivery_refusal=PostgresExecutionPlanStore._decode_refusal(
+                record.delivery_refusal
+            ),
             batches=tuple(
                 tuple(
                     PlannedRepositoryTask(
@@ -424,6 +527,7 @@ class PostgresExecutionPlanStore:
                         ),
                         # Rows persisted before verification commands existed have no key.
                         tests=tuple(planned.get("tests") or ()),
+                        test_paths=tuple(planned.get("test_paths") or ()),
                     )
                     for planned in batch
                 )

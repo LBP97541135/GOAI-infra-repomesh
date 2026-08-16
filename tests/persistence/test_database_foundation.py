@@ -75,3 +75,44 @@ async def test_duplicate_repository_rolls_back_its_events(database: Database) ->
 
     assert len(await catalog.list()) == 1
     assert await outbox.pending_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_a_repository_stores_and_returns_its_verification_commands(
+    database: Database,
+) -> None:
+    """Defect A-19: the catalog is the source of truth for how a repo is tested.
+
+    Round-tripped through the real store rather than asserted on the dataclass,
+    because the whole point of the column is that a *later* round — a different
+    process, days later — reads back what an operator wrote once.
+    """
+
+    catalog = PostgresRepositoryCatalog(database)
+    verified = RepositoryProfile(
+        name="checkout",
+        url="https://github.com/example/checkout",
+        test_commands=("python scripts/run_tests.py",),
+        test_paths=("tests/**",),
+    )
+    silent = RepositoryProfile(
+        name="legacy",
+        url="https://github.com/example/legacy",
+    )
+
+    await RegisterRepository(catalog).execute(verified)
+    await RegisterRepository(catalog).execute(silent)
+
+    assert (await catalog.get(verified.id)).test_commands == ("python scripts/run_tests.py",)
+    # Defect A-21: the command and the directory it reads are one fact stored
+    # in two columns, and both have to survive the round trip. Supplying the
+    # command without the path is what voided a whole live run.
+    assert (await catalog.get(verified.id)).test_paths == ("tests/**",)
+    assert (await catalog.get(silent.id)).test_paths == ()
+    # Empty stays empty. A default invented here would put a command that does
+    # not exist into a real Runner dispatch.
+    assert (await catalog.get(silent.id)).test_commands == ()
+    assert {profile.name: profile.test_commands for profile in await catalog.list()} == {
+        "checkout": ("python scripts/run_tests.py",),
+        "legacy": (),
+    }

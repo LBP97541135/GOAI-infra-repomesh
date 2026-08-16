@@ -22,6 +22,27 @@ class ExecutionPlaneUnavailable(RuntimeError):
     """The task orchestration plane is not configured; the workflow refused side effects."""
 
 
+class RoundNotRecorded(RuntimeError):
+    """A plan was started but its snapshot could not be told about it.
+
+    ``execution_plan_id`` is not decoration. It is the only place the round is
+    written down: the read model keys a delivery's ``plan_version``,
+    ``created_at`` and ``updated_at`` off it, and §8's "this issue has already
+    been materialised" 409 is nothing but ``current_draft`` finding the column
+    still NULL. A materialize that started a plan and then failed to record it
+    returns 200 over a draft that still looks untouched, so the next attempt —
+    a reloaded panel, a second operator — starts a *second* execution plan for
+    the same round.
+
+    Raised instead of swallowed because the round is repairable: the failed
+    materialization receipt lends its prefix to the next attempt, whose
+    ``start_plan`` recognises the plan it already wrote and returns it without
+    reassigning anything, so the retry gets a second run at the link. The tasks
+    that were created are *not* undone — this says "not recorded", not "not
+    started".
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class StartedExecutionPlan:
     """Execution plan and initially released tasks."""
@@ -67,5 +88,6 @@ __all__ = [
     "MaterializationResult",
     "ReplanMode",
     "ReplanResult",
+    "RoundNotRecorded",
     "StartedExecutionPlan",
 ]

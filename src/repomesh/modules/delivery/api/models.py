@@ -3,6 +3,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 from repomesh.modules.delivery.contracts import (
+    GovernanceDecisionKind,
     RecoveryActionStatus,
     RecoveryTrigger,
     ReviewState,
@@ -79,3 +80,29 @@ class RecoveryPlanCreate(BaseModel):
 class RecoveryActionUpdate(BaseModel):
     status: RecoveryActionStatus
     detail: str
+
+
+class ChangeSetRollbackCreate(BaseModel):
+    """Whole-ChangeSet rollback request (GUI batch E-1, contract v0.1 §4.6).
+
+    No ``repository_id``: rollback granularity is the whole change set by GUI
+    ruling #4, and offering the field would imply a choice that does not exist.
+    No ``head_sha`` either — the decision covers every candidate at whatever
+    head it currently carries, and the server reads those heads itself rather
+    than trusting a browser to enumerate them.
+    """
+
+    change_set_id: UUID
+    reason: str
+    requested_by_agent_id: UUID
+    idempotency_key: str
+
+
+class GovernanceDecisionCreate(BaseModel):
+    change_set_id: UUID
+    repository_id: UUID
+    head_sha: str
+    decision: GovernanceDecisionKind
+    reason: str
+    idempotency_key: str
+    decided_by_agent_id: UUID

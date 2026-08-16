@@ -1,6 +1,7 @@
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import String, Text, UniqueConstraint, select
+from sqlalchemy import DateTime, String, Text, UniqueConstraint, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -35,6 +36,7 @@ class CollaborationMessageRecord(Base):
     status: Mapped[str] = mapped_column(String(30), index=True)
     event_id: Mapped[str | None] = mapped_column(Text)
     correlation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_fingerprint: Mapped[str] = mapped_column(String(71))
 
@@ -75,6 +77,18 @@ class InMemoryCollaborationMessageStore:
 
     async def update(self, message: CollaborationMessage) -> None:
         self.messages[message.id] = message
+
+    async def last_assignment_at(self, project_id: UUID) -> dict[UUID, datetime]:
+        latest: dict[UUID, datetime] = {}
+        for message in self.messages.values():
+            if message.project_id != project_id or message.task_id is None:
+                continue
+            if message.kind is not CollaborationMessageKind.TASK_ASSIGNMENT:
+                continue
+            current = latest.get(message.task_id)
+            if current is None or message.created_at > current:
+                latest[message.task_id] = message.created_at
+        return latest
 
     async def list_failed(
         self, limit: int = 100
@@ -136,6 +150,63 @@ class PostgresCollaborationMessageStore:
         except IntegrityError as error:
             raise CollaborationConflict("collaboration message already exists") from error
 
+    async def list_by_project(self, project_id: UUID) -> tuple[CollaborationMessage, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(CollaborationMessageRecord)
+                    .where(CollaborationMessageRecord.project_id == project_id)
+                    .order_by(CollaborationMessageRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
+    async def last_assignment_at(self, project_id: UUID) -> dict[UUID, datetime]:
+        """When each task of this project was last dispatched (contract v0.4 §8.7.4).
+
+        Deliberately an aggregate rather than a filter over ``list_by_project``.
+        That method loads every message of the project including its full
+        ``body``, and the console asks this on every read of a round's tasks;
+        ``max(created_at) group by task_id`` returns one small row per task and
+        rides the ``project_id`` and ``kind`` indexes the table already has.
+
+        ``created_at`` is set when the message is written, so this is when the
+        dispatch was *sent*, not when the Worker read it — which is the honest
+        reading and the only one available: the row has no ``delivered_at``.
+        The console labels it accordingly.
+        """
+
+        async with self._database.transaction() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        CollaborationMessageRecord.task_id,
+                        func.max(CollaborationMessageRecord.created_at),
+                    )
+                    .where(
+                        CollaborationMessageRecord.project_id == project_id,
+                        CollaborationMessageRecord.kind
+                        == CollaborationMessageKind.TASK_ASSIGNMENT.value,
+                        CollaborationMessageRecord.task_id.is_not(None),
+                    )
+                    .group_by(CollaborationMessageRecord.task_id)
+                )
+            ).all()
+        return {task_id: at for task_id, at in rows if task_id is not None and at is not None}
+
+    async def list_by_room(self, room_id: str) -> tuple[CollaborationMessage, ...]:
+        """Every message delivered to one Matrix room, oldest first."""
+
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(CollaborationMessageRecord)
+                    .where(CollaborationMessageRecord.room_id == room_id)
+                    .order_by(CollaborationMessageRecord.created_at)
+                )
+            ).all()
+        return tuple(self._to_domain(record) for record in records)
+
     async def update(self, message: CollaborationMessage) -> None:
         async with self._database.transaction() as session:
             record = await session.get(CollaborationMessageRecord, message.id)
@@ -177,6 +248,7 @@ class PostgresCollaborationMessageStore:
             "status": message.status.value,
             "event_id": message.event_id,
             "correlation_id": message.correlation_id,
+            "created_at": message.created_at,
         }
 
     @staticmethod
@@ -196,6 +268,7 @@ class PostgresCollaborationMessageStore:
             status=CollaborationDeliveryStatus(record.status),
             event_id=record.event_id,
             correlation_id=record.correlation_id,
+            created_at=record.created_at,
         )
 
 

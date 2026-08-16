@@ -1,16 +1,26 @@
+import logging
+from collections.abc import Callable
 from dataclasses import asdict
+from secrets import compare_digest
 from typing import Annotated
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
     HandoffDocError,
+    IssueIntakeActorNotFound,
+    IssueIntakeDenied,
     RegisterRepository,
     RepositoryDiscoveryService,
+    ScanRegistration,
+    identify_url_type,
+    register_scanned_profiles,
     render_markdown,
 )
 from repomesh.modules.repository_intelligence.application.confirmation import (
@@ -27,6 +37,7 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     TaskNode,
 )
 from repomesh.modules.repository_intelligence.contracts import (
+    IssueIntakeCommand,
     PlanDiff,
     diff_plan_graphs,
 )
@@ -34,6 +45,7 @@ from repomesh.modules.repository_intelligence.domain import AutoCard, Repository
 from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (
     plan_graph_from_snapshot,
 )
+from repomesh.modules.repository_intelligence.infrastructure.platform import UrlType
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatusSnapshot
 from repomesh.settings import get_settings
@@ -52,6 +64,7 @@ from .models import (
     HandoffDocView,
     IntegratedPlanView,
     IntegrationRequest,
+    IssueIntakeCreate,
     MaterializeRequest,
     MaterializeResponse,
     OrgScanRequest,
@@ -61,13 +74,18 @@ from .models import (
     PlanSnapshotView,
     ReplanRequest,
     ReplanResponse,
+    RepoScanRequest,
+    RepoScanResult,
     RepositoryCreate,
     RepositoryView,
     RequirementAnalysisRequest,
     RequirementAnalysisView,
     TaskNodeView,
+    UrlIdentification,
     WorkerTaskStatusView,
 )
+
+_logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["repository-intelligence"])
 
@@ -77,41 +95,6 @@ def get_catalog(request: Request) -> RepositoryCatalog:
 
 
 CatalogDependency = Annotated[RepositoryCatalog, Depends(get_catalog)]
-
-
-def _agent_action_authorized(request: Request) -> bool:
-    expected = get_settings().agent_action_token
-    return bool(expected and request.headers.get("Authorization") == f"Bearer {expected}")
-
-
-async def _human(request: Request):
-    authorization = request.headers.get("Authorization", "")
-    token = (
-        authorization.removeprefix("Bearer ").strip()
-        if authorization.startswith("Bearer ")
-        else request.cookies.get("repomesh_session")
-    )
-    if not token:
-        raise HTTPException(status_code=401, detail="local authentication is required")
-    try:
-        return await request.app.state.container.local_account_service().authenticate(token)
-    except Exception as error:
-        raise HTTPException(status_code=401, detail="invalid local session") from error
-
-
-async def _human_or_agent_action(request: Request):
-    if _agent_action_authorized(request):
-        return None
-    return await _human(request)
-
-
-async def _administrator_or_agent_action(request: Request):
-    if _agent_action_authorized(request):
-        return None
-    actor = await _human(request)
-    if not actor.is_admin:
-        raise HTTPException(status_code=403, detail="local administrator permission is required")
-    return actor
 
 
 def _resolve_replan_mode(requested: str, auto_commit: bool) -> str:
@@ -139,17 +122,226 @@ def _build_auto_card(body_card) -> AutoCard | None:  # noqa: ANN001
     )
 
 
-@router.post("/repositories", response_model=RepositoryView, status_code=201)
+def require_action_token(request: Request) -> None:
+    """Bearer action-token check for every write on this router.
+
+    It started life guarding only ``POST /issues`` (contract v0.3 §3), which
+    left the eight other writes here — including the manual approval gate and
+    the org scanner — reachable with no credential at all. The check now hangs
+    off each write route instead of one handler. It is deliberately not a
+    router-level dependency: nine reads share this router, and closing a read
+    that is open today is a scope call for whoever owns those consumers, not
+    part of stopping the bleeding on the writes.
+
+    Missing configuration fails closed (503). An unset token must not read as
+    "no authentication required" — that is how a deployment ends up open.
+    """
+
+    from repomesh.settings import get_settings
+
+    expected = get_settings().agent_action_token
+    if not expected:
+        raise HTTPException(status_code=503, detail="write authentication is not configured")
+    presented = request.headers.get("Authorization") or ""
+    if not compare_digest(presented, f"Bearer {expected}"):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+
+
+#: Applied to every write route below; reads on this router stay open.
+ACTION_TOKEN = Depends(require_action_token)
+
+
+def _require_scannable_host(url: str) -> None:
+    """Refuse org URLs whose host is not on the configured allowlist.
+
+    ``detect_platform`` treats every non-github.com git URL as a self-hosted
+    GitLab and the fetcher derives its API base from that same URL, so an
+    arbitrary host in the request body becomes an outbound request from this
+    server. The allowlist keeps that reachable set to hosts an operator has
+    named. Default is github.com only; extend with
+    ``REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS`` (comma separated).
+    """
+
+    from repomesh.settings import get_settings
+
+    host = (urlsplit(url).hostname or "").lower()
+    allowed = {
+        item.strip().lower()
+        for item in (get_settings().repository_scan_allowed_hosts or "").split(",")
+        if item.strip()
+    }
+    if host in allowed:
+        return
+    _logger.warning("rejected org scan for host outside the allowlist: %s", host)
+    raise HTTPException(
+        status_code=400,
+        detail="organization host is not on the configured scan allowlist",
+    )
+
+
+def build_scan_fetcher(
+    url: str,
+    *,
+    target: str,
+    github_token: str = "",
+    gitlab_token: str = "",
+):  # noqa: ANN201 - PlatformFetcher is imported lazily, see below
+    """Validate a scan target and build the fetcher that will reach it.
+
+    Every scan endpoint — native, console, sync, background — goes through
+    here, so the two refusals that must happen *before* egress cannot be
+    forgotten by the next endpoint someone adds: a local path is not
+    scannable, and a host nobody put on the allowlist is not reachable.
+    """
+
+    from repomesh.modules.repository_intelligence.infrastructure.platform import (  # noqa: PLC0415
+        Platform,
+        detect_platform,
+        make_fetcher,
+    )
+
+    platform = detect_platform(url)
+    if platform is Platform.LOCAL:
+        raise HTTPException(400, f"URL must be a GitHub/GitLab {target} URL")
+    _require_scannable_host(url)
+    return make_fetcher(platform, github_token=github_token, gitlab_token=gitlab_token)
+
+
+def require_single_repo_url(url: str) -> None:
+    """Refuse a URL that does not name one repository.
+
+    The same judgement the console badges with, applied server-side: a group
+    URL sent to a single-repo scan is a mistake worth naming, not something to
+    guess a repository name out of.
+    """
+
+    if identify_url_type(url) is not UrlType.SINGLE_REPO:
+        raise HTTPException(400, "URL must point at a single repository, not a group")
+
+
+class ScanFailed(Exception):
+    """A scan could not complete.
+
+    Carries the sentence the caller may see and nothing else. Whatever the
+    outbound request actually saw is already in the log by the time this is
+    raised — that separation is the point (S-2), and it is what lets the
+    background scan tasks report a failure without inventing a second, chattier
+    error path.
+    """
+
+
+async def perform_org_scan(
+    url: str,
+    fetcher: object,
+    catalog: RepositoryCatalog,
+    *,
+    max_workers: int,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> ScanRegistration:
+    """Scan an organization and register what came back.
+
+    ``on_progress`` receives ``(completed, total, repository_name)`` after each
+    repository finishes — it is how the console's background tasks turn a long
+    silence into an "n of m" line.
+    """
+
+    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
+        scan_org,
+    )
+
+    try:
+        profiles = await scan_org(url, fetcher, max_workers=max_workers, on_progress=on_progress)
+    except Exception as exc:
+        # The message used to be echoed back, which handed the caller whatever
+        # the outbound request saw. Operators read it in the log instead.
+        _logger.warning("org scan failed for %s", url, exc_info=exc)
+        raise ScanFailed("organization scan failed") from exc
+
+    return await register_scanned_profiles(profiles, catalog)
+
+
+async def perform_repo_scan(
+    url: str,
+    fetcher: object,
+    catalog: RepositoryCatalog,
+) -> ScanRegistration:
+    """Scan one repository and register it."""
+
+    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
+        scan_single_repo,
+    )
+
+    try:
+        profile = await scan_single_repo(url, fetcher)
+    except Exception as exc:
+        _logger.warning("repository scan failed for %s", url, exc_info=exc)
+        raise ScanFailed("repository scan failed") from exc
+
+    return await register_scanned_profiles([profile], catalog)
+
+
+@router.post("/issues", dependencies=[ACTION_TOKEN])
+async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONResponse:
+    """Contract v0.3 §1: create an issue (= first draft PlanSnapshot).
+
+    201 on first creation, 200 on idempotent replay (Q5) — both bodies are the
+    v0.2 §2 single-issue projection produced by the read model (no second
+    serializer). Method-disjoint with the read model's GET /issues.
+
+    Authorization status quo, spelled out (v0.3 §6 S-4): the action token is
+    a single shared secret carrying no subject and no tenant — the acting
+    subject comes from the body's ``created_by_agent_id``, the workspace from
+    that agent's directory row. Containment applied: the service rejects a
+    body ``organization_id`` that disagrees with the actor's organization
+    (403), the idempotency keyspace is workspace-scoped, and a key replay is
+    only answered within the owning workspace. Subject-carrying credentials
+    (per-principal token / session ticket) are an adopted backlog item shared
+    with the delivery write endpoints — an architecture change, not part of
+    this containment."""
+
+    service = request.app.state.container.issue_intake_service()
+    try:
+        receipt = await service.execute(
+            IssueIntakeCommand(
+                requirement_text=body.requirement_text,
+                created_by_agent_id=body.created_by_agent_id,
+                idempotency_key=body.idempotency_key,
+                organization_id=body.organization_id,
+            )
+        )
+    except IssueIntakeActorNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except IssueIntakeDenied as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    summary = await request.app.state.container.delivery_read_model_service().issue_summary(
+        receipt.project_id
+    )
+    if summary is None:  # pragma: no cover - the snapshot was just persisted
+        raise HTTPException(status_code=500, detail="issue projection unavailable")
+    # The summary carries UUID/datetime values; the read-model routers lean on
+    # FastAPI's default encoding, a manual JSONResponse must encode explicitly.
+    return JSONResponse(
+        status_code=201 if receipt.created else 200, content=jsonable_encoder(summary)
+    )
+
+
+@router.post(
+    "/repositories", response_model=RepositoryView, status_code=201, dependencies=[ACTION_TOKEN]
+)
 async def register_repository(
-    body: RepositoryCreate, request: Request, catalog: CatalogDependency
+    body: RepositoryCreate, catalog: CatalogDependency
 ) -> RepositoryProfile:
-    await _administrator_or_agent_action(request)
     profile = RepositoryProfile(
         name=body.name,
         url=str(body.url),
         description=body.description,
         topics=tuple(body.topics),
         languages=tuple(body.languages),
+        test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
+        test_paths=tuple(item.strip() for item in body.test_paths if item.strip()),
         auto_card=_build_auto_card(body.auto_card),
     )
     await RegisterRepository(catalog).execute(profile)
@@ -161,73 +353,120 @@ async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfil
     return await catalog.list()
 
 
-@router.post("/repositories/scan-org", response_model=OrgScanResult)
-async def scan_organization(
-    body: OrgScanRequest, request: Request, catalog: CatalogDependency
-) -> OrgScanResult:
+@router.get("/repositories/url-type", response_model=UrlIdentification)
+async def identify_repository_url(url: str) -> UrlIdentification:
+    """Say whether a URL points at an organization, a single repo, or neither.
+
+    Read-only and offline: it parses the string and returns, so the console
+    can call it on a debounce while the user is still typing. No request goes
+    out, nothing is written, and no credential is involved — which is why it
+    sits with the reads on this router rather than behind the action token.
+
+    It answers for URLs this server would refuse to scan (a host off the
+    allowlist still classifies as ``group``). Telling the user "that is an
+    organization URL" and then refusing the scan is honest; making the badge
+    double as an allowlist oracle would leak the operator's configuration to
+    an endpoint that takes no credential.
+    """
+
+    from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
+        extract_entry_repo_name,
+        identify_url_type,
+    )
+    from repomesh.modules.repository_intelligence.infrastructure.platform import (  # noqa: PLC0415
+        detect_platform,
+    )
+
+    candidate = url.strip()
+    url_type = identify_url_type(candidate)
+    return UrlIdentification(
+        url=candidate,
+        url_type=url_type.value,
+        platform=detect_platform(candidate).value,
+        repository_name=(
+            extract_entry_repo_name(candidate) if url_type is UrlType.SINGLE_REPO else None
+        ),
+    )
+
+
+@router.post("/repositories/scan-org", response_model=OrgScanResult, dependencies=[ACTION_TOKEN])
+async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) -> OrgScanResult:
     """Batch-scan all repos under a GitHub/GitLab organization.
 
     Fetches file trees, dependency files, and commits for every repo,
     builds AutoCards, and registers them in the catalog.
+
+    Synchronous on purpose: this is the scripting/ops entry point and its
+    callers want the counts in the response. The console's equivalent
+    (``POST /console/repositories/scan-org``) returns 202 and a task instead,
+    because a browser cannot hold a request open for a 40-repo organization.
     """
-    await _administrator_or_agent_action(request)
-
-    from repomesh.modules.repository_intelligence.application.scan_remote import (
-        scan_org,
-    )
-    from repomesh.modules.repository_intelligence.infrastructure.platform import (
-        detect_platform,
-        make_fetcher,
-    )
-
     url = str(body.org_url)
-    platform = detect_platform(url)
-    if platform.value == "local":
-        raise HTTPException(400, "URL must be a GitHub/GitLab organization URL")
-
-    fetcher = make_fetcher(
-        platform,
+    fetcher = build_scan_fetcher(
+        url,
+        target="organization",
         github_token=body.github_token,
         gitlab_token=body.gitlab_token,
     )
 
     try:
-        profiles = await scan_org(url, fetcher, max_workers=body.max_workers)
-    except Exception as exc:
-        raise HTTPException(502, f"Scan failed: {exc}") from exc
-
-    register = RegisterRepository(catalog)
-    registered: list[RepositoryView] = []
-    skipped = 0
-    failed = 0
-
-    existing = {p.name for p in await catalog.list()}
-
-    for profile in profiles:
-        if profile.name in existing:
-            skipped += 1
-            continue
-        try:
-            await register.execute(profile)
-            registered.append(RepositoryView.model_validate(profile))
-        except Exception:
-            failed += 1
+        outcome = await perform_org_scan(url, fetcher, catalog, max_workers=body.max_workers)
+    except ScanFailed as error:
+        raise HTTPException(502, str(error)) from error
 
     return OrgScanResult(
         org_url=url,
-        total_scanned=len(profiles),
-        registered=len(registered),
-        skipped=skipped,
-        failed=failed,
-        repositories=registered,
+        total_scanned=outcome.total_scanned,
+        registered=len(outcome.registered),
+        skipped=outcome.skipped,
+        failed=outcome.failed,
+        repositories=[RepositoryView.model_validate(p) for p in outcome.registered],
     )
 
 
-@router.post("/discovery", response_model=list[DiscoveryCandidate])
+@router.post("/repositories/scan-repo", response_model=RepoScanResult, dependencies=[ACTION_TOKEN])
+async def scan_single_repository(
+    body: RepoScanRequest, catalog: CatalogDependency
+) -> RepoScanResult:
+    """Scan one repository from its URL and register it.
+
+    The sibling of ``scan-org`` for the case where the user has a single repo
+    rather than a whole organization. Same SSRF allowlist, same silence about
+    what the outbound request saw.
+
+    Distinct from ``POST /repositories``, which registers a repository from
+    fields the caller types out by hand. This one fetches the tree, the
+    dependency files and the commits, and builds the AutoCard from what is
+    actually in the repo.
+    """
+    url = str(body.repo_url).rstrip("/")
+    require_single_repo_url(url)
+    fetcher = build_scan_fetcher(
+        url,
+        target="repository",
+        github_token=body.github_token,
+        gitlab_token=body.gitlab_token,
+    )
+
+    try:
+        outcome = await perform_repo_scan(url, fetcher, catalog)
+    except ScanFailed as error:
+        raise HTTPException(502, str(error)) from error
+
+    return RepoScanResult(
+        repo_url=url,
+        total_scanned=outcome.total_scanned,
+        registered=len(outcome.registered),
+        skipped=outcome.skipped,
+        failed=outcome.failed,
+        repositories=[RepositoryView.model_validate(p) for p in outcome.registered],
+    )
+
+
+@router.post("/discovery", response_model=list[DiscoveryCandidate], dependencies=[ACTION_TOKEN])
 async def discover_repositories(
     body: DiscoveryRequest, catalog: CatalogDependency, request: Request
 ) -> list[DiscoveryCandidate]:
-    await _human_or_agent_action(request)
     client = request.app.state.container.llm_client
     service = RepositoryDiscoveryService(catalog, llm_client=client)
     evidence = await service.discover(
@@ -250,12 +489,13 @@ async def discover_repositories(
     ]
 
 
-@router.post("/requirement-analysis", response_model=RequirementAnalysisView)
+@router.post(
+    "/requirement-analysis", response_model=RequirementAnalysisView, dependencies=[ACTION_TOKEN]
+)
 async def analyze_requirement(
     body: RequirementAnalysisRequest, request: Request
 ) -> RequirementAnalysisView:
     """Evaluate whether a requirement has sufficient business information."""
-    await _human_or_agent_action(request)
     container = request.app.state.container
     analyzer = container.requirement_analyzer()
     if analyzer is None:
@@ -285,21 +525,38 @@ def _confirmation_summary_to_view(
     )
 
 
-@router.post("/confirmation", response_model=ConfirmationSummaryView)
+@router.post("/confirmation", response_model=ConfirmationSummaryView, dependencies=[ACTION_TOKEN])
 async def confirm_repositories(
     body: ConfirmationRequest, request: Request
 ) -> ConfirmationSummaryView:
-    """Phase 2: Team Managers confirm involvement and produce plans."""
-    await _human_or_agent_action(request)
+    """Phase 2: Team Managers confirm involvement and produce plans.
+
+    Two refusals corrected here to match ``/requirement-analysis`` and the
+    discovery chain (contract v0.4 Q12/Q13). Both used to reach the caller as
+    500s: an unconfigured LLM blew up inside ``chat()``, and a candidate list
+    with nothing in the catalog escaped as a bare ``ValueError``. Neither is a
+    server fault — one is a deployment that has no model, the other is a
+    request naming repositories nobody registered — and reporting them as
+    crashes sent people looking for a bug instead of at their configuration or
+    their request.
+    """
     container = request.app.state.container
     llm = container.llm_client
+    if llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured — repository confirmation unavailable",
+        )
 
     service = await container.confirmation_service(llm)
     profiles = service._profiles  # noqa: SLF001
 
     candidate_repos = [r for r in body.candidate_repos if r in profiles]
     if not candidate_repos:
-        raise ValueError("No valid candidate repositories found in catalog")
+        raise HTTPException(
+            status_code=422,
+            detail="No valid candidate repositories found in catalog",
+        )
 
     evidence = {}
     for repo, val in body.discovery_evidence.items():
@@ -347,12 +604,20 @@ def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
     )
 
 
-@router.post("/integration", response_model=IntegratedPlanView)
+@router.post("/integration", response_model=IntegratedPlanView, dependencies=[ACTION_TOKEN])
 async def integrate_plan(body: IntegrationRequest, request: Request) -> IntegratedPlanView:
-    """Phase 3: Leader integrates per-repo plans into a project-level plan."""
-    await _human_or_agent_action(request)
+    """Phase 3: Leader integrates per-repo plans into a project-level plan.
+
+    503 rather than a 500 from inside ``chat()`` when no model is configured
+    (v0.4 Q12), matching ``/requirement-analysis``.
+    """
     container = request.app.state.container
     llm = container.llm_client
+    if llm is None:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM not configured — plan integration unavailable",
+        )
 
     summary = _summary_from_view(body.confirmation)
 
@@ -387,10 +652,9 @@ async def integrate_plan(body: IntegrationRequest, request: Request) -> Integrat
     )
 
 
-@router.post("/bridge/materialize", response_model=MaterializeResponse)
+@router.post("/bridge/materialize", response_model=MaterializeResponse, dependencies=[ACTION_TOKEN])
 async def materialize_plan(body: MaterializeRequest, request: Request) -> MaterializeResponse:
     """Create Engineering Spec + Contract Specs + an execution plan from an IntegratedPlan."""
-    await _human_or_agent_action(request)
     container = request.app.state.container
     bridge = container.plan_execution_bridge()
 
@@ -440,8 +704,6 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ExecutionPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    except Exception as error:
-        raise HTTPException(status_code=500, detail=str(error)) from error
 
     return MaterializeResponse(
         engineering_spec_id=result.engineering_spec.id,
@@ -453,7 +715,7 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
     )
 
 
-@router.post("/bridge/replan", response_model=ReplanResponse)
+@router.post("/bridge/replan", response_model=ReplanResponse, dependencies=[ACTION_TOKEN])
 async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
     """Trigger a partial replan based on TM feedback.
 
@@ -471,7 +733,6 @@ async def replan_plan(body: ReplanRequest, request: Request) -> ReplanResponse:
     in the response.
     """
 
-    await _human_or_agent_action(request)
     container = request.app.state.container
     mode = _resolve_replan_mode(body.mode, get_settings().replan_auto_commit)
 
@@ -617,7 +878,9 @@ async def get_handoff_doc_markdown(doc_id: UUID, request: Request) -> PlainTextR
     return PlainTextResponse(render_markdown(doc))
 
 
-@router.post("/handoff-docs/{doc_id}/decision", response_model=HandoffDocView)
+@router.post(
+    "/handoff-docs/{doc_id}/decision", response_model=HandoffDocView, dependencies=[ACTION_TOKEN]
+)
 async def decide_handoff_doc(
     doc_id: UUID, body: HandoffDocDecisionRequest, request: Request
 ) -> HandoffDocView:
@@ -627,7 +890,6 @@ async def decide_handoff_doc(
     plan version must be re-decided on its regenerated copy.
     """
 
-    await _human_or_agent_action(request)
     container = request.app.state.container
     try:
         doc = await container.handoff_doc_service().decide(

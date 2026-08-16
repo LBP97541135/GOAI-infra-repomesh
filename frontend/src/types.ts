@@ -1,0 +1,139 @@
+/** 交付控制台前端视图模型。
+ *  契约数据（src/api/contract.ts）经 src/viewmodel.ts 派生成本文件的展示形状；
+ *  display_status / gate_display / phase 由后端（或 replay 夹具）给出，前端只渲染，
+ *  不做任何状态映射（契约 §5 是唯一实现）。 */
+import type { DecisionAction, GateDisplay, TaskDisplayStatus } from "./api/contract";
+
+/** 契约 §4.3 仅此两类。clarify 已删（X4 裁决：无消费方；真机制落地时按
+ *  ChangeRequest 回路立项重建，届时是真实体不是演示枚举） */
+export type DecisionKind = "approve" | "watch";
+
+export interface Decision {
+  id: string;
+  kind: DecisionKind;
+  title: string;
+  body: string;
+  actions: string[];
+  actionKinds: DecisionAction[] | null;
+  repositoryId: string | null;
+  headSha: string | null;
+}
+
+/** 审批弹窗（快照绑定授权单）数据；语义见 frontend-prototype/DESIGN-DECISION.md。
+ *  授权单按点击的决策卡构建（S1），decisionId 用于消化后从决策夹移除对应项。 */
+export interface ApprovalInfo {
+  decisionId: string;
+  snapshotLabel: string;
+  scopeLabel: string;
+  changeSetId: string | null;
+  repositoryId: string | null;
+  headSha: string | null;
+  /** A-18：本次要合的那些任务里，agent 自己说没验证的（`evidence.verified === false`）。
+   *  摆在确认框之前、按钮之上。**不拦**动作——门禁语义是另一轮裁决，这里只是不让
+   *  人在没看见这段话的情况下按下去。空数组 = 没有任何任务做过「未验证」的声明。 */
+  unverified: TaskAgentReport[];
+}
+
+/** A-18：一条任务的 agent 自述（契约 v0.1 §5.4，【提案】）。字段与契约一一对应，
+ *  只做 snake→camel 改名，**不重算、不摘要、不补词**。
+ *
+ *  只有 `evidence !== null` 的任务才会有一条本记录：没有结构化证据的任务（superseded、
+ *  纯散文回报、Runner 之前的行）不进这张表，也就不会被标上任何标记——它从没做过声明。 */
+export interface TaskAgentReport {
+  taskId: string;
+  repositoryId: string;
+  title: string;
+  /** 读模型给的 `display_status` 原值（§5.1），原样透传。
+   *
+   *  用途只有一个：把「失败」与「未验证」分开呈现。失败的任务当然没有可核验的执行
+   *  记录——`verified` 恒 false——但它不该再多一个琥珀标记：失败已经是更响的那句话，
+   *  两个标记叠在一起既是重复，也会稀释真正需要人注意的那一类（跑成了却没验证）。 */
+  displayStatus: TaskDisplayStatus;
+  /** 服务端派生（§5.4），前端只渲染 */
+  verified: boolean;
+  /** 逐字。为空**不代表没有 blocker**，只代表载荷没有结构化声明过（契约 6.12） */
+  blockers: string[];
+  /** agent 原话，逐字。未验证时这里往往就是唯一说明原因的地方 */
+  summaryText: string | null;
+  testCommand: string | null;
+  testResults: Array<{ command: string; exitCode: number; summary: string }>;
+  artifactCount: number;
+}
+
+/** 证据面（B-3 最小版）：治理决策的支撑证据，从 v0.1 交付聚合切单仓作用域派生。
+ *  全部字段原样透传或 nullable 降级（diffstat 缺失只列文件名、快照 null 显未接入），
+ *  不做状态映射。 */
+export interface EvidenceView {
+  repositoryName: string;
+  headSha: string;
+  baseSha: string;
+  branchName: string;
+  prLabel: string | null;
+  prUrl: string | null;
+  ciChecks: Array<{ name: string; passed: boolean; summary: string; required: boolean }>;
+  reviews: Array<{ reviewer: string; state: string; summary: string }>;
+  requiredApprovals: number;
+  /** null = 合并请求已发出或已过（§6.4），不等于「不允许」 */
+  mergeGate: { allowed: boolean; reasons: string[] } | null;
+  governance: Array<{ decision: string; headSha: string; reason: string; decidedAt: string }>;
+  commits: Array<{ sha: string; files: string[] }>;
+  snapshot: { id: string; status: string; environmentHash: string; expiresAt: string } | null;
+  /** A-18：本仓任务的 agent 自述，验证过的和没验证过的都在，按聚合顺序。
+   *  这是证据面里唯一**不是**机器观测的一段——CI、评审、门禁都是系统看到的，
+   *  这一段是执行者自己说的，两者不能互相顶替。 */
+  agentReports: TaskAgentReport[];
+}
+
+/** 计划纸面（§5.4）的**锚点仓**。端点是单仓作用域，而 DAG 与 execution_batches 是
+ *  issue 级、每个仓取回的是同一份——所以画整张图只需要任取一个落在本 issue 域内的
+ *  仓库。issue 详情的 `repositories` 为空时（草稿 issue 尚未冻结范围），发现链候选块
+ *  的 `repository_id` 是同一个域内的另一条来路，由发现面板报给容器、容器转给 DAG 面板。 */
+export interface PlanAnchor {
+  repositoryId: string;
+  name: string;
+}
+
+/** 计划 DAG 的执行态着色输入（C-4）。由**本轮交付聚合的 `tasks[]`** 切成按仓一份，
+ *  值全部是读模型给出的 `display_status` 字面值——前端不派生、不翻译、不兜底。
+ *
+ *  `null` 是一种诚实的取舍而不是缺省值：同一个仓在本轮可能有多条任务（CI rework
+ *  与父任务同仓），它们的展示态不一致时，读模型**没有**给出「这个仓整体算什么态」
+ *  这一事实，前端挑一条充数就是自造了一份仓级状态映射。 */
+export interface DagExecutionView {
+  /** repository_id → 该仓本轮任务的展示态；多条且不一致时为 null */
+  byRepository: Record<string, TaskDisplayStatus | null>;
+  /** 该仓本轮的任务条数（0 = 本轮没有这个仓的任务） */
+  taskCountByRepository: Record<string, number>;
+  /** A-18：该仓本轮里 agent 自述「未验证」的任务条数（0 = 没有这样的声明）。
+   *  与 `byRepository` 的展示态**正交**：一个任务可以既是 succeeded 又是未验证，
+   *  live 那条就是。所以它是节点上另加的一个标记，不是换一种颜色。 */
+  unverifiedCountByRepository: Record<string, number>;
+  /** 该仓未验证任务里，agent 结构化声明的 blocker 总条数。为 0 时节点只说「未验证」，
+   *  绝不写「0 条 blocker」——没声明和声明了零条是两回事（契约 6.12）。 */
+  blockerCountByRepository: Record<string, number>;
+  /** A-18 第四面：该仓失败任务的理由原文（Runner `summary`，逐字）。
+   *
+   *  失败任务此前在读模型里没有证据（parser 卡在「必须有 commitSha」上），界面因此
+   *  只能说「failed」。理由是可执行的操作信息——`changed_path_denied: tests/
+   *  test_discount.py` 直接指出「把 tests/ 加进 allowed_paths」——所以它上图，
+   *  不只躺在弹窗里。没有理由的失败任务不进这张表（不编）。 */
+  failureReasonsByRepository: Record<string, string[]>;
+  /** 着色取自哪一轮，页脚如实标注（决策夹的 deckNote 同款语义） */
+  roundLabel: string;
+}
+
+/** 环境窗（CONS-43）的单仓切片：轮次粒度的交付聚合切到本仓作用域。
+ *  gate 相关字段原样透传读模型，前端不映射。 */
+export interface RepositoryEnv {
+  repositoryName: string;
+  gateDisplay: GateDisplay | null;
+  prLabel: string | null;
+  prUrl: string | null;
+  /** null = 合并请求已发出或已过（§6.4 追认），**不等于**「不允许」 */
+  mergeAllowed: boolean | null;
+  changedFiles: Array<{ path: string }>;
+  commitShas: string[];
+  validationSnapshotId: string | null;
+  /** CHANGESET 中各仓位置（按 merge_order），标出当前所在仓 */
+  siblings: Array<{ name: string; gate: GateDisplay; isCurrent: boolean }>;
+}

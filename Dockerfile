@@ -16,6 +16,13 @@ COPY capabilities ./capabilities
 
 RUN pip install --no-cache-dir .
 
+# Operator scripts travel with the image so a containerised console can be
+# seeded in place: `docker compose --profile console exec console-api python
+# scripts/seed-console-demo.py` picks the database up from the container's own
+# REPOMESH_DATABASE_URL. Copied after the install so editing a script does not
+# invalidate it.
+COPY scripts ./scripts
+
 EXPOSE 8000
 
 CMD ["sh", "-c", "alembic upgrade head && uvicorn repomesh.main:app --host 0.0.0.0 --port 8000"]

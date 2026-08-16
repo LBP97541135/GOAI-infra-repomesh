@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from repomesh.modules.agent_runtime.ports.agent_team import ManagerRuntime, WorkerRuntime
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="REPOMESH_", extra="ignore")
@@ -19,8 +21,33 @@ class Settings(BaseSettings):
     agentteams_controller_token: str | None = None
     agentteams_matrix_url: str = "http://localhost:6167"
     agentteams_matrix_access_token: str | None = None
+    #: Which runtime the projected Manager/Worker resources ask the controller
+    #: for. Not a free choice: the controller pairs each runtime with its own
+    #: image env (``AGENTTEAMS_COPAW_WORKER_IMAGE`` vs ``AGENTTEAMS_WORKER_IMAGE``
+    #: for openclaw), so asking for a runtime whose image that controller has
+    #: not been given spawns containers that exit(1) on boot, never obtain a
+    #: Matrix identity, and fail every dispatch — the root cause under defect
+    #: A-6. Hardcoded ``openclaw`` on both projection paths before this;
+    #: ``copaw`` is the pairing this deployment actually has. Typed as the wire
+    #: enums so an unknown value fails at startup rather than at first
+    #: dispatch, and so the allowed set is not copied here.
+    agentteams_manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
+    agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     runner_control_token: str | None = None
     agent_action_token: str | None = None
+    #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
+    #: else is refused before a request leaves this process.
+    repository_scan_allowed_hosts: str = "github.com"
+    #: Credentials the *console* scan endpoints use to read private
+    #: repositories. The console's request bodies carry no token field on
+    #: purpose (a browser is not a place to type a PAT), so this env is the
+    #: only way to reach a private repo from the GUI. The native RI endpoints
+    #: still accept a token in the body for scripts and operators.
+    repository_scan_github_token: str = ""
+    repository_scan_gitlab_token: str = ""
+    #: AgentTeams probe budget per row, and how many may be in flight at once.
+    runtime_probe_timeout_seconds: float = 2.0
+    runtime_probe_concurrency: int = 16
     worker_task_control_url: str | None = None
     agentteams_storage_root: Path = Path(".agentteams-storage")
     agentteams_storage_endpoint: str | None = None
@@ -65,12 +92,17 @@ class Settings(BaseSettings):
     github_app_private_key_base64: SecretStr | None = None
     github_webhook_secret: str | None = None
     delivery_auto_enabled: bool = False
+    # Local-dev alternative to the GitHub App pair above: one personal
+    # token for every repository (StaticTokenProvider). The App path
+    # wins when both are configured.
+    delivery_github_token: str = ""
     delivery_base_branch: str = "main"
     delivery_required_checks: tuple[str, ...] = ()
     delivery_required_approvals: int = Field(default=1, ge=0)
     delivery_contract_gate: bool = False
     delivery_pr_label: bool = False
     delivery_reconcile_interval_seconds: int = Field(default=60, ge=5)
+    delivery_recovery_interval_seconds: int = Field(default=30, ge=5)
     replan_auto_commit: bool = True
     """Default replan mode when the request says ``auto`` (PR-4).
 

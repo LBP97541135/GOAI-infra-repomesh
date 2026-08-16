@@ -91,6 +91,12 @@ class GovernanceDecisionView:
     decided_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class DeliveryArchiveView:
+    delivery_id: UUID
+    archived_at: datetime
+
+
 class SCMObservationSource(StrEnum):
     WEBHOOK = "webhook"
     POLLER = "poller"
@@ -372,6 +378,38 @@ class RecoveryPlanView:
 
 
 @dataclass(frozen=True, slots=True)
+class RequestChangeSetRollbackCommand:
+    """Roll back a whole ChangeSet, requested from the console (GUI batch E-1).
+
+    Granularity is deliberate: the 2026-08-12 GUI ruling #4 refuses a
+    per-repository rollback because undoing one repository of a jointly
+    validated set tears that validation apart. There is therefore no
+    ``repository_id`` here — the command always covers every candidate.
+    """
+
+    change_set_id: UUID
+    reason: str
+    requested_by_agent_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeSetRollbackView:
+    """What a rollback request actually did, so the console can say it plainly.
+
+    ``decisions`` are the head-bound ROLLBACK_REQUIRED decisions that close the
+    merge gate; ``recovery_plan`` is the action sequence the Saga will execute.
+    ``replayed`` is true when the request found the same decision and the same
+    operator-requested plan already recorded and wrote nothing.
+    """
+
+    delivery_id: UUID
+    change_set_id: UUID
+    decisions: tuple["GovernanceDecisionView", ...]
+    recovery_plan: "RecoveryPlanView"
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ChangeSetView:
     id: UUID
     organization_id: UUID
@@ -388,6 +426,14 @@ class ChangeSetView:
     candidate_revisions: tuple[CandidateRevisionView, ...]
     created_at: datetime
     updated_at: datetime
+
+
+MERGE_GATE_GOVERNANCE_MISSING_REASON = "head-bound governance decision is missing"
+"""Merge-gate reason for a candidate lacking a head-bound READY decision.
+
+The gate evaluator and its consumers (e.g. the read model's approve
+derivation, contract §4.3) must share this constant — no magic strings.
+"""
 
 
 @dataclass(frozen=True, slots=True)

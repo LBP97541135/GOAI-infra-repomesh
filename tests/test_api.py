@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import replace
+from datetime import datetime
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -74,9 +75,7 @@ def test_local_account_bootstrap_login_and_session_authentication(
         )
         assert login.status_code == 200
         token = login.json()["access_token"]
-        authenticated = client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-        )
+        authenticated = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
         assert authenticated.status_code == 200
         assert authenticated.json()["username"] == "admin"
         assert client.get("/api/v1/auth/me").status_code == 200
@@ -85,9 +84,134 @@ def test_local_account_bootstrap_login_and_session_authentication(
             "/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}"}
         )
         assert logged_out.status_code == 204
-        assert client.get(
-            "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
-        ).status_code == 401
+        assert (
+            client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}).status_code
+            == 401
+        )
+
+
+def test_account_creation_separates_bad_input_conflict_and_permission(
+    application_container: ApplicationContainer,
+) -> None:
+    """One LocalAuthenticationError used to become 403 for all three.
+
+    The form on the other end has to know whether to highlight a field, say
+    the name is taken, or say the operator may not do this at all.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={
+                "username": "admin",
+                "password": "strong-password-123",
+                "display_name": "Administrator",
+            },
+        )
+        admin_headers = {
+            "Authorization": "Bearer "
+            + client.post(
+                "/api/v1/auth/login",
+                json={"username": "admin", "password": "strong-password-123"},
+            ).json()["access_token"]
+        }
+
+        short_password = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={"username": "reviewer", "password": "short", "display_name": "Reviewer"},
+        )
+        assert short_password.status_code == 422
+        assert short_password.json()["detail"] == "password must contain at least 12 characters"
+
+        blank_display_name = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={"username": "reviewer", "password": "reviewer-password-123", "display_name": " "},
+        )
+        assert blank_display_name.status_code == 422
+
+        created = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={
+                "username": "reviewer",
+                "password": "reviewer-password-123",
+                "display_name": "Reviewer",
+            },
+        )
+        assert created.status_code == 201
+
+        duplicate = client.post(
+            "/api/v1/auth/accounts",
+            headers=admin_headers,
+            json={
+                "username": "REVIEWER",
+                "password": "reviewer-password-456",
+                "display_name": "Twin",
+            },
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "username already exists"
+
+        reviewer_headers = {
+            "Authorization": "Bearer "
+            + client.post(
+                "/api/v1/auth/login",
+                json={"username": "reviewer", "password": "reviewer-password-123"},
+            ).json()["access_token"]
+        }
+        forbidden = client.post(
+            "/api/v1/auth/accounts",
+            headers=reviewer_headers,
+            json={
+                "username": "other",
+                "password": "another-password-123",
+                "display_name": "Other",
+            },
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "local administrator permission is required"
+
+
+def test_bootstrap_rejects_weak_password_as_input_not_conflict(
+    application_container: ApplicationContainer,
+) -> None:
+    with TestClient(create_app(application_container)) as client:
+        weak = client.post(
+            "/api/v1/auth/bootstrap",
+            json={"username": "admin", "password": "short", "display_name": "Administrator"},
+        )
+        assert weak.status_code == 422
+        assert weak.json()["detail"] == "password must contain at least 12 characters"
+
+
+def test_login_with_malformed_username_still_answers_401(
+    application_container: ApplicationContainer,
+) -> None:
+    """Regression pin for the error-typing split.
+
+    ``login`` normalizes the username through the same validator that now
+    raises LocalAccountValidationError. Because that type subclasses
+    LocalAuthenticationError, the login handler still catches it and answers
+    401 — a sibling type would have escaped the handler and become a 500.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        client.post(
+            "/api/v1/auth/bootstrap",
+            json={
+                "username": "admin",
+                "password": "strong-password-123",
+                "display_name": "Administrator",
+            },
+        )
+        refused = client.post(
+            "/api/v1/auth/login",
+            json={"username": "no spaces allowed", "password": "strong-password-123"},
+        )
+        assert refused.status_code == 401
+        assert refused.json()["detail"] == "username format is invalid"
 
 
 def test_admin_can_compose_agentteams_team_from_existing_agents(
@@ -183,9 +307,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
             ),
             idempotency_key="human-api-org-leader",
         )
-        team = await CreateRepositoryAgentTeam(
-            application_container.agent_directory
-        ).execute(
+        team = await CreateRepositoryAgentTeam(application_container.agent_directory).execute(
             CreateRepositoryAgentTeamRequest(
                 organization_id=organization_id,
                 organization_leader_id=leader.principal.id,
@@ -240,7 +362,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
                 "human_grants": [
                     {
                         "human_principal_id": reviewer["id"],
-                            "role": "project_supervisor",
+                        "role": "project_supervisor",
                         "code_access": "read",
                         "control_actions": [
                             "approve_checkpoint",
@@ -249,8 +371,8 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
                             "resume_project",
                             "cancel_project",
                         ],
-                            "repository_id": None,
-                            "path_patterns": [],
+                        "repository_id": None,
+                        "path_patterns": [],
                     }
                 ],
                 "idempotency_key": "human-api-project",
@@ -273,9 +395,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
             },
         )
         assert pending_gate.json()["reason"] == "human_checkpoint_pending"
-        reviewer_headers = {
-            "Authorization": f"Bearer {reviewer_login['access_token']}"
-        }
+        reviewer_headers = {"Authorization": f"Bearer {reviewer_login['access_token']}"}
         agents_response = client.get("/api/v1/agents", headers=reviewer_headers)
         assert agents_response.status_code == 200
         assert {item["id"] for item in agents_response.json()} == {
@@ -283,9 +403,7 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
             str(team.leader.id),
             str(team.workers[0].id),
         }
-        inbox = client.get(
-            "/api/v1/review-requests?status=pending", headers=reviewer_headers
-        )
+        inbox = client.get("/api/v1/review-requests?status=pending", headers=reviewer_headers)
         assert inbox.status_code == 200
         assert inbox.json()[0]["evidence_version"] == "task:example:v1"
         decision_payload = {
@@ -300,9 +418,10 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
         )
         assert approved.status_code == 200
         assert approved.json()["human_principal_id"] == reviewer["id"]
-        assert client.get(
-            "/api/v1/review-requests?status=pending", headers=reviewer_headers
-        ).json() == []
+        assert (
+            client.get("/api/v1/review-requests?status=pending", headers=reviewer_headers).json()
+            == []
+        )
         duplicate_decision = client.post(
             f"/api/v1/projects/{project_id}/checkpoint-decisions",
             headers=reviewer_headers,
@@ -333,54 +452,48 @@ def test_authenticated_project_mode_and_checkpoint_decision_api(
 def test_register_and_discover_repository(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:
-    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "planning-secret")
+    # These writes used to take no credential; they now share the action token
+    # with the rest of this router, so the happy path has to present it.
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     get_settings.cache_clear()
-    headers = {"Authorization": "Bearer planning-secret"}
+    headers = {"Authorization": "Bearer internal-secret"}
     try:
-        with TestClient(create_app(application_container)) as client:
-            created = client.post(
-                "/api/v1/repositories",
-                headers=headers,
-                json={
-                    "name": "billing-api",
-                    "url": "https://github.com/example/billing",
-                    "description": "Invoice and payment service",
-                    "topics": ["billing", "payment"],
-                    "languages": ["python"],
-                },
-            )
-            assert created.status_code == 201
-
-            discovered = client.post(
-                "/api/v1/discovery",
-                headers=headers,
-                json={"requirement": "Add payment invoice support"},
-            )
-            assert discovered.status_code == 200
-            assert discovered.json()[0]["repository_name"] == "billing-api"
-            assert discovered.json()[0]["matched_terms"] == ["invoice", "payment"]
+        _register_and_discover(application_container, headers)
     finally:
         get_settings.cache_clear()
 
 
-def test_repository_intelligence_posts_require_authentication(
-    application_container: ApplicationContainer,
+def _register_and_discover(
+    application_container: ApplicationContainer, headers: dict[str, str]
 ) -> None:
     with TestClient(create_app(application_container)) as client:
-        response = client.post(
+        created = client.post(
             "/api/v1/repositories",
+            headers=headers,
             json={
                 "name": "billing-api",
                 "url": "https://github.com/example/billing",
+                "description": "Invoice and payment service",
+                "topics": ["billing", "payment"],
+                "languages": ["python"],
             },
         )
-    assert response.status_code == 401
+        assert created.status_code == 201
+
+        discovered = client.post(
+            "/api/v1/discovery",
+            headers=headers,
+            json={"requirement": "Add payment invoice support"},
+        )
+        assert discovered.status_code == 200
+        assert discovered.json()[0]["repository_name"] == "billing-api"
+        assert discovered.json()[0]["matched_terms"] == ["invoice", "payment"]
 
 
 def test_runner_control_requires_configured_token(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:
-    monkeypatch.delenv("REPOMESH_RUNNER_CONTROL_TOKEN", raising=False)
+    monkeypatch.setenv("REPOMESH_RUNNER_CONTROL_TOKEN", "")
     get_settings.cache_clear()
     try:
         with TestClient(create_app(application_container)) as client:
@@ -432,9 +545,7 @@ def test_delivery_reconciliation_requires_token_and_configured_scm(
     get_settings.cache_clear()
     try:
         with TestClient(create_app(application_container)) as client:
-            unauthorized = client.post(
-                f"/api/v1/delivery/change-sets/{uuid4()}/reconcile"
-            )
+            unauthorized = client.post(f"/api/v1/delivery/change-sets/{uuid4()}/reconcile")
             unavailable = client.post(
                 f"/api/v1/delivery/change-sets/{uuid4()}/reconcile",
                 headers={"Authorization": "Bearer internal-secret"},
@@ -459,9 +570,7 @@ def test_worker_mcp_initializes_with_gateway_token(
                 json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
             )
         assert response.status_code == 200
-        assert response.json()["result"]["serverInfo"]["name"] == (
-            "repomesh-task-control"
-        )
+        assert response.json()["result"]["serverInfo"]["name"] == ("repomesh-task-control")
     finally:
         get_settings.cache_clear()
 
@@ -537,3 +646,735 @@ def test_worker_mcp_direct_mode_is_forbidden_in_production(
         assert response.status_code == 503
     finally:
         get_settings.cache_clear()
+
+
+def test_repository_intelligence_writes_all_require_the_action_token(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Every write on this router, not just POST /issues.
+
+    The check used to live inside the intake handler, so the other eight — the
+    manual approval gate and the org scanner among them — took no credential.
+    Sampling one endpoint would not have caught that, so this asserts the whole
+    set and the reads it must not have locked.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    doc_id = uuid4()
+    writes = [
+        ("/api/v1/issues", {}),
+        ("/api/v1/repositories", {}),
+        ("/api/v1/repositories/scan-org", {}),
+        ("/api/v1/repositories/scan-repo", {}),
+        ("/api/v1/discovery", {}),
+        ("/api/v1/requirement-analysis", {}),
+        ("/api/v1/confirmation", {}),
+        ("/api/v1/integration", {}),
+        ("/api/v1/bridge/materialize", {}),
+        ("/api/v1/bridge/replan", {}),
+        (f"/api/v1/handoff-docs/{doc_id}/decision", {}),
+    ]
+    try:
+        with TestClient(create_app(application_container)) as client:
+            unauthorized = {path: client.post(path, json=body).status_code for path, body in writes}
+            wrong_token = client.post(
+                "/api/v1/discovery",
+                headers={"Authorization": "Bearer wrong"},
+                json={"requirement": "x"},
+            )
+            reads_still_open = client.get("/api/v1/repositories")
+    finally:
+        get_settings.cache_clear()
+
+    assert set(unauthorized.values()) == {401}, unauthorized
+    assert wrong_token.status_code == 401
+    # The reads share this router and stay open: this change stops the bleeding
+    # on the writes without altering behaviour anyone reads today.
+    assert reads_still_open.status_code == 200
+
+
+def test_org_scan_refuses_hosts_outside_the_allowlist(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A host in the request body used to become an outbound request.
+
+    Anything that is not github.com is treated as a self-hosted GitLab and the
+    fetcher derives its API base from the submitted URL, so the body chose who
+    this server talked to. 400 means the refusal happened before any egress.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            metadata = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "http://169.254.169.254/latest/meta-data/"},
+            )
+            internal = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://gitlab.internal.example/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert metadata.status_code == 400
+    assert internal.status_code == 400
+    assert "allowlist" in internal.json()["detail"]
+
+
+def test_org_scan_failures_do_not_echo_the_underlying_error(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """502 used to carry the outbound failure's text back to the caller."""
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("connect to 10.0.0.7:5432 refused")
+
+    monkeypatch.setattr(scan_remote, "scan_org", _explode)
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.post(
+                "/api/v1/repositories/scan-org",
+                headers={"Authorization": "Bearer internal-secret"},
+                json={"org_url": "https://github.com/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "organization scan failed"
+    assert "10.0.0.7" not in response.text
+
+
+def test_url_type_endpoint_is_the_console_badge_source_of_truth(
+    application_container: ApplicationContainer,
+) -> None:
+    """Organization / single repo / neither, decided in Python.
+
+    The console debounces against this instead of reimplementing
+    ``detect_platform`` in TypeScript, so the badge cannot drift from what the
+    scan endpoints will actually do. It is a read: no token, no egress.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        org = client.get("/api/v1/repositories/url-type", params={"url": "https://github.com/acme"})
+        repo = client.get(
+            "/api/v1/repositories/url-type",
+            params={"url": "https://github.com/acme/order-service"},
+        )
+        junk = client.get("/api/v1/repositories/url-type", params={"url": "order-service"})
+        gitlab = client.get(
+            "/api/v1/repositories/url-type",
+            params={"url": "https://gitlab.internal.example/acme"},
+        )
+
+    assert org.status_code == 200
+    assert org.json() == {
+        "url": "https://github.com/acme",
+        "url_type": "group",
+        "platform": "github",
+        "repository_name": None,
+    }
+    assert repo.json()["url_type"] == "single_repo"
+    assert repo.json()["repository_name"] == "order-service"
+    assert junk.json()["url_type"] == "unknown"
+    assert junk.json()["platform"] == "local"
+    # A host this server would refuse to scan still classifies honestly: the
+    # badge must not double as an oracle for the operator's allowlist.
+    assert gitlab.json() == {
+        "url": "https://gitlab.internal.example/acme",
+        "url_type": "group",
+        "platform": "gitlab",
+        "repository_name": None,
+    }
+
+
+def test_single_repo_scan_registers_the_repository_from_its_url(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A pasted repo URL becomes a catalog entry with a real AutoCard.
+
+    POST /repositories already existed but makes the caller type every field;
+    this one fetches the tree/deps/commits. The scan itself is stubbed — the
+    test asserts the endpoint's contract, not GitHub's.
+    """
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+    from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+
+    async def _fake_scan(url: str, fetcher: object) -> RepositoryProfile:
+        return RepositoryProfile(
+            name="order-service",
+            url=url,
+            auto_card=AutoCard(top_dirs=("src",), recent_commits=("add wechat pay",)),
+        )
+
+    monkeypatch.setattr(scan_remote, "scan_single_repo", _fake_scan)
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            first = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://github.com/acme/order-service"},
+            )
+            # Re-scanning is the only retry the console offers, so it has to be
+            # safe to repeat: the second run skips instead of duplicating.
+            again = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://github.com/acme/order-service"},
+            )
+            listed = client.get("/api/v1/repositories")
+    finally:
+        get_settings.cache_clear()
+
+    assert first.status_code == 200
+    body = first.json()
+    assert body["repo_url"] == "https://github.com/acme/order-service"
+    assert (body["total_scanned"], body["registered"], body["skipped"], body["failed"]) == (
+        1,
+        1,
+        0,
+        0,
+    )
+    assert body["repositories"][0]["name"] == "order-service"
+    assert body["repositories"][0]["auto_card"]["recent_commits"] == ["add wechat pay"]
+
+    assert again.json()["registered"] == 0
+    assert again.json()["skipped"] == 1
+    assert [r["name"] for r in listed.json()] == ["order-service"]
+
+
+def test_single_repo_scan_refuses_a_group_url_and_hosts_off_the_allowlist(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Both refusals happen before anything leaves this process.
+
+    The group URL is caught by the same identification the console badges
+    with; the internal host by the SSRF allowlist that scan-org already had.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            group = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://github.com/acme"},
+            )
+            internal = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "https://gitlab.internal.example/acme/orders"},
+            )
+            metadata = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers=headers,
+                json={"repo_url": "http://169.254.169.254/latest/meta-data/"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert group.status_code == 400
+    assert "single repository" in group.json()["detail"]
+    assert internal.status_code == 400
+    assert "allowlist" in internal.json()["detail"]
+    assert metadata.status_code == 400
+
+
+def test_single_repo_scan_failures_do_not_echo_the_underlying_error(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Same silence as scan-org: the caller does not learn what we reached."""
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("connect to 10.0.0.7:5432 refused")
+
+    monkeypatch.setattr(scan_remote, "scan_single_repo", _explode)
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.post(
+                "/api/v1/repositories/scan-repo",
+                headers={"Authorization": "Bearer internal-secret"},
+                json={"repo_url": "https://github.com/acme/order-service"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "repository scan failed"
+    assert "10.0.0.7" not in response.text
+
+
+# ---------------------------------------------------------------------------
+# The supervision-policy draft: PUT / GET / DELETE
+# ---------------------------------------------------------------------------
+
+
+def _admin_headers(client: TestClient) -> dict[str, str]:
+    client.post(
+        "/api/v1/auth/bootstrap",
+        json={
+            "username": "admin",
+            "password": "strong-password-123",
+            "display_name": "Administrator",
+        },
+    )
+    return {
+        "Authorization": "Bearer "
+        + client.post(
+            "/api/v1/auth/login",
+            json={"username": "admin", "password": "strong-password-123"},
+        ).json()["access_token"]
+    }
+
+
+def _member(
+    client: TestClient, admin_headers: dict[str, str], username: str
+) -> tuple[dict, dict[str, str]]:
+    password = f"{username}-password-123"
+    account = client.post(
+        "/api/v1/auth/accounts",
+        headers=admin_headers,
+        json={
+            "username": username,
+            "password": password,
+            "display_name": username.title(),
+        },
+    ).json()
+    headers = {
+        "Authorization": "Bearer "
+        + client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        ).json()["access_token"]
+    }
+    return account, headers
+
+
+def _grant(human_principal_id: str, **overrides: object) -> dict:
+    grant = {
+        "human_principal_id": human_principal_id,
+        "role": "project_supervisor",
+        "code_access": "read",
+        "control_actions": ["view_decisions", "approve_checkpoint", "request_changes"],
+        "repository_id": None,
+        "path_patterns": [],
+    }
+    grant.update(overrides)
+    return grant
+
+
+def _draft_body(human_principal_id: str, **overrides: object) -> dict:
+    body = {
+        "execution_mode": "supervised",
+        "required_checkpoints": ["repository_scope", "delivery"],
+        "human_grants": [_grant(human_principal_id)],
+    }
+    body.update(overrides)
+    return body
+
+
+def _instant(value: str) -> datetime:
+    """Compare two timestamps as instants, not as strings.
+
+    The endpoint answers out of the record it just wrote, so the first PUT
+    returns the aware ``datetime`` it stored (``...Z``) while the second returns
+    the one SQLite read back, which carries no offset — the same instant spelled
+    two ways, and only under the test database. Postgres holds these columns as
+    ``timestamptz`` and hands both back aware, so normalising here hides a
+    fixture artefact rather than a behaviour.
+    """
+
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+
+
+def test_policy_draft_is_overwritten_read_and_withdrawn(
+    application_container: ApplicationContainer,
+) -> None:
+    """The lifecycle of the one supervision intent a requirement holds.
+
+    ``PUT`` twice is 200 twice — whole-document overwrite, no idempotency key —
+    and the pair of timestamps carries the distinction the store exists to keep:
+    who first decided this project needed watching stays put, when it was last
+    touched moves.
+    """
+
+    project_id = uuid4()
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, reviewer_headers = _member(client, admin_headers, "reviewer")
+        _, outsider_headers = _member(client, admin_headers, "outsider")
+
+        assert (
+            client.get(
+                f"/api/v1/projects/{project_id}/policy-draft", headers=admin_headers
+            ).status_code
+            == 404
+        )
+
+        first = client.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(reviewer["id"]),
+        )
+        assert first.status_code == 200
+        assert first.json()["execution_mode"] == "supervised"
+        assert sorted(first.json()["required_checkpoints"]) == [
+            "delivery",
+            "repository_scope",
+        ]
+
+        second = client.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(reviewer["id"], required_checkpoints=["delivery"]),
+        )
+        assert second.status_code == 200
+        assert second.json()["required_checkpoints"] == ["delivery"]
+        assert _instant(second.json()["created_at"]) == _instant(first.json()["created_at"])
+        assert _instant(second.json()["updated_at"]) > _instant(first.json()["updated_at"])
+        assert second.json()["created_by"] == first.json()["created_by"]
+
+        # Readable by the same rule as GET .../topology: administrators, or the
+        # people the policy itself names.
+        granted = client.get(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=reviewer_headers
+        )
+        assert granted.status_code == 200
+        assert granted.json()["human_grants"][0]["human_principal_id"] == reviewer["id"]
+        refused = client.get(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=outsider_headers
+        )
+        assert refused.status_code == 403
+        assert refused.json()["detail"] == "human project membership is required"
+
+        withdrawn = client.delete(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=admin_headers
+        )
+        assert withdrawn.status_code == 204
+        again = client.delete(
+            f"/api/v1/projects/{project_id}/policy-draft", headers=admin_headers
+        )
+        assert again.status_code == 404
+        assert again.json()["detail"] == "project policy draft does not exist"
+
+
+def test_policy_draft_writes_are_admin_only(
+    application_container: ApplicationContainer,
+) -> None:
+    """Setting a policy is the one thing the console's shared token must not reach.
+
+    The whole design rests on it: materialization keeps its own guard and merely
+    *reads* what an admin left, so a write that leaked to any authenticated
+    session — or to none — would put the policy back inside the blast radius of
+    the shared action token.
+    """
+
+    project_id = uuid4()
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, reviewer_headers = _member(client, admin_headers, "reviewer")
+
+        forbidden = client.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            headers=reviewer_headers,
+            json=_draft_body(reviewer["id"]),
+        )
+        assert forbidden.status_code == 403
+        assert forbidden.json()["detail"] == "local administrator permission is required"
+        assert (
+            client.delete(
+                f"/api/v1/projects/{project_id}/policy-draft", headers=reviewer_headers
+            ).status_code
+            == 403
+        )
+
+    with TestClient(create_app(application_container)) as anonymous:
+        unauthenticated = anonymous.put(
+            f"/api/v1/projects/{project_id}/policy-draft",
+            json=_draft_body(str(uuid4())),
+        )
+        assert unauthenticated.status_code == 401
+        assert unauthenticated.json()["detail"] == "local authentication is required"
+
+
+def test_policy_draft_runs_the_single_grant_rules_by_building_a_real_grant(
+    application_container: ApplicationContainer,
+) -> None:
+    """The two refusals below only happen if the endpoint builds a HumanProjectGrant.
+
+    ``assert_supervision_policy`` takes a Protocol and reads two fields off each
+    grant, so forwarding the request rows straight to it would type-check, pass,
+    and store a draft that materialization later refuses — the exact
+    two-verdicts-on-one-policy failure the shared module was cut out to prevent.
+    The four single-grant rules live in ``HumanProjectGrant.__post_init__`` and
+    run only when the object is really constructed; these are the regression
+    pins for that, and the sentences are the domain's own rather than Pydantic's.
+    """
+
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, _ = _member(client, admin_headers, "reviewer")
+
+        unscoped_supervisor = client.put(
+            f"/api/v1/projects/{uuid4()}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(
+                reviewer["id"],
+                human_grants=[_grant(reviewer["id"], role="repository_supervisor")],
+            ),
+        )
+        assert unscoped_supervisor.status_code == 422
+        assert (
+            unscoped_supervisor.json()["detail"]
+            == "repository supervisor requires repository scope"
+        )
+
+        no_actions = client.put(
+            f"/api/v1/projects/{uuid4()}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(
+                reviewer["id"],
+                human_grants=[_grant(reviewer["id"], control_actions=[])],
+            ),
+        )
+        assert no_actions.status_code == 422
+        assert no_actions.json()["detail"] == "human grant requires control actions"
+
+        unknown_account = client.put(
+            f"/api/v1/projects/{uuid4()}/policy-draft",
+            headers=admin_headers,
+            json=_draft_body(str(uuid4())),
+        )
+        assert unknown_account.status_code == 422
+        assert unknown_account.json()["detail"] == "human grant account does not exist"
+
+
+def test_policy_draft_reports_each_broken_policy_rule_verbatim(
+    application_container: ApplicationContainer,
+) -> None:
+    """A draft is judged now by the same function that will judge it at materialization."""
+
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+        reviewer, _ = _member(client, admin_headers, "reviewer")
+
+        cases = (
+            (
+                {
+                    "execution_mode": "auto",
+                    "required_checkpoints": ["delivery"],
+                    "human_grants": [],
+                },
+                "automatic projects cannot require human checkpoints",
+            ),
+            (
+                {
+                    "execution_mode": "supervised",
+                    "required_checkpoints": ["delivery"],
+                    "human_grants": [],
+                },
+                "human-controlled projects require a human grant",
+            ),
+            (
+                {
+                    "execution_mode": "supervised",
+                    "required_checkpoints": [],
+                    "human_grants": [_grant(reviewer["id"])],
+                },
+                "human-controlled projects require checkpoints",
+            ),
+            (
+                {
+                    "execution_mode": "manual_controlled",
+                    "required_checkpoints": [
+                        "repository_scope",
+                        "specification",
+                        "execution",
+                        "validation",
+                        "delivery",
+                    ],
+                    "human_grants": [_grant(reviewer["id"])],
+                },
+                "manual-controlled projects require every human checkpoint",
+            ),
+            (
+                {
+                    "execution_mode": "supervised",
+                    "required_checkpoints": ["delivery"],
+                    "human_grants": [_grant(reviewer["id"]), _grant(reviewer["id"])],
+                },
+                "duplicate human grant scope",
+            ),
+        )
+        for body, detail in cases:
+            refused = client.put(
+                f"/api/v1/projects/{uuid4()}/policy-draft",
+                headers=admin_headers,
+                json=body,
+            )
+            assert refused.status_code == 422, detail
+            assert refused.json()["detail"] == detail
+
+
+# ---------------------------------------------------------------------------
+# "already has a topology" is a conflict, on both endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_both_topology_endpoints_answer_409_for_a_project_that_already_has_one(
+    application_container: ApplicationContainer,
+) -> None:
+    """One defect in two copies, plus the control cases that keep the fix honest.
+
+    ``ProjectTopologyConflict`` subclasses ``ProjectTopologyError``, so a lone
+    ``except ProjectTopologyError`` gave "this project already has a topology"
+    and "your request is wrong" the same 422 — telling a caller who cannot fix
+    anything to go fix their request. The subclass clause has to come first, and
+    the automatic endpoint carried its own copy of the defect because it
+    delegates to the same creator. The two 422 assertions are what fails if the
+    pair is ever collapsed or reversed.
+    """
+
+    organization_id = uuid4()
+    repository_id = uuid4()
+
+    async def agents():
+        leader = await CreateAgent(application_container.agent_directory).execute(
+            CreateAgentRequest(
+                organization_id=organization_id,
+                role=AgentRole.ORGANIZATION_LEADER,
+                agentteams_resource_name="conflict-org-leader",
+            ),
+            idempotency_key="conflict-org-leader",
+        )
+        team = await CreateRepositoryAgentTeam(application_container.agent_directory).execute(
+            CreateRepositoryAgentTeamRequest(
+                organization_id=organization_id,
+                organization_leader_id=leader.principal.id,
+                repository_id=repository_id,
+                leader_agentteams_resource_name="conflict-repo-leader",
+                worker_agentteams_resource_names=("conflict-worker",),
+            ),
+            idempotency_key="conflict-repo-team",
+        )
+        return leader.principal, team
+
+    organization_leader, team = asyncio.run(agents())
+
+    def explicit(project_id, key: str, **overrides: object) -> dict:
+        body = {
+            "organization_id": str(organization_id),
+            "project_id": str(project_id),
+            "organization_leader_id": str(organization_leader.id),
+            "repository_teams": [
+                {
+                    "repository_id": str(repository_id),
+                    "leader_agent_id": str(team.leader.id),
+                    "worker_agent_ids": [str(team.workers[0].id)],
+                }
+            ],
+            "idempotency_key": key,
+        }
+        body.update(overrides)
+        return body
+
+    def automatic(project_id, key: str, **overrides: object) -> dict:
+        body = {
+            "organization_id": str(organization_id),
+            "project_id": str(project_id),
+            "repository_ids": [str(repository_id)],
+            "idempotency_key": key,
+        }
+        body.update(overrides)
+        return body
+
+    with TestClient(create_app(application_container)) as client:
+        admin_headers = _admin_headers(client)
+
+        explicit_project = uuid4()
+        created = client.post(
+            "/api/v1/projects/topologies",
+            headers=admin_headers,
+            json=explicit(explicit_project, "explicit-first"),
+        )
+        assert created.status_code == 201
+        # A fresh idempotency key, so this is the store refusing a second
+        # topology for the project rather than the replay path answering.
+        repeated = client.post(
+            "/api/v1/projects/topologies",
+            headers=admin_headers,
+            json=explicit(explicit_project, "explicit-second"),
+        )
+        assert repeated.status_code == 409
+        assert repeated.json()["detail"] == "project topology already exists"
+
+        malformed = client.post(
+            "/api/v1/projects/topologies",
+            headers=admin_headers,
+            json=explicit(
+                uuid4(),
+                "explicit-violation",
+                execution_mode="auto",
+                required_checkpoints=["delivery"],
+            ),
+        )
+        assert malformed.status_code == 422
+        assert malformed.json()["detail"] == "automatic projects cannot require human checkpoints"
+
+        automatic_project = uuid4()
+        auto_created = client.post(
+            "/api/v1/projects/automatic-topologies",
+            headers=admin_headers,
+            json=automatic(automatic_project, "automatic-first"),
+        )
+        assert auto_created.status_code == 201
+        auto_repeated = client.post(
+            "/api/v1/projects/automatic-topologies",
+            headers=admin_headers,
+            json=automatic(automatic_project, "automatic-second"),
+        )
+        assert auto_repeated.status_code == 409
+        assert auto_repeated.json()["detail"] == "project topology already exists"
+
+        auto_malformed = client.post(
+            "/api/v1/projects/automatic-topologies",
+            headers=admin_headers,
+            json=automatic(
+                uuid4(),
+                "automatic-violation",
+                execution_mode="auto",
+                required_checkpoints=["delivery"],
+            ),
+        )
+        assert auto_malformed.status_code == 422
+        assert (
+            auto_malformed.json()["detail"]
+            == "automatic projects cannot require human checkpoints"
+        )

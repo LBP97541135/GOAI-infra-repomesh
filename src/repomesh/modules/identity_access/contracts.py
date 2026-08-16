@@ -6,6 +6,7 @@ from uuid import UUID
 from repomesh.modules.agent_directory.contracts import AgentPrincipalView
 from repomesh.modules.context.contracts import ContextObjectType, ContextScope
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
+from repomesh.shared.events import ActorType
 
 
 class AuthorizationAction(StrEnum):
@@ -54,3 +55,48 @@ class AgentAuthorizationGateway(Protocol):
         *,
         topology: ProjectAgentTopologyView | None = None,
     ) -> AuthorizationDecision: ...
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationView:
+    """Contract v0.3 §2.2: one workspace row in the registry."""
+
+    organization_id: UUID
+    name: str
+    created_at: str
+    agent_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CreateOrganizationCommand:
+    """Contract v0.3 §2.3. Creating a workspace = organization row plus its
+    ORGANIZATION_LEADER registration (a desired-state directory row, not a
+    running agent — the roster reports its runtime honestly as absent).
+
+    ``actor_type``/``actor_id`` feed the audit trail (v0.3 §6 S-6): the API
+    layer resolves them to the logged-in human session when the request
+    carries one, else to a fingerprint of the presented action token — a
+    hardcoded label would make workspace creation untraceable."""
+
+    name: str
+    idempotency_key: str
+    actor_type: ActorType
+    actor_id: str
+    leader_resource_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationReceipt:
+    organization_id: UUID
+    name: str
+    created_at: str
+    leader_agent_id: UUID
+    created: bool
+
+
+class OrganizationRegistry(Protocol):
+    async def list_views(
+        self, organization_id: UUID | None = None
+    ) -> tuple[OrganizationView, ...]: ...
+
+    async def create(self, command: CreateOrganizationCommand) -> OrganizationReceipt: ...

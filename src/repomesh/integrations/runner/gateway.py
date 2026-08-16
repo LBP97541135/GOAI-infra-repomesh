@@ -74,6 +74,20 @@ class RunnerControlGateway:
             "summary": summary,
             "changedFiles": details.get("changedFiles", []),
             "testResults": details.get("testResults", []),
+            # A-18: the Runner event carries these two and this write-back used
+            # to drop them, so "no test command was ever run" and "no artifact
+            # was produced" existed only in ``runner_events`` -- a table no read
+            # model joins. A task therefore could not say whether it had been
+            # verified, which is why a run that executed nothing rendered as a
+            # clean success right before the merge approval.
+            "testCommand": details.get("testCommand"),
+            "artifacts": details.get("artifacts", []),
+            # Not emitted by any Runner today (RunnerExecutionResult declares no
+            # such field). Copied when present so the day a Runner does declare
+            # its blockers they reach the task without another migration; until
+            # then the agent's words live in ``summary`` and are shown from
+            # there, not mined out of it.
+            "blockers": details.get("blockers", []),
             "commitSha": details.get("commitSha"),
             "runId": str(dispatch.run_id),
             "workspacePath": dict(dispatch.task_payload.get("workspace") or {}).get("path"),

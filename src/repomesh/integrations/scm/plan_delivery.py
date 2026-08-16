@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from repomesh.modules.delivery import DeliveryService
+from repomesh.modules.delivery import DeliveryService, delivery_change_set_key
 from repomesh.modules.delivery.contracts import (
     AppendCandidatesCommand,
     PrepareChangeSetCommand,
@@ -24,7 +24,11 @@ from repomesh.modules.review_validation import (
     ValidationSnapshotService,
     ValidationTestInput,
 )
-from repomesh.modules.task_orchestration.contracts import ExecutionPlanView, TaskStatus
+from repomesh.modules.task_orchestration.contracts import (
+    BatchDeliveryRefused,
+    ExecutionPlanView,
+    TaskStatus,
+)
 from repomesh.modules.task_orchestration.ports import TaskStore
 
 from .delivery import ChangeSetSCMCoordinator, PublishChangeSetPullRequestCommand
@@ -100,7 +104,7 @@ class PlanDeliveryFinalizer:
             )
             if not delivery_gate.allowed:
                 raise ValueError(delivery_gate.reason)
-        idempotency_key = f"execution-plan:{plan.id}:delivery"
+        idempotency_key = delivery_change_set_key(plan.id)
         existing = await self._delivery.get_by_idempotency_key(idempotency_key)
         validation_snapshot_id = (
             existing.validation_snapshot_id if existing is not None else None
@@ -256,18 +260,43 @@ class PlanDeliveryFinalizer:
             workers = await self._tasks.list_by_parent(planned.leader_task_id)
             succeeded = [task for task in workers if task.status is TaskStatus.SUCCEEDED]
             if len(succeeded) != 1:
-                raise ValueError(
-                    f"repository {planned.repository_id} has no unique successful candidate"
+                raise BatchDeliveryRefused(
+                    f"repository {planned.repository_id} has no unique successful candidate",
+                    repository_id=planned.repository_id,
                 )
             worker = succeeded[0]
-            evidence = self._evidence(worker.result_summary)
-            commit_sha = str(evidence.get("commitSha") or "").lower()
-            base_sha = str(evidence.get("baseSha") or "").lower()
-            workspace = Path(str(evidence.get("workspacePath") or ""))
+            # Declared evidence, resolved by the producing module at projection
+            # time. This used to re-parse ``result_summary`` here, which is free
+            # text by contract, so delivery was reading a shape nobody promised
+            # it -- and parsing it differently from the producer besides.
+            evidence = worker.to_view().evidence
+            if evidence is None:
+                raise BatchDeliveryRefused(
+                    f"repository {planned.repository_id} candidate carries no Runner evidence",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
+            # ``commit_sha`` is nullable since A-18's fourth face let failed runs
+            # keep their evidence. This path only ever sees SUCCEEDED workers, so
+            # a null here means a run that reported success without committing --
+            # not a shape to publish. It falls through to the ``_full_sha`` check
+            # below and refuses there; the ``or ""`` exists so that check gets to
+            # run at all instead of an AttributeError two lines earlier.
+            commit_sha = (evidence.commit_sha or "").lower()
+            base_sha = (evidence.base_sha or "").lower()
+            workspace = Path(evidence.workspace_path or "")
             if not self._full_sha(commit_sha) or not self._full_sha(base_sha):
-                raise ValueError("Runner evidence has no frozen commit/base SHA")
-            if not workspace.is_dir():
-                raise ValueError("Runner evidence workspace no longer exists")
+                raise BatchDeliveryRefused(
+                    "Runner evidence has no frozen commit/base SHA",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
+            if not evidence.workspace_path or not workspace.is_dir():
+                raise BatchDeliveryRefused(
+                    "Runner evidence workspace no longer exists",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
             branch = f"repomesh/{str(plan.id)[:8]}/{str(planned.repository_id)[:8]}"
             candidates.append(
                 RepositoryCandidateInput(
@@ -282,23 +311,37 @@ class PlanDeliveryFinalizer:
                 )
             )
             workspaces[planned.repository_id] = workspace
-            raw_tests = evidence.get("testResults") or ()
-            if not isinstance(raw_tests, list) or not raw_tests:
-                raise ValueError("Runner evidence has no test results")
-            for result in raw_tests:
-                if not isinstance(result, dict):
-                    raise ValueError("Runner test evidence is malformed")
+            # The last undeclared read is gone (A-18): test results are now part
+            # of TaskEvidenceView, so this reads the producer's parse like every
+            # other field above instead of re-opening the free-text summary.
+            #
+            # The refusal stays exactly as strict, and since A-19 it is a
+            # *named* refusal the advancer records on the round instead of a
+            # ValueError that died in a log. ``_parse_evidence`` drops an entry
+            # it cannot read, which is right for a display projection and wrong
+            # here: delivery must not publish a candidate whose test evidence
+            # was partly unreadable, so a dropped entry surfaces as a count
+            # mismatch against the raw list and refuses.
+            raw_test_count = len(self._evidence(worker.result_summary).get("testResults") or ())
+            if not evidence.test_results:
+                raise BatchDeliveryRefused(
+                    "Runner evidence has no test results",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
+            if len(evidence.test_results) != raw_test_count:
+                raise BatchDeliveryRefused(
+                    "Runner test evidence is malformed",
+                    repository_id=planned.repository_id,
+                    task_id=worker.id,
+                )
+            for result in evidence.test_results:
                 tests.append(
                     ValidationTestInput(
                         repository_id=planned.repository_id,
-                        command=str(result.get("command") or "").strip(),
-                        exit_code=int(result.get("exitCode", -1)),
-                        summary=str(
-                            result.get("stderr")
-                            or result.get("stdout")
-                            or result.get("summary")
-                            or ""
-                        ),
+                        command=result.command,
+                        exit_code=result.exit_code,
+                        summary=result.summary,
                     )
                 )
             earlier_repositories.append(planned.repository_id)

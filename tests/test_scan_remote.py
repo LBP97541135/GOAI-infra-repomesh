@@ -8,7 +8,9 @@ import pytest
 from repomesh.modules.repository_intelligence.application import (
     RepositoryDiscoveryService,
     extract_entry_repo_name,
+    identify_url_type,
     load_requirement,
+    scan_single_repo,
 )
 from repomesh.modules.repository_intelligence.application.scan_remote import (
     _extract_top_dirs,
@@ -27,6 +29,7 @@ from repomesh.modules.repository_intelligence.infrastructure.cache import OrgCac
 from repomesh.modules.repository_intelligence.infrastructure.platform import (
     FileEntry,
     Platform,
+    UrlType,
     detect_platform,
 )
 
@@ -447,3 +450,113 @@ class TestDiscoverWithKeywords:
             keywords=["payment", "stripe"],
         )
         assert len(results) > 0
+
+
+# ---------------------------------------------------------------------------
+# identify_url_type — the console badge's single source of truth
+# ---------------------------------------------------------------------------
+
+
+class TestIdentifyUrlType:
+    """The verdict the console renders next to the URL box.
+
+    Every case here is a pure string judgement: if any of these ever needed a
+    network call the endpoint's promise (debounce on every keystroke, no
+    egress) would already be broken.
+    """
+
+    def test_group_url_is_a_group(self) -> None:
+        assert identify_url_type("https://github.com/FudanSELab") is UrlType.GROUP
+
+    def test_single_repo_url_is_a_single_repo(self) -> None:
+        assert (
+            identify_url_type("https://github.com/FudanSELab/train-ticket")
+            is UrlType.SINGLE_REPO
+        )
+
+    def test_host_only_url_is_unknown(self) -> None:
+        """No path at all names neither an org nor a repo."""
+        assert identify_url_type("https://github.com") is UrlType.UNKNOWN
+        assert identify_url_type("https://gitlab.example.com/") is UrlType.UNKNOWN
+
+    def test_local_path_is_unknown(self) -> None:
+        """The remote scanners cannot reach a filesystem path."""
+        assert identify_url_type(r"D:\repos\order-service") is UrlType.UNKNOWN
+        assert identify_url_type("not a url at all") is UrlType.UNKNOWN
+
+    def test_verdict_agrees_with_the_name_the_scan_would_use(self) -> None:
+        """The badge and the scan must not be able to disagree.
+
+        SINGLE_REPO is defined as "extract_entry_repo_name found a name", so a
+        URL badged single-repo always yields the name the registration uses.
+        """
+
+        for url in (
+            "https://github.com/acme/orders",
+            "https://gitlab.example.com/group/subgroup/orders",
+            "https://github.com/acme/orders.git",
+        ):
+            assert identify_url_type(url) is UrlType.SINGLE_REPO
+            assert extract_entry_repo_name(url) is not None
+
+        for url in ("https://github.com/acme", "https://github.com"):
+            assert identify_url_type(url) is not UrlType.SINGLE_REPO
+            assert extract_entry_repo_name(url) is None
+
+
+# ---------------------------------------------------------------------------
+# scan_single_repo — the single-repo peer of scan_org
+# ---------------------------------------------------------------------------
+
+
+class _StubFetcher:
+    """Offline stand-in for a platform fetcher; records what was asked for."""
+
+    def __init__(self, *, explode: bool = False) -> None:
+        self._explode = explode
+        self.tree_calls: list[str] = []
+
+    async def fetch_file_tree(self, repo_url: str) -> list[FileEntry]:
+        self.tree_calls.append(repo_url)
+        if self._explode:
+            raise RuntimeError("connect to 10.0.0.7:443 refused")
+        return [FileEntry(path="src", is_dir=True)]
+
+    async def fetch_commits(self, repo_url: str, limit: int = 5) -> list[str]:
+        return ["add wechat payment"]
+
+    async def fetch_file_content(self, repo_url: str, file_path: str) -> str | None:
+        return None
+
+
+class TestScanSingleRepo:
+    @pytest.mark.asyncio
+    async def test_builds_a_profile_named_from_the_url(self) -> None:
+        fetcher = _StubFetcher()
+        profile = await scan_single_repo("https://github.com/acme/order-service", fetcher)
+
+        assert profile.name == "order-service"
+        assert profile.url == "https://github.com/acme/order-service"
+        assert profile.auto_card is not None
+        assert profile.auto_card.recent_commits == ("add wechat payment",)
+        # The name came from the URL, so no extra metadata round trip happened.
+        assert fetcher.tree_calls == ["https://github.com/acme/order-service"]
+
+    @pytest.mark.asyncio
+    async def test_group_url_is_rejected_rather_than_guessed(self) -> None:
+        fetcher = _StubFetcher()
+        with pytest.raises(ValueError, match="not a single-repository URL"):
+            await scan_single_repo("https://github.com/acme", fetcher)
+        assert fetcher.tree_calls == []
+
+    @pytest.mark.asyncio
+    async def test_failure_propagates_instead_of_registering_an_empty_card(self) -> None:
+        """scan_org swallows a per-repo failure; a scan of one must not.
+
+        An empty AutoCard registered under the user's repository name would be
+        worse than an error: discovery would score it and find nothing.
+        """
+
+        fetcher = _StubFetcher(explode=True)
+        with pytest.raises(RuntimeError):
+            await scan_single_repo("https://github.com/acme/order-service", fetcher)

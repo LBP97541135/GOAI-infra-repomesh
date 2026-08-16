@@ -36,6 +36,21 @@ class ContractSpec:
     interface: str
     agreement: str
 
+    def to_dict(self) -> dict:
+        """Serialise for a JSON column or an API body.
+
+        These are slotted frozen dataclasses, so ``dict(spec)`` raises — every
+        caller that needs a mapping needs this method, and callers that guessed
+        otherwise persisted nothing at all for a while.
+        """
+
+        return {
+            "producer": self.producer,
+            "consumer": self.consumer,
+            "interface": self.interface,
+            "agreement": self.agreement,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class TaskNode:
@@ -52,6 +67,22 @@ class TaskNode:
     become the Runner's ``test_commands``.  The integration LLM does not emit
     them yet, so the caller supplies them when materialising a plan.
     """
+
+    def to_dict(self) -> dict:
+        """Serialise for a JSON column or an API body.
+
+        Tuples become lists: the value that goes into JSONB comes back as an
+        array, and matching that here keeps the in-process value equal to the
+        persisted one instead of subtly different.
+        """
+
+        return {
+            "repository": self.repository,
+            "instruction": self.instruction,
+            "depends_on": list(self.depends_on),
+            "parallelizable_with": list(self.parallelizable_with),
+            "tests": list(self.tests),
+        }
 
 
 @dataclass(frozen=True, slots=True)

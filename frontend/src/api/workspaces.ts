@@ -1,0 +1,33 @@
+/** 工作区（Organization）数据源——契约 v0.3 §2（验收缺陷 B-2）。
+ *
+ *  仅 live 模式有数据：replay 是回放夹具，夹具世界没有组织注册表，切换器如实
+ *  显示「回放模式不适用」而不是编一份列表。 */
+import type { OrganizationCreateResponse, OrganizationView } from "./contract";
+import { defaultClient } from "./client";
+import { invalidateGovernanceAgentCache } from "./decisions";
+import { invalidateGridCache } from "./grid";
+import { resolveDataSourceMode } from "./source";
+
+/** replay 模式返回 null（区别于 live 的空列表 []：前者是「不适用」，后者是
+ *  「注册表真的没有条目」——两态文案不同，不可合并）。 */
+export async function fetchWorkspaces(): Promise<OrganizationView[] | null> {
+  if (resolveDataSourceMode() === "replay") return null;
+  const res = await defaultClient().listOrganizations();
+  return res.organizations;
+}
+
+/** 幂等键由调用方持有并传入（A2）：每次逻辑创建新键、重试沿用同键（§1.3/§2.3）。
+ *  成功后清花名册缓存（B1 主脑硬性要求）：本请求登记了新 Org Leader，缓存不失效
+ *  的话花名册看不到它，工作区闭环显示就是坏的。 */
+export async function createWorkspace(
+  name: string,
+  idempotencyKey: string,
+): Promise<OrganizationCreateResponse> {
+  const created = await defaultClient().createOrganization({
+    name,
+    idempotency_key: idempotencyKey,
+  });
+  invalidateGridCache();
+  invalidateGovernanceAgentCache();
+  return created;
+}

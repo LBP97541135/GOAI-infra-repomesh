@@ -113,7 +113,7 @@ class IdempotencyRecord(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     scope: Mapped[str] = mapped_column(String(200))
-    idempotency_key: Mapped[str] = mapped_column(String(200))
+    idempotency_key: Mapped[str] = mapped_column(String(500))
     request_hash: Mapped[str] = mapped_column(String(64))
     response_status: Mapped[int | None] = mapped_column(Integer)
     response_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON_DOCUMENT)

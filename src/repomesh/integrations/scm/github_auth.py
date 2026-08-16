@@ -183,3 +183,24 @@ def private_key_file_loader(path: Path) -> Callable[[], bytes]:
             raise SCMAuthenticationError("GitHub App private key file is unavailable") from error
 
     return load
+
+class StaticTokenProvider:
+    """A fixed token for every repository — the local-dev seam.
+
+    The App provider above mints short-lived installation tokens per
+    repository; a developer driving the fixture repos with a personal token
+    (``gh auth token``) has exactly one credential for all of them. Same
+    call shape as the App provider so ``GitHubAdapter`` cannot tell them
+    apart; ``close`` exists for the composition root's resource sweep.
+    Selected only in ``bootstrap.app`` when ``REPOMESH_DELIVERY_GITHUB_TOKEN``
+    is set and App credentials are not — the App path wins when both exist.
+    """
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    async def __call__(self, repository: RepositoryRef) -> str:
+        return self._token
+
+    async def close(self) -> None:  # nothing owned, kept for uniformity
+        return None

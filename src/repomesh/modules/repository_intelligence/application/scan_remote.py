@@ -27,8 +27,11 @@ from repomesh.modules.repository_intelligence.domain import (
 )
 from repomesh.modules.repository_intelligence.infrastructure.platform import (
     FileEntry,
+    Platform,
     PlatformFetcher,
     RepoInfo,
+    UrlType,
+    detect_platform,
 )
 
 _logger = logging.getLogger(__name__)
@@ -160,6 +163,38 @@ def _infer_entry_repo_name(url: str) -> str | None:
     return None
 
 
+def identify_url_type(url: str) -> UrlType:
+    """Classify a pasted URL as a single repo, a group/org, or neither.
+
+    Parsing only — nothing leaves this process, so the console can debounce
+    against it on every keystroke. It is the *offline* sibling of
+    :meth:`PlatformFetcher.identify`, which asks the platform and costs a
+    round trip.
+
+    The verdict is deliberately derived from :func:`extract_entry_repo_name`
+    rather than from a second rule of its own: that function is what a
+    single-repo scan actually uses to name the repository, so agreement
+    between the badge the user sees and the scan that follows is structural
+    instead of maintained by hand. Its ``>= 2 path segments`` rule cannot tell
+    a GitLab subgroup (``/group/subgroup``) from a repo inside a group, and
+    this function inherits that: such a URL reads as ``SINGLE_REPO``, and the
+    scan will fail on it rather than silently scanning the wrong thing.
+    """
+
+    if detect_platform(url) is Platform.LOCAL:
+        # A local path is not something the remote scanners can reach; the
+        # console has no local-scan entry point, so "unknown" is the honest
+        # answer rather than inventing a fourth verdict.
+        return UrlType.UNKNOWN
+    if extract_entry_repo_name(url) is not None:
+        return UrlType.SINGLE_REPO
+
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    return UrlType.GROUP if segments else UrlType.UNKNOWN
+
+
 # ---------------------------------------------------------------------------
 # Remote AutoCard building
 # ---------------------------------------------------------------------------
@@ -284,6 +319,32 @@ async def scan_org(
     tasks = [asyncio.create_task(_scan_one(r)) for r in repos]
     profiles = await asyncio.gather(*tasks)
     return list(profiles)
+
+
+async def scan_single_repo(
+    repo_url: str,
+    fetcher: PlatformFetcher,
+) -> RepositoryProfile:
+    """Scan one repository given only its URL.
+
+    The single-repo peer of :func:`scan_org`. The name comes from the URL path
+    (:func:`extract_entry_repo_name`) instead of a metadata call, which is the
+    same inference the CLI entry point has always used — one API call saved,
+    and one fewer place for the name to disagree with itself.
+
+    Unlike :func:`scan_org`, a failure here is *not* swallowed into an empty
+    AutoCard: an org scan of 40 repos should not die because one repo is
+    unreadable, but a scan the user asked for by URL has nothing left to
+    report if it fails, and a registered card full of nothing would be worse
+    than an error.
+    """
+
+    name = extract_entry_repo_name(repo_url)
+    if name is None:
+        raise ValueError(f"not a single-repository URL: {repo_url}")
+
+    card = await scan_remote(RepoInfo(name=name, url=repo_url), fetcher)
+    return RepositoryProfile(name=name, url=repo_url, auto_card=card)
 
 
 # ---------------------------------------------------------------------------

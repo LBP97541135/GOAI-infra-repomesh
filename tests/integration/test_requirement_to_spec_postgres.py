@@ -13,7 +13,7 @@ from repomesh.modules.agent_directory.application import (
 )
 from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
-from repomesh.modules.agent_runtime.ports import TeamRuntimeRef
+from repomesh.modules.agent_runtime.ports import TeamRuntimeRef, WorkerRuntimeRef
 from repomesh.modules.collaboration import (
     PostgresCollaborationMessageStore,
     SendCollaborationMessage,
@@ -75,6 +75,11 @@ class StaticLLM:
 
 
 class ReadyControlPlane:
+    async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
+        # Nothing to adopt (A-8): this controller has never seen the leader,
+        # so the reconcile uses the canonical repository name.
+        return None
+
     async def ensure_team(self, projection, *, idempotency_key: str) -> TeamRuntimeRef:
         return TeamRuntimeRef(
             name=projection.name,

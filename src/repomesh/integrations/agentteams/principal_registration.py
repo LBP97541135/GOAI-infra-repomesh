@@ -29,6 +29,33 @@ class RegisterNativeAgentRequest:
             raise ValueError("repository leaders and workers require native AgentTeams Workers")
 
 
+def with_task_control(
+    worker: WorkerProjection, task_control_url: str | None
+) -> WorkerProjection:
+    """Give a worker projection the RepoMesh task-control MCP server.
+
+    Module level rather than a method because two callers need the *same*
+    projection: this module registers an agent as it is created, and the
+    console's materialize projects agents that already exist. The controller
+    compares an existing worker's ``mcpServers`` field for field, so a second
+    caller that spelled this differently would turn a re-registration into a
+    409 conflict.
+    """
+
+    if not task_control_url:
+        return worker
+    servers = tuple(
+        server for server in worker.mcp_servers if server.name != "repomesh-task-control"
+    )
+    return replace(
+        worker,
+        mcp_servers=(
+            McpServerProjection("repomesh-task-control", task_control_url),
+            *servers,
+        ),
+    )
+
+
 class RegisterNativeAgent:
     """Ensure an AgentTeams resource, then register only its RepoMesh business binding."""
 
@@ -68,15 +95,4 @@ class RegisterNativeAgent:
         )
 
     def _with_task_control(self, worker: WorkerProjection) -> WorkerProjection:
-        if not self._worker_task_control_url:
-            return worker
-        servers = tuple(
-            server for server in worker.mcp_servers if server.name != "repomesh-task-control"
-        )
-        return replace(
-            worker,
-            mcp_servers=(
-                McpServerProjection("repomesh-task-control", self._worker_task_control_url),
-                *servers,
-            ),
-        )
+        return with_task_control(worker, self._worker_task_control_url)

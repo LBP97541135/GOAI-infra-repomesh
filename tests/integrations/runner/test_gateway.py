@@ -96,6 +96,8 @@ async def test_dispatch_event_and_business_task_writeback(tmp_path) -> None:
             "summary": "pricing fixed",
             "changedFiles": ["src/pricing.py"],
             "testResults": [{"command": "pytest", "exitCode": 0}],
+            "testCommand": "pytest -q",
+            "artifacts": [{"kind": "log", "uri": "s3://run/log", "contentHash": "0" * 64}],
             "commitSha": "a" * 40,
         },
     }
@@ -109,6 +111,112 @@ async def test_dispatch_event_and_business_task_writeback(tmp_path) -> None:
     assert '"commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' in (
         updated.result_summary or ""
     )
+    # A-18: the event's verification facts reach the task. They used to stop
+    # here — the write-back copied five keys and dropped testCommand and
+    # artifacts, so a task could not say whether anything had been run.
+    evidence = updated.to_view().evidence
+    assert evidence is not None
+    assert evidence.test_command == "pytest -q"
+    assert evidence.artifact_count == 1
+    assert evidence.verified is True
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_completed_run_that_executed_nothing_writes_back_unverified(tmp_path) -> None:
+    """The live A-18 shape: ``runner.completed`` with an empty test list.
+
+    Reaching ``runner.completed`` means the process finished, never that it
+    checked anything. The agent said so in its own summary; that sentence and
+    the empty test list both have to survive the write-back, because they are
+    the only things standing between this row and an automatic merge.
+    """
+
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path / 'unverified.db'}",
+        schema_translate_map={schema: None for schema in ALL_SCHEMAS},
+    )
+    await database.create_all_for_tests()
+    task_store = PostgresTaskStore(database)
+    gateway = RunnerControlGateway(PostgresRunnerGatewayStore(database), task_store)
+    worker_id = uuid4()
+    repository_id = uuid4()
+    business_task = Task(
+        organization_id=uuid4(),
+        project_id=uuid4(),
+        repository_id=repository_id,
+        assigned_by_agent_id=uuid4(),
+        assignee_agent_id=worker_id,
+        title="Add the tax estimate",
+        instruction="Add the tax estimate to checkout",
+        acceptance=("code compiles / existing tests pass",),
+    )
+    await task_store.add(
+        business_task, idempotency_key="task-2", request_fingerprint="sha256:" + "c" * 64
+    )
+    run_id = uuid4()
+    runner_task = RunnerTask(
+        organization_id=business_task.organization_id,
+        project_id=business_task.project_id,
+        task_id=business_task.id,
+        run_id=run_id,
+        correlation_id=uuid4(),
+        attempt=1,
+        adapter_id="claude",
+        instruction="Read task context and implement",
+        repository=RepositoryCheckout(repository_id, "https://example/repo.git", "main"),
+        context_bundle=ContextBundleRef(uuid4(), 1, "file:///manifest.json", SHA),
+        permissions=RunnerPermissions(),
+        idempotency_key="run-2",
+        issued_at=datetime.now(UTC),
+        worker_agent_id=worker_id,
+    )
+    await gateway.enqueue(runner_task)
+    assert await gateway.next_task(worker_id) is not None
+
+    summary = (
+        "Implementation is complete. I could not execute anything to verify it — see below.\n"
+        "Nothing was executed. Please re-run before merging."
+    )
+    assert (
+        await gateway.receive_event(
+            {
+                "schemaVersion": "runtime.v1",
+                "eventId": str(uuid4()),
+                "eventType": "runner.completed",
+                "organizationId": str(business_task.organization_id),
+                "projectId": str(business_task.project_id),
+                "taskId": str(business_task.id),
+                "runId": str(run_id),
+                "correlationId": str(runner_task.correlation_id),
+                "attempt": 1,
+                "sequence": 3,
+                "occurredAt": datetime.now(UTC).isoformat(),
+                "nativeSessionId": "session-1",
+                "payload": {
+                    "status": "succeeded",
+                    "summary": summary,
+                    "testCommand": None,
+                    "artifacts": [],
+                    "changedFiles": ["src/checkout/tax_calculator.py"],
+                    "commitSha": "5" * 40,
+                    "testResults": [],
+                },
+            }
+        )
+        is True
+    )
+
+    updated = await task_store.get(business_task.id)
+    assert updated is not None
+    assert updated.status is TaskStatus.SUCCEEDED  # it did succeed, as a run
+    evidence = updated.to_view().evidence
+    assert evidence is not None
+    assert evidence.verified is False
+    assert evidence.summary_text == summary
+    assert evidence.test_command is None
+    assert evidence.test_results == ()
+    assert evidence.artifact_count == 0
     await database.dispose()
 
 

@@ -32,6 +32,7 @@ class CreateSpecificationCommand:
     tests: tuple[str, ...] = ()
     dependencies: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ()
+    forbidden_paths: tuple[str, ...] = ()
     interface_changes: tuple[str, ...] = ()
     repository_id: UUID | None = None
     task_id: UUID | None = None
@@ -56,6 +57,7 @@ class ReviseSpecificationCommand:
     tests: tuple[str, ...] = ()
     dependencies: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ()
+    forbidden_paths: tuple[str, ...] = ()
     interface_changes: tuple[str, ...] = ()
 
 
@@ -141,3 +143,4 @@ class CodingAgentPackage:
     test_commands: tuple[str, ...]
     context_files: tuple[RenderedSpecification, ...]
     content_hash: str
+    forbidden_paths: tuple[str, ...] = ()

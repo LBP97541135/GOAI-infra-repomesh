@@ -10,7 +10,7 @@ from .delivery import (
 )
 from .git_branch import GitBranchPublisher
 from .github import GitHubAdapter, verify_github_webhook
-from .github_auth import GitHubAppTokenProvider, private_key_file_loader
+from .github_auth import GitHubAppTokenProvider, StaticTokenProvider, private_key_file_loader
 from .github_events import (
     GitHubCIObservation,
     GitHubReviewObservation,
@@ -32,12 +32,19 @@ from .recovery import (
     RecoverySagaExecutor,
     RevertConflict,
 )
-from .rework import CIReworkTaskCreator
+from .revert import (
+    GitHubRevertDeliveryGateway,
+    MirrorGitReverter,
+    RevertBranch,
+    RevertBranchRequest,
+)
+from .rework import CIReworkTaskCreator, RecoveryConflictTaskCreator
 
 __all__ = [
     "BranchPublisher",
     "ChangeSetSCMCoordinator",
     "CIReworkTaskCreator",
+    "RecoveryConflictTaskCreator",
     "RecoveryExecutionContext",
     "GovernedRecoveryActionHandler",
     "RecoverySagaExecutor",
@@ -45,11 +52,16 @@ __all__ = [
     "DeliveryReconciler",
     "GitHubAdapter",
     "GitHubAppTokenProvider",
+    "StaticTokenProvider",
     "GitHubCIObservation",
     "GitHubObservationProcessor",
     "GitHubObservationPoller",
     "GitHubReviewObservation",
+    "GitHubRevertDeliveryGateway",
     "GitBranchPublisher",
+    "MirrorGitReverter",
+    "RevertBranch",
+    "RevertBranchRequest",
     "OpenChangeSetPullRequestCommand",
     "PlanDeliveryFinalizer",
     "PlanDeliveryPolicy",

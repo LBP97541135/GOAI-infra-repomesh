@@ -22,5 +22,5 @@ Workers from Agent Directory. Creation validates the durable hierarchy before st
 reconciliation creates a missing runtime Team or reuses the existing repository Team.
 
 PostgreSQL tables `project.agent_topologies` and `project.repository_agent_teams` are the source of
-truth. The stable `rm-repo-{repository_id}` name is the runtime binding shared across projects;
+truth. The stable `rm-team-{repository_id}` name is the runtime binding shared across projects;
 Matrix room IDs are cached bindings, not business identity.

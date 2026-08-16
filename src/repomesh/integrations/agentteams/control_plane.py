@@ -10,6 +10,7 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     ManagerProjection,
     ManagerRuntimeRef,
     TeamProjection,
+    TeamRole,
     TeamRuntimeRef,
     WorkerProjection,
     WorkerRuntimeRef,
@@ -56,11 +57,16 @@ class AgentTeamsControlPlaneClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        # The control-plane base URL is an in-cluster address (container DNS name
+        # or loopback). A host-level HTTP_PROXY/HTTPS_PROXY must never intercept
+        # these calls — honoring it silently hijacks the controller-DNS request
+        # and surfaces as a spurious "AgentTeams unreachable" 503 (see E-1).
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers=headers,
             timeout=timeout,
             transport=transport,
+            trust_env=False,
         )
 
     async def close(self) -> None:
@@ -155,6 +161,16 @@ class AgentTeamsControlPlaneClient:
             return self._team_ref(existing)
         payload: dict[str, Any] = {
             "name": projection.name,
+            # The v1.2.0 controller rejects a Team without a named leader
+            # (400 ``leader.name is required``): the leader is a first-class
+            # field, not just the first ``workerMembers`` entry.
+            "leader": {
+                "name": next(
+                    member.name
+                    for member in projection.members
+                    if member.role is TeamRole.LEADER
+                )
+            },
             "workerMembers": [
                 {"name": member.name, "role": member.role.value} for member in projection.members
             ],
@@ -177,6 +193,10 @@ class AgentTeamsControlPlaneClient:
     async def get_manager(self, name: str) -> ManagerRuntimeRef | None:
         body = await self._get_optional(self._resource_path("managers", name))
         return self._manager_ref(body) if body else None
+
+    async def get_team(self, name: str) -> TeamRuntimeRef | None:
+        body = await self._get_optional(self._resource_path("teams", name))
+        return self._team_ref(body) if body else None
 
     async def ensure_worker_ready(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
         path = self._resource_path("workers", name) + "/ensure-ready"
@@ -291,16 +311,23 @@ class AgentTeamsControlPlaneClient:
         fields: dict[str, Any] = {
             "model": expected.model,
             "runtime": expected.runtime.value,
-            "skills": list(expected.skills),
-            "mcpServers": [
+        }
+        # The v1.2.0 controller's GET document omits ``skills`` and
+        # ``mcpServers`` (verified live 2026-08-13), so those two can only be
+        # compared when the document actually carries them — an absent field
+        # must not read as "empty", or every already-provisioned worker looks
+        # like a skills conflict.
+        if "skills" in body:
+            fields["skills"] = list(expected.skills)
+        if "mcpServers" in body:
+            fields["mcpServers"] = [
                 {
                     "name": server.name,
                     "url": server.url,
                     "transport": server.transport,
                 }
                 for server in expected.mcp_servers
-            ],
-        }
+            ]
         if expected.identity:
             fields["identity"] = expected.identity
         if expected.soul:
@@ -315,17 +342,23 @@ class AgentTeamsControlPlaneClient:
                 "dmDenyExtra": list(expected.channel_policy.dm_deny_extra),
             }
         normalized = dict(body)
-        normalized["skills"] = list(body.get("skills") or [])
-        normalized["mcpServers"] = list(body.get("mcpServers") or [])
+        if "skills" in body:
+            normalized["skills"] = list(body.get("skills") or [])
+        if "mcpServers" in body:
+            normalized["mcpServers"] = list(body.get("mcpServers") or [])
         AgentTeamsControlPlaneClient._assert_fields("worker", normalized, fields)
 
     @staticmethod
     def _assert_team_matches(body: dict[str, Any], expected: TeamProjection) -> None:
-        fields = {
-            "workerMembers": [
+        # Same omission as the worker document: the v1.2.0 controller's GET
+        # response for a Team carries no ``workerMembers`` (the members live
+        # on the Worker documents, each naming its Team), so it can only be
+        # compared when the document actually includes it.
+        fields: dict[str, Any] = {}
+        if "workerMembers" in body:
+            fields["workerMembers"] = [
                 {"name": member.name, "role": member.role.value} for member in expected.members
             ]
-        }
         AgentTeamsControlPlaneClient._assert_fields("team", body, fields)
 
     @staticmethod
@@ -353,6 +386,12 @@ class AgentTeamsControlPlaneClient:
             room_id=body.get("roomID"),
             matrix_user_id=body.get("matrixUserID"),
             message=body.get("message"),
+            # Verified against the deployed controller (v1.2.0, read-only GET
+            # /api/v1/workers/rm-leader-b-checkout, 2026-08-12): the worker
+            # document carries its Team by name. Reading it is what lets the
+            # reconcile adopt an existing repository Team instead of walking
+            # into the exclusive-membership 400 (A-8).
+            team=body.get("team"),
         )
 
     @staticmethod

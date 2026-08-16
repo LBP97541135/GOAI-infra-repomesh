@@ -5,13 +5,26 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from repomesh.modules.agent_directory.contracts import (
+    AgentPrincipalReader,
+    AgentPrincipalStatus,
+    AgentRole,
+)
+from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus
+from repomesh.shared.domain import new_id
+from repomesh.shared.events import ActorType, EventEnvelope
+
 from .contracts import (
+    MERGE_GATE_GOVERNANCE_MISSING_REASON,
     AppendCandidatesCommand,
+    ChangeSetRollbackView,
     ChangeSetStatus,
     ChangeSetView,
     CIObservationCommand,
+    DeliveryArchiveView,
     EnqueueSCMCommand,
     GovernanceDecisionKind,
+    GovernanceDecisionView,
     MergeGateDecision,
     MergeObservationCommand,
     PlanRecoveryCommand,
@@ -25,9 +38,12 @@ from .contracts import (
     RecordSCMObservationCommand,
     RecoveryActionKind,
     RecoveryActionStatus,
+    RecoveryActionView,
+    RecoveryPlanView,
     RecoveryTrigger,
     RepositoryCandidateInput,
     RepositoryDeliveryStatus,
+    RequestChangeSetRollbackCommand,
     ReviewObservationCommand,
     SCMCommandStatus,
     SCMCommandView,
@@ -37,6 +53,7 @@ from .domain import (
     CandidateRevision,
     ChangeSet,
     DeliveryConflict,
+    DeliveryDenied,
     DeliveryNotFound,
     GovernanceDecision,
     RecoveryAction,
@@ -49,11 +66,20 @@ from .domain import (
 from .ports import (
     ChangeSetStore,
     ContractCatalogPort,
+    DeliveryArchiveStore,
+    DeliveryAuditLog,
+    ExecutionPlanStatusReader,
     SCMCommandStore,
     SCMObservationStore,
     SCMPollCursorStore,
     ValidationSnapshotReader,
 )
+
+
+def delivery_change_set_key(delivery_id: UUID) -> str:
+    """The idempotency key that binds a delivery (execution plan) to its ChangeSet."""
+
+    return f"execution-plan:{delivery_id}:delivery"
 
 
 class SCMCommandService:
@@ -543,7 +569,7 @@ class DeliveryService:
                 None,
             )
             if decision is None:
-                reasons.append("head-bound governance decision is missing")
+                reasons.append(MERGE_GATE_GOVERNANCE_MISSING_REASON)
             elif decision.decision is GovernanceDecisionKind.BLOCKED:
                 reasons.append(f"governance blocked delivery: {decision.reason}")
             elif decision.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED:
@@ -592,6 +618,20 @@ class DeliveryService:
         updated = change_set.add_recovery(plan)
         await self._store.update(updated, expected_version=change_set.version)
         return updated.to_view()
+
+    async def preview_recovery(
+        self, command: PlanRecoveryCommand
+    ) -> tuple[RecoveryActionView, ...]:
+        """The actions ``plan_recovery`` would create, without creating them.
+
+        The console's rollback dialog has to show which repository gets a
+        revert PR and in which position, and that answer must be the plan the
+        Saga will actually run — so it comes from the same generator rather
+        than from a second implementation of the reverse-merge-order rule.
+        """
+
+        change_set = await self._required(command.change_set_id)
+        return tuple(action.to_view() for action in self._recovery_actions(change_set, command))
 
     async def get(self, change_set_id: UUID) -> ChangeSetView:
         return (await self._required(change_set_id)).to_view()
@@ -780,3 +820,373 @@ class DeliveryService:
     def _fingerprint(command: PrepareChangeSetCommand) -> str:
         payload = json.dumps(asdict(command), default=str, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
+
+
+class DeliveryGovernanceService:
+    """API-facing governance recording bound to a delivery (execution plan)."""
+
+    def __init__(
+        self,
+        delivery: DeliveryService,
+        directory: AgentPrincipalReader,
+        audit: DeliveryAuditLog,
+    ) -> None:
+        self._delivery = delivery
+        self._directory = directory
+        self._audit = audit
+
+    async def record(
+        self,
+        delivery_id: UUID,
+        command: RecordGovernanceDecisionCommand,
+        *,
+        idempotency_key: str,
+    ) -> GovernanceDecisionView:
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
+        change_set = await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+        if change_set is None:
+            raise DeliveryNotFound(f"delivery has no ChangeSet: {delivery_id}")
+        if change_set.id != command.change_set_id:
+            raise DeliveryConflict("change set does not belong to this delivery")
+        actor = await self._authorized_actor(command, change_set)
+        head_sha = command.head_sha.strip().lower()
+        replayed = self._latest_decision(change_set, command.repository_id, head_sha)
+        if replayed is not None and self._same_decision(replayed, command):
+            return replayed
+        updated = await self._delivery.record_governance_decision(command)
+        recorded = self._latest_decision(updated, command.repository_id, head_sha)
+        if recorded is None:  # pragma: no cover - record_governance guarantees presence
+            raise DeliveryNotFound("governance decision was not recorded")
+        await self._audit.append(
+            EventEnvelope(
+                event_type="DeliveryGovernanceDecisionRecorded",
+                actor_type=ActorType.AGENT,
+                actor_id=str(actor.id),
+                aggregate_type="ChangeSet",
+                aggregate_id=updated.id,
+                aggregate_version=updated.version,
+                correlation_id=new_id(),
+                organization_id=updated.organization_id,
+                project_id=updated.project_id,
+                payload={
+                    "deliveryId": str(delivery_id),
+                    "repositoryId": str(command.repository_id),
+                    "headSha": head_sha,
+                    "decision": command.decision.value,
+                    "reason": command.reason.strip(),
+                    "idempotencyKey": idempotency_key.strip(),
+                },
+            )
+        )
+        return recorded
+
+    async def _authorized_actor(
+        self, command: RecordGovernanceDecisionCommand, change_set: ChangeSetView
+    ):
+        actor = await self._directory.get_view(command.decided_by_agent_id)
+        if actor is None or actor.status is not AgentPrincipalStatus.ACTIVE:
+            raise DeliveryDenied("governance decisions require an active agent principal")
+        if actor.organization_id != change_set.organization_id:
+            raise DeliveryDenied("governance agent belongs to another organization")
+        if actor.role is AgentRole.ORGANIZATION_LEADER:
+            return actor
+        if (
+            actor.role is AgentRole.REPOSITORY_LEADER
+            and actor.repository_id == command.repository_id
+        ):
+            return actor
+        raise DeliveryDenied("governance decisions require a leader for this repository")
+
+    @staticmethod
+    def _latest_decision(
+        change_set: ChangeSetView, repository_id: UUID, head_sha: str
+    ) -> GovernanceDecisionView | None:
+        return next(
+            (
+                item
+                for item in reversed(change_set.governance_decisions)
+                if item.repository_id == repository_id and item.head_sha == head_sha
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _same_decision(
+        existing: GovernanceDecisionView, command: RecordGovernanceDecisionCommand
+    ) -> bool:
+        return (
+            existing.decision is command.decision
+            and existing.decided_by_agent_id == command.decided_by_agent_id
+            and existing.reason == command.reason.strip()
+        )
+
+
+_TERMINAL_RECOVERY_STATUSES = frozenset(
+    {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+)
+
+
+class DeliveryRollbackService:
+    """Console face for rolling a whole ChangeSet back (GUI batch E-1).
+
+    The console does not execute anything. It records the human decision and
+    lets the machine take over, which is two writes that belong together:
+
+    1. one head-bound ROLLBACK_REQUIRED governance decision per candidate,
+       which is what actually closes the merge gate (see
+       ``evaluate_merge_gate``) so nothing else merges while the rollback runs;
+    2. one OPERATOR_REQUESTED recovery plan, whose actions the recovery Saga
+       picks up on its next interval.
+
+    Doing this from the browser as N+1 separate calls would leave the gate half
+    closed whenever one of them failed, and would put the reverse-merge-order
+    rule in the front end. Hence one endpoint, one service, one audit event.
+
+    This is not a promise of a clean restore: revert PRs still have to pass
+    their own CI, and a conflicting revert is handed to a Worker task. The
+    console's wording says so; this service only makes sure the wording is not
+    contradicted by the machine.
+    """
+
+    def __init__(
+        self,
+        delivery: DeliveryService,
+        directory: AgentPrincipalReader,
+        audit: DeliveryAuditLog,
+    ) -> None:
+        self._delivery = delivery
+        self._directory = directory
+        self._audit = audit
+
+    async def request(
+        self,
+        delivery_id: UUID,
+        command: RequestChangeSetRollbackCommand,
+        *,
+        idempotency_key: str,
+    ) -> ChangeSetRollbackView:
+        if not idempotency_key.strip():
+            raise ValueError("idempotency_key is required")
+        reason = command.reason.strip()
+        if not reason:
+            raise ValueError("reason is required")
+        change_set = await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+        if change_set is None:
+            raise DeliveryNotFound(f"delivery has no ChangeSet: {delivery_id}")
+        if change_set.id != command.change_set_id:
+            raise DeliveryConflict("change set does not belong to this delivery")
+        actor = await self._authorized_actor(command, change_set)
+
+        # Decide what to do with the recovery plan *before* writing any
+        # decision: a request that ends in 409 must not leave the merge gate
+        # closed by decisions whose plan never got created.
+        existing = change_set.recovery_plans[-1] if change_set.recovery_plans else None
+        replaying = (
+            existing is not None
+            and existing.trigger is RecoveryTrigger.OPERATOR_REQUESTED
+            and existing.reason == reason
+        )
+        if not replaying and existing is not None and self._incomplete(existing):
+            raise DeliveryConflict(
+                "a recovery plan is already running for this ChangeSet; "
+                "wait for it to finish or resolve it before requesting another rollback"
+            )
+
+        candidates = tuple(sorted(change_set.repositories, key=lambda item: item.merge_order))
+        wrote_decision = False
+        for candidate in candidates:
+            # §4.4's decisions are stored against the lower-cased head; look up
+            # and write against the same form so a replay is recognised.
+            head = candidate.commit_sha.strip().lower()
+            recorded = self._latest_decision(change_set, candidate.repository_id, head)
+            if (
+                recorded is not None
+                and recorded.decision is GovernanceDecisionKind.ROLLBACK_REQUIRED
+                and recorded.decided_by_agent_id == actor.id
+                and recorded.reason == reason
+            ):
+                continue
+            change_set = await self._delivery.record_governance_decision(
+                RecordGovernanceDecisionCommand(
+                    change_set_id=change_set.id,
+                    repository_id=candidate.repository_id,
+                    head_sha=head,
+                    decision=GovernanceDecisionKind.ROLLBACK_REQUIRED,
+                    decided_by_agent_id=actor.id,
+                    reason=reason,
+                )
+            )
+            wrote_decision = True
+
+        if replaying:
+            plan = change_set.recovery_plans[-1]
+        else:
+            change_set = await self._delivery.plan_recovery(
+                PlanRecoveryCommand(
+                    change_set_id=change_set.id,
+                    trigger=RecoveryTrigger.OPERATOR_REQUESTED,
+                    reason=reason,
+                )
+            )
+            plan = change_set.recovery_plans[-1]
+
+        decisions = tuple(
+            decision
+            for candidate in candidates
+            if (
+                decision := self._latest_decision(
+                    change_set,
+                    candidate.repository_id,
+                    candidate.commit_sha.strip().lower(),
+                )
+            )
+            is not None
+        )
+        replayed = replaying and not wrote_decision
+        if not replayed:
+            await self._audit.append(
+                EventEnvelope(
+                    event_type="DeliveryRollbackRequested",
+                    actor_type=ActorType.AGENT,
+                    actor_id=str(actor.id),
+                    aggregate_type="ChangeSet",
+                    aggregate_id=change_set.id,
+                    aggregate_version=change_set.version,
+                    correlation_id=new_id(),
+                    organization_id=change_set.organization_id,
+                    project_id=change_set.project_id,
+                    payload={
+                        "deliveryId": str(delivery_id),
+                        "recoveryPlanId": str(plan.id),
+                        "repositoryIds": [str(item.repository_id) for item in candidates],
+                        "reason": reason,
+                        "idempotencyKey": idempotency_key.strip(),
+                    },
+                )
+            )
+        return ChangeSetRollbackView(
+            delivery_id=delivery_id,
+            change_set_id=change_set.id,
+            decisions=decisions,
+            recovery_plan=plan,
+            replayed=replayed,
+        )
+
+    async def _authorized_actor(
+        self, command: RequestChangeSetRollbackCommand, change_set: ChangeSetView
+    ):
+        actor = await self._directory.get_view(command.requested_by_agent_id)
+        if actor is None or actor.status is not AgentPrincipalStatus.ACTIVE:
+            raise DeliveryDenied("rollback requires an active agent principal")
+        if actor.organization_id != change_set.organization_id:
+            raise DeliveryDenied("rollback agent belongs to another organization")
+        # No repository-leader branch here, unlike §4.4's per-repository
+        # decision: this command speaks for every repository in the set, and a
+        # repository leader does not.
+        if actor.role is not AgentRole.ORGANIZATION_LEADER:
+            raise DeliveryDenied("whole-ChangeSet rollback requires an organization leader")
+        return actor
+
+    @staticmethod
+    def _incomplete(plan: RecoveryPlanView) -> bool:
+        return any(action.status not in _TERMINAL_RECOVERY_STATUSES for action in plan.actions)
+
+    @staticmethod
+    def _latest_decision(
+        change_set: ChangeSetView, repository_id: UUID, head_sha: str
+    ) -> GovernanceDecisionView | None:
+        return next(
+            (
+                item
+                for item in reversed(change_set.governance_decisions)
+                if item.repository_id == repository_id and item.head_sha == head_sha
+            ),
+            None,
+        )
+
+
+class DeliveryArchiveService:
+    """Archive an inactive delivery; archived deliveries keep all data."""
+
+    def __init__(
+        self,
+        archives: DeliveryArchiveStore,
+        delivery: DeliveryService,
+        plans: ExecutionPlanStatusReader,
+        audit: DeliveryAuditLog,
+    ) -> None:
+        self._archives = archives
+        self._delivery = delivery
+        self._plans = plans
+        self._audit = audit
+
+    async def archive(self, delivery_id: UUID) -> DeliveryArchiveView:
+        existing = await self._archives.get(delivery_id)
+        if existing is not None:
+            return existing
+        plan = await self._plans.get_view(delivery_id)
+        if plan is None:
+            raise DeliveryNotFound(f"delivery not found: {delivery_id}")
+        if plan.status is ExecutionPlanStatus.IN_PROGRESS:
+            raise DeliveryConflict("an in-progress delivery cannot be archived")
+        change_set = await self._delivery.get_by_idempotency_key(
+            delivery_change_set_key(delivery_id)
+        )
+        if change_set is not None:
+            plan_failed = plan.status is ExecutionPlanStatus.FAILED
+            self._require_terminal(change_set, plan_failed=plan_failed)
+        archive = DeliveryArchiveView(delivery_id=delivery_id, archived_at=datetime.now(UTC))
+        try:
+            await self._archives.add(archive)
+        except DeliveryConflict:
+            stored = await self._archives.get(delivery_id)
+            if stored is not None:
+                return stored
+            raise
+        await self._audit.append(
+            EventEnvelope(
+                event_type="DeliveryArchived",
+                actor_type=ActorType.SERVICE,
+                actor_id="repomesh-api",
+                aggregate_type="ExecutionPlan",
+                aggregate_id=delivery_id,
+                aggregate_version=plan.current_batch_index + 1,
+                correlation_id=new_id(),
+                organization_id=plan.organization_id,
+                project_id=plan.project_id,
+                payload={
+                    "planStatus": plan.status.value,
+                    "changeSetId": str(change_set.id) if change_set is not None else None,
+                    "changeSetStatus": (
+                        change_set.status.value if change_set is not None else None
+                    ),
+                },
+            )
+        )
+        return archive
+
+    @staticmethod
+    def _require_terminal(change_set: ChangeSetView, *, plan_failed: bool) -> None:
+        if change_set.status in {ChangeSetStatus.DELIVERED, ChangeSetStatus.COMPENSATED}:
+            return
+        failed = plan_failed or change_set.status is ChangeSetStatus.MANUAL_INTERVENTION
+        if failed and not DeliveryArchiveService._has_active_recovery(change_set):
+            return
+        raise DeliveryConflict(
+            f"an active delivery cannot be archived (ChangeSet is {change_set.status.value})"
+        )
+
+    @staticmethod
+    def _has_active_recovery(change_set: ChangeSetView) -> bool:
+        if not change_set.recovery_plans:
+            return False
+        active = change_set.recovery_plans[-1]
+        return any(
+            action.status not in {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+            for action in active.actions
+        )

@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import uuid
@@ -31,13 +32,24 @@ import requests
 DEFAULT_URL = "http://localhost:8000/api/v1"
 
 
+def _auth_headers() -> dict[str, str]:
+    """The repository-intelligence writes now require the action token.
+
+    They used to be reachable with no credential at all; this script was the
+    one in-repo caller relying on that. Export REPOMESH_AGENT_ACTION_TOKEN to
+    match the server, or every POST here comes back 401/503.
+    """
+    token = os.environ.get("REPOMESH_AGENT_ACTION_TOKEN", "")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def _post(url: str, payload: dict, label: str) -> dict:
     """POST JSON and return parsed response, with timing + error handling."""
     print(f"\n{'='*60}")
     print(f"[{label}] POST {url}")
     print(f"  payload keys: {list(payload.keys())}")
     t0 = time.time()
-    resp = requests.post(url, json=payload, timeout=120)
+    resp = requests.post(url, json=payload, timeout=120, headers=_auth_headers())
     elapsed = time.time() - t0
     print(f"  status: {resp.status_code}  ({elapsed:.1f}s)")
 
@@ -298,14 +310,13 @@ def _ensure_topology(
         from repomesh.modules.agent_runtime.ports.agent_team import (
             DesiredRuntimeState,
             ManagerProjection,
-            ManagerRuntime,
             WorkerProjection,
-            WorkerRuntime,
         )
         from repomesh.modules.project.domain import (
             ProjectAgentTopology,
             RepositoryTeam,
         )
+        from repomesh.settings import get_settings
         from repomesh.shared.domain import new_id
 
         container = build_default_container()
@@ -341,6 +352,11 @@ def _ensure_topology(
 
         org_id = new_id()
         model = "deepseek-chat"
+        # The same source the console's ProjectRuntimeProjection reads. These
+        # two paths must ask for field-identical resources (contract §8.7) and
+        # `runtime` used to be OPENCLAW written out in both; one setting means
+        # there is no second value left to drift.
+        runtimes = get_settings()
         teams = []
 
         # --- Register Org Leader (Manager) ---
@@ -349,7 +365,7 @@ def _ensure_topology(
         manager_proj = ManagerProjection(
             name=org_leader_name,
             model=model,
-            runtime=ManagerRuntime.OPENCLAW,
+            runtime=runtimes.agentteams_manager_runtime,
             skills=("planning", "coordination"),
         )
         org_result = await registrar.execute(
@@ -394,7 +410,7 @@ def _ensure_topology(
                     worker=WorkerProjection(
                         name=repo_leader_name,
                         model=model,
-                        runtime=WorkerRuntime.OPENCLAW,
+                        runtime=runtimes.agentteams_worker_runtime,
                         skills=("code-review", "planning"),
                         state=DesiredRuntimeState.RUNNING,
                     ),
@@ -420,7 +436,7 @@ def _ensure_topology(
                     worker=WorkerProjection(
                         name=worker_name,
                         model=model,
-                        runtime=WorkerRuntime.OPENCLAW,
+                        runtime=runtimes.agentteams_worker_runtime,
                         skills=("coding",),
                         state=DesiredRuntimeState.RUNNING,
                     ),

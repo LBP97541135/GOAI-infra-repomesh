@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -37,6 +38,44 @@ from .github_events import (
     validate_ci_observation,
 )
 
+logger = logging.getLogger(__name__)
+
+_PUBLISHABLE_STATUSES = frozenset(
+    {RepositoryDeliveryStatus.PENDING, RepositoryDeliveryStatus.PR_OPEN}
+)
+"""The only candidate states that may still receive a pull request number.
+
+Not an arbitrary "non-terminal" set: it is exactly what ``RepositoryDelivery
+.observe_pr`` accepts. Offering the domain a candidate it would refuse would
+turn a stranded publish into a DeliveryConflict on every sweep.
+"""
+
+_UNDRAFTABLE_STATUSES = frozenset(
+    {
+        RepositoryDeliveryStatus.PR_OPEN,
+        RepositoryDeliveryStatus.CI_PENDING,
+        RepositoryDeliveryStatus.REVIEW_PENDING,
+        RepositoryDeliveryStatus.READY_TO_MERGE,
+    }
+)
+"""Candidate states in which promoting a draft pull request is still meaningful.
+
+This used to be ``PR_OPEN`` alone, which quietly made undrafting depend on the
+*order events arrived in* rather than on the candidate's actual state:
+``observe_ci`` recomputes the status on every observation
+(``RepositoryDelivery._readiness_status``), so the first CI fact moves a
+candidate out of PR_OPEN forever. On the webhook path that was survivable by
+luck -- a ``pull_request`` opened event usually arrives before the first
+``check_run``, and undraft runs after every observation. On the reconciler's
+polling path there is no luck to have: one sweep opens the PR *and* records
+CI, so PR_OPEN never exists at any moment undraft could observe it.
+
+CI_FAILED and REVIEW_CHANGES_REQUESTED are excluded on purpose. Those
+candidates are on their way back to a Worker, and draft is the honest signal
+for "not ready to be looked at"; the merge-request and compensation states
+have nothing left to promote.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class OpenChangeSetPullRequestCommand:
@@ -68,12 +107,14 @@ class ChangeSetSCMCoordinator:
         adapter: SCMAdapter | None,
         branch_publisher: BranchPublisher | None = None,
         command_service: SCMCommandService | None = None,
+        base_branch: str = "main",
     ) -> None:
         self._delivery = delivery
         self._catalog = catalog
         self._adapter = adapter
         self._branch_publisher = branch_publisher
         self._command_service = command_service
+        self._base_branch = base_branch.strip() or "main"
 
     @property
     def can_mutate(self) -> bool:
@@ -123,15 +164,24 @@ class ChangeSetSCMCoordinator:
             protection = await protection_reader(
                 parse_repository_ref(profile.url), command.base_branch
             )
-            missing = set(candidate.required_checks) - set(protection.required_checks)
-            if missing:
-                raise SCMConflict(
-                    f"base branch protection is missing required checks: {sorted(missing)}"
-                )
-            if protection.required_approvals < candidate.required_approvals:
-                raise SCMConflict("base branch protection allows too few approvals")
-            if candidate.required_approvals and not protection.dismisses_stale_reviews:
-                raise SCMConflict("base branch protection must dismiss stale reviews")
+            # An unprotected base branch is a legitimate state, not a refusal.
+            # This preflight only checks that a rule which *exists* is at least
+            # as strict as the candidate demands -- it is belt to the merge
+            # gate's braces. With no rule at all there is nothing to compare
+            # against, and opening a draft PR is harmless: RepoMesh still
+            # refuses to merge until it has itself observed every required
+            # check passing and enough approvals (RepositoryDelivery
+            # ._readiness_status), which no remote setting can relax.
+            if protection.protected:
+                missing = set(candidate.required_checks) - set(protection.required_checks)
+                if missing:
+                    raise SCMConflict(
+                        f"base branch protection is missing required checks: {sorted(missing)}"
+                    )
+                if protection.required_approvals < candidate.required_approvals:
+                    raise SCMConflict("base branch protection allows too few approvals")
+                if candidate.required_approvals and not protection.dismisses_stale_reviews:
+                    raise SCMConflict("base branch protection must dismiss stale reviews")
         observation = await self._adapter.create_draft_pull_request(
             CreateDraftPullRequestCommand(
                 repository=parse_repository_ref(profile.url),
@@ -343,15 +393,20 @@ class ChangeSetSCMCoordinator:
         """Promote draft PRs to ready-for-review once upstream dependencies merged.
 
         A candidate stays draft while any ``depends_on`` repository is not yet
-        merged; once the upstream merge observation arrives the next replay
-        cycle issues an ``UNDRAFT_PULL_REQUEST`` command for every open draft
-        PR. Commands are idempotent per PR, so repeated observations never
-        enqueue a duplicate.
+        merged; once the upstream merge is observed, an
+        ``UNDRAFT_PULL_REQUEST`` command is issued for every open draft PR.
+        A candidate with no dependencies is eligible immediately -- ``all()``
+        over an empty ``depends_on`` is vacuously true, which is exactly right:
+        nothing upstream can be waited for.
+
+        Commands are idempotent per PR (``undraft:<change set>:<repo>:<pr>``),
+        and the direct ``ready_for_review`` path re-reads the PR and skips the
+        PATCH when it is no longer draft, so repeated calls never duplicate.
         """
 
         change_set = await self._delivery.get(change_set_id)
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
-            if candidate.status is not RepositoryDeliveryStatus.PR_OPEN:
+            if candidate.status not in _UNDRAFTABLE_STATUSES:
                 continue
             if candidate.pull_request_number is None:
                 continue
@@ -392,12 +447,102 @@ class ChangeSetSCMCoordinator:
             )
         return change_set
 
+    async def complete_pending_publications(self, change_set_id: UUID) -> ChangeSetView:
+        """Open the pull request for a candidate whose branch is already pushed.
+
+        ``publish_and_open_draft_pull_request`` is two remote calls behind one
+        name, and the second half can fail on its own: the branch reaches the
+        remote and ``create_draft_pull_request`` dies. Nothing retried that.
+        ``reconcile_and_merge`` skipped every PR-less candidate, and the plan
+        advancer only re-fires on task-terminal or reconsider events that a
+        finished delivery will never emit again -- so "branch pushed, PR
+        failed" was stranded permanently, the same one-shot disease already
+        fixed for dispatch, publish, mention and commands.
+
+        This pass completes the *second* half only. When the remote branch is
+        absent the first half failed too, and rebuilding it needs the Runner
+        workspace that this process no longer holds; the candidate is then
+        skipped with a log rather than half-repaired, leaving a task-level
+        redispatch as the honest remedy.
+        """
+
+        if self._adapter is None:
+            raise RuntimeError("SCM adapter is not configured")
+        current = await self._delivery.get(change_set_id)
+        for original in sorted(current.repositories, key=lambda item: item.merge_order):
+            # Re-read per candidate: a concurrent sweep may have recorded the
+            # number since this loop started, and the check below is what turns
+            # that into a skip instead of a second create.
+            current = await self._delivery.get(change_set_id)
+            candidate = self._candidate(current, original.repository_id)
+            context = {
+                "change_set_id": str(change_set_id),
+                "repository_id": str(candidate.repository_id),
+                "branch_name": candidate.branch_name,
+            }
+            if (
+                candidate.pull_request_number is not None
+                or candidate.status not in _PUBLISHABLE_STATUSES
+                or not candidate.branch_name.strip()
+                or not candidate.commit_sha.strip()
+            ):
+                continue
+            branch_reader = getattr(self._adapter, "get_branch_head", None)
+            if branch_reader is None:
+                logger.warning(
+                    "SCM adapter cannot read a remote branch head; "
+                    "leaving the unpublished delivery candidate alone",
+                    extra=context,
+                )
+                continue
+            repository = await self._repository_ref(candidate.repository_id)
+            remote_head = await branch_reader(repository, candidate.branch_name)
+            if remote_head is None:
+                logger.info(
+                    "delivery candidate branch is not on the remote; "
+                    "the publish never happened and only a redispatch can rebuild it",
+                    extra=context,
+                )
+                continue
+            if remote_head.lower() != candidate.commit_sha.lower():
+                # The branch exists but carries a commit RepoMesh did not
+                # freeze. Opening a PR for it would publish a head nobody
+                # validated, so this is reported and left alone -- not raised,
+                # because a permanently drifted branch must not block the
+                # other candidates' reconciliation on every sweep.
+                logger.warning(
+                    "delivery candidate branch head differs from the frozen commit; "
+                    "not opening a pull request for it",
+                    extra={**context, "commit_sha": candidate.commit_sha},
+                )
+                continue
+            current = await self.open_draft_pull_request(
+                OpenChangeSetPullRequestCommand(
+                    change_set_id=change_set_id,
+                    repository_id=candidate.repository_id,
+                    base_branch=self._base_branch,
+                    body=self._reconciled_pull_request_body(current, candidate),
+                    # Draft for the same reason handle_batch uses it: the
+                    # undraft cycle promotes the PR once dependencies merge.
+                    draft=True,
+                )
+            )
+            logger.info(
+                "delivery reconciliation opened the pull request a failed publish left behind",
+                extra=context,
+            )
+        return current
+
     async def reconcile_and_merge(self, change_set_id: UUID) -> ChangeSetView:
         """Recover remote SCM facts, then merge eligible repositories in order."""
 
         if self._adapter is None:
             raise RuntimeError("SCM adapter is not configured")
-        current = await self._delivery.get(change_set_id)
+        # Convergence first: a candidate stranded between "branch pushed" and
+        # "PR opened" has no pull request number, and every recovery step below
+        # is keyed on one. Completing the publish here lets the very same sweep
+        # go on to reconcile the PR it just opened.
+        current = await self.complete_pending_publications(change_set_id)
         for original in sorted(current.repositories, key=lambda item: item.merge_order):
             current = await self._delivery.get(change_set_id)
             candidate = self._candidate(current, original.repository_id)
@@ -485,7 +630,50 @@ class ChangeSetSCMCoordinator:
             gate = await self._delivery.evaluate_merge_gate(change_set_id, candidate.repository_id)
             if gate.allowed:
                 current = await self.merge_when_allowed(change_set_id, candidate.repository_id)
+        # Draft-ness is the sweep's third convergence duty, and it belongs
+        # here rather than before the loop. ``undraft_when_allowed`` asks
+        # whether every ``depends_on`` repository is MERGED, and the loop above
+        # is precisely what discovers this sweep's merges -- running it first
+        # would judge a candidate against dependency state one full interval
+        # stale. Nothing is lost by promoting after the gate: this sweep's PR
+        # observation was read while the PR was still draft, and in the wired
+        # deployment the promotion travels through the SCM command queue
+        # anyway, so no ordering inside one sweep could have merged it here.
+        # The next sweep sees a non-draft PR and gates it.
+        await self.undraft_when_allowed(change_set_id)
         return current
+
+    @staticmethod
+    def _reconciled_pull_request_body(change_set: ChangeSetView, candidate) -> str:
+        """An honest minimal body for a pull request completed by reconciliation.
+
+        ``PlanDeliveryFinalizer._pull_request_body`` writes the plan narrative
+        -- change_id, batch position, repository list -- because it is holding
+        the ``ExecutionPlanView``. This path is not, and cannot get one: the
+        reconciler starts from ``DeliveryService.list_active()``, and a
+        ``ChangeSetView`` carries no route back to its plan. The only link is
+        the ChangeSet's idempotency key (``execution-plan:<plan>:delivery``),
+        which the store writes but no port reads back for a change set id.
+        So this body states the facts the reconciler actually verified against
+        the remote, and says who wrote it, instead of reconstructing a
+        narrative it cannot check.
+        """
+
+        return "\n".join(
+            [
+                "Automated RepoMesh delivery, completed by reconciliation.",
+                "",
+                f"- change_set: `{change_set.id}`",
+                f"- repository: `{candidate.repository_id}`",
+                f"- branch: `{candidate.branch_name}`",
+                f"- commit: `{candidate.commit_sha}`",
+                "",
+                "The candidate branch was published but its pull request never opened.",
+                "The delivery reconciler finished the publish; the originating execution",
+                "plan is not reachable from a ChangeSet, so this description carries only",
+                "what was verified against the remote.",
+            ]
+        )
 
     async def _repository_ref(self, repository_id: UUID) -> RepositoryRef:
         profile = await self._catalog.get(repository_id)

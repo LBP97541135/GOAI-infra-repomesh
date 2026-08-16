@@ -1,31 +1,31 @@
 import json
 import re
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.collaboration.contracts import (
+    CollaborationConflict,
     CollaborationDeliveryStatus,
+    CollaborationDenied,
+    CollaborationError,
     CollaborationMessageKind,
     CollaborationMessageView,
+    CollaborationRouteUnavailable,
     MatrixTaskReport,
 )
 from repomesh.shared.domain import new_id
 
-
-class CollaborationError(Exception):
-    pass
-
-
-class CollaborationDenied(CollaborationError):
-    pass
-
-
-class CollaborationConflict(CollaborationError):
-    pass
-
-
-class CollaborationRouteUnavailable(CollaborationError):
-    pass
+# Re-exported: the refusals are declared in ``contracts`` so other modules'
+# API layers can translate them without importing this module's internals.
+__all__ = [
+    "CollaborationConflict",
+    "CollaborationDenied",
+    "CollaborationError",
+    "CollaborationMessage",
+    "CollaborationRouteUnavailable",
+    "parse_matrix_task_report",
+]
 
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
@@ -74,6 +74,7 @@ class CollaborationMessage:
     id: UUID = field(default_factory=new_id)
     status: CollaborationDeliveryStatus = CollaborationDeliveryStatus.PENDING
     event_id: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
         if not self.subject.strip() or not self.body.strip() or not self.room_id.strip():
@@ -107,4 +108,5 @@ class CollaborationMessage:
             status=self.status,
             event_id=self.event_id,
             correlation_id=self.correlation_id,
+            created_at=self.created_at,
         )

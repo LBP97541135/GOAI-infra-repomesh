@@ -6,6 +6,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalStatus,
     AgentPrincipalView,
     AgentRole,
+    RepositoryAgentTeamProvisioner,
 )
 from repomesh.modules.project.contracts import (
     CodeAccessLevel,
@@ -22,7 +23,7 @@ from repomesh.modules.project.domain import (
     ProjectTopologyViolation,
     RepositoryTeam,
 )
-from repomesh.modules.project.ports import ProjectTopologyStore
+from repomesh.modules.project.ports import ProjectTopologyStore, TopologyPolicyDraftStore
 from repomesh.shared.idempotency import command_fingerprint
 
 
@@ -168,6 +169,140 @@ class CreateProjectAgentTopology:
             raise ProjectTopologyViolation(f"agent {profile.id} belongs to another repository")
         if leader_agent_id is not None and profile.leader_agent_id != leader_agent_id:
             raise ProjectTopologyViolation(f"agent {profile.id} belongs to another leader")
+
+
+class EnsureProjectAgentTopology:
+    """Implements :class:`ProjectTopologyProvisioner` (see it for the why).
+
+    A thin composition of two capabilities that already exist and had no
+    caller between them: ``ProvisionRepositoryAgentTeam`` makes the principals,
+    ``CreateProjectAgentTopology`` makes the topology out of them. The
+    *decisions* this class owns are only these three:
+
+    - a project that already has a topology is left alone, whatever it was
+      asked for;
+    - the organization is the acting leader's own, never a fresh one
+      (``scripts/run_pipeline.py`` mints a new organization per run, which is
+      right for a script bootstrapping from nothing and wrong for a console
+      round inside a workspace that already exists);
+    - one worker per repository, the smallest team that can be assigned a task.
+
+    ``execution_mode`` and ``required_checkpoints`` are deliberately not
+    decided here. A topology created on the way to work is not the place to
+    decide a project's supervision policy; the admin face
+    (``POST /projects/topologies``) still owns that.
+
+    What that face now has is somewhere to leave the decision in advance, so
+    these three fields — the two above plus ``human_grants`` — are no longer
+    always the defaults: they are read from the project's
+    :class:`~repomesh.modules.project.domain.TopologyPolicyDraft` when one
+    exists. This class still decides nothing about supervision; it carries a
+    decision across a gap that used to swallow it, because the policy is set
+    minutes before there is a topology to hold it. A project with no draft
+    takes the same defaults it always did, byte for byte — the request this
+    class hands the creator is identical, fingerprint included, which is the
+    whole of the backward compatibility story for the projects already
+    materialized.
+    """
+
+    def __init__(
+        self,
+        store: ProjectTopologyStore,
+        teams: RepositoryAgentTeamProvisioner,
+        creator: CreateProjectAgentTopology,
+        policy_drafts: TopologyPolicyDraftStore,
+    ) -> None:
+        self._store = store
+        self._teams = teams
+        self._creator = creator
+        self._policy_drafts = policy_drafts
+
+    async def ensure(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        organization_leader_id: UUID,
+        repository_ids: tuple[UUID, ...],
+        idempotency_key: str,
+    ) -> ProjectAgentTopologyView:
+        existing = await self._store.get(project_id)
+        if existing is not None:
+            return existing.to_view()
+        if not repository_ids:
+            raise ProjectTopologyViolation(
+                "cannot create a project topology with no repositories"
+            )
+
+        key = idempotency_key.strip()
+        if not key:
+            raise ValueError("idempotency_key is required")
+
+        # Read before provisioning: a store that cannot answer should cost
+        # nothing, and provisioning mints agent principals that would outlive
+        # the failure. A draft whose grant names a repository the plan later
+        # dropped is *not* caught here — ``ProjectAgentTopology`` owns that
+        # rule because only it has the teams to check against, and it refuses
+        # loudly rather than dropping the grant (silently unwatching a project
+        # that someone asked to watch).
+        draft = await self._policy_drafts.get(project_id)
+
+        assignments = []
+        # Sorted so the same repository set produces the same team order, and
+        # therefore the same command fingerprint on a replay.
+        for repository_id in sorted(set(repository_ids), key=str):
+            team = await self._teams.provision(
+                organization_id=organization_id,
+                organization_leader_id=organization_leader_id,
+                repository_id=repository_id,
+                idempotency_key=f"{key}:team:{repository_id.hex}",
+            )
+            assignments.append(
+                RepositoryTeamAssignment(
+                    repository_id=repository_id,
+                    leader_agent_id=team.leader.id,
+                    worker_agent_ids=tuple(worker.id for worker in team.workers),
+                )
+            )
+        return await self._creator.execute(
+            CreateProjectAgentTopologyRequest(
+                organization_id=organization_id,
+                project_id=project_id,
+                organization_leader_id=organization_leader_id,
+                repository_teams=tuple(assignments),
+                # Spelled out even when there is no draft so the defaults are
+                # visible next to the thing that overrides them. The values are
+                # the field defaults, so the command fingerprint of a
+                # draft-less project is unchanged and a replay still matches.
+                execution_mode=(
+                    draft.execution_mode if draft else ProjectExecutionMode.AUTO
+                ),
+                required_checkpoints=(
+                    draft.required_checkpoints if draft else frozenset()
+                ),
+                # The draft already holds ``HumanProjectGrant``; it goes back
+                # out through the request's input type rather than sneaking a
+                # domain object past it, because the request type is what
+                # ``CreateProjectAgentTopology`` publishes and one caller
+                # bypassing it would make it a lie.
+                human_grants=(
+                    tuple(
+                        HumanProjectGrantInput(
+                            human_principal_id=grant.human_principal_id,
+                            role=grant.role,
+                            code_access=grant.code_access,
+                            control_actions=grant.control_actions,
+                            repository_id=grant.repository_id,
+                            path_patterns=grant.path_patterns,
+                        )
+                        for grant in draft.human_grants
+                    )
+                    if draft
+                    else ()
+                ),
+            ),
+            idempotency_key=f"{key}:topology",
+        )
 
 
 class CreateAutomaticProjectTopology:

@@ -110,11 +110,11 @@ def test_integration_returns_graph_with_matching_projections(
 ) -> None:
     """PR-5: /integration carries the unified graph, and its materialised
     projections equal the top-level fields the frontend previously spliced."""
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "planning-secret")
+    get_settings.cache_clear()
     application_container = replace(
         application_container, llm_client=StubLLM(_LLM_PLAN)
     )
-    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "planning-secret")
-    get_settings.cache_clear()
 
     try:
         with TestClient(create_app(application_container)) as client:

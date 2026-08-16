@@ -27,6 +27,16 @@ from repomesh.modules.context.application import ContextPublicationGateway, GetE
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import LocalAccountService, PolicyAuthorizationGateway
 from repomesh.modules.identity_access.infrastructure import PostgresLocalAccountStore
+from repomesh.modules.observability.infrastructure.alerting import (
+    AlertingEvaluator,
+    AlertingStore,
+)
+from repomesh.modules.observability.infrastructure.log_query import LogQueryStore
+from repomesh.modules.observability.infrastructure.log_recorder import LogRecorder
+from repomesh.modules.observability.infrastructure.trace_ingest import TraceStore
+from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
+from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
+from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
 from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
@@ -55,8 +65,11 @@ from repomesh.modules.task_orchestration import (
     PostgresExecutionPlanStore,
 )
 from repomesh.modules.task_orchestration.contracts import (
+    PublishedTaskPackage,
     TaskAssignmentGateway,
+    TaskAssignmentPublisher,
     TaskReportGateway,
+    TaskView,
 )
 from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
 from repomesh.persistence import Database
@@ -76,6 +89,158 @@ class BackgroundService(Protocol):
     async def start(self) -> None: ...
 
     async def close(self) -> None: ...
+
+
+def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReader:
+    """Adapt the topology store to the read port modules depend on."""
+
+    class _Adapter:
+        async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
+            topology = await store.get(project_id)
+            return topology.to_view() if topology else None
+
+    return _Adapter()
+
+
+def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMessenger:
+    """Adapt the AgentTeams messenger to the refusal the collaboration port owns.
+
+    ``AgentTeamsUnavailable`` is the integration's word for "the execution
+    plane cannot take this message *yet*" — the recipient's Matrix identity has
+    not appeared, or Matrix itself did not answer. The collaboration port
+    already has a name for exactly that, ``CollaborationRouteUnavailable``, and
+    every caller up the chain is written against it: the API layer turns it
+    into a retryable 503 and the round stays materialisable.
+
+    Untranslated, it escaped the whole stack as a bare 500 with no body — the
+    console told the operator to file a bug about a plan that only needed the
+    button pressed again (defect A-6, found live 2026-08-12). This is the same
+    move ``topology_runtime_projector`` makes for the projection's taxonomy,
+    made in the same place and for the same reason: the business module must
+    not import the integration, so the composition root is where the two
+    vocabularies are allowed to meet.
+
+    Only ``AgentTeamsUnavailable`` is translated. Its siblings
+    ``AgentTeamsResponseError`` and ``AgentTeamsConflict`` mean the plane
+    answered and the answer was wrong, which is a fault to report rather than a
+    wait to retry, and dressing them as 503 would tell the operator to keep
+    pressing a button that cannot work.
+    """
+
+    from repomesh.integrations.agentteams import AgentTeamsUnavailable
+    from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
+
+    class _Messenger:
+        async def send_task(
+            self,
+            room_id: str,
+            body: str,
+            *,
+            transaction_id: str,
+            recipient_resource_name: str | None = None,
+        ) -> str:
+            try:
+                return await messenger.send_task(
+                    room_id,
+                    body,
+                    transaction_id=transaction_id,
+                    recipient_resource_name=recipient_resource_name,
+                )
+            except AgentTeamsUnavailable as error:
+                raise CollaborationRouteUnavailable(str(error)) from error
+
+        def __getattr__(self, name: str):
+            # The concrete client is also a Matrix gateway (whoami, sync_once,
+            # close). Only delivery is being retold, so everything else is the
+            # object itself.
+            return getattr(messenger, name)
+
+    return _Messenger()
+
+
+def storage_backed_task_publisher(
+    publisher: TaskAssignmentPublisher,
+) -> TaskAssignmentPublisher:
+    """Adapt a task-package store to the refusal the publisher port owns.
+
+    A Worker is handed its work as files. ``AgentTeamsTaskPublisher`` writes
+    the package to a directory and ``AgentTeamsObjectTaskPublisher`` writes the
+    same package through AgentTeams' S3 API, and both speak their store's
+    native failure vocabulary — ``minio.error.S3Error`` and its
+    ``MinioException`` siblings, ``urllib3``'s connection errors, and plain
+    ``OSError`` from the filesystem. None of those meant anything to the
+    materialize path, so they escaped it: an S3 ``InvalidAccessKeyId`` reached
+    the console as ``text/plain`` "Internal Server Error" for a round that
+    only needed the button again once the credentials were right (defect A-10,
+    found live 2026-08-12).
+
+    So the composition root wraps the publisher once, where the port meets the
+    adapter, and retells them as ``TaskPublicationUnavailable`` with the
+    store's own sentence preserved — the same move
+    ``collaboration_routed_messenger`` makes for Matrix identities (A-6) and
+    ``topology_runtime_projector`` makes for the projection taxonomy, in the
+    same place and for the same reason: the business module must not import
+    the integration, so the composition root is where the two vocabularies are
+    allowed to meet.
+
+    Both variants are wrapped by one function because the port is what is
+    being wrapped, not the adapter. An unreachable store and a misconfigured
+    one are the same reading — the execution plane cannot take this *yet* — and
+    the live evidence was the misconfigured half.
+
+    ``ValueError`` is deliberately not translated. The file channel raises it
+    when the task path already holds a *different* package, which means the
+    store answered and the answer was no; pressing materialize again cannot
+    change it, and a 503 there would tell the operator to keep pressing a
+    button that cannot work.
+    """
+
+    from repomesh.modules.task_orchestration.contracts import TaskPublicationUnavailable
+
+    # ``minio`` is an optional import in the object publisher, so the file
+    # channel must keep working in a deployment that never installed it.
+    try:
+        from minio.error import MinioException
+    except ImportError:  # pragma: no cover - minio is a declared dependency
+        MinioException = ()
+    try:
+        from urllib3.exceptions import HTTPError as Urllib3Error
+    except ImportError:  # pragma: no cover - urllib3 arrives with minio
+        Urllib3Error = ()
+    # OSError already covers ConnectionError, TimeoutError and every
+    # filesystem failure the file channel can raise, including its own
+    # "publication verification failed".
+    unavailable: tuple[type[BaseException], ...] = tuple(
+        family
+        for family in (OSError, MinioException, Urllib3Error)
+        if isinstance(family, type)
+    )
+
+    class _Publisher:
+        async def publish(
+            self,
+            task: TaskView,
+            *,
+            team_name: str,
+            room_id: str,
+            assignee_resource_name: str,
+            idempotency_key: str,
+        ) -> PublishedTaskPackage:
+            try:
+                return await publisher.publish(
+                    task,
+                    team_name=team_name,
+                    room_id=room_id,
+                    assignee_resource_name=assignee_resource_name,
+                    idempotency_key=idempotency_key,
+                )
+            except unavailable as error:
+                raise TaskPublicationUnavailable(str(error)) from error
+
+        def __getattr__(self, name: str):
+            return getattr(publisher, name)
+
+    return _Publisher()
 
 
 def cached_service(factory):
@@ -109,6 +274,10 @@ class ApplicationContainer:
     mock_coding_agent_factory: Callable[[str], CodingAgent]
     # Planning LLM adapter; None selects the deterministic keyword fallback paths.
     llm_client: LLMClient | None = None
+    # Thread-safe usage sink + background flush service for planning LLM calls.
+    usage_recorder: QueuedUsageRecorder | None = None
+    # Process-log capture + background flush service for the unified log page.
+    log_recorder: LogRecorder | None = None
     agent_team_control_plane: AgentTeamControlPlane | None = None
     agent_team_messenger: AgentTeamMessenger | None = None
     agentteams_probe: ReadinessProbe | None = None
@@ -137,6 +306,126 @@ class ApplicationContainer:
         from repomesh.modules.project import CreateProjectAgentTopology
 
         return CreateProjectAgentTopology(self.agent_directory, self.project_topology_store)
+
+    def project_topology_provisioner(self):
+        """Contract v0.4 §8: the topology a console round makes on its way to work.
+
+        Composed of the two capabilities the modules already publish rather
+        than a third path into the same tables — ``scripts/run_pipeline.py``
+        writes the topology straight to the store, and repeating that here
+        would put a fourth spelling of "what a team is" in the codebase.
+        """
+
+        from repomesh.modules.agent_directory.application import (
+            ProvisionRepositoryAgentTeam,
+        )
+        from repomesh.modules.project import EnsureProjectAgentTopology
+
+        return EnsureProjectAgentTopology(
+            self.project_topology_store,
+            ProvisionRepositoryAgentTeam(self.agent_directory),
+            self.project_topology_creator(),
+            self.topology_policy_draft_store(),
+        )
+
+    @cached_service
+    def topology_policy_draft_store(self):
+        """Where the admin face leaves a supervision policy for materialization.
+
+        One instance for both directions on purpose: the endpoints write
+        through it over an admin session, ``EnsureProjectAgentTopology`` reads
+        through it in-process. That asymmetry is the whole design — the shared
+        console action token gains no way to set a policy, only to trigger one
+        an admin already set.
+        """
+
+        from repomesh.modules.project.infrastructure import (
+            PostgresTopologyPolicyDraftStore,
+        )
+
+        return PostgresTopologyPolicyDraftStore(self.database)
+
+    def topology_runtime_projector(self):
+        """Contract v0.4 §8: the step that makes a round's rooms exist.
+
+        Wired here for the reason the bridge is: the capability is composed
+        out of an integration (``RegisterNativeAgent`` +
+        ``ReconcileProjectAgentTopology``) and the module that needs it
+        declares only a Protocol, so the two can meet nowhere else.
+
+        The adapter's whole body is a translation. The integration raises its
+        own taxonomy — unreachable controller, refused request, teams whose
+        rooms have not appeared — and the port publishes two refusals, split on
+        the only question the caller can act on: *is pressing the button again
+        a plan?* Unreachable and rooms-not-yet are yes (503). A controller that
+        answered and said no — ``AgentTeamsConflict``, or any 4xx it spelled
+        out — is not (409, §8.7.1's second ruling, A-8). Folding the second
+        into the first is what made a permanent deadlock wear "materialize
+        again once AgentTeams answers".
+
+        A container with no control plane gets a projector that refuses rather
+        than one that quietly does nothing: "the rooms were never made" is the
+        defect this exists to end, and a silent skip is how it hid. Production
+        always has one (``build_default_container`` constructs the client
+        unconditionally); a test that wants past this stubs it, exactly as it
+        already stubs ``execution_plan_starter``.
+        """
+
+        from repomesh.modules.repository_intelligence.ports import (
+            RuntimeProjectionConflict,
+            RuntimeProjectionUnavailable,
+        )
+
+        control_plane = self.agent_team_control_plane
+        store = self.project_topology_store
+        directory = self.agent_directory
+        settings = get_settings()
+
+        class _RuntimeProjection:
+            async def project(self, project_id: UUID) -> None:
+                from repomesh.integrations.agentteams import (  # noqa: PLC0415
+                    AgentTeamsConflict,
+                    AgentTeamsError,
+                    AgentTeamsResponseError,
+                    AgentTeamsRoomsPending,
+                    ProjectRuntimeProjection,
+                )
+
+                if control_plane is None:
+                    raise RuntimeProjectionUnavailable(
+                        "the AgentTeams control plane is not configured, so this "
+                        "project's teams can have no rooms"
+                    )
+                try:
+                    await ProjectRuntimeProjection(
+                        directory,
+                        store,
+                        control_plane,
+                        model=settings.deepseek_model,
+                        manager_runtime=settings.agentteams_manager_runtime,
+                        worker_runtime=settings.agentteams_worker_runtime,
+                        worker_task_control_url=settings.worker_task_control_url,
+                    ).project(project_id)
+                except AgentTeamsRoomsPending as error:
+                    # A subclass of AgentTeamsError and *not* a conflict: the
+                    # controller took the Teams and simply has not published
+                    # their rooms yet. Caught first because the clauses below
+                    # would not otherwise see past it.
+                    raise RuntimeProjectionUnavailable(str(error)) from error
+                except AgentTeamsConflict as error:
+                    raise RuntimeProjectionConflict(str(error)) from error
+                except AgentTeamsResponseError as error:
+                    # The controller answered with a status. 4xx is a verdict
+                    # on what we asked for — the already-a-member 400 A-8 lived
+                    # under is exactly this — and 5xx is the plane having a bad
+                    # day, which a retry may well outlast.
+                    if 400 <= error.status_code < 500:
+                        raise RuntimeProjectionConflict(str(error)) from error
+                    raise RuntimeProjectionUnavailable(str(error)) from error
+                except AgentTeamsError as error:
+                    raise RuntimeProjectionUnavailable(str(error)) from error
+
+        return _RuntimeProjection()
 
     def automatic_project_topology_creator(self):
         from repomesh.modules.project import CreateAutomaticProjectTopology
@@ -193,14 +482,7 @@ class ApplicationContainer:
     def topology_reader(self) -> ProjectTopologyReader:
         """Adapt ProjectTopologyStore to ProjectTopologyReader."""
 
-        store = self.project_topology_store
-
-        class _Adapter:
-            async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
-                topology = await store.get(project_id)
-                return topology.to_view() if topology else None
-
-        return _Adapter()
+        return project_topology_reader(self.project_topology_store)
 
     def requirement_analyzer(self) -> RequirementAnalyzer | None:
         """Build a RequirementAnalyzer when an LLM client is configured.
@@ -227,6 +509,33 @@ class ApplicationContainer:
     def plan_snapshot_store(self) -> PlanSnapshotStore:
         return PlanSnapshotStore(self.database)
 
+    def usage_query_store(self) -> UsageQueryStore:
+        return UsageQueryStore(self.database)
+
+    @cached_service
+    def alerting_store(self) -> AlertingStore:
+        return AlertingStore(self.database)
+
+    @cached_service
+    def alerting_evaluator(self) -> AlertingEvaluator:
+        return AlertingEvaluator(
+            self.alerting_store(),
+            self.usage_query_store(),
+            trace_query=self.trace_query_store(),
+        )
+
+    @cached_service
+    def trace_store(self) -> TraceStore:
+        return TraceStore(self.database)
+
+    @cached_service
+    def trace_query_store(self) -> TraceQueryStore:
+        return TraceQueryStore(self.database)
+
+    @cached_service
+    def log_query_store(self) -> LogQueryStore:
+        return LogQueryStore(self.database)
+
     @cached_service
     def delivery_service(self):
         from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
@@ -238,9 +547,7 @@ class ApplicationContainer:
             require_validation=get_settings().delivery_auto_enabled,
             validation_reader=validation,
             contract_catalog=(
-                self.contract_catalog()
-                if get_settings().delivery_contract_gate
-                else None
+                self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
         )
 
@@ -311,11 +618,7 @@ class ApplicationContainer:
                     consumer = by_name.get(content.scope[1])
                     if producer is None or consumer is None:
                         continue
-                    interface = (
-                        content.interface_changes[0]
-                        if content.interface_changes
-                        else ""
-                    )
+                    interface = content.interface_changes[0] if content.interface_changes else ""
                     contracts.append(
                         ContractView(
                             producer=producer.id,
@@ -331,6 +634,544 @@ class ApplicationContainer:
             self.specification_store,
             self.repository_catalog,
             self.task_store,
+        )
+
+    def delivery_read_model_service(self):
+        from repomesh.api.read_models import DeliveryReadModelService
+        from repomesh.api.read_models.sources import (
+            PlanSnapshotData,
+            RepositoryData,
+            RepositoryProfileData,
+            RepositorySpecData,
+            RunnerEventData,
+            RuntimeSnapshot,
+            SpecificationContractData,
+        )
+        from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
+        from repomesh.modules.collaboration import PostgresCollaborationMessageStore
+        from repomesh.modules.delivery import (
+            PostgresDeliveryArchiveStore,
+            PostgresSCMObservationStore,
+            delivery_change_set_key,
+        )
+        from repomesh.modules.review_validation import PostgresValidationSnapshotStore
+        from repomesh.modules.specification.contracts import (
+            SpecificationKind,
+            SpecificationStatus,
+        )
+
+        container = self
+        delivery = self.delivery_service()
+        plan_store = self.execution_plan_store()
+        snapshot_store = self.plan_snapshot_store()
+        archive_store = PostgresDeliveryArchiveStore(self.database)
+        validation_store = PostgresValidationSnapshotStore(self.database)
+        runner_store = PostgresRunnerGatewayStore(self.database)
+        message_store = PostgresCollaborationMessageStore(self.database)
+        observation_store = PostgresSCMObservationStore(self.database)
+
+        class _Plans:
+            async def list_all(self):
+                return tuple(plan.to_view() for plan in await plan_store.list_all())
+
+            async def get(self, plan_id: UUID):
+                plan = await plan_store.get(plan_id)
+                return plan.to_view() if plan is not None else None
+
+        class _Snapshots:
+            async def project_ids(self):
+                return await snapshot_store.list_project_ids()
+
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    PlanSnapshotData(
+                        id=record.id,
+                        project_id=record.project_id,
+                        plan_version=record.plan_version,
+                        created_at=record.created_at,
+                        engineering_spec=record.engineering_spec,
+                        requirement_text=record.requirement_text,
+                        execution_batches=tuple(tuple(batch) for batch in record.execution_batches),
+                        task_dag=tuple(record.task_dag),
+                        execution_plan_id=record.execution_plan_id,
+                        created_by_agent_id=record.created_by_agent_id,
+                        contracts=tuple(record.contracts or ()),
+                        discovery=record.discovery,
+                    )
+                    for record in await snapshot_store.list_all(project_id)
+                )
+
+        class _Tasks:
+            async def list_by_project(self, project_id: UUID):
+                return tuple(
+                    task.to_view()
+                    for task in await container.task_store.list_by_project(project_id)
+                )
+
+            async def list_all(self):
+                return tuple(task.to_view() for task in await container.task_store.list_all())
+
+        class _ChangeSets:
+            async def for_delivery(self, delivery_id: UUID):
+                return await delivery.get_by_idempotency_key(delivery_change_set_key(delivery_id))
+
+            async def merge_gate(self, change_set_id: UUID, repository_id: UUID):
+                return await delivery.evaluate_merge_gate(change_set_id, repository_id)
+
+            async def recovery_preview(self, change_set_id: UUID):
+                from repomesh.modules.delivery.contracts import (
+                    PlanRecoveryCommand,
+                    RecoveryTrigger,
+                )
+
+                return await delivery.preview_recovery(
+                    PlanRecoveryCommand(
+                        change_set_id=change_set_id,
+                        trigger=RecoveryTrigger.OPERATOR_REQUESTED,
+                        reason="rollback scope preview",
+                    )
+                )
+
+        class _Validations:
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    snapshot.to_view()
+                    for snapshot in await validation_store.list_by_project(project_id)
+                )
+
+        class _Specifications:
+            async def engineering_contract(self, project_id: UUID):
+                candidates = [
+                    specification
+                    for specification in await container.specification_store.list_by_project(
+                        project_id
+                    )
+                    if specification.kind is SpecificationKind.ENGINEERING
+                ]
+                if not candidates:
+                    return None
+                frozen = [item for item in candidates if item.status is SpecificationStatus.FROZEN]
+                chosen = (frozen or candidates)[-1]
+                content = chosen.current_version.content
+                return SpecificationContractData(
+                    specification_id=chosen.id,
+                    version=chosen.current_version.version,
+                    status=chosen.status.value,
+                    goal=content.goal,
+                    acceptance=content.acceptance,
+                    constraints=content.constraints,
+                    allowed_paths=content.allowed_paths,
+                    forbidden_paths=content.forbidden_paths,
+                    tests=content.tests,
+                )
+
+            async def repository_spec(self, project_id: UUID, repository_id: UUID):
+                candidates = [
+                    specification
+                    for specification in await container.specification_store.list_by_project(
+                        project_id
+                    )
+                    if specification.repository_id == repository_id
+                    and specification.kind in {SpecificationKind.REPOSITORY, SpecificationKind.TASK}
+                ]
+                if not candidates:
+                    return None
+                # Contract v0.2 §5.4: FROZEN wins, then APPROVED, then the
+                # highest revision within the winning status.
+                for status in (SpecificationStatus.FROZEN, SpecificationStatus.APPROVED):
+                    ranked = [item for item in candidates if item.status is status]
+                    if ranked:
+                        chosen = max(ranked, key=lambda item: item.revision)
+                        break
+                else:
+                    return None
+                content = chosen.current_version.content
+                return RepositorySpecData(
+                    specification_id=chosen.id,
+                    kind=chosen.kind.value,
+                    status=chosen.status.value,
+                    revision=chosen.revision,
+                    goal=content.goal,
+                    acceptance=content.acceptance,
+                    allowed_paths=content.allowed_paths,
+                    forbidden_paths=content.forbidden_paths,
+                    tests=content.tests,
+                )
+
+        class _Repositories:
+            async def list(self):
+                return tuple(
+                    RepositoryData(
+                        id=profile.id, name=profile.name, description=profile.description
+                    )
+                    for profile in await container.repository_catalog.list()
+                )
+
+            async def profiles(self):
+                return tuple(
+                    RepositoryProfileData(
+                        id=profile.id,
+                        name=profile.name,
+                        url=profile.url,
+                        description=profile.description,
+                        topics=tuple(profile.topics),
+                        languages=tuple(profile.languages),
+                        test_commands=tuple(profile.test_commands),
+                        test_paths=tuple(profile.test_paths),
+                        profiled_at=profile.profiled_at,
+                    )
+                    for profile in await container.repository_catalog.list()
+                )
+
+        class _Agents:
+            async def name(self, agent_id: UUID):
+                principal = await container.agent_directory.get_view(agent_id)
+                return principal.agentteams_resource_name if principal else None
+
+            async def organization_id(self, agent_id: UUID):
+                principal = await container.agent_directory.get_view(agent_id)
+                return principal.organization_id if principal else None
+
+            async def list_all(self):
+                return tuple(
+                    principal.to_view() for principal in await container.agent_directory.list()
+                )
+
+        class _Topology:
+            async def get_view(self, project_id: UUID):
+                return await container.topology_reader().get_view(project_id)
+
+            async def find_by_room(self, room_id: str):
+                return await container.project_topology_store.find_view_by_room(room_id)
+
+            async def list_views(self):
+                return tuple(await container.project_topology_store.list_views())
+
+            async def matrix_room_id(self, project_id: UUID):
+                topology = await self.get_view(project_id)
+                if topology is None or len(topology.repository_teams) != 1:
+                    return None
+                return topology.repository_teams[0].room_id
+
+        class _RunnerEvents:
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    RunnerEventData(
+                        event_id=row["event_id"],
+                        run_id=row["run_id"],
+                        sequence=row["sequence"],
+                        event_type=row["event_type"],
+                        occurred_at=row["occurred_at"],
+                        task_id=row["task_id"],
+                        repository_id=row["repository_id"],
+                    )
+                    for row in await runner_store.list_events_for_project(project_id)
+                )
+
+        class _Messages:
+            async def for_project(self, project_id: UUID):
+                return tuple(
+                    message.to_view() for message in await message_store.list_by_project(project_id)
+                )
+
+            async def for_room(self, room_id: str):
+                return tuple(
+                    message.to_view() for message in await message_store.list_by_room(room_id)
+                )
+
+            async def last_assignment_at(self, project_id: UUID):
+                return await message_store.last_assignment_at(project_id)
+
+        class _Observations:
+            async def for_change_set(self, change_set_id: UUID):
+                return tuple(
+                    observation.to_view()
+                    for observation in await observation_store.list_by_change_set(change_set_id)
+                )
+
+        class _Runtime:
+            """Live AgentTeams proxy for §4.4.
+
+            Translates the integration's error taxonomy into the read model's
+            two outcomes: None for 404 (no such resource) and a raised error for
+            anything else, which the read model degrades to reachable:false.
+            """
+
+            def __init__(self, control_plane) -> None:
+                self._control_plane = control_plane
+
+            async def worker(self, name: str):
+                ref = await self._not_found_as_none(self._control_plane.get_worker(name))
+                if ref is None:
+                    return None
+                return RuntimeSnapshot(
+                    phase=ref.phase,
+                    runtime_kind=ref.runtime,
+                    matrix_user_id=ref.matrix_user_id,
+                    room_id=ref.room_id,
+                    message=ref.message,
+                )
+
+            async def manager(self, name: str):
+                ref = await self._not_found_as_none(self._control_plane.get_manager(name))
+                if ref is None:
+                    return None
+                return RuntimeSnapshot(
+                    phase=ref.phase,
+                    matrix_user_id=ref.matrix_user_id,
+                    room_id=ref.room_id,
+                )
+
+            async def team(self, name: str):
+                ref = await self._not_found_as_none(self._control_plane.get_team(name))
+                if ref is None:
+                    return None
+                return RuntimeSnapshot(
+                    phase=ref.phase,
+                    ready_workers=ref.ready_workers,
+                    total_workers=ref.total_workers,
+                )
+
+            @staticmethod
+            async def _not_found_as_none(awaitable):
+                from repomesh.integrations.agentteams import AgentTeamsResponseError
+
+                try:
+                    return await awaitable
+                except AgentTeamsResponseError as error:
+                    if error.status_code == 404:
+                        return None
+                    raise
+
+        class _DiscoveryTasks:
+            def running(self, issue_id: UUID):
+                from repomesh.modules.repository_intelligence.api.discovery_chain import (  # noqa: PLC0415
+                    running_task,
+                )
+
+                return running_task(issue_id)
+
+        return DeliveryReadModelService(
+            plans=_Plans(),
+            snapshots=_Snapshots(),
+            tasks=_Tasks(),
+            change_sets=_ChangeSets(),
+            archives=archive_store,
+            validations=_Validations(),
+            specifications=_Specifications(),
+            repositories=_Repositories(),
+            agents=_Agents(),
+            topology=_Topology(),
+            runner_events=_RunnerEvents(),
+            messages=_Messages(),
+            observations=_Observations(),
+            runtime=(
+                _Runtime(self.agent_team_control_plane)
+                if self.agent_team_control_plane is not None
+                else None
+            ),
+            # v0.4 §3.1: "is a step in flight" is process memory owned by the
+            # writing module. Adapted here rather than imported there, the same
+            # way the AgentTeams runtime probe is — the read model depends on
+            # the protocol, not on where the dict lives.
+            discovery_tasks=_DiscoveryTasks(),
+            probe_timeout=get_settings().runtime_probe_timeout_seconds,
+            probe_concurrency=get_settings().runtime_probe_concurrency,
+        )
+
+    def organization_registry_service(self):
+        from repomesh.modules.agent_directory.application import (
+            CreateAgent,
+            CreateAgentRequest,
+        )
+        from repomesh.modules.agent_directory.contracts import (
+            AgentPrincipalStatus,
+            AgentRole,
+        )
+        from repomesh.modules.agent_directory.domain import AgentAlreadyExists
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.identity_access.infrastructure import (
+            PostgresOrganizationStore,
+        )
+        from repomesh.modules.identity_access.organizations import (
+            OrganizationLeaderConflict,
+            OrganizationRegistryService,
+        )
+
+        directory = self.agent_directory
+
+        # Composition-root adapters: identity_access only knows its own ports;
+        # the agent_directory coupling lives here (same pattern as the read
+        # model's inline sources).
+        class _LeaderRegistrar:
+            async def ensure_leader(
+                self, organization_id: UUID, resource_name: str, idempotency_key: str
+            ) -> tuple[UUID, bool]:
+                # Key already used → that registration stands, whatever
+                # resource name this call derived (the naming scheme may have
+                # changed since); replaying must not trip CreateAgent's
+                # fingerprint comparison.
+                existing = await directory.get_by_idempotency_key(idempotency_key)
+                if existing is not None:
+                    return existing[0].id, False
+                try:
+                    created = await CreateAgent(directory).execute(
+                        CreateAgentRequest(
+                            organization_id=organization_id,
+                            role=AgentRole.ORGANIZATION_LEADER,
+                            agentteams_resource_name=resource_name,
+                        ),
+                        idempotency_key=idempotency_key,
+                    )
+                    return created.principal.id, True
+                except AgentAlreadyExists as error:
+                    # Converge on the workspace's existing leader when there is
+                    # one: the directory's singleton key guarantees at most one
+                    # ORGANIZATION_LEADER per organization, so any conflict here
+                    # (idempotency-fingerprint drift after the naming scheme
+                    # changed, crash-gap replay, singleton race) resolves to
+                    # that row instead of stranding the workspace.
+                    for principal in await directory.list():
+                        if (
+                            principal.organization_id == organization_id
+                            and principal.role is AgentRole.ORGANIZATION_LEADER
+                            and principal.status is AgentPrincipalStatus.ACTIVE
+                        ):
+                            return principal.id, False
+                    # No leader in this workspace → the resource name is held
+                    # by another workspace (v0.3 §6 S-8). Typed so the API
+                    # answers 409 with repair guidance instead of a 500, and
+                    # the organization row stays repairable by replay.
+                    raise OrganizationLeaderConflict(
+                        f"leader resource name is not available: {resource_name}; "
+                        "replay the same idempotency_key with a different "
+                        "leader_resource_name"
+                    ) from error
+
+        class _AgentCounter:
+            async def count_active(self, organization_id: UUID) -> int:
+                principals = await directory.list()
+                return sum(
+                    1
+                    for principal in principals
+                    if principal.organization_id == organization_id
+                    and principal.status is AgentPrincipalStatus.ACTIVE
+                )
+
+        return OrganizationRegistryService(
+            PostgresOrganizationStore(self.database),
+            _LeaderRegistrar(),
+            _AgentCounter(),
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def discovery_chain_service(self):
+        """Contract v0.4 §4: the discovery chain's write side.
+
+        Same audit sink and the same directory the issue intake uses — the
+        acting subject rule is one rule (an active organization leader of the
+        issue's workspace), so it is satisfied from one place.
+        """
+
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.repository_intelligence.application.discovery_chain import (
+            DiscoveryChainService,
+            DiscoveryPipeline,
+        )
+
+        return DiscoveryChainService(
+            self.plan_snapshot_store(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+            DiscoveryPipeline(
+                self.repository_catalog,
+                self.llm_client,
+                self.requirement_analyzer(),
+            ),
+        )
+
+    def discovery_materialization_service(self):
+        """Contract v0.4 §8: the write that ends a round and starts the work.
+
+        The bridge is handed in as ``PlanMaterializer``, the port
+        repository_intelligence declares for it. The import direction is the
+        reason: change_orchestration already depends on repository_intelligence
+        for ``IntegratedPlan``, so the service cannot name the bridge without
+        closing a cycle — the composition root is where the two meet.
+        """
+
+        from repomesh.modules.repository_intelligence.application.discovery_materialization import (  # noqa: E501
+            DiscoveryMaterializationService,
+        )
+
+        return DiscoveryMaterializationService(
+            self.plan_snapshot_store(),
+            self.agent_directory,
+            self.repository_catalog,
+            self.topology_reader(),
+            self.project_topology_provisioner(),
+            self.plan_execution_bridge(),
+            self.topology_runtime_projector(),
+        )
+
+    def issue_intake_service(self):
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.repository_intelligence.application import (
+            IssueIntakeService,
+        )
+
+        # The audit sink is the platform-generic 6-line writer that happens to
+        # live in delivery; only the composition root couples to it (module
+        # code depends on the IssueIntakeAuditLog protocol).
+        return IssueIntakeService(
+            self.plan_snapshot_store(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def delivery_governance_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryGovernanceService,
+            PostgresDeliveryAuditLog,
+        )
+
+        return DeliveryGovernanceService(
+            self.delivery_service(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def delivery_rollback_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryRollbackService,
+            PostgresDeliveryAuditLog,
+        )
+
+        return DeliveryRollbackService(
+            self.delivery_service(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def delivery_archive_service(self):
+        from repomesh.modules.delivery import (
+            DeliveryArchiveService,
+            PostgresDeliveryArchiveStore,
+            PostgresDeliveryAuditLog,
+        )
+
+        plans = self.execution_plan_store()
+
+        class _PlanViewReader:
+            async def get_view(self, plan_id: UUID):
+                plan = await plans.get(plan_id)
+                return plan.to_view() if plan is not None else None
+
+        return DeliveryArchiveService(
+            PostgresDeliveryArchiveStore(self.database),
+            self.delivery_service(),
+            _PlanViewReader(),
+            PostgresDeliveryAuditLog(self.database),
         )
 
     @cached_service
@@ -387,9 +1228,11 @@ class ApplicationContainer:
                 self.repository_catalog,
                 self.scm_adapter,
                 command_service=self.scm_command_service(),
+                base_branch=get_settings().delivery_base_branch,
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
+            rework_tasks=self.ci_rework_task_gateway(),
         )
 
     def changeset_scm_coordinator(self):
@@ -406,6 +1249,71 @@ class ApplicationContainer:
                 token_provider=self.scm_token_provider,
             ),
             command_service=self.scm_command_service(),
+            base_branch=get_settings().delivery_base_branch,
+        )
+
+    def ci_rework_task_gateway(self):
+        """Route a failed delivery candidate back to the repository Worker.
+
+        Same shape as ``recovery_conflict_task_gateway``: task assignment
+        travels over AgentTeams, so without a messenger a CI failure can only
+        change state and wait to be noticed.
+        """
+
+        from repomesh.integrations.scm.rework import CIReworkTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return CIReworkTaskCreator(tasks, self.topology_reader())
+
+    def recovery_conflict_task_gateway(self):
+        """Route revert conflicts to the repository Worker, when there is one.
+
+        Task assignment travels over AgentTeams, so without a messenger the
+        Saga has nobody to hand a conflict to and records the failed action
+        instead of parking it in ``waiting_worker``.
+        """
+
+        from repomesh.integrations.scm.rework import RecoveryConflictTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return RecoveryConflictTaskCreator(tasks, self.topology_reader())
+
+    def revert_delivery_gateway(self):
+        """Choose the GitHub rollback provider for the recovery Saga."""
+
+        from repomesh.integrations.scm import GitHubRevertDeliveryGateway, MirrorGitReverter
+        from repomesh.integrations.scm.github import GitHubAdapter
+
+        if self.scm_adapter is None:
+            raise RuntimeError("SCM adapter is not configured")
+        settings = get_settings()
+        return GitHubRevertDeliveryGateway(
+            self.repository_catalog,
+            cast(GitHubAdapter, self.scm_adapter),
+            MirrorGitReverter(
+                settings.runner_workspace_root / "revert-mirrors",
+                token_provider=self.scm_token_provider,
+            ),
+            base_branch=settings.delivery_base_branch,
+        )
+
+    def recovery_saga_executor(self):
+        """Assemble the durable rollback Saga over the GitHub revert gateway."""
+
+        from repomesh.integrations.scm import (
+            GovernedRecoveryActionHandler,
+            RecoverySagaExecutor,
+        )
+
+        return RecoverySagaExecutor(
+            self.delivery_service(),
+            GovernedRecoveryActionHandler(self.revert_delivery_gateway()),
+            self.recovery_conflict_task_gateway(),
+            interval_seconds=get_settings().delivery_recovery_interval_seconds,
         )
 
     def plan_delivery_finalizer(self):
@@ -442,11 +1350,7 @@ class ApplicationContainer:
             policy_resolver=resolve_policy,
             validation=self.validation_snapshot_service(),
             checkpoints=self.project_checkpoint_service(),
-            contracts=(
-                self.contract_catalog()
-                if settings.delivery_contract_gate
-                else None
-            ),
+            contracts=(self.contract_catalog() if settings.delivery_contract_gate else None),
         )
 
     @cached_service
@@ -517,6 +1421,33 @@ class ApplicationContainer:
         if self.task_report_gateway is None:
             return None
         return cast(TaskSupersederGateway, self.task_report_gateway)
+
+    def task_redispatch_gateway(self):
+        """The same composed TaskOrchestrator, in its re-dispatch role (§8.7.4).
+
+        ``TaskOrchestrator.redispatch`` is the fourth capability on the
+        instance that already backs assignment, reports and supersession, so
+        this is a cast rather than a construction — and it stays optional for
+        the same reason they do: without the AgentTeams messenger there is no
+        orchestrator, and a round with nowhere to dispatch to cannot be
+        dispatched again.
+        """
+
+        if self.task_report_gateway is None:
+            return None
+        from repomesh.modules.task_orchestration.contracts import TaskRedispatchGateway
+
+        return cast(TaskRedispatchGateway, self.task_report_gateway)
+
+    def round_redispatch_service(self):
+        """Contract v0.4 §8.7.4: the operator's handle on a stalled round."""
+
+        dispatcher = self.task_redispatch_gateway()
+        if dispatcher is None:
+            return None
+        from repomesh.modules.task_orchestration.application import RedispatchRound
+
+        return RedispatchRound(self.execution_plan_store(), self.task_store, dispatcher)
 
     def project_task_reader(self):
         """Expose task views through the TaskOrchestrator public read port."""

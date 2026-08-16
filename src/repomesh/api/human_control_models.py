@@ -43,6 +43,36 @@ class HumanGrantCreate(BaseModel):
     path_patterns: list[str] = []
 
 
+class PolicyDraftGrant(HumanGrantCreate):
+    """A draft's human grant, with the one restated rule handed back to the domain.
+
+    ``HumanGrantCreate`` spells ``min_length=1`` on ``control_actions``, which
+    is a second copy of ``HumanProjectGrant``'s "human grant requires control
+    actions" — and a copy answers in Pydantic's words rather than the domain's.
+    A draft is judged twice, once when it is saved and once if materialization
+    refuses, and the two occasions have to produce the same sentence about the
+    same data; that is the whole reason ``supervision_policy`` exists. The other
+    three single-grant rules were never restated here and already reach the
+    caller verbatim, so restating this one would make exactly one of the four
+    speak a different language.
+    """
+
+    control_actions: set[HumanControlAction] = set()
+
+
+class TopologyPolicyDraftPut(BaseModel):
+    """A project's whole supervision policy, overwritten in one call.
+
+    No ``idempotency_key``, unlike the two topology creates below: a
+    requirement holds one supervision intent and ``PUT`` of the whole document
+    is already idempotent. There is nothing here to accidentally create twice.
+    """
+
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: set[ProjectCheckpoint] = set()
+    human_grants: list[PolicyDraftGrant] = []
+
+
 class ProjectTopologyCreate(BaseModel):
     organization_id: UUID
     project_id: UUID

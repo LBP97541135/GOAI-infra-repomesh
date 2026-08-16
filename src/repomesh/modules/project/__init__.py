@@ -4,6 +4,7 @@ from .application import (
     CreateAutomaticProjectTopologyRequest,
     CreateProjectAgentTopology,
     CreateProjectAgentTopologyRequest,
+    EnsureProjectAgentTopology,
     HumanProjectGrantInput,
     RepositoryTeamAssignment,
 )
@@ -24,6 +25,7 @@ from .contracts import (
     ProjectExecutionMode,
     ProjectOperationalStatus,
     ProjectTeamRuntimeStatus,
+    ProjectTopologyProvisioner,
     RepositoryTeamView,
     TopologyAwareCheckpointFallback,
 )
@@ -40,6 +42,7 @@ __all__ = [
     "CreateAutomaticProjectTopologyRequest",
     "CreateProjectAgentTopology",
     "CreateProjectAgentTopologyRequest",
+    "EnsureProjectAgentTopology",
     "CodeAccessLevel",
     "CheckpointDecisionKind",
     "CheckpointGateDecision",
@@ -59,6 +62,7 @@ __all__ = [
     "ControlProjectCommand",
     "ProjectLifecycleService",
     "ProjectTeamRuntimeStatus",
+    "ProjectTopologyProvisioner",
     "RepositoryTeamAssignment",
     "RepositoryTeamView",
     "RecordCheckpointDecisionCommand",

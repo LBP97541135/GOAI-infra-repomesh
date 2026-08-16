@@ -1,11 +1,17 @@
+import json
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.task_orchestration.contracts import (
+    DeliveryRefusalView,
     ExecutionPlanStatus,
     ExecutionPlanView,
     PlannedRepositoryTaskView,
+    TaskEvidenceView,
+    TaskOrigin,
     TaskStatus,
+    TaskTestResultView,
     TaskView,
 )
 from repomesh.shared.domain import new_id
@@ -32,6 +38,19 @@ class TaskNotFound(TaskOrchestrationError):
     pass
 
 
+class RoundNotDispatchable(TaskConflict):
+    """This round has nothing an explicit re-dispatch could do → 409.
+
+    A subclass so the existing conflict translation covers it without a new
+    branch, and a named type so the API and the tests can say which refusal
+    they mean rather than matching a sentence. Two shapes wear it: a round
+    whose materialization never got as far as writing tasks, and a round whose
+    tasks have all reached a terminal status. Neither is an error the operator
+    made, and neither is fixed by pressing again — which is exactly what
+    separates it from the 503 next door.
+    """
+
+
 FINAL_TASK_STATUSES = frozenset(
     {
         TaskStatus.SUCCEEDED,
@@ -40,6 +59,150 @@ FINAL_TASK_STATUSES = frozenset(
         TaskStatus.SUPERSEDED,
     }
 )
+
+#: Final statuses an operator may send back to work (§8.7.4, ``Task.redo``).
+#: A result that came out wrong, as opposed to a decision that the work should
+#: not happen — see ``Task.redo`` for why the other two are excluded.
+_REDOABLE_TASK_STATUSES = frozenset({TaskStatus.SUCCEEDED, TaskStatus.FAILED})
+
+
+#: The key that identifies a document as the Runner gateway's write-back.
+#:
+#: Deliberately the same key the old rule gated on, and deliberately only that
+#: one: the change is *presence instead of truthiness*, nothing else. So this
+#: cannot reject a document the previous parser accepted, and it cannot start
+#: accepting some unrelated JSON an agent happened to write -- ``commitSha`` is
+#: not a word that turns up in a hand-written report.
+#:
+#: Requiring ``runId`` as well was tried and rejected: the gateway does write it
+#: on every event, but in-repo producers construct the document without it, so
+#: the extra requirement would refuse documents that plainly are Runner
+#: documents. One widening at a time.
+_RUNNER_DOCUMENT_KEYS = ("commitSha",)
+
+
+def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
+    """Read structured Runner evidence out of a task's free-text summary.
+
+    ``result_summary`` holds three unrelated shapes: the Runner gateway writes
+    a JSON document, ``supersede()`` writes ``SUPERSEDED: ...``, and a plain
+    agent report writes prose. The latter two are not JSON objects and have no
+    evidence to report, which is unchanged.
+
+    A-18 (fourth face): this used to also require a **non-empty commitSha**,
+    which quietly meant "evidence exists only for runs that succeeded". A
+    failed run writes the same document with ``commitSha: null`` and the reason
+    in ``summary`` -- live rows read ``changed_path_denied: tests/test_discount.py``
+    and ``test_command_failed: python scripts/run_tests.py (exit code 1)``, both
+    of which tell an operator exactly what to change. Gating on the commit threw
+    every one of them away, so the console could say "failed" and nothing else.
+
+    The discriminator is now *"is this the Runner's document"* rather than
+    *"did it succeed"*: the two keys the gateway always writes must be present.
+    Their values may be null -- that is the failed shape, and it is precisely
+    the shape we came here for.
+
+    HONEST GAP (not solved here): this still depends on the Runner happening to
+    write these particular keys. What this function changes is *where* that
+    dependency lives — it is now inside the producing module, next to the
+    contract that declares TaskEvidenceView, instead of in a consumer parsing a
+    field that was only ever promised to be free text. Removing the dependency
+    for real needs the Runner to write structured columns; that is separate
+    work, and TaskEvidenceView's shape is meant to survive it unchanged.
+    """
+
+    if not result_summary:
+        return None
+    try:
+        document = json.loads(result_summary)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if any(key not in document for key in _RUNNER_DOCUMENT_KEYS):
+        return None
+    raw_commit_sha = document.get("commitSha")
+    # An empty string is the same claim as null and must not reach consumers as
+    # a "sha" -- ``""[:12]`` renders as nothing and ``"".lower()`` compares
+    # equal to nothing, so both would fail silently rather than refuse.
+    commit_sha = (
+        raw_commit_sha if isinstance(raw_commit_sha, str) and raw_commit_sha.strip() else None
+    )
+    raw_run_id = document.get("runId")
+    try:
+        run_id = UUID(str(raw_run_id)) if raw_run_id else None
+    except ValueError:
+        # A run id that is not a UUID is not a run id we can hand out typed.
+        run_id = None
+    raw_changed = document.get("changedFiles")
+    changed_files = (
+        tuple(str(item) for item in raw_changed) if isinstance(raw_changed, list) else ()
+    )
+    base_sha = document.get("baseSha")
+    workspace_path = document.get("workspacePath")
+    summary_text = document.get("summary")
+    test_command = document.get("testCommand")
+    return TaskEvidenceView(
+        commit_sha=commit_sha,
+        run_id=run_id,
+        changed_files=changed_files,
+        base_sha=str(base_sha) if base_sha else None,
+        workspace_path=str(workspace_path) if workspace_path else None,
+        summary_text=str(summary_text) if isinstance(summary_text, str) else None,
+        blockers=_parse_blockers(document.get("blockers")),
+        test_command=str(test_command) if isinstance(test_command, str) else None,
+        test_results=_parse_test_results(document.get("testResults")),
+        artifact_count=(
+            len(document["artifacts"]) if isinstance(document.get("artifacts"), list) else 0
+        ),
+    )
+
+
+def _parse_blockers(raw: object) -> tuple[str, ...]:
+    """Agent-declared blockers, verbatim, and only if declared as a list.
+
+    Deliberately shallow: strings pass through untouched, anything else is not
+    a blocker list and yields ``()``. There is no fallback that reads the prose
+    summary -- see ``TaskEvidenceView.blockers`` for why inventing one would
+    reproduce the defect this field exists to fix.
+    """
+
+    if not isinstance(raw, list):
+        return ()
+    return tuple(item for item in raw if isinstance(item, str) and item.strip())
+
+
+def _parse_test_results(raw: object) -> tuple[TaskTestResultView, ...]:
+    """Executed test commands as the Runner reported them.
+
+    A malformed entry is dropped rather than defaulted: an entry with no exit
+    code invented as ``0`` would read as a pass, and ``-1`` would read as a
+    failure the Runner never reported. Neither is a fact, so the entry is not
+    evidence. Delivery's own stricter read (which *raises* on a malformed
+    entry rather than publishing a candidate) is unchanged and still lives in
+    ``plan_delivery``.
+    """
+
+    if not isinstance(raw, list):
+        return ()
+    results: list[TaskTestResultView] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        command = str(entry.get("command") or "").strip()
+        exit_code = entry.get("exitCode")
+        if not command or not isinstance(exit_code, int) or isinstance(exit_code, bool):
+            continue
+        results.append(
+            TaskTestResultView(
+                command=command,
+                exit_code=exit_code,
+                summary=str(
+                    entry.get("stderr") or entry.get("stdout") or entry.get("summary") or ""
+                ),
+            )
+        )
+    return tuple(results)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +220,7 @@ class Task:
     status: TaskStatus = TaskStatus.ASSIGNED
     result_summary: str | None = None
     version: int = 1
+    origin: TaskOrigin = TaskOrigin.PLANNED
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -94,6 +258,48 @@ class Task:
             version=self.version + 1,
         )
 
+    def redo(self) -> "Task":
+        """Send a finished task back to work, for an explicit operator re-run.
+
+        Re-dispatch (§8.7.4) normally leaves rows alone: it repeats the telling
+        and nothing else. That is right for a task still in flight, and wrong
+        for the shape the live evidence turned up on 2026-08-12 — a task that
+        reported SUCCEEDED without producing what the next stage needs. Its
+        delivery then refuses (``_candidates_for_batch`` raising "Runner
+        evidence has no test results" inside ``_advance_if_ready``, a silent
+        background crash-loop), the operator fixes the condition, and the work
+        has to actually happen again.
+
+        Re-sending the mention alone would not do it. ``report`` refuses a
+        final task — "a final task cannot be reported again" — so the re-run's
+        own report would be swallowed and the round would sit on a result from
+        the attempt that failed. A re-run has to make the task unfinished again
+        or it is not a re-run.
+
+        The batch consequence is intended, not a side effect: ``_batch_succeeded``
+        now answers False, so the plan stops treating the batch as done. That
+        is the correct state for a round whose delivery was refused, and
+        restoring it is half the point of the button.
+
+        CANCELLED and SUPERSEDED are deliberately not redoable. Those are not
+        results that came out wrong; they are decisions that this work should
+        not happen, and a superseded task belongs to a plan version that has
+        been replaced. Resurrecting one would put a task from a retired plan
+        back on a live Worker.
+        """
+
+        if self.status not in _REDOABLE_TASK_STATUSES:
+            raise TaskConflict(
+                f"a {self.status.value} task cannot be re-run; only a succeeded "
+                "or failed task can be sent back to work"
+            )
+        return replace(
+            self,
+            status=TaskStatus.ASSIGNED,
+            result_summary=None,
+            version=self.version + 1,
+        )
+
     def supersede(self, *, reason: str = "", superseded_by: UUID | None = None) -> "Task":
         """Mark this task as superseded by a newer plan version."""
         if self.status in FINAL_TASK_STATUSES:
@@ -120,6 +326,8 @@ class Task:
             status=self.status,
             result_summary=self.result_summary,
             version=self.version,
+            origin=self.origin,
+            evidence=_parse_evidence(self.result_summary),
         )
 
 
@@ -134,6 +342,16 @@ class PlannedRepositoryTask:
     leader_task_id: UUID | None = None
     tests: tuple[str, ...] = ()
     """Verification commands the Worker must run before reporting this task."""
+    test_paths: tuple[str, ...] = ()
+    """Where those commands read from, added to the Worker's allowed paths.
+
+    Defect A-21. Supplying the command without the path it reads is a trap: the
+    Worker is permitted ``src/checkout/**`` and the command discovers from the
+    root's ``tests/``, so writing the test where the command looks voids the run
+    on the path guard and writing it where the Worker may voids the
+    verification. These travel together for the same reason they were broken
+    apart.
+    """
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -152,7 +370,63 @@ class PlannedRepositoryTask:
             acceptance=self.acceptance,
             leader_task_id=self.leader_task_id,
             tests=self.tests,
+            test_paths=self.test_paths,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryRefusal:
+    """A stated refusal to deliver the batch the plan is standing on.
+
+    Not a status. The plan is still IN_PROGRESS and its batch still succeeded;
+    what is recorded is that the delivering side looked at the evidence and
+    said no, in its own words. Keeping it beside the status rather than inside
+    it is what makes convergence possible: nothing has to be un-failed when the
+    evidence improves, the refusal is simply cleared.
+    """
+
+    reason: str
+    batch_index: int
+    at: datetime
+    repository_id: UUID | None = None
+    task_id: UUID | None = None
+
+    def same_as(self, other: "DeliveryRefusal") -> bool:
+        """Whether this is the refusal already recorded, ignoring the clock.
+
+        The advance path is re-entered on every terminal Runner event and every
+        delivery observation, so an unresolved refusal is restated constantly.
+        Comparing without ``at`` is what stops a stuck round from writing a new
+        row — and bumping the aggregate's version — several times a minute.
+        """
+
+        return (
+            self.reason == other.reason
+            and self.batch_index == other.batch_index
+            and self.repository_id == other.repository_id
+            and self.task_id == other.task_id
+        )
+
+    def to_view(self) -> DeliveryRefusalView:
+        return DeliveryRefusalView(
+            reason=self.reason,
+            batch_index=self.batch_index,
+            repository_id=self.repository_id,
+            task_id=self.task_id,
+            at=self.at,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryRefusalOutcome:
+    """What ``refuse_delivery`` decided: a plan to write, or nothing new to say.
+
+    ``plan`` is None when the refusal is a repeat, so the caller can tell "we
+    already know" from "we just learned" without comparing versions.
+    """
+
+    plan: "ExecutionPlan | None"
+    refusal: DeliveryRefusal
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +441,8 @@ class ExecutionPlan:
     current_batch_index: int = 0
     status: ExecutionPlanStatus = ExecutionPlanStatus.IN_PROGRESS
     version: int = 1
+    delivery_refusal: DeliveryRefusal | None = None
+    """The delivering side's last stated refusal, or None once it is resolved."""
 
     def __post_init__(self) -> None:
         if not self.batches or any(not batch for batch in self.batches):
@@ -222,6 +498,73 @@ class ExecutionPlan:
         self._require_in_progress()
         return replace(self, status=ExecutionPlanStatus.FAILED, version=self.version + 1)
 
+    def reopen(self) -> "ExecutionPlan":
+        """Return a failed plan to IN_PROGRESS once its batch was repaired.
+
+        ``fail()`` is reached from a single non-succeeded leader task, so a plan
+        died the moment one repository's first attempt failed. Repairing that
+        repository then had nowhere to land: the rework task could succeed and
+        roll its leader up to SUCCEEDED while the plan stayed FAILED forever,
+        because every mutator is guarded by ``_require_in_progress``.
+
+        Reopening only restores the status. It never skips a batch or invents
+        progress -- the caller must have established that the current batch now
+        succeeds, and the ordinary advance path takes it from there. COMPLETED
+        stays terminal: a delivered plan is history, not something to revisit.
+        """
+
+        if self.status is not ExecutionPlanStatus.FAILED:
+            raise TaskConflict("only a failed execution plan can be reopened")
+        return replace(self, status=ExecutionPlanStatus.IN_PROGRESS, version=self.version + 1)
+
+    def refuse_delivery(
+        self,
+        reason: str,
+        *,
+        repository_id: UUID | None = None,
+        task_id: UUID | None = None,
+        at: datetime | None = None,
+    ) -> "DeliveryRefusalOutcome":
+        """Record why this plan's current batch was not delivered.
+
+        Deliberately not guarded by ``_require_in_progress``: recording a
+        refusal is not progress, it is the reason there is none, and a plan
+        that failed for another cause may still be carrying an unresolved one.
+
+        Returns ``None`` for the plan when the same refusal is already
+        recorded. That is the difference between a state and a log — a batch
+        stuck on missing test results restates its refusal on every Runner
+        event, and each restatement writing a new version would bury the round
+        the projection is trying to explain.
+        """
+
+        refusal = DeliveryRefusal(
+            reason=reason,
+            batch_index=self.current_batch_index,
+            at=at or datetime.now(UTC),
+            repository_id=repository_id,
+            task_id=task_id,
+        )
+        if self.delivery_refusal is not None and self.delivery_refusal.same_as(refusal):
+            return DeliveryRefusalOutcome(plan=None, refusal=self.delivery_refusal)
+        return DeliveryRefusalOutcome(
+            plan=replace(self, delivery_refusal=refusal, version=self.version + 1),
+            refusal=refusal,
+        )
+
+    def clear_delivery_refusal(self) -> "ExecutionPlan | None":
+        """Drop a refusal the delivering side no longer makes; None if there was none.
+
+        Convergence lives here. Once a re-dispatched Worker reports evidence
+        that does carry test results, delivery accepts the batch and the round
+        must stop saying it was refused — without any operator action, and
+        without a second code path that has to remember to.
+        """
+
+        if self.delivery_refusal is None:
+            return None
+        return replace(self, delivery_refusal=None, version=self.version + 1)
+
     def to_view(self) -> ExecutionPlanView:
         return ExecutionPlanView(
             id=self.id,
@@ -231,6 +574,9 @@ class ExecutionPlan:
             status=self.status,
             current_batch_index=self.current_batch_index,
             batches=tuple(tuple(planned.to_view() for planned in batch) for batch in self.batches),
+            delivery_refusal=(
+                self.delivery_refusal.to_view() if self.delivery_refusal is not None else None
+            ),
         )
 
     def _require_in_progress(self) -> None:

@@ -146,6 +146,10 @@ class DeliveryError(Exception):
     pass
 
 
+class DeliveryDenied(DeliveryError):
+    pass
+
+
 class DeliveryConflict(DeliveryError):
     pass
 

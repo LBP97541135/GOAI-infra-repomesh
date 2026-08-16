@@ -245,6 +245,7 @@ async def test_team_references_independently_created_workers() -> None:
     finally:
         await client.close()
 
+    assert posted["leader"] == {"name": "rm-worker-lead"}
     assert posted["workerMembers"] == [
         {"name": "rm-worker-lead", "role": "team_leader"},
         {"name": "rm-worker-api", "role": "worker"},

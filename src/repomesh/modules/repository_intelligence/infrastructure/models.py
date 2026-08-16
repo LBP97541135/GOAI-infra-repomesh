@@ -22,6 +22,24 @@ class RepositoryRecord(Base):
     description: Mapped[str] = mapped_column(Text)
     topics: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
     languages: Mapped[list[str]] = mapped_column(JSON_DOCUMENT, default=list)
+    test_commands: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, nullable=False, server_default="[]", default=list
+    )
+    """Defect A-19: how this repository verifies itself, source of truth.
+
+    A column rather than another key under ``metadata`` because it is read on
+    the materialize path of every round and is meant to be edited by an
+    operator; ``metadata`` carries the scanner's derived AutoCard, which is
+    rewritten wholesale by the next scan.
+    """
+    test_paths: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, nullable=False, server_default="[]", default=list
+    )
+    """Defect A-21: glob patterns the verification commands read from.
+
+    Beside ``test_commands`` because they are one fact in two halves — a
+    command without the path it reads is the trap that voided a whole run.
+    """
     profiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -57,6 +75,19 @@ class PlanSnapshotRecord(Base):
     execution_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     requirement_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     integration_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discovery: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True, default=None
+    )
+    """Contract v0.4 §2: the whole discovery chain for this round.
+
+    One column rather than four because the four steps are four stages of one
+    chain: they are read together and invalidated together (§4.4 — re-running
+    an upstream step voids the downstream ones), and four columns would make
+    that void a four-statement write that can land half-done.
+
+    NULL means the chain was never started, which is not the same as an empty
+    object; ``{}`` would be a chain that ran and produced nothing.
+    """
 
 
 class HandoffDocRecord(Base):

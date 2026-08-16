@@ -292,6 +292,116 @@ def load_predictions(
     return by_id
 
 
+# --- Trace-event linkage (M4) ------------------------------------------------
+
+
+#: Tool names that a repository-recommendation agent turn may invoke; when one
+#: of these finished ok, its payload output text is trusted as the repo list.
+TRACE_RECOMMEND_TOOLS: frozenset[str] = frozenset(
+    {
+        "repository_recommend",
+        "repository_recommendations",
+        "recommend_repositories",
+        "recommend_repos",
+        "rank_repositories",
+        "predict_repositories",
+        "repo_recommend",
+    }
+)
+
+
+def _trace_case_id(payload: dict[str, Any]) -> str | None:
+    for key in ("case_id", "caseId", "id", "task_id", "taskId"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _trace_repo_list(
+    payload: dict[str, Any], *, trust_output_text: bool
+) -> list[str]:
+    """Explicit repositories/repos/predicted lists always win; output text is
+    trusted only for known recommendation tools (its stored form is truncated,
+    so it is a last resort)."""
+    for key in ("repositories", "repos", "predicted"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            repos = _extract_repo_list(value)
+            if repos:
+                return repos
+    if trust_output_text:
+        output = payload.get("output")
+        if isinstance(output, str) and output.strip():
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            if lines:
+                return lines
+    return []
+
+
+def extract_trace_predictions(events: Any) -> dict[str, list[str]]:
+    """Map trace events that carried a repository recommendation to predictions.
+
+    Accepts the shape of the ``/observe/trace/events`` API records (or a raw
+    dump of ``observability.trace_events``): a sequence of dicts with ``name``,
+    ``status`` and ``payload``. An event contributes a prediction when it
+    finished ok AND either its tool name is a known recommendation tool or its
+    payload carries an explicit ``repositories``/``repos``/``predicted`` list.
+    The case id is read from the payload (``case_id``/``caseId``/``id``/
+    ``task_id``/``taskId``); events without one are skipped. Later events
+    overwrite earlier ones for the same case, mirroring ``load_predictions``.
+    """
+    predictions: dict[str, list[str]] = {}
+    for event in events or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("status") not in (None, "ok"):
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        name = str(event.get("name") or "")
+        trust_output_text = name in TRACE_RECOMMEND_TOOLS or "recommend" in name
+        repos = _trace_repo_list(payload, trust_output_text=trust_output_text)
+        if not repos:
+            continue
+        case_id = _trace_case_id(payload)
+        if not case_id:
+            continue
+        predictions[case_id] = repos
+    return predictions
+
+
+def _load_trace_events(path: Path) -> list[dict[str, Any]]:
+    """Load trace events from a JSON list, a single event, or JSONL lines."""
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        inner = data.get("events")
+        if isinstance(inner, list):
+            return [item for item in inner if isinstance(item, dict)]
+        return [data]
+    events: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events
+
+
 # --- Report rendering --------------------------------------------------------
 
 
@@ -572,6 +682,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--from-trace",
+        type=Path,
+        help=(
+            "Score predictions extracted from an observability trace-event "
+            "export (JSON list, single event, or JSONL of the "
+            "/observe/trace/events records). Cannot be combined with "
+            "--predictions/--predictions-dir."
+        ),
+    )
+    parser.add_argument(
         "--report",
         type=Path,
         help="Write the text report to this path (default: stdout).",
@@ -598,7 +718,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     cases = _load_cases(args.cases)
-    predictions = load_predictions(cases, args.predictions, args.predictions_dir)
+    if args.from_trace is not None:
+        if args.predictions is not None or args.predictions_dir is not None:
+            parser.error(
+                "--from-trace 不能与 --predictions/--predictions-dir 同时使用"
+            )
+        trace_events = _load_trace_events(args.from_trace)
+        predictions = extract_trace_predictions(trace_events)
+    else:
+        predictions = load_predictions(cases, args.predictions, args.predictions_dir)
     report = _build_report(cases, predictions, overall_only=args.overall_only)
 
     if args.report is not None:

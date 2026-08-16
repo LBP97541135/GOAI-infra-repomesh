@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
@@ -23,6 +24,24 @@ _logger = logging.getLogger(__name__)
 
 class LLMClient(Protocol):
     def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryOutcome:
+    """Candidates plus the one thing their shape cannot tell you.
+
+    The LLM path and the keyword fallback produce byte-identical
+    ``DiscoveryEvidence``: same fields, same ranges. A consumer holding a 0.62
+    cannot tell a model's judgement from a term-frequency ratio, and a panel
+    that renders both as "score" is presenting arithmetic as an opinion.
+
+    ``llm_used`` is the producing mechanism reporting on itself. Do not try to
+    infer it from the data — "matched_terms is empty" is a signal that happens
+    to correlate today, and correlated signals are not causes.
+    """
+
+    candidates: list[DiscoveryEvidence]
+    llm_used: bool
 
 
 class RepositoryDiscoveryService:
@@ -45,6 +64,32 @@ class RepositoryDiscoveryService:
         keywords: list[str] | None = None,
     ) -> list[DiscoveryEvidence]:
         profiles = await self._catalog.list()
+        return self.score(
+            profiles,
+            requirement,
+            limit=limit,
+            entry_point=entry_point,
+            keywords=keywords,
+        ).candidates
+
+    def score(
+        self,
+        profiles: list[RepositoryProfile],
+        requirement: str,
+        *,
+        limit: int = 5,
+        entry_point: str | None = None,
+        keywords: list[str] | None = None,
+    ) -> DiscoveryOutcome:
+        """Rank *profiles* against *requirement*. Synchronous on purpose.
+
+        Split out from :meth:`discover` so the only await — reading the catalog
+        — happens on the caller's event loop while this part, which makes a
+        blocking ``chat()`` call, can be handed to a worker thread. Running it
+        inline on the loop stalls every other request on the process, including
+        the polls asking how this one is doing.
+        """
+
         by_name = {profile.name: profile for profile in profiles}
         results = self._discover_with_llm(requirement, profiles) if self._llm else []
         llm_used = bool(results)
@@ -69,7 +114,10 @@ class RepositoryDiscoveryService:
                 is_entry_point=True,
             )
 
-        return sorted(evidence_by_name.values(), key=lambda item: item.score, reverse=True)[:limit]
+        ranked = sorted(
+            evidence_by_name.values(), key=lambda item: item.score, reverse=True
+        )[:limit]
+        return DiscoveryOutcome(candidates=ranked, llm_used=llm_used)
 
     def _discover_with_llm(
         self, requirement: str, profiles: list[RepositoryProfile]

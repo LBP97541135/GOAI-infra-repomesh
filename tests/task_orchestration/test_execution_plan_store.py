@@ -162,6 +162,51 @@ async def test_plan_store_rejects_a_reused_idempotency_key(database: Database) -
 
 
 @pytest.mark.asyncio
+async def test_a_recorded_delivery_refusal_survives_a_restart_and_is_cleared(
+    database: Database,
+) -> None:
+    """Defect A-19: the refusal has to outlive the process that heard it.
+
+    The whole point of recording it is that an operator opening the console
+    tomorrow can see why the round stopped. It is also asserted that clearing
+    it really returns the column to NULL rather than to an empty object — a
+    resolved refusal and a refusal that says nothing are different states, and
+    only one of them should ever reach a panel.
+    """
+
+    store = PostgresExecutionPlanStore(database)
+    repository_id = uuid4()
+    task_id = uuid4()
+    plan = build_plan(repository_id)
+    await store.add(plan, idempotency_key="refused-plan")
+
+    outcome = plan.refuse_delivery(
+        "Runner evidence has no test results", repository_id=repository_id, task_id=task_id
+    )
+    assert outcome.plan is not None
+    await store.update(outcome.plan, expected_version=plan.version)
+
+    stored = await store.get(plan.id)
+    assert stored is not None and stored.delivery_refusal is not None
+    assert stored.delivery_refusal.reason == "Runner evidence has no test results"
+    assert stored.delivery_refusal.repository_id == repository_id
+    assert stored.delivery_refusal.task_id == task_id
+    assert stored.delivery_refusal.batch_index == 0
+    assert stored.delivery_refusal.at == outcome.plan.delivery_refusal.at
+
+    # Restating the same refusal writes nothing: that is what keeps a stuck
+    # round from becoming a version history of its own crash-loop.
+    assert stored.refuse_delivery(
+        "Runner evidence has no test results", repository_id=repository_id, task_id=task_id
+    ).plan is None
+
+    cleared = stored.clear_delivery_refusal()
+    assert cleared is not None
+    await store.update(cleared, expected_version=stored.version)
+    assert (await store.get(plan.id)).delivery_refusal is None
+
+
+@pytest.mark.asyncio
 async def test_completed_plan_keeps_its_status(database: Database) -> None:
     store = PostgresExecutionPlanStore(database)
     plan = build_plan(uuid4())

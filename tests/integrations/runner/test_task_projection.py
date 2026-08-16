@@ -58,6 +58,7 @@ def scenario(tmp_path: Path):
         dependencies=(),
         interface_changes=(),
         allowed_paths=("src/**", "tests/**"),
+        forbidden_paths=("src/legacy/**",),
         test_commands=("pytest tests/pricing",),
         context_files=(
             RenderedSpecification(
@@ -112,6 +113,7 @@ def test_project_materialize_and_verify_context(tmp_path: Path) -> None:
     mounted = RunnerContextMaterializer(Path.cwd()).materialize(task, package, capabilities)
 
     assert task.permissions.allowed_tools == ("read", "edit", "test", "context7.query-docs")
+    assert task.permissions.denied_paths == (".github/**", "src/legacy/**")
     assert "github.pull_requests.merge" in task.permissions.disallowed_tools
     assert task.test_commands == ("pytest tests/pricing",)
     assert mounted.manifest_path.is_file()
@@ -155,6 +157,156 @@ def test_projection_rejects_a_different_immutable_base(tmp_path: Path) -> None:
     )
 
     with pytest.raises(RunnerTaskProjectionDenied, match="base SHA"):
+        RunnerTaskProjector().project(request)
+
+
+# ---------------------------------------------------------------------------
+# Verification commands are resolved at dispatch time, not baked in (A-19)
+# ---------------------------------------------------------------------------
+
+
+def test_a_spec_that_states_its_tests_outranks_the_catalog(tmp_path: Path) -> None:
+    """Precedence, in the direction that protects deliberate scoping.
+
+    A task somebody narrowed to one suite must keep it. If the catalog could
+    override, correcting one repository's command would silently rewrite every
+    in-flight task that had been scoped on purpose — and it would rewrite them
+    at dispatch, where nobody is looking.
+    """
+
+    request, _package, _capabilities = scenario(tmp_path)
+    request = replace(request, catalog_test_commands=("python scripts/run_tests.py",))
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.test_commands == ("pytest tests/pricing",)
+
+
+def test_a_silent_spec_falls_back_to_the_catalogs_current_answer(tmp_path: Path) -> None:
+    """The rescue: a task row with no tests baked in still dispatches verified.
+
+    Every round materialized before A-19's first half carries an empty ``tests``
+    in its Specification, and re-dispatch replays that row verbatim. Resolving
+    here is what reaches them — and what lets an operator fix a wrong command
+    without re-materialising anything.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(
+        request,
+        package=replace(package, test_commands=()),
+        catalog_test_commands=("python scripts/run_tests.py",),
+    )
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.test_commands == ("python scripts/run_tests.py",)
+
+
+def test_neither_spec_nor_catalog_dispatches_honestly_empty(tmp_path: Path) -> None:
+    """No default is invented at the last moment either.
+
+    A command nobody has stated cannot be guessed here any more than it could
+    be guessed in the migration. The dispatch goes out with none, the Runner
+    runs none, and delivery refuses the unverified candidate — which is the
+    loop closing honestly rather than a green tick over nothing.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(request, package=replace(package, test_commands=()))
+
+    assert RunnerTaskProjector().project(request).test_commands == ()
+
+
+# ---------------------------------------------------------------------------
+# Test paths are added to the permit at dispatch time (A-21)
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_test_paths_are_added_to_the_tasks_own_paths(tmp_path: Path) -> None:
+    """The contradiction that voided a whole run, resolved by union.
+
+    The Worker is permitted the product code it owns — ``src/**``, ``tests/**``
+    in this fixture's terms — and its verification command discovers from a
+    directory nobody granted it. Live, the compliant agent wrote
+    ``tests/test_discount.py`` where ``run_tests.py`` looks and the guard
+    voided the run with ``changed_path_denied`` and a null commitSha.
+
+    The grant is widened alongside, exactly as ``StartAssignedWorkerTask`` does
+    in production: the projector validates every payload path against the
+    grant, so a union the grant does not cover would be refused rather than
+    dispatched.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(
+        request,
+        package=replace(package, allowed_paths=("src/checkout/**",)),
+        context_grant=replace(
+            request.context_grant, allowed_paths=("src/checkout/**", "integration-tests/**")
+        ),
+        catalog_test_paths=("integration-tests/**",),
+    )
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.permissions.allowed_paths == ("src/checkout/**", "integration-tests/**")
+
+
+def test_catalog_test_paths_never_replace_the_tasks_own(tmp_path: Path) -> None:
+    """Added, never substituted.
+
+    A repository saying where its tests live must not become a way to narrow —
+    or widen — what a Worker may touch anywhere else. The task's own paths
+    survive unchanged and keep their order, so the permit still reads as the
+    scoping decision somebody made plus one addition.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(
+        request,
+        context_grant=replace(
+            request.context_grant, allowed_paths=("src/**", "tests/**", "e2e/**")
+        ),
+        package=replace(package, allowed_paths=("src/**", "tests/**")),
+        catalog_test_paths=("e2e/**",),
+    )
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.permissions.allowed_paths[:2] == ("src/**", "tests/**")
+    assert "e2e/**" in task.permissions.allowed_paths
+
+
+def test_a_repository_that_declares_no_test_paths_changes_nothing(tmp_path: Path) -> None:
+    """The honest half: no path is invented for a repository that named none."""
+
+    request, _package, _capabilities = scenario(tmp_path)
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.permissions.allowed_paths == ("src/**", "tests/**")
+
+
+def test_test_paths_alone_are_not_a_permit(tmp_path: Path) -> None:
+    """A task nobody scoped is still refused, catalog or no catalog.
+
+    The union happens after the emptiness check on purpose. "This repository
+    keeps its tests in tests/" is not an authorisation to do anything; a task
+    that arrived with no paths of its own and no grant is a task nobody
+    scoped, and turning that into a one-directory permit would be inventing
+    the scope rather than refusing to guess at it.
+    """
+
+    request, package, _capabilities = scenario(tmp_path)
+    request = replace(
+        request,
+        package=replace(package, allowed_paths=()),
+        context_grant=replace(request.context_grant, allowed_paths=()),
+        catalog_test_paths=("tests/**",),
+    )
+
+    with pytest.raises(RunnerTaskProjectionDenied, match="at least one allowed path"):
         RunnerTaskProjector().project(request)
 
 

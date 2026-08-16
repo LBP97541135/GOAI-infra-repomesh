@@ -47,6 +47,7 @@ class SpecificationContent:
     tests: tuple[str, ...] = ()
     dependencies: tuple[str, ...] = ()
     allowed_paths: tuple[str, ...] = ()
+    forbidden_paths: tuple[str, ...] = ()
     interface_changes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -60,16 +61,21 @@ class SpecificationContent:
             self.tests,
             self.dependencies,
             self.allowed_paths,
+            self.forbidden_paths,
             self.interface_changes,
         ):
             if any(not item.strip() for item in values):
                 raise ValueError("specification lists cannot contain empty values")
 
     def canonical_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             key: list(value) if isinstance(value, tuple) else value
             for key, value in asdict(self).items()
         }
+        if not self.forbidden_paths:
+            # Content hashes persisted before this field existed must stay valid.
+            del payload["forbidden_paths"]
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

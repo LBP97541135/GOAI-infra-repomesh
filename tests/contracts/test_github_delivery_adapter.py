@@ -10,6 +10,7 @@ from repomesh.integrations.scm.contracts import (
     PullRequestState,
     RepositoryRef,
     SCMConflict,
+    SCMNotFound,
     SCMProvider,
     SCMRateLimited,
 )
@@ -184,6 +185,60 @@ async def test_branch_protection_is_normalized_for_delivery_preflight() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unprotected_branch_is_an_answer_not_a_missing_repository() -> None:
+    """GitHub's 404 for "no protection rule" is the honest answer "none"."""
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(404, json={"message": "Branch not protected"})
+        )
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    protection = await adapter.get_branch_protection(repository(), "main")
+
+    assert not protection.protected
+    assert protection.required_checks == ()
+    assert protection.required_approvals == 0
+    assert not protection.dismisses_stale_reviews
+    assert not protection.requires_conversation_resolution
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["Not Found", "Branch not found"])
+async def test_protection_404_for_a_missing_repository_or_branch_still_raises(
+    message: str,
+) -> None:
+    """Only the "not protected" body is an answer; the rest stay not-found."""
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(404, json={"message": message})
+        )
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    with pytest.raises(SCMNotFound):
+        await adapter.get_branch_protection(repository(), "main")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_bodyless_protection_404_is_not_read_as_unprotected() -> None:
+    """An unreadable body is not evidence of anything, so it fails closed."""
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(404, text="nope"))
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    with pytest.raises(SCMNotFound):
+        await adapter.get_branch_protection(repository(), "main")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_merge_uses_frozen_head_sha_as_github_guard() -> None:
     requests: list[httpx.Request] = []
 
@@ -272,4 +327,56 @@ async def test_merged_pull_request_exposes_remote_merge_sha() -> None:
 
     assert observation.state is PullRequestState.MERGED
     assert observation.merge_sha == "d" * 40
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_branch_head_reports_the_published_commit() -> None:
+    """Delivery reconciliation asks this before completing a stranded publish."""
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={"name": "repomesh/a762abba", "commit": {"sha": "A" * 40}},
+            )
+        )
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    assert await adapter.get_branch_head(repository(), "repomesh/a762abba") == "a" * 40
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_branch_is_an_answer_not_an_error() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(404, json={"message": "Branch not found"})
+        )
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    assert await adapter.get_branch_head(repository(), "repomesh/gone") is None
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message", ["Not Found", "Branch not protected"])
+async def test_a_branch_404_about_something_else_still_raises(message: str) -> None:
+    """Only "Branch not found" says the branch is absent.
+
+    A repository-level 404 reported as "the branch is missing" would make the
+    reconciler skip a stranded candidate for a reason that is not true.
+    """
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(404, json={"message": message})
+        )
+    )
+    adapter = GitHubAdapter(lambda repo: "installation-token", client=client)
+
+    with pytest.raises(SCMNotFound):
+        await adapter.get_branch_head(repository(), "repomesh/a762abba")
     await client.aclose()

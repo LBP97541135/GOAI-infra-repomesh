@@ -5,16 +5,20 @@ __pycache__/
 .ruff_cache/
 .venv/
 .env
+.tools/
 .secrets/
 *.pem
 .repomesh-local.db
+tmp/repomesh-local.db
 .repomesh-workspaces/
+.repomesh-dev/
 .test-tmp/
 .test-tmp-*/
 .runtime/
 repomesh-local.*.log
 dist/
 node_modules/
+web/.npm-cache/
 *.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
@@ -23,3 +27,7 @@ build/
 htmlcov/
 
 .repomesh_cache/
+.agentteams-storage/
+
+# 本机凭据文件，绝不入库
+admininfo.txt

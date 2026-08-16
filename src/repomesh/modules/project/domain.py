@@ -18,24 +18,39 @@ from repomesh.modules.project.contracts import (
     ProjectTeamRuntimeStatus,
     RepositoryTeamView,
 )
+from repomesh.modules.project.errors import (
+    ProjectTopologyConflict,
+    ProjectTopologyError,
+    ProjectTopologyViolation,
+)
+from repomesh.modules.project.supervision_policy import assert_supervision_policy
 from repomesh.shared.domain import new_id
 
-
-class ProjectTopologyError(RuntimeError):
-    pass
-
-
-class ProjectTopologyConflict(ProjectTopologyError):
-    pass
-
-
-class ProjectTopologyViolation(ProjectTopologyError):
-    pass
+__all__ = [
+    "HumanProjectGrant",
+    "HumanReviewRequest",
+    "ProjectAgentTopology",
+    "ProjectCheckpointDecision",
+    "ProjectTopologyConflict",
+    "ProjectTopologyError",
+    "ProjectTopologyViolation",
+    "RepositoryTeam",
+    "TopologyPolicyDraft",
+    "repository_agentteams_team_name",
+]
 
 
 def repository_agentteams_team_name(repository_id: UUID) -> str:
-    """Stable AgentTeams Team binding shared by every project using a repository."""
-    return f"rm-repo-{repository_id.hex}"
+    """Stable AgentTeams Team binding shared by every project using a repository.
+
+    Delegates to :meth:`RepositoryTeam.canonical_agentteams_team_name` so the
+    two lines of development that independently keyed the Team on the
+    repository (A-8 on this branch, platform onboarding on main) mint one
+    spelling. The ``rm-team-`` template is the one existing rooms were made
+    under; the reconcile adopts a repository's real Team either way.
+    """
+
+    return RepositoryTeam.canonical_agentteams_team_name(repository_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,8 +178,30 @@ class RepositoryTeam:
             object.__setattr__(
                 self,
                 "agentteams_team_name",
-                repository_agentteams_team_name(self.repository_id),
+                self.canonical_agentteams_team_name(self.repository_id),
             )
+
+    @staticmethod
+    def canonical_agentteams_team_name(repository_id: UUID) -> str:
+        """The AgentTeams Team a repository's agents belong to.
+
+        Keyed on the *repository*, not on this row's id — the correction A-8
+        is. An AgentTeams Team owns its members exclusively, and a repository's
+        leader and workers are directory singletons shared by every project
+        that touches the repository, so there can only ever be one Team for
+        them. Minting a name per topology row asked the controller for a second
+        Team over the same principals, which it refused with
+        ``400 ... is already a member of Team ...`` — a refusal no retry could
+        clear, because nothing about it was transient.
+
+        That name only ever survived because the script era never put two
+        projects on one repository. Sharing the Team (and therefore its two
+        Matrix rooms) across those projects is the architecture, not a
+        concession: a repository's room is where that repository's agents talk,
+        whichever issue they are talking about.
+        """
+
+        return f"rm-team-{repository_id.hex}"
 
     def with_runtime(
         self,
@@ -172,12 +209,23 @@ class RepositoryTeam:
         status: ProjectTeamRuntimeStatus,
         room_id: str | None,
         leader_room_id: str | None,
+        agentteams_team_name: str | None = None,
     ) -> "RepositoryTeam":
+        """Write back what the controller actually gave this team.
+
+        ``agentteams_team_name`` joins the room ids because the reconcile may
+        have *adopted* a Team created under some other name (a row minted
+        before A-8, most of them). The adopted name has to land on the row, or
+        the next projection asks the same question again and the row keeps
+        pointing at a Team that does not exist.
+        """
+
         return replace(
             self,
             runtime_status=status,
             room_id=room_id,
             leader_room_id=leader_room_id,
+            agentteams_team_name=agentteams_team_name or self.agentteams_team_name,
         )
 
     def to_view(self) -> RepositoryTeamView:
@@ -221,24 +269,14 @@ class ProjectAgentTopology:
             raise ProjectTopologyViolation("an agent cannot join multiple repository teams")
         if any(team.project_id != self.project_id for team in self.repository_teams):
             raise ProjectTopologyViolation("repository team project must match topology project")
-        if self.execution_mode is ProjectExecutionMode.AUTO and self.required_checkpoints:
-            raise ProjectTopologyViolation("automatic projects cannot require human checkpoints")
-        if self.execution_mode is not ProjectExecutionMode.AUTO and not self.human_grants:
-            raise ProjectTopologyViolation("human-controlled projects require a human grant")
-        if self.execution_mode is not ProjectExecutionMode.AUTO and not self.required_checkpoints:
-            raise ProjectTopologyViolation("human-controlled projects require checkpoints")
-        if (
-            self.execution_mode is ProjectExecutionMode.MANUAL_CONTROLLED
-            and self.required_checkpoints != frozenset(ProjectCheckpoint)
-        ):
-            raise ProjectTopologyViolation(
-                "manual-controlled projects require every human checkpoint"
-            )
-        grant_scopes = [
-            (grant.human_principal_id, grant.repository_id) for grant in self.human_grants
-        ]
-        if len(set(grant_scopes)) != len(grant_scopes):
-            raise ProjectTopologyViolation("duplicate human grant scope")
+        # Everything above needs the repository teams; everything in here does
+        # not, which is exactly why it is shared with the policy draft written
+        # before any team exists. See ``supervision_policy`` for the seam.
+        assert_supervision_policy(
+            execution_mode=self.execution_mode,
+            required_checkpoints=self.required_checkpoints,
+            human_grants=self.human_grants,
+        )
         repository_ids = set(repository_ids)
         if any(
             grant.repository_id is not None and grant.repository_id not in repository_ids
@@ -268,3 +306,36 @@ class ProjectAgentTopology:
         ):
             raise ProjectTopologyViolation("cancelled project cannot be resumed")
         return replace(self, operational_status=status)
+
+
+@dataclass(frozen=True, slots=True)
+class TopologyPolicyDraft:
+    """What an admin decided about supervision, before there is a topology.
+
+    Same three fields ``ProjectAgentTopology`` carries, and validated by the
+    same function, so a draft that constructs is a draft that will not be
+    rejected on those grounds later. The one rule it cannot run is the one that
+    needs repository teams — a grant may name a repository that the plan later
+    drops — so materialization stays able to refuse, and must say so rather
+    than silently discard the grant.
+
+    ``project_id`` is the identity: a requirement has one supervision intent,
+    and changing your mind overwrites it. What is worth keeping a history of is
+    the *decisions* made at checkpoints, which ``checkpoint_decisions`` already
+    records; the deliberation before them is not evidence of anything.
+    """
+
+    project_id: UUID
+    created_by: UUID
+    execution_mode: ProjectExecutionMode = ProjectExecutionMode.AUTO
+    required_checkpoints: frozenset[ProjectCheckpoint] = frozenset()
+    human_grants: tuple[HumanProjectGrant, ...] = ()
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        assert_supervision_policy(
+            execution_mode=self.execution_mode,
+            required_checkpoints=self.required_checkpoints,
+            human_grants=self.human_grants,
+        )

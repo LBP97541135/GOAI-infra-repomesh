@@ -177,6 +177,36 @@ class PostgresRunnerGatewayStore:
                 task_payload=dict(record.task_payload),
             )
 
+    async def list_events_for_project(
+        self, project_id: UUID
+    ) -> tuple[dict[str, object], ...]:
+        """Chronological runner events for a project, joined to their dispatch."""
+
+        async with self._database.transaction() as session:
+            rows = (
+                await session.execute(
+                    select(RunnerEventRecord, RunnerDispatchRecord)
+                    .join(
+                        RunnerDispatchRecord,
+                        RunnerEventRecord.run_id == RunnerDispatchRecord.run_id,
+                    )
+                    .where(RunnerDispatchRecord.project_id == project_id)
+                    .order_by(RunnerEventRecord.occurred_at, RunnerEventRecord.sequence)
+                )
+            ).all()
+        return tuple(
+            {
+                "event_id": event.event_id,
+                "run_id": event.run_id,
+                "sequence": event.sequence,
+                "event_type": event.event_type,
+                "occurred_at": event.occurred_at,
+                "task_id": dispatch.task_id,
+                "repository_id": dispatch.repository_id,
+            }
+            for event, dispatch in rows
+        )
+
     async def record_event(self, event: dict[str, object]) -> bool:
         event_id = UUID(str(event["eventId"]))
         run_id = UUID(str(event["runId"]))

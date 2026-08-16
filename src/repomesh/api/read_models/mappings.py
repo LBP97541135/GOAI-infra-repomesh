@@ -1,0 +1,216 @@
+"""Status mappings of delivery-read-model contract v0.1 §2/§5 and v0.2 §2.
+
+These functions are the single implementation of the contract's derivations;
+the frontend must not re-map statuses.
+"""
+
+from enum import StrEnum
+
+from repomesh.modules.delivery.contracts import (
+    ChangeSetStatus,
+    ChangeSetView,
+    RecoveryActionKind,
+    RecoveryActionStatus,
+    RepositoryDeliveryStatus,
+)
+from repomesh.modules.project.contracts import ProjectOperationalStatus
+from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
+
+
+class DeliveryPhase(StrEnum):
+    CONTRACT = "contract"
+    PLAN = "plan"
+    EXECUTE = "execute"
+    VALIDATE = "validate"
+    RELEASE = "release"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    ARCHIVED = "archived"
+
+
+class IssueState(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class TaskDisplayStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    REPAIRING = "repairing"
+    BLOCKED = "blocked"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class GateDisplay(StrEnum):
+    OPEN = "open"
+    BLOCKED = "blocked"
+    RUNNING = "running"
+    WAITING = "waiting"
+
+
+_TERMINAL_ACTION_STATUSES = frozenset(
+    {RecoveryActionStatus.SUCCEEDED, RecoveryActionStatus.SKIPPED}
+)
+
+
+def has_active_recovery(change_set: ChangeSetView) -> bool:
+    if not change_set.recovery_plans:
+        return False
+    active = change_set.recovery_plans[-1]
+    return any(
+        action.status not in _TERMINAL_ACTION_STATUSES for action in active.actions
+    )
+
+
+def has_manual_intervention(change_set: ChangeSetView) -> bool:
+    """Whether an unfinished MANUAL_INTERVENTION recovery action exists (§5.2)."""
+
+    for plan in change_set.recovery_plans:
+        for action in plan.actions:
+            if (
+                action.kind is RecoveryActionKind.MANUAL_INTERVENTION
+                and action.status not in _TERMINAL_ACTION_STATUSES
+            ):
+                return True
+    return False
+
+
+def derive_phase(
+    *,
+    archived: bool,
+    plan_status: ExecutionPlanStatus | None,
+    change_set: ChangeSetView | None,
+    has_validation_snapshot: bool,
+    has_plan_snapshot: bool,
+    materialized: bool,
+) -> DeliveryPhase:
+    """§2 phase derivation, evaluated strictly in table order."""
+
+    if archived:
+        return DeliveryPhase.ARCHIVED
+    failure_signal = plan_status is ExecutionPlanStatus.FAILED or (
+        change_set is not None
+        and change_set.status
+        in {ChangeSetStatus.MANUAL_INTERVENTION, ChangeSetStatus.COMPENSATED}
+    )
+    if failure_signal and (change_set is None or not has_active_recovery(change_set)):
+        return DeliveryPhase.FAILED
+    if change_set is not None:
+        if change_set.status is ChangeSetStatus.DELIVERED:
+            return DeliveryPhase.DELIVERED
+        return DeliveryPhase.RELEASE
+    if has_validation_snapshot:
+        return DeliveryPhase.VALIDATE
+    if plan_status is ExecutionPlanStatus.IN_PROGRESS:
+        return DeliveryPhase.EXECUTE
+    if plan_status is not None:
+        # A completed plan whose delivery pipeline has not produced evidence yet.
+        return DeliveryPhase.VALIDATE
+    if has_plan_snapshot and not materialized:
+        return DeliveryPhase.PLAN
+    return DeliveryPhase.CONTRACT
+
+
+TERMINAL_CHANGE_SET_STATUSES = frozenset(
+    {ChangeSetStatus.DELIVERED, ChangeSetStatus.COMPENSATED}
+)
+"""v0.2 §2.1 rule 3: every other change-set status still needs work."""
+
+
+def derive_issue_state(
+    *,
+    operational_status: ProjectOperationalStatus | None,
+    has_active_round: bool,
+    has_open_change_set: bool,
+    has_draft: bool,
+    has_rounds: bool,
+    latest_round_failed_and_unarchived: bool,
+) -> IssueState:
+    """v0.2 §2.1 (incl. the rule-4b erratum), in the contract's order.
+
+    `paused` deliberately does not close an issue: state answers "does this
+    still need a human or an agent", and paused work still does. Rules 2-4 all
+    answer open, so they collapse into one branch without reordering.
+
+    Rule 4b applies the same argument to the shape §2.1 predates: a round that
+    ended FAILED left no change set to keep the issue open under rule 3, so
+    rule 5 used to close it — an issue reading `Closed · 执行失败` while its
+    only outcome is a failure still obviously needs someone. Archiving that
+    round is the operator saying the failure is acknowledged and final, and an
+    archived round falls back to rule 5. The caller collapses "failed" and
+    "not archived" into one flag because `derive_phase` already does: it
+    returns ARCHIVED before it can return FAILED, so phase FAILED *is* the
+    unarchived failure.
+    """
+
+    if operational_status is ProjectOperationalStatus.CANCELLED:
+        return IssueState.CLOSED
+    if has_active_round or has_open_change_set or has_draft:
+        return IssueState.OPEN
+    if latest_round_failed_and_unarchived:
+        return IssueState.OPEN
+    if has_rounds:
+        return IssueState.CLOSED
+    # No round and no draft: an empty issue is a todo, not a finished one.
+    return IssueState.OPEN
+
+
+def select_issue_phase(
+    *,
+    active_round_phase: DeliveryPhase | None,
+    latest_round_phase: DeliveryPhase | None,
+    draft_phase: DeliveryPhase | None,
+) -> DeliveryPhase:
+    """v0.2 §2.2: a selection rule over the v0.1 eight phases, never a 9th one."""
+
+    if active_round_phase is not None:
+        return active_round_phase
+    if latest_round_phase is not None:
+        return latest_round_phase
+    if draft_phase is not None:
+        return draft_phase
+    # Requirement exists but nothing was ever planned.
+    return DeliveryPhase.PLAN
+
+
+def task_display_status(
+    status: TaskStatus, *, has_active_rework: bool
+) -> TaskDisplayStatus | None:
+    """§5.1 mapping; SUPERSEDED returns None and is filtered from lists."""
+
+    if status is TaskStatus.SUPERSEDED:
+        return None
+    if status is TaskStatus.BLOCKED:
+        return TaskDisplayStatus.BLOCKED
+    if status is TaskStatus.IN_PROGRESS:
+        return (
+            TaskDisplayStatus.REPAIRING if has_active_rework else TaskDisplayStatus.RUNNING
+        )
+    if status is TaskStatus.ASSIGNED:
+        return TaskDisplayStatus.PENDING
+    if status is TaskStatus.SUCCEEDED:
+        return TaskDisplayStatus.SUCCEEDED
+    return TaskDisplayStatus.FAILED
+
+
+_GATE_DISPLAY = {
+    RepositoryDeliveryStatus.READY_TO_MERGE: GateDisplay.OPEN,
+    RepositoryDeliveryStatus.MERGE_REQUESTED: GateDisplay.OPEN,
+    RepositoryDeliveryStatus.MERGED: GateDisplay.OPEN,
+    RepositoryDeliveryStatus.CI_FAILED: GateDisplay.BLOCKED,
+    RepositoryDeliveryStatus.REVIEW_CHANGES_REQUESTED: GateDisplay.BLOCKED,
+    RepositoryDeliveryStatus.MANUAL_INTERVENTION: GateDisplay.BLOCKED,
+    RepositoryDeliveryStatus.PR_OPEN: GateDisplay.RUNNING,
+    RepositoryDeliveryStatus.CI_PENDING: GateDisplay.RUNNING,
+    RepositoryDeliveryStatus.REVIEW_PENDING: GateDisplay.RUNNING,
+    RepositoryDeliveryStatus.COMPENSATION_PENDING: GateDisplay.RUNNING,
+    RepositoryDeliveryStatus.COMPENSATED: GateDisplay.RUNNING,
+    RepositoryDeliveryStatus.PENDING: GateDisplay.WAITING,
+}
+
+
+def gate_display(status: RepositoryDeliveryStatus) -> GateDisplay:
+    """§5.3 mapping: 12 repository delivery states onto 4 gate displays."""
+
+    return _GATE_DISPLAY[status]
