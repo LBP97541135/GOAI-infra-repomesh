@@ -2,6 +2,7 @@
 
 ## 当前阶段（全流程 GUI 闭环）
 
+- [控制台六个面的图示](console-tour.md)
 - [全流程闭环总计划（已收官，含批次记录）](development/full-loop-plan-20260812.md)
 - [全流程 GUI 设计定稿](development/full-loop-gui-design-20260812.md)
 - [交付读模型契约 v0.4（发现链，现行）](contracts/delivery-read-model-v0.4.md)
