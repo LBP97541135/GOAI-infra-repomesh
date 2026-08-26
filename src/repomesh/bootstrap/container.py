@@ -449,6 +449,35 @@ class ApplicationContainer:
             worker_task_control_url=get_settings().worker_task_control_url,
         )
 
+    def external_worker_binding_control_plane(self) -> AgentTeamControlPlane | None:
+        """The control plane the bridge preflight (ADR 0004) reads through.
+
+        Wraps ``agent_team_control_plane`` in ``ExternalWorkerProjection`` so
+        that an unreachable controller reaches ``ResolveExternalWorkerBinding``
+        as ``WorkerControlPlaneUnavailable`` rather than the integration's own
+        ``AgentTeamsUnavailable`` — the router maps the former to 503 without
+        importing ``repomesh.integrations.*``, which module code may not do.
+
+        Scoped to this one call site: every other reader of
+        ``agent_team_control_plane`` (``ProjectRuntimeProjection``,
+        ``RegisterNativeAgent``, the readiness probe) keeps talking to the raw
+        client and is unaffected by this translation.
+        """
+
+        if self.agent_team_control_plane is None:
+            return None
+        from repomesh.integrations.agentteams.runtime_projection import (  # noqa: PLC0415
+            ExternalWorkerProjection,
+        )
+
+        settings = get_settings()
+        return ExternalWorkerProjection(
+            self.agent_team_control_plane,
+            model=settings.deepseek_model,
+            worker_runtime=settings.agentteams_worker_runtime,
+            worker_task_control_url=settings.worker_task_control_url,
+        )
+
     async def start(self) -> None:
         for service in self.background_services:
             await service.start()

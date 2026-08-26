@@ -147,6 +147,20 @@ class TeamRuntimeRef:
     total_workers: int
 
 
+class WorkerControlPlaneUnavailable(RuntimeError):
+    """The AgentTeams control plane could not be reached to answer a read.
+
+    Module-owned on purpose. The bridge preflight router must not import
+    ``repomesh.integrations.*`` to catch the integration's own transport
+    exception (``AgentTeamsUnavailable``) — that boundary is why ports exist
+    at all — so the adapter that actually talks to the controller catches it
+    there and raises this instead, chained with ``from`` so the original
+    transport failure is not lost. The router maps this to HTTP 503: the
+    controller merely did not answer, which a retry may well outlast, unlike
+    the 404/409 refusals a controller that *did* answer can hand back.
+    """
+
+
 class AgentTeamControlPlane(Protocol):
     async def ensure_manager(
         self, projection: ManagerProjection, *, idempotency_key: str

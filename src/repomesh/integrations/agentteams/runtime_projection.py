@@ -52,6 +52,8 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     DesiredRuntimeState,
     ManagerProjection,
     ManagerRuntime,
+    TeamRuntimeRef,
+    WorkerControlPlaneUnavailable,
     WorkerProjection,
     WorkerRuntime,
     WorkerRuntimeRef,
@@ -60,7 +62,7 @@ from repomesh.modules.project.contracts import ProjectAgentTopologyView
 from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.ports import ProjectTopologyStore
 
-from .control_plane import AgentTeamsError
+from .control_plane import AgentTeamsError, AgentTeamsUnavailable
 from .principal_registration import with_task_control
 from .project_topology import ReconcileProjectAgentTopology
 
@@ -260,6 +262,15 @@ class ExternalWorkerProjection:
 
     Nothing here decides *whether* an agent may be external — that is the
     application use case's question, asked of RepoMesh's own principal.
+
+    ``get_worker``/``get_team`` below answer the same question a plain
+    ``AgentTeamControlPlane`` would, for the one caller that needs an
+    unreachable controller to read as ``WorkerControlPlaneUnavailable``
+    rather than this module's own ``AgentTeamsUnavailable``:
+    ``ResolveExternalWorkerBinding``, the bridge preflight's use case, is
+    application code and may not import ``repomesh.integrations.*`` to catch
+    the latter itself. Translating here — the adapter that already imports
+    it — is what lets the router catch a module-owned exception instead.
     """
 
     def __init__(
@@ -290,6 +301,18 @@ class ExternalWorkerProjection:
             ),
             idempotency_key=idempotency_key,
         )
+
+    async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
+        try:
+            return await self._control_plane.get_worker(name)
+        except AgentTeamsUnavailable as error:
+            raise WorkerControlPlaneUnavailable(str(error)) from error
+
+    async def get_team(self, name: str) -> TeamRuntimeRef | None:
+        try:
+            return await self._control_plane.get_team(name)
+        except AgentTeamsUnavailable as error:
+            raise WorkerControlPlaneUnavailable(str(error)) from error
 
 
 __all__ = [

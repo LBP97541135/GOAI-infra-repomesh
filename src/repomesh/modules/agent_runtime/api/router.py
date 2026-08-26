@@ -14,6 +14,7 @@ from repomesh.modules.agent_runtime.contracts import (
     UnknownExternalWorker,
 )
 from repomesh.modules.agent_runtime.ports import CodingRunRequest
+from repomesh.modules.agent_runtime.ports.agent_team import WorkerControlPlaneUnavailable
 from repomesh.settings import get_settings
 
 from .models import (
@@ -69,7 +70,7 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
 
     _authorize_runner(request)
     container = request.app.state.container
-    control_plane = container.agent_team_control_plane
+    control_plane = container.external_worker_binding_control_plane()
     if control_plane is None:
         # Fail-closed: with no controller there is nothing to confirm against,
         # and an unconfirmed binding is worse than no answer.
@@ -82,6 +83,10 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ExternalWorkerRefused as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except WorkerControlPlaneUnavailable as error:
+        # The controller merely did not answer -- unlike the refusals above,
+        # a retry may well outlast this, so it is a 503 rather than a 409.
+        raise HTTPException(status_code=503, detail=str(error)) from error
     return binding.to_wire()
 
 
