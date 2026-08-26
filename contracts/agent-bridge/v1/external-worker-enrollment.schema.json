@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agent-bridge/v1/external-worker-enrollment.schema.json",
+  "title": "RepoMesh External Worker Enrollment v1",
+  "description": "Non-secret binding a Room-Native Coding Agent Bridge instance needs to serve one AgentTeams external worker. Credential fields are opaque references resolved by the local credential resolver at runtime; secret values never appear in this document.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "organizationId",
+    "workerName",
+    "teamName",
+    "matrixUserId",
+    "allowedRoomIds",
+    "repomeshEndpoint",
+    "codingProfile",
+    "credentialRefs"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "agent-bridge.v1"},
+    "organizationId": {"type": "string", "format": "uuid"},
+    "workerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "AgentTeams Worker resource name. The referenced Worker must have containerManaged: false."
+    },
+    "teamName": {"type": "string", "minLength": 1, "maxLength": 100},
+    "matrixUserId": {
+      "type": "string",
+      "pattern": "^@[^:]+:.+$",
+      "maxLength": 255,
+      "description": "Fully qualified Matrix user id of the worker identity. Used for mention detection and sender binding; the access token is NOT part of this document."
+    },
+    "allowedRoomIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^![^:]+:.+$", "maxLength": 255},
+      "description": "Rooms the Bridge may read from and post to. Events from any other room are ignored; invites outside this list are not auto-joined."
+    },
+    "repomeshEndpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the RepoMesh control plane used for task validation and governed execution."
+    },
+    "codingProfile": {
+      "type": "string",
+      "enum": ["codex", "claude-code", "kimi"],
+      "description": "Runner profile id driving the local CLI session. Exactly one per enrollment."
+    },
+    "credentialRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matrix"],
+      "properties": {
+        "matrix": {"$ref": "#/$defs/credentialRef"},
+        "model": {"$ref": "#/$defs/credentialRef"},
+        "scm": {"$ref": "#/$defs/credentialRef"},
+        "repomesh": {"$ref": "#/$defs/credentialRef"}
+      },
+      "description": "Opaque references handed to the local credential resolver. A ref names where a secret lives (keyring entry, env var name, file path); it is never the secret itself."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Optional human-facing name used in room messages. Defaults to workerName."
+    }
+  },
+  "$defs": {
+    "credentialRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Opaque locator understood by the local credential resolver. Must not contain the secret value."
+    }
+  }
+}
