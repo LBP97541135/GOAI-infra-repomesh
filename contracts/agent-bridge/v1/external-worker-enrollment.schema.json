@@ -8,22 +8,29 @@
   "required": [
     "schemaVersion",
     "organizationId",
+    "workerAgentId",
     "workerName",
     "teamName",
     "matrixUserId",
+    "matrixHomeserverUrl",
     "allowedRoomIds",
     "repomeshEndpoint",
     "codingProfile",
     "credentialRefs"
   ],
   "properties": {
-    "schemaVersion": {"const": "agent-bridge.v1"},
+    "schemaVersion": {"const": "repomesh.agent-bridge.enrollment.v1"},
     "organizationId": {"type": "string", "format": "uuid"},
+    "workerAgentId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "RepoMesh AgentPrincipal id for this worker. Used as workerAgentId in Runtime v1 RunnerTask and passed to RepoMesh preflight (WorkerBindingPort) to resolve the repomesh.agent-bridge.binding.v1 response. Must match the workerAgentId RepoMesh returns from preflight; a mismatch is a stage-2 validation failure."
+    },
     "workerName": {
       "type": "string",
       "minLength": 1,
       "maxLength": 100,
-      "description": "AgentTeams Worker resource name. The referenced Worker must have containerManaged: false."
+      "description": "AgentTeams Worker resource name. The referenced Worker must have containerManaged: false, as confirmed by RepoMesh preflight, not merely asserted here."
     },
     "teamName": {"type": "string", "minLength": 1, "maxLength": 100},
     "matrixUserId": {
@@ -31,6 +38,11 @@
       "pattern": "^@[^:]+:.+$",
       "maxLength": 255,
       "description": "Fully qualified Matrix user id of the worker identity. Used for mention detection and sender binding; the access token is NOT part of this document."
+    },
+    "matrixHomeserverUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the Matrix homeserver the worker identity is registered on. May differ from the server name embedded in matrixUserId when well-known delegation is used; the Bridge must connect to this URL, not derive one from the user id."
     },
     "allowedRoomIds": {
       "type": "array",

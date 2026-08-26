@@ -15,7 +15,7 @@
     "body"
   ],
   "properties": {
-    "schemaVersion": {"const": "agent-bridge.v1"},
+    "schemaVersion": {"const": "repomesh.room-observation.v1"},
     "observationId": {"type": "string", "format": "uuid"},
     "emittedAt": {"type": "string", "format": "date-time"},
     "workerName": {"type": "string", "minLength": 1, "maxLength": 100},
