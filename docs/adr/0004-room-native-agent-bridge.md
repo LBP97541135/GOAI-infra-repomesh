@@ -105,7 +105,10 @@ session, connected to Matrix for conversation and to RepoMesh for governed execu
    messages are a wake-up and display signal only; Task assignment, assignee identity,
    permission scope, and terminal state are authoritative only in RepoMesh's persisted state —
    a room message can request or narrate, never grant. Room text never advances Task state;
-   only persisted Runner events do.
+   only persisted Runner events do. The Bridge is also the external worker's Runner consumer:
+   it reuses the complete Runner execution chain — task source, executor, and event sink —
+   and never reimplements executor, test, or commit logic; no second local Runner process
+   competes for the same worker's tasks.
 
 7. **Idempotency has three stable keys**: Matrix `room id + event id` for inbound dedup,
    `worker + native session + trigger event` for CLI turns, and the Runtime v1
