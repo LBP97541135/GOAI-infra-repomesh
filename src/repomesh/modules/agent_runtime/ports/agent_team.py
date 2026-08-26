@@ -187,6 +187,11 @@ class ExternalWorkerProvisioner(Protocol):
     compares an existing worker against the one being asked for — so they have
     to be the values the ordinary project path already uses, and those live in
     the integration next to the path that uses them.
+
+    Raises adapter-specific conflict exceptions (e.g. AgentTeamsConflict) if
+    the worker already exists with a conflicting projection, including when a
+    managed worker conflicts with an external provisioning request. Callers
+    must treat such adapter conflict exceptions as refusals, not internal errors.
     """
 
     async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef: ...

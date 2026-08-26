@@ -53,6 +53,12 @@ class ProvisionExternalWorker:
     build that ignored the field would answer 201 with a managed worker, and
     reporting success on that would hand a Bridge an identity whose container is
     about to start under it.
+
+    The adapter's ``provision`` method raises its own conflict exception (e.g.
+    AgentTeamsConflict) when the worker already exists with a conflicting
+    projection or managed/external mismatch. This is deliberately passed through
+    unchanged; the HTTP layer must map such adapter conflicts to a refusal,
+    not an internal error.
     """
 
     def __init__(
