@@ -268,7 +268,7 @@ export function createApiClient(config: ApiClientConfig) {
     /** §5.1：未建团的 issue 返回 `{"rooms": []}` 且 HTTP 200，空态不是错误 */
     listRooms: (issueId: string) => request<RoomListResponse>(config, "GET", `/issues/${issueId}/rooms`),
 
-    /** §5.2：room_id 形如 `!rm-team-c-billing:matrix.local`，含 `!` 与 `:` 必须编码；
+    /** §5.2：room_id 形如 `!repomesh-team-c-billing:matrix.local`，含 `!` 与 `:` 必须编码；
      *  cursor 语义同 §4.1 events；未知 room_id → 404 */
     getRoomStream: (roomId: string, opts?: { cursor?: string; limit?: number }) => {
       const params = new URLSearchParams();

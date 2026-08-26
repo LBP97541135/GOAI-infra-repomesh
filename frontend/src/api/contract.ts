@@ -49,7 +49,7 @@ export type GovernanceDecisionValue = "ready" | "blocked" | "rollback_required";
  *   - `issue_key`：无 Project 注册表（§0/§6.1），前端显 issue_id 短版；
  *   - `operational_status` / `execution_mode`：来自 project.agent_topologies，
  *     联调种子上该表为空 → 恒 null。**null 不等于 active**，徽标须「有值才渲染」；
- *   - `opened_by_name`：AgentTeams **资源名**（rm-worker-01 这类），与 §4.2 的
+ *   - `opened_by_name`：AgentTeams **资源名**（repomesh-worker-01 这类），与 §4.2 的
  *     `sender_name` 同源同精度，**不是人名**——渲染保留 AGENT 前缀语义。 */
 export interface IssueListItemView {
   issue_id: string;
@@ -224,7 +224,7 @@ export interface IssueDetailView extends IssueListItemView {
 
 export interface RoomMemberView {
   agent_id: string;
-  /** AgentTeams 资源名（rm-leader-a-api 这类），**不是人名** */
+  /** AgentTeams 资源名（repomesh-leader-a-api 这类），**不是人名** */
   name: string | null;
   role: string;
 }
@@ -408,7 +408,7 @@ export interface ConsoleAgentView {
   organization_id: string;
   role: AgentRole;
   status: "active" | "disabled";
-  /** AgentTeams 资源名（rm-worker-01 这类），**不是人名** */
+  /** AgentTeams 资源名（repomesh-worker-01 这类），**不是人名** */
   agentteams_resource_name: string;
   leader_agent_id: string | null;
   repository_id: string | null;

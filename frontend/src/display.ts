@@ -295,7 +295,7 @@ export function eventTime(at: string | null | undefined): string {
 }
 
 /** 发起人恒为 **agent**（最早 PlanSnapshot 的 created_by_agent_id）。
- *  `opened_by_name` 是 AgentTeams 资源名（rm-worker-01 这类），与 §4.2 的
+ *  `opened_by_name` 是 AgentTeams 资源名（repomesh-worker-01 这类），与 §4.2 的
  *  `sender_name` 同源同精度，**不是人名**——AGENT 前缀必须保留，否则读者会
  *  以为这单是同事开的。两者都取不到时显「发起人未关联」，不编造。 */
 export function openedBy(item: Pick<IssueListItemView, "opened_by_name" | "opened_by_agent_id">): string {

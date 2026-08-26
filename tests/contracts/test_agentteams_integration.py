@@ -63,7 +63,7 @@ async def test_ensure_worker_gets_before_create_and_sends_v12_payload() -> None:
             return response(404, {"error": "not found"})
         payload = json.loads(request.content)
         assert payload == {
-            "name": "rm-worker-api",
+            "name": "repomesh-worker-api",
             "model": "qwen3.6-plus",
             "runtime": "hermes",
             "skills": ["github-operations"],
@@ -78,7 +78,7 @@ async def test_ensure_worker_gets_before_create_and_sends_v12_payload() -> None:
     try:
         worker = await client.ensure_worker(
             WorkerProjection(
-                name="rm-worker-api",
+                name="repomesh-worker-api",
                 model="qwen3.6-plus",
                 runtime=WorkerRuntime.HERMES,
                 identity="Backend coding worker",
@@ -89,10 +89,10 @@ async def test_ensure_worker_gets_before_create_and_sends_v12_payload() -> None:
     finally:
         await client.close()
 
-    assert worker.name == "rm-worker-api"
+    assert worker.name == "repomesh-worker-api"
     assert worker.phase == "Pending"
     assert [(item.method, item.url.path) for item in requests] == [
-        ("GET", "/api/v1/workers/rm-worker-api"),
+        ("GET", "/api/v1/workers/repomesh-worker-api"),
         ("POST", "/api/v1/workers"),
     ]
     assert requests[1].headers["Idempotency-Key"] == "project-1-worker-api-v1"
@@ -107,7 +107,7 @@ async def test_ensure_worker_reuses_matching_projection_without_post() -> None:
         return response(
             200,
             {
-                "name": "rm-worker-api",
+                "name": "repomesh-worker-api",
                 "model": "qwen3.6-plus",
                 "runtime": "hermes",
                 "phase": "Ready",
@@ -119,7 +119,7 @@ async def test_ensure_worker_reuses_matching_projection_without_post() -> None:
     )
     try:
         worker = await client.ensure_worker(
-            WorkerProjection("rm-worker-api", "qwen3.6-plus", WorkerRuntime.HERMES),
+            WorkerProjection("repomesh-worker-api", "qwen3.6-plus", WorkerRuntime.HERMES),
             idempotency_key="same-request",
         )
     finally:
@@ -146,7 +146,7 @@ async def test_worker_creation_projects_identity_prompts_mcp_and_channel_policy(
     try:
         await client.ensure_worker(
             WorkerProjection(
-                name="rm-worker-secure",
+                name="repomesh-worker-secure",
                 model="qwen3.6-plus",
                 identity="Repository worker",
                 soul="Be precise.",
@@ -187,7 +187,7 @@ async def test_ensure_worker_rejects_different_existing_projection() -> None:
         return response(
             200,
             {
-                "name": "rm-worker-api",
+                "name": "repomesh-worker-api",
                 "model": "different-model",
                 "runtime": "hermes",
                 "phase": "Ready",
@@ -200,7 +200,7 @@ async def test_ensure_worker_rejects_different_existing_projection() -> None:
     try:
         with pytest.raises(AgentTeamsConflict, match="model"):
             await client.ensure_worker(
-                WorkerProjection("rm-worker-api", "qwen3.6-plus", WorkerRuntime.HERMES),
+                WorkerProjection("repomesh-worker-api", "qwen3.6-plus", WorkerRuntime.HERMES),
                 idempotency_key="conflicting-request",
             )
     finally:
@@ -221,7 +221,7 @@ async def test_team_references_independently_created_workers() -> None:
             {
                 **posted,
                 "phase": "Pending",
-                "leaderName": "rm-worker-lead",
+                "leaderName": "repomesh-worker-lead",
                 "readyWorkers": 0,
                 "totalWorkers": 2,
                 "leaderDMRoomID": "!leader:matrix.local",
@@ -229,10 +229,10 @@ async def test_team_references_independently_created_workers() -> None:
         )
 
     projection = TeamProjection(
-        name="rm-team-project",
+        name="repomesh-team-project",
         members=(
-            TeamMemberProjection("rm-worker-lead", TeamRole.LEADER),
-            TeamMemberProjection("rm-worker-api", TeamRole.WORKER),
+            TeamMemberProjection("repomesh-worker-lead", TeamRole.LEADER),
+            TeamMemberProjection("repomesh-worker-api", TeamRole.WORKER),
         ),
         description="RepoMesh project team",
         heartbeat_every="30m",
@@ -245,12 +245,12 @@ async def test_team_references_independently_created_workers() -> None:
     finally:
         await client.close()
 
-    assert posted["leader"] == {"name": "rm-worker-lead"}
+    assert posted["leader"] == {"name": "repomesh-worker-lead"}
     assert posted["workerMembers"] == [
-        {"name": "rm-worker-lead", "role": "team_leader"},
-        {"name": "rm-worker-api", "role": "worker"},
+        {"name": "repomesh-worker-lead", "role": "team_leader"},
+        {"name": "repomesh-worker-api", "role": "worker"},
     ]
-    assert team.leader_name == "rm-worker-lead"
+    assert team.leader_name == "repomesh-worker-lead"
     assert team.total_workers == 2
     assert team.leader_room_id == "!leader:matrix.local"
 
@@ -266,23 +266,25 @@ async def test_manager_and_worker_lifecycle_use_distinct_endpoints() -> None:
         if request.url.path == "/api/v1/managers":
             payload = json.loads(request.content)
             return response(201, {**payload, "phase": "Pending"})
-        return response(200, {"name": "rm-worker-api", "phase": "Ready"})
+        return response(200, {"name": "repomesh-worker-api", "phase": "Ready"})
 
     client = AgentTeamsControlPlaneClient(
         "http://agentteams:8090", transport=httpx.MockTransport(handler)
     )
     try:
         manager = await client.ensure_manager(
-            ManagerProjection("rm-manager-main", "qwen3.6-plus"),
+            ManagerProjection("repomesh-manager-main", "qwen3.6-plus"),
             idempotency_key="manager-v1",
         )
-        worker = await client.ensure_worker_ready("rm-worker-api", idempotency_key="run-1-ready")
+        worker = await client.ensure_worker_ready(
+            "repomesh-worker-api", idempotency_key="run-1-ready"
+        )
     finally:
         await client.close()
 
-    assert manager.name == "rm-manager-main"
+    assert manager.name == "repomesh-manager-main"
     assert worker.phase == "Ready"
-    assert calls[-1] == ("POST", "/api/v1/workers/rm-worker-api/ensure-ready")
+    assert calls[-1] == ("POST", "/api/v1/workers/repomesh-worker-api/ensure-ready")
 
 
 @pytest.mark.asyncio
@@ -291,9 +293,9 @@ async def test_get_manager_exposes_matrix_identity_for_inbound_authentication() 
         return response(
             200,
             {
-                "name": "rm-manager-main",
+                "name": "repomesh-manager-main",
                 "phase": "Ready",
-                "matrixUserID": "@rm-manager-main:matrix.local",
+                "matrixUserID": "@repomesh-manager-main:matrix.local",
             },
         )
 
@@ -301,11 +303,11 @@ async def test_get_manager_exposes_matrix_identity_for_inbound_authentication() 
         "http://agentteams:8090", transport=httpx.MockTransport(handler)
     )
     try:
-        manager = await client.get_manager("rm-manager-main")
+        manager = await client.get_manager("repomesh-manager-main")
     finally:
         await client.close()
     assert manager is not None
-    assert manager.matrix_user_id == "@rm-manager-main:matrix.local"
+    assert manager.matrix_user_id == "@repomesh-manager-main:matrix.local"
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from uuid import UUID
 
+from repomesh.modules.agent_runtime.contracts import AGENTTEAMS_NAME_PREFIX
 from repomesh.modules.project.contracts import (
     CheckpointDecisionKind,
     CodeAccessLevel,
@@ -46,8 +47,10 @@ def repository_agentteams_team_name(repository_id: UUID) -> str:
     Delegates to :meth:`RepositoryTeam.canonical_agentteams_team_name` so the
     two lines of development that independently keyed the Team on the
     repository (A-8 on this branch, platform onboarding on main) mint one
-    spelling. The ``rm-team-`` template is the one existing rooms were made
-    under; the reconcile adopts a repository's real Team either way.
+    spelling. That spelling changed once, from ``rm-team-`` to
+    ``repomesh-team-`` (see :data:`AGENTTEAMS_NAME_PREFIX`); rooms made under
+    the old template are not renamed, and the reconcile adopts a repository's
+    real Team either way.
     """
 
     return RepositoryTeam.canonical_agentteams_team_name(repository_id)
@@ -201,7 +204,7 @@ class RepositoryTeam:
         whichever issue they are talking about.
         """
 
-        return f"rm-team-{repository_id.hex}"
+        return f"{AGENTTEAMS_NAME_PREFIX}-team-{repository_id.hex}"
 
     def with_runtime(
         self,

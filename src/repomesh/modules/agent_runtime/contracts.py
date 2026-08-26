@@ -5,6 +5,7 @@ from uuid import UUID
 
 from repomesh.modules.context.contracts import ExecutionContextGrant
 
+from .ports.agent_team import AGENTTEAMS_NAME_PREFIX as AGENTTEAMS_NAME_PREFIX
 from .ports.coding_agent import CodingRunRequest
 
 

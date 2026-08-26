@@ -267,14 +267,14 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     )
     leader = _principal(
         AgentRole.REPOSITORY_LEADER,
-        "rm-leader-a-api",
+        "repomesh-leader-a-api",
         agent_id=team.leader_agent_id,
         repository_id=repository_id,
         leader_agent_id=manager.id,
     )
     worker_principal = _principal(
         AgentRole.WORKER,
-        "rm-worker-a-api",
+        "repomesh-worker-a-api",
         agent_id=team.worker_agent_ids[0],
         repository_id=repository_id,
         leader_agent_id=leader.id,
@@ -295,10 +295,10 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
         topology=StubTopology({project_id: topology_view}),
         runtime=StubRuntime(
             {
-                "rm-worker-a-api": RuntimeSnapshot(
+                "repomesh-worker-a-api": RuntimeSnapshot(
                     phase="Running",
                     runtime_kind="openclaw",
-                    matrix_user_id="@rm-worker-a-api:local",
+                    matrix_user_id="@repomesh-worker-a-api:local",
                     room_id="!team:local",
                     message="ready",
                 )
@@ -309,7 +309,7 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     payload = await service.list_agents()
 
     by_name = {item["agentteams_resource_name"]: item for item in payload["agents"]}
-    worker_row = by_name["rm-worker-a-api"]
+    worker_row = by_name["repomesh-worker-a-api"]
     assert worker_row["role"] == "worker"
     assert worker_row["status"] == "active"
     assert worker_row["team_id"] == team.id
@@ -317,14 +317,14 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     assert worker_row["repository_name"] == "repomesh-e2e-api"
     assert worker_row["active_task_count"] == 1
     assert worker_row["runtime"]["runtime_kind"] == "openclaw"
-    assert worker_row["runtime"]["matrix_user_id"] == "@rm-worker-a-api:local"
+    assert worker_row["runtime"]["matrix_user_id"] == "@repomesh-worker-a-api:local"
     # §4.4: no start timestamp and no observed sleep state exist upstream.
     assert worker_row["runtime"]["uptime_seconds"] is None
     assert worker_row["runtime"]["awake"] is None
     # The organization leader belongs to no repository team.
     assert by_name["console-demo-org-leader"]["team_id"] is None
     assert by_name["console-demo-org-leader"]["repository_id"] is None
-    assert by_name["rm-leader-a-api"]["team_id"] == team.id
+    assert by_name["repomesh-leader-a-api"]["team_id"] == team.id
 
 
 # ------------------------------------------------------------------------ §4.4
@@ -406,7 +406,7 @@ async def test_unreachable_probes_run_concurrently(monkeypatch) -> None:
 async def test_runtime_is_null_when_agentteams_is_not_configured() -> None:
     """Not configured is not the same as unreachable: there is no fact at all."""
 
-    principal = _principal(AgentRole.WORKER, "rm-worker-a-api", repository_id=uuid4())
+    principal = _principal(AgentRole.WORKER, "repomesh-worker-a-api", repository_id=uuid4())
     service = _service(
         StubPlans(),
         StubSnapshots(),

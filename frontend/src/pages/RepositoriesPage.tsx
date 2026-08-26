@@ -215,7 +215,7 @@ export function RepositoriesPage({
       )}
 
       <p className="pt-4 text-[11px] text-tx3">
-        团队按「issue × 仓库」自动组建（rm-team-*，teamRoom + leaderDM 双房间）；
+        团队按「issue × 仓库」自动组建（repomesh-team-*，teamRoom + leaderDM 双房间）；
         也可在接入后先建常驻团队，两条路径复用同一批人（仓库的 leader 是目录单例）。
         仓库的「发现证据」（auto_card）按仓库已存，本版不渲染 ——
         <ProbeNote sourceNote={gridSourceMode() === "live" ? "live · GET /console/repositories（契约 v0.2 §4.1）" : "replay 夹具"} />

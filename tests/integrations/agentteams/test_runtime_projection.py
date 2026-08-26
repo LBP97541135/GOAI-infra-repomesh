@@ -492,7 +492,7 @@ async def test_a_fresh_team_is_named_after_its_repository_not_its_row() -> None:
         directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
     ).project(project_id)
 
-    expected = f"rm-team-{repository_id.hex}"
+    expected = f"repomesh-team-{repository_id.hex}"
     assert [team.name for team in control_plane.teams] == [expected]
     assert view.repository_teams[0].agentteams_team_name == expected
 
@@ -561,10 +561,10 @@ async def test_a_row_minted_before_the_fix_adopts_the_team_that_already_exists()
     topology = await store.get(project_id)
     stale = replace(
         topology.repository_teams[0],
-        agentteams_team_name="rm-team-b0e9b2eee4074dfd9cf767a46b2d2575",
+        agentteams_team_name="repomesh-team-b0e9b2eee4074dfd9cf767a46b2d2575",
     )
     await store.save(replace(topology, repository_teams=(stale,)))
-    incumbent = "rm-team-6c503f0227a44e9280b3ab29775c0b76"
+    incumbent = "repomesh-team-6c503f0227a44e9280b3ab29775c0b76"
     leader = await directory.get_view(stale.leader_agent_id)
     worker = await directory.get_view(stale.worker_agent_ids[0])
     control_plane = RecordingControlPlane(
@@ -629,7 +629,7 @@ async def test_a_team_whose_members_disagree_is_a_conflict_not_a_wait() -> None:
     # The worker is spoken for by an unrelated Team; the leader is not, so
     # there is nothing to adopt and the ensure walks into the refusal.
     control_plane = RecordingControlPlane(
-        memberships={worker.agentteams_resource_name: "rm-team-somebody-else"}
+        memberships={worker.agentteams_resource_name: "repomesh-team-somebody-else"}
     )
 
     with pytest.raises(AgentTeamsResponseError, match="already a member of Team") as raised:

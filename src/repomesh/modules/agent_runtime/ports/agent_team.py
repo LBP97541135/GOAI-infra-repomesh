@@ -167,8 +167,22 @@ class AgentTeamMessenger(Protocol):
     ) -> str: ...
 
 
+AGENTTEAMS_NAME_PREFIX = "repomesh"
+"""Prefix every AgentTeams resource RepoMesh mints carries.
+
+Deliberately not ``rm``. The worker runtime screens every shell command
+through a rule whose pattern is ``\\brm\\b``, and a hyphen is a word
+boundary -- so a name like ``rm-worker-a-api`` makes ``rm`` a standalone
+word wherever it appears. An agent listing its own working directory
+therefore tripped the "dangerous rm" rule, and the guard suspended the
+tool call waiting for a human to type ``/approve`` in a room that holds
+only agents. The task never started. ``repomesh`` has no ``rm`` in it at
+all, which is a stronger guarantee than relying on a boundary argument.
+"""
+
+
 def agentteams_resource_name(kind: str, resource_id: UUID) -> str:
     normalized_kind = kind.strip().lower().replace("_", "-")
     if normalized_kind not in {"manager", "worker", "team"}:
         raise ValueError(f"unsupported AgentTeams resource kind: {kind}")
-    return f"rm-{normalized_kind}-{resource_id.hex}"
+    return f"{AGENTTEAMS_NAME_PREFIX}-{normalized_kind}-{resource_id.hex}"

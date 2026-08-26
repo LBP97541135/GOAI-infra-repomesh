@@ -258,11 +258,11 @@ TEAM_SCENARIOS = (
 
 
 def team_room(key: str) -> str:
-    return f"!rm-team-{key}:matrix.local"
+    return f"!repomesh-team-{key}:matrix.local"
 
 
 def leader_room(key: str) -> str:
-    return f"!rm-leader-{key}:matrix.local"
+    return f"!repomesh-leader-{key}:matrix.local"
 
 
 async def seed_agents(directory: PostgresAgentDirectory, leader_id: UUID) -> None:
@@ -288,7 +288,7 @@ async def seed_agents(directory: PostgresAgentDirectory, leader_id: UUID) -> Non
             singleton_key=f"repository:{repository_id}:leader",
             repository_id=repository_id,
             responsibility_paths=paths,
-            agentteams_resource_name=f"rm-leader-{key}",
+            agentteams_resource_name=f"repomesh-leader-{key}",
         )
         worker = AgentPrincipal(
             id=stable_id(f"agent:{key}:worker"),
@@ -298,7 +298,7 @@ async def seed_agents(directory: PostgresAgentDirectory, leader_id: UUID) -> Non
             singleton_key=None,
             repository_id=repository_id,
             responsibility_paths=paths,
-            agentteams_resource_name=f"rm-worker-{key}",
+            agentteams_resource_name=f"repomesh-worker-{key}",
         )
         for principal in (repository_leader, worker):
             # rerun: the principal is already registered
@@ -408,7 +408,7 @@ async def seed_project_topologies(database: Database, leader_id: UUID) -> None:
                 repository_id=stable_id(repo_name),
                 leader_agent_id=stable_id(f"agent:{key}:repo-leader"),
                 worker_agent_ids=(stable_id(f"agent:{key}:worker"),),
-                agentteams_team_name=f"rm-team-{key}",
+                agentteams_team_name=f"repomesh-team-{key}",
                 runtime_status=ProjectTeamRuntimeStatus.READY,
                 room_id=team_room(key),
                 leader_room_id=leader_room(key),

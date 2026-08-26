@@ -71,7 +71,7 @@ async def test_automatic_topology_resolves_long_lived_repository_team() -> None:
         sorted((worker.id for worker in teams[0].workers), key=str)
     )
     assert first_team.agentteams_team_name == second_team.agentteams_team_name
-    assert first_team.agentteams_team_name == f"rm-team-{teams[0].repository_id.hex}"
+    assert first_team.agentteams_team_name == f"repomesh-team-{teams[0].repository_id.hex}"
 
 
 @pytest.mark.asyncio

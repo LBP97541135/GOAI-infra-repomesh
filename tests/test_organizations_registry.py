@@ -86,7 +86,7 @@ def test_organization_registry_over_http(
             # workspace names can never collide on the platform-wide binding.
             assert (
                 leader.agentteams_resource_name
-                == f"rm-org-leader-acme-delivery-{organization_id.hex[:8]}"
+                == f"repomesh-org-leader-acme-delivery-{organization_id.hex[:8]}"
             )
 
             # S-6: the audit row is attributed to a distinguishable credential
@@ -141,7 +141,7 @@ def test_organization_registry_over_http(
             assert blocked.status_code == 409
             repaired = client.post(
                 "/api/v1/console/organizations",
-                json={**beta, "leader_resource_name": "rm-org-leader-beta-repaired"},
+                json={**beta, "leader_resource_name": "repomesh-org-leader-beta-repaired"},
                 headers=HEADERS,
             )
             assert repaired.status_code == 200

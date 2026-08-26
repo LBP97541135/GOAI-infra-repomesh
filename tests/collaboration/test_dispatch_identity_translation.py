@@ -68,7 +68,7 @@ async def test_a_recipient_without_a_matrix_identity_is_a_route_refusal() -> Non
             "!room:matrix.local",
             "do the thing",
             transaction_id="txn-1",
-            recipient_resource_name="rm-worker-b-checkout",
+            recipient_resource_name="repomesh-worker-b-checkout",
         )
 
     # The server's own sentence, unreworded — it is the whole actionable
@@ -76,7 +76,7 @@ async def test_a_recipient_without_a_matrix_identity_is_a_route_refusal() -> Non
     assert str(raised.value) == "AgentTeams recipient Matrix identity is unavailable"
     # And it is still an AgentTeams refusal underneath, for anyone reading logs.
     assert isinstance(raised.value.__cause__, AgentTeamsUnavailable)
-    assert control_plane.asked == ["rm-worker-b-checkout"]
+    assert control_plane.asked == ["repomesh-worker-b-checkout"]
 
 
 @pytest.mark.asyncio
@@ -130,11 +130,11 @@ async def test_a_reachable_recipient_is_passed_straight_through() -> None:
         "!room:matrix.local",
         "body",
         transaction_id="txn-1",
-        recipient_resource_name="rm-worker-1",
+        recipient_resource_name="repomesh-worker-1",
     )
 
     assert event_id == "$event-1"
-    assert inner.calls == [("!room:matrix.local", "body", "txn-1", "rm-worker-1")]
+    assert inner.calls == [("!room:matrix.local", "body", "txn-1", "repomesh-worker-1")]
     # Everything that is not delivery is still the gateway's own.
     assert messenger.whoami == "@repomesh:matrix.local"
 

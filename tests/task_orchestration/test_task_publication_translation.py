@@ -68,9 +68,9 @@ def _task() -> TaskView:
 async def _publish(publisher, task: TaskView):
     return await publisher.publish(
         task,
-        team_name="rm-team-c51f652f",
+        team_name="repomesh-team-c51f652f",
         room_id="!team:matrix.local",
-        assignee_resource_name="rm-worker-1",
+        assignee_resource_name="repomesh-worker-1",
         idempotency_key="materialize-1:publication",
     )
 
@@ -219,8 +219,8 @@ async def test_a_writable_file_channel_is_passed_straight_through(tmp_path: Path
 
     package = await _publish(publisher, task)
 
-    assert package.team_name == "rm-team-c51f652f"
-    assert package.task_path == f"teams/rm-team-c51f652f/shared/tasks/{task.id}"
+    assert package.team_name == "repomesh-team-c51f652f"
+    assert package.task_path == f"teams/repomesh-team-c51f652f/shared/tasks/{task.id}"
     assert package.content_hash.startswith("sha256:")
     written = tmp_path / package.task_path
     assert (written / "spec.md").exists()
@@ -358,7 +358,7 @@ async def test_the_same_key_publishes_the_task_the_first_press_could_not() -> No
     """The acceptance criterion: pressing materialize again finishes the round.
 
     The addendum's live evidence is exactly this state — task rows claimed, and
-    ``teams/rm-team-…/shared/tasks/`` holding nothing but ``.keep``. A replay
+    ``teams/repomesh-team-…/shared/tasks/`` holding nothing but ``.keep``. A replay
     that recognised the key and returned the row would leave the bucket empty
     forever, which is what it used to do.
     """

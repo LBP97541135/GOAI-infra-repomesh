@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from repomesh.modules.agent_runtime.contracts import AGENTTEAMS_NAME_PREFIX
 from repomesh.modules.identity_access.contracts import (
     CreateOrganizationCommand,
     OrganizationReceipt,
@@ -98,7 +99,10 @@ def _leader_resource_name(name: str, organization_id: UUID) -> str:
     slug = "".join(
         ch if ch.isalnum() else "-" for ch in name.strip().lower()
     ).strip("-")
-    return f"rm-org-leader-{slug or 'workspace'}-{organization_id.hex[:8]}"
+    return (
+        f"{AGENTTEAMS_NAME_PREFIX}-org-leader-"
+        f"{slug or 'workspace'}-{organization_id.hex[:8]}"
+    )
 
 
 class OrganizationRegistryService:
