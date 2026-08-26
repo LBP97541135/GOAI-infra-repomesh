@@ -127,6 +127,13 @@ class AgentTeamsControlPlaneClient:
         self._set_optional(payload, "identity", projection.identity)
         self._set_optional(payload, "soul", projection.soul)
         self._set_optional(payload, "agents", projection.agents)
+        if not projection.container_managed:
+            # Sent only by the explicit external path. The controller defaults
+            # the field to true (``resource_handler.go``), so a managed worker's
+            # payload stays byte-identical to the one RepoMesh has always sent
+            # — two spellings of the same resource is how field-for-field
+            # parity turns into a 409.
+            payload["containerManaged"] = False
         if projection.mcp_servers:
             payload["mcpServers"] = [
                 {
@@ -328,6 +335,19 @@ class AgentTeamsControlPlaneClient:
                 }
                 for server in expected.mcp_servers
             ]
+        # A containerManaged mismatch is the one conflict that must never be
+        # reconciled away: adopting a managed worker as external leaves a
+        # container running under an identity a local process is serving, and
+        # adopting an external one as managed starts a second body for it.
+        # Absence is not agreement either — the v1.2.0 worker document always
+        # carries the field, so a document without it cannot confirm anything,
+        # and only the request that needs a confirmation is refused over it.
+        if "containerManaged" in body:
+            fields["containerManaged"] = expected.container_managed
+        elif not expected.container_managed:
+            raise AgentTeamsConflict(
+                "existing AgentTeams worker does not confirm containerManaged: false"
+            )
         if expected.identity:
             fields["identity"] = expected.identity
         if expected.soul:
@@ -379,6 +399,10 @@ class AgentTeamsControlPlaneClient:
 
     @staticmethod
     def _worker_ref(body: dict[str, Any]) -> WorkerRuntimeRef:
+        # Anything that is not a JSON boolean reads as "unknown" rather than as
+        # a truthy value: the preflight binding turns on this field being
+        # exactly False, and a string "false" must not get there.
+        observed = body.get("containerManaged")
         return WorkerRuntimeRef(
             name=str(body.get("name", "")),
             phase=str(body.get("phase", "")),
@@ -392,6 +416,7 @@ class AgentTeamsControlPlaneClient:
             # reconcile adopt an existing repository Team instead of walking
             # into the exclusive-membership 400 (A-8).
             team=body.get("team"),
+            container_managed=observed if isinstance(observed, bool) else None,
         )
 
     @staticmethod

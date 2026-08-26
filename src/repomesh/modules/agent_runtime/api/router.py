@@ -4,7 +4,15 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from repomesh.modules.agent_runtime.application import ExecuteCodingRun
-from repomesh.modules.agent_runtime.contracts import StartAssignedWorkerTaskCommand
+from repomesh.modules.agent_runtime.application.external_worker import (
+    ResolveExternalWorkerBinding,
+)
+from repomesh.modules.agent_runtime.contracts import (
+    ExternalWorkerBindingQuery,
+    ExternalWorkerRefused,
+    StartAssignedWorkerTaskCommand,
+    UnknownExternalWorker,
+)
 from repomesh.modules.agent_runtime.ports import CodingRunRequest
 from repomesh.settings import get_settings
 
@@ -37,6 +45,44 @@ async def receive_runner_event(body: dict[str, Any], request: Request) -> dict[s
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return {"accepted": True, "duplicate": not inserted}
+
+
+@router.get("/runtime/external-workers/{worker_agent_id}/binding", response_model=None)
+async def external_worker_binding(worker_agent_id: UUID, request: Request) -> dict[str, object]:
+    """Bridge preflight: the ``repomesh.agent-bridge.binding.v1`` document.
+
+    Read-only, and the only place a Bridge learns that its worker is really
+    external and which rooms it may act in — it holds no AgentTeams management
+    credential and never calls the Go controller (ADR 0004 decisions 4, 5).
+
+    Authenticated with the runner control token, the same credential the other
+    ``/runtime`` reads on this router take: the caller is an out-of-cluster
+    runtime process reading control-plane state, which is exactly what that
+    token already names, and per ADR 0004 decision 6 the Bridge is its worker's
+    Runner consumer, so it holds one already. A worker-scoped credential is PR
+    5's subject, not this endpoint's to invent.
+
+    The body is returned as the contract's own dict rather than through a
+    response model, so the wire shape is the one ``to_wire`` produces and
+    nothing re-derives it.
+    """
+
+    _authorize_runner(request)
+    container = request.app.state.container
+    control_plane = container.agent_team_control_plane
+    if control_plane is None:
+        # Fail-closed: with no controller there is nothing to confirm against,
+        # and an unconfirmed binding is worse than no answer.
+        raise HTTPException(status_code=503, detail="AgentTeams control plane is not configured")
+    try:
+        binding = await ResolveExternalWorkerBinding(
+            container.agent_directory, control_plane
+        ).execute(ExternalWorkerBindingQuery(worker_agent_id=worker_agent_id))
+    except UnknownExternalWorker as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ExternalWorkerRefused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return binding.to_wire()
 
 
 def _authorize_runner(request: Request) -> None:

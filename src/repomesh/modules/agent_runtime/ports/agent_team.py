@@ -68,6 +68,19 @@ class WorkerProjection:
     mcp_servers: tuple[McpServerProjection, ...] = ()
     channel_policy: ChannelPolicyProjection | None = None
     state: DesiredRuntimeState = DesiredRuntimeState.RUNNING
+    #: Whether the AgentTeams controller owns this worker's container.
+    #:
+    #: True — the controller's own default — for every worker RepoMesh
+    #: provisions on the ordinary project path, so no existing caller changes
+    #: meaning. Only the explicit external provisioning path sets it False,
+    #: which makes ``member_reconcile.go`` skip container create/delete while
+    #: keeping the Matrix identity, the room and the Team membership: the
+    #: worker's body is a process somebody else runs (ADR 0004 decision 2).
+    #:
+    #: Defaulted rather than required precisely so that "which workers are
+    #: external" stays an explicit fact on a provisioning request instead of a
+    #: setting or a name pattern.
+    container_managed: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +127,13 @@ class WorkerRuntimeRef:
     #: this repository's team already live?" without provoking that refusal.
     #: It is what makes adoption possible (defect A-8, contract §8.7.2).
     team: str | None = None
+    #: ``containerManaged`` as the controller reports it — an observation, not
+    #: a request. The worker document always carries the field (it is not
+    #: ``omitempty``), so ``None`` means the answer did not come from a
+    #: controller that knows it; that is "unknown" and must never be read as
+    #: "external". The bridge preflight is the caller that cares: it confirms
+    #: this is exactly ``False`` before it will bind anything to the worker.
+    container_managed: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +175,21 @@ class AgentTeamControlPlane(Protocol):
     async def ensure_worker_ready(
         self, name: str, *, idempotency_key: str
     ) -> WorkerRuntimeRef: ...
+
+
+class ExternalWorkerProvisioner(Protocol):
+    """Project one already-registered principal as an *external* Worker.
+
+    Deliberately narrower than ``AgentTeamControlPlane``: the application use
+    case decides *whether* an agent may be external (role, status, and the
+    controller's own confirmation), while the adapter decides what the rest of
+    the projection's fields are. Those fields are not free — the controller
+    compares an existing worker against the one being asked for — so they have
+    to be the values the ordinary project path already uses, and those live in
+    the integration next to the path that uses them.
+    """
+
+    async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef: ...
 
 
 class AgentTeamMessenger(Protocol):

@@ -34,6 +34,12 @@ there is no second value left to drift (defect A-6).
 
 Everything here is ensure-shaped, and has to be: materialize is re-entrant, so
 a retry of a half-executed round runs this again from the top.
+
+``ExternalWorkerProjection`` at the bottom is the same projection with one
+field flipped, for the one worker whose body runs outside the cluster (ADR
+0004). It lives here rather than beside the use case that drives it precisely
+because of the field-for-field rule above: the two projections have to be built
+from the same values, and those values are here.
 """
 
 from __future__ import annotations
@@ -48,6 +54,7 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     ManagerRuntime,
     WorkerProjection,
     WorkerRuntime,
+    WorkerRuntimeRef,
 )
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
 from repomesh.modules.project.domain import ProjectTopologyViolation
@@ -239,8 +246,55 @@ class ProjectRuntimeProjection:
             )
 
 
+class ExternalWorkerProjection:
+    """Project one worker the controller must *not* containerize (ADR 0004 §2).
+
+    Satisfies ``agent_runtime.ports.agent_team.ExternalWorkerProvisioner``. It
+    is deliberately the same projection ``ProjectRuntimeProjection._register``
+    builds, with one field flipped, and that is the whole design: the
+    controller compares an existing worker against the one being asked for, so
+    a projection that also drifted on skills, model, runtime or the
+    task-control MCP server would answer 409 about *that*. The operator would
+    read a spurious mismatch where the real answer is "this worker is already
+    managed, and converting it is not something you get to do silently".
+
+    Nothing here decides *whether* an agent may be external — that is the
+    application use case's question, asked of RepoMesh's own principal.
+    """
+
+    def __init__(
+        self,
+        control_plane: AgentTeamControlPlane,
+        *,
+        model: str,
+        worker_runtime: WorkerRuntime,
+        worker_task_control_url: str | None = None,
+    ) -> None:
+        self._control_plane = control_plane
+        self._model = model
+        self._worker_runtime = worker_runtime
+        self._worker_task_control_url = worker_task_control_url
+
+    async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
+        return await self._control_plane.ensure_worker(
+            with_task_control(
+                WorkerProjection(
+                    name=name,
+                    model=self._model,
+                    runtime=self._worker_runtime,
+                    skills=_SKILLS[AgentRole.WORKER],
+                    state=DesiredRuntimeState.RUNNING,
+                    container_managed=False,
+                ),
+                self._worker_task_control_url,
+            ),
+            idempotency_key=idempotency_key,
+        )
+
+
 __all__ = [
     "AgentTeamsIdentitiesPending",
     "AgentTeamsRoomsPending",
+    "ExternalWorkerProjection",
     "ProjectRuntimeProjection",
 ]
