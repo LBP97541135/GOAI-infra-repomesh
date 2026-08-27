@@ -11,10 +11,14 @@ from repomesh.integrations.orchestration import (
 )
 from repomesh.integrations.scm.contracts import RepositoryRef, SCMAdapter
 from repomesh.modules.agent_directory.ports import AgentDirectory
+from repomesh.modules.agent_runtime.contracts import ExternalWorkerRefused
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
+    ExternalWorkerProvisioner,
     WorkerBindingReader,
+    WorkerControlPlaneUnavailable,
+    WorkerRuntimeRef,
 )
 from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
@@ -484,6 +488,71 @@ class ApplicationContainer:
             worker_runtime=settings.agentteams_worker_runtime,
             worker_task_control_url=settings.worker_task_control_url,
         )
+
+    def external_worker_provisioner(self) -> ExternalWorkerProvisioner | None:
+        """The provisioning half of ADR 0004, with the integration's errors translated.
+
+        ``ExternalWorkerProjection``, the same class the preflight reads
+        through — one projection, so the worker this writes is field-for-field
+        the worker that endpoint later confirms — wrapped in the translation the
+        port's contract
+        asks its callers for: ``ExternalWorkerProvisioner`` says an adapter
+        conflict is a *refusal*, not an internal error, and the admin route
+        cannot enforce that itself because module code may not import
+        ``repomesh.integrations.*`` to catch ``AgentTeamsConflict``.
+
+        So the split is the same one ``project_runtime_projector`` makes, on the
+        same question — *is pressing the button again a plan?* A controller that
+        answered and said no (a conflict, or any 4xx it spelled out) is a 409
+        that no retry clears; a controller that did not answer, or answered 5xx,
+        is a 503. Reads stay unwrapped: ``ExternalWorkerProjection.get_worker``
+        and ``get_team`` already translate their own transport failures.
+
+        ``None`` when no control plane is configured, exactly as
+        ``external_worker_binding_control_plane`` answers — the route turns that
+        into 503 rather than provisioning nothing and reporting success.
+
+        The adapter is built here rather than taken from that method precisely
+        because that method's return type is narrowed to two reads on purpose:
+        casting past a narrowing to reach the write it was narrowed to hide is
+        the move it exists to prevent. The three settings below are the only
+        duplication, and they are the same three both call sites would read.
+        """
+
+        if self.agent_team_control_plane is None:
+            return None
+        from repomesh.integrations.agentteams.runtime_projection import (  # noqa: PLC0415
+            ExternalWorkerProjection,
+        )
+
+        settings = get_settings()
+        projection = ExternalWorkerProjection(
+            self.agent_team_control_plane,
+            model=settings.deepseek_model,
+            worker_runtime=settings.agentteams_worker_runtime,
+            worker_task_control_url=settings.worker_task_control_url,
+        )
+
+        class _ExternalWorkerProvisioner:
+            async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
+                from repomesh.integrations.agentteams import (  # noqa: PLC0415
+                    AgentTeamsConflict,
+                    AgentTeamsError,
+                    AgentTeamsResponseError,
+                )
+
+                try:
+                    return await projection.provision(name, idempotency_key=idempotency_key)
+                except AgentTeamsConflict as error:
+                    raise ExternalWorkerRefused(str(error)) from error
+                except AgentTeamsResponseError as error:
+                    if 400 <= error.status_code < 500:
+                        raise ExternalWorkerRefused(str(error)) from error
+                    raise WorkerControlPlaneUnavailable(str(error)) from error
+                except AgentTeamsError as error:
+                    raise WorkerControlPlaneUnavailable(str(error)) from error
+
+        return _ExternalWorkerProvisioner()
 
     async def start(self) -> None:
         for service in self.background_services:
