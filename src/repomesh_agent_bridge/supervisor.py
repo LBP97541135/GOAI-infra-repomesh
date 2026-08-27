@@ -28,16 +28,29 @@ the outbox, which rendered it from a ``RoomObservation``; this module constructs
 **Failures are told to the room without detail.** A turn that broke gets one
 canned line in the room and a full traceback in this machine's log. The room is
 a place other people read.
+
+**A refusal is graded by what it costs, not by where it came from.** Everything
+the room port raises is a reason to wait and try again — except
+:class:`~repomesh_agent_bridge.ports.RoomRefused`, which says a retry changes
+nothing. Backing off on one of those produces a warning a minute for as long as
+the process lives while nothing recovers, so each of the three call sites
+answers it with the smallest true response: a refused ``sync`` means this
+identity can no longer read anything and ends the run; a refused ``send`` is one
+message the room will never take and becomes a dead letter; a refused ``join``
+is one room this worker cannot enter and is skipped. Grading them here is only
+possible because the vocabulary lives on the port — a core module may not import
+an adapter to learn the type it branches on.
 """
 
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 
 from .contracts import ExternalWorkerEnrollment, RoomObservation
 from .inbox import Inbox, Trigger
-from .outbox import Outbox, observation_id
-from .ports import CodingSessionPort, RoomBatch, RoomPort, TurnRequest
+from .outbox import NOTE_LANE, TURN_LANE, Outbox, observation_id
+from .ports import CodingSessionPort, RoomBatch, RoomPort, RoomRefused, TurnRequest
 from .state import TERMINAL_TURN_STATES, BridgeState
 
 __all__ = [
@@ -86,15 +99,35 @@ owns the machine has the log.
 
 
 class _RoomTrouble(Exception):
-    """A call into the room port failed.
+    """A call into the room port failed in a way that waiting might fix.
 
     Raised by this module's own wrappers so the loop can back off without
-    importing the Matrix adapter's exception family — which would point the
-    dependency arrow from the core at an adapter. It does not need the family:
-    the port's contract is transport and parsing with no decisions in it, so
-    *any* failure coming out of one is a transport failure, and which adapter
-    called it what is not the supervisor's business.
+    knowing which adapter is behind the port or what it calls things. The port's
+    contract is transport and parsing with no decisions in it, so *any*
+    unclassified failure coming out of one is a transport failure and gets the
+    same answer: keep the cursor where it is and try again later.
+
+    The one exception is a ``RoomRefused``, which never becomes one of these:
+    "wait and retry" is the wrong answer to "this will never work", and each
+    call site handles it before this wrapper would swallow it.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class _Answer:
+    """What one turn produced, and which lane the outbox should file it under.
+
+    The lane travels with the observations rather than being re-derived by the
+    caller, because the two paths that produce a turn's output are exactly the
+    two lanes: whatever the session said belongs to it, and whatever this module
+    had to say on its behalf belongs to the other. Reconstructing that from the
+    status afterwards would be a second encoding of a fact the producing branch
+    already knew, and the second encoding is the one that drifts.
+    """
+
+    status: str
+    lane: str
+    observations: tuple[RoomObservation, ...]
 
 
 class RoomSupervisor:
@@ -148,6 +181,16 @@ class RoomSupervisor:
         unwinds past the commit rather than as a state the commit has to
         remember to consult. A flag would be a second way to know the same
         thing, and the second way is the one that gets forgotten.
+
+        Two things end this loop and they leave the same way. Cancellation is an
+        operator stopping the process. A ``RoomRefused`` out of the sync is the
+        homeserver saying this identity cannot read its rooms at all — a revoked
+        or replaced token, most often — and retrying a decision is not a
+        recovery strategy: it would log a warning a minute forever while the
+        room saw nothing and the operator was told nothing they could act on. So
+        it propagates, the caller's exit stack unwinds every seam in reverse,
+        and the process exits with the same code any other refusal to serve
+        earns. The batch in hand is uncommitted either way, so nothing is lost.
         """
 
         try:
@@ -156,6 +199,12 @@ class RoomSupervisor:
                     await self._round()
                 except _RoomTrouble as trouble:
                     await self._back_off(trouble)
+        except RoomRefused:
+            _logger.error(
+                "the homeserver refuses this worker's sync; ending the run because no "
+                "amount of retrying changes a refusal"
+            )
+            raise
         except asyncio.CancelledError:
             _logger.info(
                 "stopping: the batch in hand is left uncommitted so it arrives again"
@@ -186,10 +235,20 @@ class RoomSupervisor:
     # -- the room side ------------------------------------------------------
 
     async def _sync(self) -> RoomBatch:
+        """Read one batch, or decide whether the room is worth waiting for.
+
+        A refusal is re-raised untouched rather than wrapped, so ``serve`` sees
+        the type and not a backoff: nothing this process can do makes a rejected
+        identity acceptable, and a Bridge that cannot read is not serving
+        whatever it looks like from outside.
+        """
+
         try:
             return await self._room_port.sync(
                 since=self._inbox.since(), timeout_ms=self._sync_timeout_ms
             )
+        except RoomRefused:
+            raise
         except Exception as trouble:
             raise _RoomTrouble(f"sync failed: {trouble}") from trouble
 
@@ -204,6 +263,14 @@ class RoomSupervisor:
         Joining is idempotent, and every round offers every pending invitation
         again, so a Bridge that was killed between the invitation and the join
         converges on the next round without any of this being written down.
+
+        A room that refuses the join is damage to one room, not to the worker:
+        the other invitations in the batch are still worth accepting and the
+        rounds behind them are still worth running, so this one is logged and
+        skipped without a backoff. There is nothing to write down either — the
+        invitation either reappears in a later sync, in which case the refusal
+        repeats and is reported again, or it does not, in which case there was
+        never anything to remember.
         """
 
         for invite in batch.invites:
@@ -218,6 +285,15 @@ class RoomSupervisor:
                 continue
             try:
                 await self._room_port.join(invite.room_id)
+            except RoomRefused as refusal:
+                _logger.warning(
+                    "cannot join %s (invited by %s): the homeserver refused, and this "
+                    "worker will not act in that room (%s)",
+                    invite.room_id,
+                    who,
+                    refusal,
+                )
+                continue
             except Exception as trouble:
                 raise _RoomTrouble(f"join {invite.room_id} failed: {trouble}") from trouble
             _logger.info("joined %s, invited by %s", invite.room_id, who)
@@ -229,6 +305,17 @@ class RoomSupervisor:
         the outbox already produced and the transaction id is the one it already
         derived, which is exactly why a resend after a crash is a no-op at the
         homeserver instead of a second message in the room.
+
+        A message the room refuses outright is put down rather than retried, and
+        the loop moves to the next one. Making that fatal instead would be the
+        worst of the three options available: this drain runs at the head of
+        every round, so the process would refuse one message, restart, refuse it
+        again, and never reach anything behind it. Dropping it in silence would
+        be the other bad option. A dead letter plus one ERROR is the only answer
+        that keeps the queue moving and still says out loud what the room never
+        heard. The log line carries the transaction id and the room and *not*
+        the body — a message that could not be delivered is still the room's
+        text, and this machine's log is not where it goes.
         """
 
         for send in self._outbox.pending():
@@ -239,6 +326,16 @@ class RoomSupervisor:
                     txn_id=send.txn_id,
                     body=send.body,
                 )
+            except RoomRefused as refusal:
+                self._outbox.mark_refused(send.txn_id)
+                _logger.error(
+                    "the room %s permanently refused intent %s; it is now a dead letter "
+                    "and no drain will offer it again (%s)",
+                    send.room_id,
+                    send.txn_id,
+                    refusal,
+                )
+                continue
             except Exception as trouble:
                 raise _RoomTrouble(f"send {send.txn_id} failed: {trouble}") from trouble
             self._outbox.mark_sent(send.txn_id, event_id)
@@ -279,12 +376,14 @@ class RoomSupervisor:
         )
         status = "failed"
         try:
-            status, observations = await self._decide(trigger)
+            answer = await self._decide(trigger)
+            status = answer.status
             self._outbox.enqueue(
                 room_id=trigger.room_id,
                 thread_root_id=trigger.thread_root_id,
                 trigger_event_id=trigger.event_id,
-                observations=observations,
+                observations=answer.observations,
+                lane=answer.lane,
             )
             await self._drain()
         except asyncio.CancelledError:
@@ -296,13 +395,19 @@ class RoomSupervisor:
         finally:
             self._inbox.settle(trigger, status)
 
-    async def _decide(self, trigger: Trigger) -> tuple[str, tuple[RoomObservation, ...]]:
+    async def _decide(self, trigger: Trigger) -> _Answer:
         """Put the turn to the coding session and classify what came back.
 
         No room IO happens here, so a transport failure during the send cannot
         overwrite what the session actually said: the caller keeps the status
         this function returned and settles the ledger with it even if the drain
         afterwards fails.
+
+        Every ``return`` also names a lane, and the two lanes fall out of the
+        three exits rather than being chosen: the two failure paths synthesise
+        text this module wrote, the success path forwards text the session
+        wrote, and those are exactly the two sequences that must stay
+        independently idempotent when a turn is replayed.
         """
 
         request = TurnRequest(
@@ -323,13 +428,13 @@ class RoomSupervisor:
                 trigger.event_id,
                 self._turn_timeout,
             )
-            return "timeout", (self._note(trigger, TIMEOUT_NOTE),)
+            return _Answer("timeout", NOTE_LANE, (self._note(trigger, TIMEOUT_NOTE),))
         except Exception:
             # The traceback belongs to this machine. The room gets one line with
             # nothing in it that a reader could act on or a stranger could learn
             # from, which is what makes the room safe to be a room.
             _logger.exception("turn %s failed", trigger.event_id)
-            return "failed", (self._note(trigger, FAILURE_NOTE),)
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, FAILURE_NOTE),))
         # Bound the moment the session announces it, before the response is even
         # written down: the window between "a session exists" and "the turn
         # finished" is exactly where a crash loses a thread's context.
@@ -342,7 +447,9 @@ class RoomSupervisor:
         self._state.count_turn(
             trigger.room_id, trigger.thread_id, profile=self._enrollment.coding_profile
         )
-        return self._terminal(outcome.status, trigger), outcome.observations
+        return _Answer(
+            self._terminal(outcome.status, trigger), TURN_LANE, outcome.observations
+        )
 
     def _terminal(self, status: str, trigger: Trigger) -> str:
         if status in TERMINAL_TURN_STATES:
@@ -357,16 +464,25 @@ class RoomSupervisor:
     def _note(self, trigger: Trigger, text: str) -> RoomObservation:
         """One canned line about a turn that did not produce its own.
 
+        Always position zero of the note lane, because a turn produces at most
+        one of these. Two attempts that both time out therefore derive the same
+        identity and the room hears about it once, which is the right answer:
+        the second timeout is not news.
+
         The identity is derived rather than generated. The outbox re-derives the
-        same value from the same four parts when it writes the row, so spelling
-        it here costs nothing and keeps the supervisor free of any source of
-        randomness — which is the property that makes a replayed turn land on
-        the row it landed on last time.
+        same value from the same five parts — the lane among them — when it
+        writes the row, so spelling it here costs nothing and keeps the
+        supervisor free of any source of randomness, which is the property that
+        makes a replayed turn land on the row it landed on last time.
         """
 
         return RoomObservation(
             observation_id=observation_id(
-                self._enrollment.worker_agent_id, trigger.room_id, trigger.event_id, 0
+                self._enrollment.worker_agent_id,
+                trigger.room_id,
+                trigger.event_id,
+                NOTE_LANE,
+                0,
             ),
             emitted_at=self._state.now(),
             worker_name=self._enrollment.worker_name,

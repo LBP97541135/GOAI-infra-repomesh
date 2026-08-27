@@ -59,9 +59,16 @@ __all__ = [
     "state_path",
 ]
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 """Bumped when a released schema changes shape. A file that disagrees is
-refused, never migrated silently and never discarded (see :class:`StateRefused`)."""
+refused, never migrated silently and never discarded (see :class:`StateRefused`).
+
+``2`` gave the outbox a ``lane`` (so a synthesised note and a session's own
+answers stop sharing one ordinal space) and a ``refused_at`` (so an intent the
+homeserver will never accept can be put down instead of retried forever). Both
+change what a row *means*, not just what columns it has, so a ``1`` file is
+refused rather than opened with the new code reading old rows.
+"""
 
 SEEN_EVENT_LIMIT = 4096
 """How many inbound event ids the first replay layer remembers.
@@ -120,6 +127,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   room_id          TEXT NOT NULL,
   thread_root_id   TEXT,
   trigger_event_id TEXT NOT NULL,
+  lane             TEXT NOT NULL,
   ordinal          INTEGER NOT NULL,
   txn_id           TEXT NOT NULL UNIQUE,
   observation_id   TEXT NOT NULL,
@@ -128,9 +136,11 @@ CREATE TABLE IF NOT EXISTS outbox (
   body             TEXT NOT NULL,
   sent_event_id    TEXT,
   sent_at          TEXT,
-  UNIQUE (trigger_event_id, ordinal)
+  refused_at       TEXT,
+  UNIQUE (trigger_event_id, lane, ordinal)
 );
-CREATE INDEX IF NOT EXISTS outbox_pending ON outbox(id) WHERE sent_event_id IS NULL;
+CREATE INDEX IF NOT EXISTS outbox_pending
+  ON outbox(id) WHERE sent_event_id IS NULL AND refused_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS session_refs (
   room_id           TEXT NOT NULL,
@@ -199,6 +209,14 @@ class OutboxRow:
     room_id: str
     thread_root_id: str | None
     trigger_event_id: str
+    lane: str
+    """Which stream of answers this row belongs to within its trigger.
+
+    A plain column here, deliberately without a CHECK constraint: the set of
+    lanes is a decision of :mod:`repomesh_agent_bridge.outbox`, and spelling it
+    twice would let the two copies drift. Storage's job is to hold the lane as
+    part of the row's identity, which the unique key does.
+    """
     ordinal: int
     txn_id: str
     observation_id: UUID
@@ -207,6 +225,13 @@ class OutboxRow:
     body: str
     sent_event_id: str | None = None
     sent_at: datetime | None = None
+    refused_at: datetime | None = None
+    """When the room said this intent will never be accepted.
+
+    A dead letter, and a third state rather than a flavour of "sent": a row with
+    a ``sent_event_id`` reached its room, a row with neither is still owed, and
+    a row with this is neither and never will be. No drain offers it again.
+    """
     outbox_id: int | None = None
 
 
@@ -458,10 +483,14 @@ class BridgeState:
     def enqueue_sends(self, rows: Sequence[OutboxRow]) -> int:
         """Persist a turn's outbound intents in one transaction.
 
-        ``INSERT OR IGNORE`` against ``UNIQUE (trigger_event_id, ordinal)`` is
-        what makes re-enqueueing a replayed turn a no-op: the ordinal is the
-        position of the response inside that trigger's answer, so the second
-        attempt collides row for row rather than appending a second copy.
+        ``INSERT OR IGNORE`` against ``UNIQUE (trigger_event_id, lane, ordinal)``
+        is what makes re-enqueueing a replayed turn a no-op: the ordinal is the
+        position of the response inside that trigger's answer *within its lane*,
+        so the second attempt collides row for row rather than appending a second
+        copy. The lane is in the key because one trigger can produce two
+        independent sequences — what the session said, and what the supervisor
+        had to say on its behalf — and without it the second sequence's first
+        row would be silently swallowed by the first sequence's.
         """
 
         if not rows:
@@ -471,15 +500,16 @@ class BridgeState:
             connection.executemany(
                 """
                 INSERT OR IGNORE INTO outbox(
-                  room_id, thread_root_id, trigger_event_id, ordinal, txn_id,
+                  room_id, thread_root_id, trigger_event_id, lane, ordinal, txn_id,
                   observation_id, emitted_at, kind, body
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 tuple(
                     (
                         row.room_id,
                         row.thread_root_id,
                         row.trigger_event_id,
+                        row.lane,
                         row.ordinal,
                         row.txn_id,
                         str(row.observation_id),
@@ -493,36 +523,73 @@ class BridgeState:
             return connection.total_changes - before
 
     def pending_sends(self) -> tuple[OutboxRow, ...]:
-        """Every unacknowledged intent, oldest row first."""
+        """Every intent still owed to a room, oldest row first.
+
+        Dead letters are excluded here rather than filtered by the caller: a row
+        the homeserver has permanently refused is not "pending", and leaving the
+        distinction to whoever iterates would make every drain a place the
+        retry-forever bug could come back.
+        """
 
         return tuple(
             _read_outbox(row)
             for row in self._connection.execute(
-                f"SELECT {_OUTBOX_COLUMNS} FROM outbox WHERE sent_event_id IS NULL ORDER BY id"
+                f"SELECT {_OUTBOX_COLUMNS} FROM outbox"
+                " WHERE sent_event_id IS NULL AND refused_at IS NULL ORDER BY id"
             )
         )
 
     def sends_for_trigger(self, trigger_event_id: str) -> tuple[OutboxRow, ...]:
-        """Every intent ever written for one trigger, acknowledged or not."""
+        """Every intent ever written for one trigger, in the order it was written.
+
+        Ordered by row id rather than by ordinal because an ordinal is only
+        unique within a lane: two lanes both start at zero, and write order is
+        the one sequence that describes what the room actually saw.
+        """
 
         return tuple(
             _read_outbox(row)
             for row in self._connection.execute(
-                f"SELECT {_OUTBOX_COLUMNS} FROM outbox WHERE trigger_event_id = ? ORDER BY ordinal",
+                f"SELECT {_OUTBOX_COLUMNS} FROM outbox WHERE trigger_event_id = ? ORDER BY id",
                 (trigger_event_id,),
             )
         )
 
     def mark_sent(self, txn_id: str, event_id: str) -> bool:
-        """Record the homeserver's answer. ``False`` when it was already recorded."""
+        """Record the homeserver's answer. ``False`` when it was already recorded.
+
+        A dead-lettered row is not eligible: it was put down precisely because
+        the room will never take it, and recording a delivery against it would
+        make the outbox claim something that did not happen.
+        """
 
         with self._write() as connection:
             changed = connection.execute(
                 """
                 UPDATE outbox SET sent_event_id = ?, sent_at = ?
-                 WHERE txn_id = ? AND sent_event_id IS NULL
+                 WHERE txn_id = ? AND sent_event_id IS NULL AND refused_at IS NULL
                 """,
                 (event_id, _write_time(self._now()), txn_id),
+            ).rowcount
+        return changed > 0
+
+    def mark_refused(self, txn_id: str) -> bool:
+        """Put one intent down for good. ``False`` when it was already settled.
+
+        The alternative to having this at all is a drain that offers a message
+        the room will never accept at the head of every round, forever, in front
+        of every intent behind it — which is a stuck Bridge that looks busy. A
+        dead letter is the only answer that neither lies about delivery nor
+        blocks the queue; the ERROR the supervisor logs is what makes it visible.
+        """
+
+        with self._write() as connection:
+            changed = connection.execute(
+                """
+                UPDATE outbox SET refused_at = ?
+                 WHERE txn_id = ? AND sent_event_id IS NULL AND refused_at IS NULL
+                """,
+                (_write_time(self._now()), txn_id),
             ).rowcount
         return changed > 0
 
@@ -650,8 +717,8 @@ class _Transaction:
 
 
 _OUTBOX_COLUMNS = (
-    "id, room_id, thread_root_id, trigger_event_id, ordinal, txn_id, "
-    "observation_id, emitted_at, kind, body, sent_event_id, sent_at"
+    "id, room_id, thread_root_id, trigger_event_id, lane, ordinal, txn_id, "
+    "observation_id, emitted_at, kind, body, sent_event_id, sent_at, refused_at"
 )
 
 
@@ -660,6 +727,7 @@ def _read_outbox(row: sqlite3.Row) -> OutboxRow:
         room_id=row["room_id"],
         thread_root_id=row["thread_root_id"],
         trigger_event_id=row["trigger_event_id"],
+        lane=row["lane"],
         ordinal=row["ordinal"],
         txn_id=row["txn_id"],
         observation_id=UUID(row["observation_id"]),
@@ -668,6 +736,7 @@ def _read_outbox(row: sqlite3.Row) -> OutboxRow:
         body=row["body"],
         sent_event_id=row["sent_event_id"],
         sent_at=_read_time(row["sent_at"]),
+        refused_at=_read_time(row["refused_at"]),
         outbox_id=row["id"],
     )
 

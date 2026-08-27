@@ -107,6 +107,22 @@ class BindingUnavailable(BridgeStartupError):
     """
 
 
+class SessionNotReady(BridgeStartupError):
+    """The local coding runtime cannot serve, so this instance will not start.
+
+    Raised by ``CodingSessionPort.ensure_ready``, which runs after preflight and
+    before anything durable exists. It is a startup refusal rather than a
+    steady-state failure on purpose: a Bridge whose CLI is missing, logged out,
+    or unable to run under this machine's restrictions would otherwise establish
+    its baseline — writing off the room's backlog as already read — and then
+    answer every mention with a note about a failure the operator was never told
+    how to fix. Refusing costs one restart; starting costs the backlog.
+
+    The message names what is missing and, where there is one, the command that
+    supplies it. It never carries a credential or a probe's raw output.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Schema primitives
 #

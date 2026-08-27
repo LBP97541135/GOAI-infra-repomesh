@@ -24,17 +24,21 @@ from repomesh_agent_bridge.adapters.memory import (
     InertCodingSession,
     InMemoryRoomPort,
     InMemoryWorkerBindingPort,
+    ScriptedCodingSession,
 )
 from repomesh_agent_bridge.application import RoomNativeAgent
 from repomesh_agent_bridge.contracts import (
     BindingRefused,
     BindingUnavailable,
+    BridgeStartupError,
     CredentialRefs,
     EnrollmentInvalid,
     ExternalWorkerEnrollment,
+    SessionNotReady,
     WorkerBinding,
 )
 from repomesh_agent_bridge.instance_lock import InstanceAlreadyRunning
+from repomesh_agent_bridge.state import state_path
 
 from .conftest import (
     REPOMESH_TOKEN_REF,
@@ -54,7 +58,7 @@ def _agent(
     *,
     tmp_path: object,
     room: InMemoryRoomPort | None = None,
-    session: InertCodingSession | None = None,
+    session: object | None = None,
     resolve_credential: object | None = None,
 ) -> RoomNativeAgent:
     extra = {} if resolve_credential is None else {"resolve_credential": resolve_credential}
@@ -219,6 +223,121 @@ async def test_only_rooms_both_sides_confirm_are_joined(
 
     assert room.started_rooms == (WORKER_ROOM,)
     assert OTHER_ROOM not in room.started_rooms
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+# ---------------------------------------------------------------------------
+# The startup gate on the coding runtime
+# ---------------------------------------------------------------------------
+
+
+async def test_a_runtime_that_cannot_serve_is_refused_before_any_state_exists(
+    enrollment: ExternalWorkerEnrollment,
+    binding: WorkerBinding,
+    tmp_path,
+    matrix_token: str,
+) -> None:
+    """The whole point of the gate, stated as the four things that did not happen.
+
+    A CLI that is missing or logged out is the failure this closes, and the
+    damage it does is entirely in what a started Bridge would have gone on to
+    do: adopt the room's backlog as already read and answer everything after it
+    with a note nobody can act on. So the assertions are absences — no database
+    for a worker that never served, no Matrix connection, no claim still held —
+    and the type, which is the family the CLI turns into exit 2.
+    """
+
+    port = InMemoryWorkerBindingPort(binding)
+    room = InMemoryRoomPort()
+    session = ScriptedCodingSession(not_ready=SessionNotReady("codex is not installed"))
+
+    with pytest.raises(SessionNotReady) as refused:
+        await _agent(port, tmp_path=tmp_path, room=room, session=session).run(enrollment)
+
+    assert isinstance(refused.value, BridgeStartupError), "the CLI maps this family to exit 2"
+    assert port.calls == 1, "the gate is after preflight, not instead of it"
+    assert session.ready_calls == 1
+    assert room.calls == [], "a runtime that was turned away is never seen by a room"
+    assert not state_path(enrollment.worker_agent_id, tmp_path).exists()
+
+
+async def test_the_worker_stays_claimable_after_its_runtime_was_turned_away(
+    enrollment: ExternalWorkerEnrollment,
+    binding: WorkerBinding,
+    tmp_path,
+    matrix_token: str,
+) -> None:
+    """A refused gate must not hold the lock for the lifetime of the process.
+
+    Asserted the way the refused-preflight case is: by starting a second Bridge
+    for the same worker afterwards and watching it reach Matrix, not by reading
+    a flag off the lock.
+    """
+
+    with pytest.raises(SessionNotReady):
+        await _agent(
+            InMemoryWorkerBindingPort(binding),
+            tmp_path=tmp_path,
+            session=ScriptedCodingSession(not_ready=SessionNotReady("codex is not installed")),
+        ).run(enrollment)
+
+    room = InMemoryRoomPort()
+    task = asyncio.create_task(
+        _agent(InMemoryWorkerBindingPort(binding), tmp_path=tmp_path, room=room).run(enrollment)
+    )
+    await asyncio.wait_for(room.ready.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_a_refused_preflight_never_reaches_the_runtime_gate(
+    enrollment: ExternalWorkerEnrollment, tmp_path, matrix_token: str
+) -> None:
+    """The other side of the ordering, pinned from the cheap end.
+
+    Probing a local CLI costs a process launch on an operator's machine, and a
+    worker RepoMesh will not bind has no business paying it. The counter is the
+    evidence: the gate was never asked.
+    """
+
+    session = ScriptedCodingSession()
+
+    with pytest.raises(BindingRefused):
+        await _agent(
+            WireBindingPort(binding_wire(workerName="other")), tmp_path=tmp_path, session=session
+        ).run(enrollment)
+
+    assert session.ready_calls == 0
+
+
+async def test_a_ready_runtime_is_asked_once_and_then_left_alone(
+    enrollment: ExternalWorkerEnrollment,
+    binding: WorkerBinding,
+    tmp_path,
+    matrix_token: str,
+) -> None:
+    """The gate is startup, not a per-round health check.
+
+    Re-probing every round would spend a process launch per sync on a machine
+    the operator is also using, and would give the loop a second way to stop
+    that the recovery story does not account for.
+    """
+
+    room = InMemoryRoomPort()
+    session = ScriptedCodingSession()
+    task = asyncio.create_task(
+        _agent(
+            InMemoryWorkerBindingPort(binding), tmp_path=tmp_path, room=room, session=session
+        ).run(enrollment)
+    )
+    await asyncio.wait_for(room.idle.wait(), timeout=5)
+
+    assert session.ready_calls == 1
+    assert room.calls[0] == "start", "and the room was reached only after the gate"
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

@@ -31,7 +31,15 @@ from urllib.parse import quote
 
 import httpx
 
-from ..ports import RoomBatch, RoomBody, RoomEvent, RoomInvite
+from ..ports import (
+    RoomBatch,
+    RoomBody,
+    RoomEvent,
+    RoomInvite,
+    RoomRefused,
+    RoomTransportError,
+    RoomUnavailable,
+)
 
 __all__ = [
     "DEFAULT_SYNC_TIMEOUT_MS",
@@ -41,6 +49,14 @@ __all__ = [
     "RoomTransportError",
     "RoomUnavailable",
 ]
+"""The transport vocabulary is re-exported, not defined here.
+
+It moved to :mod:`repomesh_agent_bridge.ports` when the supervisor started
+grading refusals — a core module that branches on a failure type cannot import
+an adapter to get it. The names stay spelled here because they are still what a
+reader of this module is classifying answers *into*, and because the
+composition root imports them from the adapter it wires.
+"""
 
 _logger = logging.getLogger(__name__)
 
@@ -61,38 +77,6 @@ SEND_PATH = "/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
 
 _MX_REPLY = re.compile(r"<mx-reply\b[^>]*>.*?</mx-reply>", re.IGNORECASE | re.DOTALL)
 """The rich-reply fallback block Matrix clients prepend to ``formatted_body``."""
-
-
-class RoomTransportError(RuntimeError):
-    """The Matrix side said no.
-
-    Its own family rather than a reuse of ``contracts.BridgeStartupError``: that
-    one is documented as "anything that stops a Bridge instance from *starting*"
-    and the CLI maps the whole family onto one exit code, but a homeserver that
-    502s three hours into a session has not stopped anything from starting. The
-    composition root is where the two vocabularies meet — a failure raised out of
-    :meth:`MatrixRoomAdapter.start` is a startup refusal and belongs to whoever
-    wires ``run``; a failure raised out of ``sync``/``join``/``send`` is a
-    steady-state event and belongs to the supervisor's backoff.
-    """
-
-
-class RoomUnavailable(RoomTransportError):
-    """A retry may well get a different answer.
-
-    Split from :class:`RoomRefused` by "can a retry fix it", not by HTTP
-    taxonomy, and split at exactly the line ``RepoMeshBindingAdapter`` already
-    draws: connection failures, timeouts, 429 and every 5xx land here.
-    """
-
-
-class RoomRefused(RoomTransportError):
-    """A retry will not change the answer.
-
-    Every 4xx, every 3xx (redirects are disabled, so one means the homeserver is
-    somewhere other than where the enrollment says), an unparseable body, and an
-    access token that belongs to a different user than the enrollment claims.
-    """
 
 
 class MatrixRoomAdapter:
@@ -250,7 +234,15 @@ class MatrixRoomAdapter:
         json_body: Mapping[str, Any] | None = None,
         read_timeout: float | None = None,
     ) -> Mapping[str, Any]:
-        """One request, one classification. The whole error vocabulary is here."""
+        """One request, one classification, and the only place HTTP is graded.
+
+        Where this adapter draws the line the port's vocabulary asks for:
+        ``RoomUnavailable`` for connection failures, timeouts, 429 and every
+        5xx; ``RoomRefused`` for every 4xx, every 3xx (redirects are disabled,
+        so one means the homeserver is somewhere other than where the enrollment
+        says), and a 200 whose body is not a JSON object. The caller never sees
+        a status code, which is what keeps the supervisor free of HTTP.
+        """
 
         try:
             response = await client.request(

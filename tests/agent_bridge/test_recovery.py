@@ -25,7 +25,7 @@ import pytest
 
 from repomesh_agent_bridge.contracts import BridgeStartupError, RoomObservation
 from repomesh_agent_bridge.inbox import Inbox
-from repomesh_agent_bridge.outbox import Outbox, observation_txn_id
+from repomesh_agent_bridge.outbox import NOTE_LANE, TURN_LANE, Outbox, observation_txn_id
 from repomesh_agent_bridge.ports import RoomBatch, RoomEvent
 from repomesh_agent_bridge.state import (
     SCHEMA_VERSION,
@@ -167,6 +167,28 @@ def test_a_state_file_from_another_schema_version_is_refused(bridge: Restartable
         open_state(bridge.path, worker_agent_id=WORKER_UUID)
 
 
+def test_a_state_file_written_by_the_previous_schema_is_refused(bridge: Restartable) -> None:
+    """The version that actually shipped, spelled out rather than parameterised.
+
+    ``"1"`` is not a hypothetical: it is what every state file on an operator's
+    machine says today, and its outbox has one ordinal space and no way to
+    record a dead letter. Reading those rows with this build's code would put a
+    replayed turn's first real answer under a note's transaction id. The bump is
+    only a safeguard if a file that says ``1`` is turned away, so that exact
+    string is the assertion.
+    """
+
+    bridge.boot()
+    bridge.crash()
+    with sqlite3.connect(bridge.path) as raw:
+        raw.execute("UPDATE bridge_meta SET value = '1' WHERE key = 'schema_version'")
+    raw.close()
+
+    assert SCHEMA_VERSION != "1", "this build no longer reads the shape 1 files carry"
+    with pytest.raises(BridgeStartupError):
+        open_state(bridge.path, worker_agent_id=WORKER_UUID)
+
+
 def test_every_table_is_readable_after_a_close_and_reopen(bridge: Restartable) -> None:
     """The persistence claim, stated once over all five tables."""
 
@@ -232,7 +254,7 @@ def test_a_turn_that_crashed_before_persisting_replays_to_the_same_transaction_i
         observations=(_observation(),),
     )
 
-    assert send.txn_id == observation_txn_id("$one", 0)
+    assert send.txn_id == observation_txn_id("$one", TURN_LANE, 0)
 
 
 def test_a_session_reference_bound_mid_turn_outlives_the_turn_that_bound_it(
@@ -342,7 +364,7 @@ def test_a_send_that_was_never_acknowledged_replays_under_the_same_transaction_i
     (resend,) = _outbox(state).pending()
 
     assert resend.txn_id == written.txn_id
-    assert resend.txn_id == observation_txn_id("$one", 0)
+    assert resend.txn_id == observation_txn_id("$one", TURN_LANE, 0)
 
 
 def test_an_acknowledged_send_is_not_offered_again_after_restart(
@@ -368,6 +390,93 @@ def test_an_acknowledged_send_is_not_offered_again_after_restart(
     (row,) = state.sends_for_trigger("$one")
     assert row.sent_event_id == "$event-in-room"
     assert row.sent_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Window four: the room refused it, and will refuse it again
+# ---------------------------------------------------------------------------
+
+
+def test_a_dead_letter_is_not_offered_again_by_the_next_process(
+    bridge: Restartable,
+) -> None:
+    """The refusal has to be *on disk*, not a decision the last process made.
+
+    A restart is exactly when a retry-forever bug comes back: the in-memory
+    knowledge that this message was rejected is gone, and if the row still looks
+    pending, the new process puts it at the head of its first drain and stops
+    there — before every intent written after it.
+    """
+
+    state = bridge.boot()
+    inbox = Inbox(state)
+    inbox.record_baseline(_batch(next_batch="s-0"))
+    trigger = _trigger(inbox, _batch(_event("$one"), next_batch="s-1"))
+    inbox.claim(trigger)
+    outbox = _outbox(state)
+    (rejected, following) = outbox.enqueue(
+        room_id=TEAM_ROOM,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("the room will not take this"), _observation("but this")),
+    )
+    outbox.mark_refused(rejected.txn_id)
+
+    state = bridge.boot()
+
+    assert [send.txn_id for send in _outbox(state).pending()] == [following.txn_id]
+    (dead, _) = state.sends_for_trigger("$one")
+    assert dead.refused_at is not None
+    assert dead.sent_event_id is None, "the record still says the room never got it"
+
+
+def test_a_timeout_note_and_the_replayed_answers_survive_in_separate_lanes(
+    bridge: Restartable,
+) -> None:
+    """Account B, at the durability layer: what the next process finds on disk.
+
+    The note was written and delivered before the crash, the batch was never
+    acknowledged, and the replay produced two real answers. All three rows have
+    to be there under three names, or the room's record of the mention is a
+    timeout that was in fact answered.
+    """
+
+    state = bridge.boot()
+    inbox = Inbox(state)
+    inbox.record_baseline(_batch(next_batch="s-0"))
+    trigger = _trigger(inbox, _batch(_event("$one"), next_batch="s-1"))
+    inbox.claim(trigger)
+    outbox = _outbox(state)
+    (note,) = outbox.enqueue(
+        room_id=TEAM_ROOM,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("I ran out of time"),),
+        lane=NOTE_LANE,
+    )
+    outbox.mark_sent(note.txn_id, "$the-timeout-note")
+    # The batch was never committed, so the mention arrives again.
+
+    state = bridge.boot()
+    answers = _outbox(state).enqueue(
+        room_id=TEAM_ROOM,
+        thread_root_id=None,
+        trigger_event_id="$one",
+        observations=(_observation("first"), _observation("second")),
+    )
+
+    assert [send.txn_id for send in answers] == [
+        observation_txn_id("$one", TURN_LANE, 0),
+        observation_txn_id("$one", TURN_LANE, 1),
+    ]
+    assert note.txn_id == observation_txn_id("$one", NOTE_LANE, 0)
+    rows = state.sends_for_trigger("$one")
+    assert [(row.lane, row.ordinal) for row in rows] == [
+        (NOTE_LANE, 0),
+        (TURN_LANE, 0),
+        (TURN_LANE, 1),
+    ]
+    assert len({row.txn_id for row in rows}) == 3
 
 
 # ---------------------------------------------------------------------------

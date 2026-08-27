@@ -6,10 +6,16 @@ coding CLI versus a scripted session. Local state and credential resolution are
 deliberately *not* ports — SQLite is its own test stand-in, and resolution is an
 injected ``resolve(ref) -> secret`` callable.
 
-The failure vocabulary lives in :mod:`repomesh_agent_bridge.contracts` next to
-the wire models that raise it: the same refusal covers "the transport said no"
-and "the body is not a binding", so splitting it across two modules would only
-force adapters to import both.
+Two failure vocabularies meet in this package and they live in different
+modules for one reason each. The *preflight* one lives in
+:mod:`repomesh_agent_bridge.contracts`, next to the wire models that raise it:
+the same refusal covers "the transport said no" and "the body is not a
+binding", so splitting it across two modules would only force adapters to
+import both. The *room transport* one — :class:`RoomTransportError` and its two
+halves — lives here, because the supervisor has to tell a retryable failure
+from a permanent refusal and may not import an adapter to do it; a failure type
+the core branches on is part of the port's contract, not of whoever implements
+it.
 """
 
 from collections.abc import Sequence
@@ -25,6 +31,9 @@ __all__ = [
     "RoomEvent",
     "RoomInvite",
     "RoomPort",
+    "RoomRefused",
+    "RoomTransportError",
+    "RoomUnavailable",
     "TurnOutcome",
     "TurnRequest",
     "WorkerBindingPort",
@@ -106,6 +115,44 @@ class WorkerBindingPort(Protocol):
         ...
 
 
+class RoomTransportError(RuntimeError):
+    """A room port could not do what it was asked.
+
+    Its own family rather than a reuse of ``contracts.BridgeStartupError``: that
+    one is documented as "anything that stops a Bridge instance from *starting*"
+    and the CLI maps the whole family onto one exit code, but a homeserver that
+    502s three hours into a session has not stopped anything from starting. The
+    composition root is where the two vocabularies meet — a failure raised out
+    of :meth:`RoomPort.start` is a startup refusal and belongs to whoever wires
+    ``run``; a failure raised out of ``sync``, ``join`` or ``send`` is a
+    steady-state event and belongs to the supervisor.
+    """
+
+
+class RoomUnavailable(RoomTransportError):
+    """A retry may well get a different answer.
+
+    Split from :class:`RoomRefused` by "can a retry fix it", not by any
+    transport's taxonomy, and split at exactly the line the preflight adapter
+    already draws between ``BindingUnavailable`` and ``BindingRefused``:
+    connection failures, timeouts, and a server that is overloaded or down land
+    here. Everything the supervisor's backoff exists for is this class.
+    """
+
+
+class RoomRefused(RoomTransportError):
+    """A retry will not change the answer.
+
+    A revoked token, a room this identity may not enter, a message the server
+    will never accept, a reply body that is not what the protocol says it is.
+    Backing off on one of these produces a warning a minute, forever, while
+    nothing recovers — so the supervisor grades them by what the refusal
+    actually costs: a refused ``sync`` means the whole identity is unusable and
+    ends the run, a refused ``send`` dead-letters that one intent, and a refused
+    ``join`` skips that one room.
+    """
+
+
 class RoomPort(Protocol):
     """The Matrix side of the Bridge: transport and parsing, zero decisions.
 
@@ -128,16 +175,32 @@ class RoomPort(Protocol):
         The token is passed per call rather than held by the adapter for the
         same reason ``fetch_binding`` takes its credential: the resolved
         secret's lifetime is the call's, not the process's.
+
+        Raises :class:`RoomUnavailable` when the server could not be reached and
+        :class:`RoomRefused` when it answered and said no — including a token
+        that belongs to somebody other than ``user_id``. Either one out of this
+        method means the instance never started.
         """
         ...
 
     async def sync(self, *, since: str | None, timeout_ms: int) -> RoomBatch:
         """Long-poll once. ``since=None`` is the baseline round: return the
-        current position without waiting for new messages."""
+        current position without waiting for new messages.
+
+        Raises :class:`RoomUnavailable` for anything a retry might survive.
+        :class:`RoomRefused` here means this identity can no longer read its
+        rooms at all — a revoked token is the usual cause — and the supervisor
+        ends the run on it rather than retrying a decision.
+        """
         ...
 
     async def join(self, room_id: str) -> None:
-        """Accept an invitation. Idempotent on a room already joined."""
+        """Accept an invitation. Idempotent on a room already joined.
+
+        Raises :class:`RoomUnavailable` when a retry might get in and
+        :class:`RoomRefused` when it will not; the latter is damage to one room,
+        not to the worker, and the supervisor skips that room and carries on.
+        """
         ...
 
     async def send(
@@ -145,7 +208,12 @@ class RoomPort(Protocol):
     ) -> str:
         """Send one message under the caller's transaction id; return the
         event id the homeserver assigned. Retrying with the same ``txn_id``
-        must be server-side deduplicated, never re-keyed here."""
+        must be server-side deduplicated, never re-keyed here.
+
+        Raises :class:`RoomUnavailable` when the message may still get through
+        later and :class:`RoomRefused` when it never will, which the supervisor
+        turns into a dead letter — an intent no drain will offer again.
+        """
         ...
 
     async def close(self) -> None:
@@ -189,6 +257,30 @@ class CodingSessionPort(Protocol):
     ``ProcessFactory`` that is allowed to launch one at all; until then every
     implementation answers from memory and spawns nothing.
     """
+
+    async def ensure_ready(self) -> None:
+        """Prove this session can serve, before the process takes anything on.
+
+        The startup gate. A Bridge that starts syncing before its CLI is
+        installed, logged in, or able to run under this machine's restrictions
+        does the most damaging thing available: the baseline round writes off
+        the room's backlog as already read, every later mention gets a canned
+        failure note, and nothing anywhere says the operator has one command
+        left to run. Refusing to start says it instead, by raising
+        :class:`~repomesh_agent_bridge.contracts.SessionNotReady` with a message
+        an operator can act on.
+
+        Called once, after RepoMesh preflight and before the state file exists,
+        so a runtime that is turned away leaves no database behind, is never
+        seen by a room, and hands the worker's claim straight back.
+
+        A refusal must leave nothing to close: this is a gate, not an open, and
+        :meth:`close` is only owed a session that got past it. An implementation
+        that spawns a probe reaps it before it raises. An implementation with
+        nothing to verify — the inert stand-in, a scripted double — does nothing
+        here, which is the honest answer rather than a stub.
+        """
+        ...
 
     async def respond(self, turn: TurnRequest) -> TurnOutcome:
         """Serve one turn. Implementations resume ``native_session_id`` when

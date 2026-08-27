@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from repomesh_agent_bridge import adapters, ports
 from repomesh_agent_bridge.adapters import matrix
 from repomesh_agent_bridge.adapters.matrix import (
     DEFAULT_SYNC_TIMEOUT_MS,
@@ -196,6 +197,30 @@ async def test_start_verifies_the_token_belongs_to_the_enrolled_user() -> None:
     assert str(request.url) == WHOAMI_URL, "a trailing slash on the homeserver is not a new path"
     assert request.headers["Authorization"] == f"Bearer {MATRIX_TOKEN_VALUE}"
     await adapter.close()
+
+
+def test_the_transport_vocabulary_is_the_ports_one_under_the_adapters_name() -> None:
+    """Same classes, three spellings, because the supervisor needs the first one.
+
+    The family moved to ``ports`` when the supervisor started grading refusals:
+    a core module may not import an adapter to get the type it branches on. The
+    two re-exports stay because the composition root reaches for these names
+    next to the adapter it is wiring, and ``except`` on a *copy* of an exception
+    class is a silent no-match — so identity, not just name, is what is pinned.
+    """
+
+    for module in (matrix, adapters):
+        assert module.RoomTransportError is ports.RoomTransportError
+        assert module.RoomUnavailable is ports.RoomUnavailable
+        assert module.RoomRefused is ports.RoomRefused
+    assert {"RoomTransportError", "RoomUnavailable", "RoomRefused"} <= set(matrix.__all__), (
+        "the console script imports them from this module"
+    )
+    assert issubclass(ports.RoomRefused, ports.RoomTransportError)
+    assert issubclass(ports.RoomUnavailable, ports.RoomTransportError)
+    assert not issubclass(ports.RoomRefused, ports.RoomUnavailable), (
+        "a refusal that a backoff could catch is the bug this split exists to prevent"
+    )
 
 
 async def test_a_token_belonging_to_another_worker_is_refused_at_startup() -> None:

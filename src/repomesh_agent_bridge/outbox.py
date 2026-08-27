@@ -34,7 +34,10 @@ from .ports import RoomBody
 from .state import ROOM_BODY_LIMIT, BridgeState, OutboxRow
 
 __all__ = [
+    "LANES",
+    "NOTE_LANE",
     "ROOM_OBSERVATION_NAMESPACE",
+    "TURN_LANE",
     "TXN_PREFIX",
     "Outbox",
     "PendingSend",
@@ -50,6 +53,30 @@ TXN_PREFIX = "rmb-"
 house pattern for idempotency keys: legible prefix, bounded digest."""
 
 _TXN_DIGEST_CHARS = 40
+
+TURN_LANE = "turn"
+"""What the coding session itself said."""
+
+NOTE_LANE = "note"
+"""What the supervisor had to say on the session's behalf.
+
+One trigger can produce both, and they are *independent* sequences. A turn that
+runs out of time puts one note in the room; if the batch is then lost before it
+is acknowledged, the replay may succeed and produce three real observations. In
+a single ordinal space those three would start at zero — the position the note
+already holds — and ``INSERT OR IGNORE`` would drop the first answer on the
+floor while the room kept showing "I ran out of time" as the reply. Two lanes
+make the two sequences independently idempotent, and the room reads exactly what
+happened: first the timeout, then the answer.
+"""
+
+LANES: tuple[str, ...] = (TURN_LANE, NOTE_LANE)
+"""Every lane there is.
+
+Closed on purpose. A lane is part of a message's durable name, so inventing one
+by typo would mint a parallel identity space that silently never collides with
+anything — the failure mode the whole derivation exists to prevent.
+"""
 
 ROOM_OBSERVATION_NAMESPACE = uuid5(NAMESPACE_URL, "repomesh://room-observation")
 """Namespace for derived observation ids, in the shape this repository already
@@ -72,39 +99,47 @@ _KIND_LABELS: dict[str, str] = {
 }
 
 
-def observation_txn_id(trigger_event_id: str, ordinal: int) -> str:
+def observation_txn_id(trigger_event_id: str, lane: str, ordinal: int) -> str:
     """The Matrix transaction id for one response within one turn.
 
     Matrix deduplicates by ``(access token, txnId)`` and this Bridge holds a
-    single token, so the trigger's event id plus the response's position inside
-    that trigger's answer is already a unique name for "this exact message".
-    Deriving it rather than generating one per attempt is what turns a crash
-    between send and acknowledge into a no-op on restart.
+    single token, so the trigger's event id, the lane, and the response's
+    position inside that lane are already a unique name for "this exact
+    message". Deriving it rather than generating one per attempt is what turns a
+    crash between send and acknowledge into a no-op on restart.
+
+    The lane is part of the material and not decoration: without it a
+    supervisor's timeout note and a session's first real answer to the same
+    mention derive the *same* id, and the homeserver would deduplicate the
+    answer away as a resend of the note.
 
     Hashed rather than concatenated because a Matrix event id is ``$`` followed
     by base64url — 43 characters and up — and it goes into the request *path*,
     where it would have to be percent-escaped. A fixed-width hex digest raises
-    no escaping question at all.
+    no escaping question at all. ``\\x1f`` separates the parts so no lane or
+    event id can spell another combination by containing the separator.
     """
 
-    material = f"{trigger_event_id}\x1f{ordinal}".encode()
+    material = f"{trigger_event_id}\x1f{lane}\x1f{ordinal}".encode()
     return TXN_PREFIX + hashlib.sha256(material).hexdigest()[:_TXN_DIGEST_CHARS]
 
 
 def observation_id(
-    worker_agent_id: UUID, room_id: str, trigger_event_id: str, ordinal: int
+    worker_agent_id: UUID, room_id: str, trigger_event_id: str, lane: str, ordinal: int
 ) -> UUID:
     """The stable identity of one response, as a UUID.
 
     A digest string would be simpler, but the frozen ``room-observation.v1``
     schema says ``"format": "uuid"`` and the wire model parses it as one, so the
-    derivation has to land inside the UUID space: ``uuid5`` over the four parts
-    that actually name a response.
+    derivation has to land inside the UUID space: ``uuid5`` over the five parts
+    that actually name a response. The lane is one of them for the same reason
+    it is part of the transaction id — two lanes share an ordinal space and
+    would otherwise share an identity.
     """
 
     return uuid5(
         ROOM_OBSERVATION_NAMESPACE,
-        f"{worker_agent_id}|{room_id}|{trigger_event_id}|{ordinal}",
+        f"{worker_agent_id}|{room_id}|{trigger_event_id}|{lane}|{ordinal}",
     )
 
 
@@ -166,6 +201,7 @@ class PendingSend:
     room_id: str
     thread_root_id: str | None
     trigger_event_id: str
+    lane: str
     ordinal: int
     txn_id: str
     observation_id: UUID
@@ -194,6 +230,7 @@ class Outbox:
         thread_root_id: str | None,
         trigger_event_id: str,
         observations: Sequence[RoomObservation],
+        lane: str = TURN_LANE,
     ) -> tuple[PendingSend, ...]:
         """Write a turn's responses down, and return what still needs sending.
 
@@ -204,7 +241,14 @@ class Outbox:
         or filtering after a restart would shift positions, every message would
         derive a different transaction id, and the deduplication that makes a
         crash harmless would quietly stop working. ``UNIQUE (trigger_event_id,
-        ordinal)`` hands the invariant to SQLite rather than to a convention.
+        lane, ordinal)`` hands the invariant to SQLite rather than to a
+        convention.
+
+        The lane defaults to what a caller almost always means — the session's
+        own answer — and is keyword-only so the rarer case has to name itself.
+        Positions are counted *within* the lane, which is exactly what makes a
+        replayed turn's real answers land beside the note a timed-out attempt
+        already put in the room instead of underneath it.
 
         The identity the session put on its observations is not used. A turn
         that reran produced fresh random ids for the same facts; the outbox's
@@ -217,16 +261,19 @@ class Outbox:
         layer, and the outbox is told where to write, never deciding it.
         """
 
+        if lane not in LANES:
+            raise ValueError(f"unknown outbox lane {lane!r}; one of {', '.join(LANES)}")
         emitted_at = self._state.now()
         rows = tuple(
             OutboxRow(
                 room_id=room_id,
                 thread_root_id=thread_root_id,
                 trigger_event_id=trigger_event_id,
+                lane=lane,
                 ordinal=ordinal,
-                txn_id=observation_txn_id(trigger_event_id, ordinal),
+                txn_id=observation_txn_id(trigger_event_id, lane, ordinal),
                 observation_id=observation_id(
-                    self._worker_agent_id, room_id, trigger_event_id, ordinal
+                    self._worker_agent_id, room_id, trigger_event_id, lane, ordinal
                 ),
                 emitted_at=emitted_at,
                 kind=observation.kind,
@@ -237,15 +284,16 @@ class Outbox:
         written = self._state.enqueue_sends(rows)
         if written < len(rows):
             _logger.info(
-                "outbox already held %d of %d intents for %s; replay is a no-op",
+                "outbox already held %d of %d %s intents for %s; replay is a no-op",
                 len(rows) - written,
                 len(rows),
+                lane,
                 trigger_event_id,
             )
         return tuple(
             _pending_from_row(row)
             for row in self._state.sends_for_trigger(trigger_event_id)
-            if row.sent_event_id is None
+            if row.sent_event_id is None and row.refused_at is None
         )
 
     def pending(self) -> tuple[PendingSend, ...]:
@@ -268,6 +316,21 @@ class Outbox:
 
         return self._state.mark_sent(txn_id, event_id)
 
+    def mark_refused(self, txn_id: str) -> bool:
+        """Put one intent down for good. ``False`` if it was already settled.
+
+        The dead-letter half of the reliability core, and the only honest answer
+        to a room that says "never". Retrying costs the whole queue: the drain
+        runs at the head of every round and stops at the first failure, so one
+        message the homeserver will always reject would hold every later answer
+        behind it until an operator noticed. Dropping it silently would be
+        worse. Recording it, skipping it, and shouting once in the log is the
+        third option, and it is the only one that keeps both the queue and the
+        record true.
+        """
+
+        return self._state.mark_refused(txn_id)
+
 
 def _pending_from_row(row: OutboxRow) -> PendingSend:
     """Rehydrate an intent an earlier process already rendered.
@@ -285,6 +348,7 @@ def _pending_from_row(row: OutboxRow) -> PendingSend:
         room_id=row.room_id,
         thread_root_id=row.thread_root_id,
         trigger_event_id=row.trigger_event_id,
+        lane=row.lane,
         ordinal=row.ordinal,
         txn_id=row.txn_id,
         observation_id=row.observation_id,

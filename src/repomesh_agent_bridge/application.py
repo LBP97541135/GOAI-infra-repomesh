@@ -193,27 +193,39 @@ class RoomNativeAgent:
         self._resolve_credential = resolve_credential
 
     async def run(self, enrollment: ExternalWorkerEnrollment) -> None:
-        """Validate, claim the worker, preflight, join, and serve until cancelled.
+        """Validate, claim the worker, preflight, gate the runtime, and serve.
 
         The order is the contract: local validation, then the instance lock,
-        then RepoMesh preflight, then local state, then Matrix — and only then
-        does the process serve anything. Nothing after ``await`` here is
-        reachable without every earlier step having succeeded, which is what
-        makes "no CLI is spawned before preflight" a structural property rather
-        than a promise.
+        then RepoMesh preflight, then the coding runtime's own readiness gate,
+        then local state, then Matrix — and only then does the process serve
+        anything. Nothing after ``await`` here is reachable without every
+        earlier step having succeeded, which is what makes "no CLI is spawned
+        before preflight" a structural property rather than a promise.
 
-        The state file is opened between preflight and Matrix, and both
-        neighbours matter. Opening it earlier would have a refused preflight
-        leave a database behind for a worker that never started; opening it
-        later would have the supervisor's first act — draining intents a crash
-        stranded — happen after new messages had already been taken on.
+        The two middle steps each sit between the only two neighbours they can.
+        ``ensure_ready`` is after preflight because a worker RepoMesh will not
+        bind has no business probing a CLI, and before the state file because a
+        runtime that is turned away must not leave a database behind for a
+        worker that never served a turn — the same argument that puts the lock
+        after stage 1. The state file is then opened before Matrix, because the
+        supervisor's first act is draining intents a crash stranded, and that
+        has to happen before new messages are taken on.
+
+        A refused gate therefore unwinds through a stack holding only the lock:
+        no state file exists, ``RoomPort.start`` was never called, the claim is
+        handed straight back, and the refusal reaches the CLI as the same
+        ``BridgeStartupError`` family every other startup refusal uses. Closing
+        the session is not owed here — ``ensure_ready`` reaps whatever it probed
+        with before it raises, which is why it is registered afterwards.
 
         Cancellation unwinds the stack in reverse: the supervisor stops without
         committing the batch it was holding, the coding session closes, the room
         port closes, the state file closes, the lock is released, and
-        ``CancelledError`` propagates so the caller learns the loop ended. The
-        supervisor starts no background tasks, so there is nothing else to wait
-        for.
+        ``CancelledError`` propagates so the caller learns the loop ended. A
+        ``RoomRefused`` out of the steady-state sync leaves the same way and for
+        the same reason — the supervisor ends the run rather than retrying a
+        decision — so the shutdown path has one shape, not two. The supervisor
+        starts no background tasks, so there is nothing else to wait for.
         """
 
         lock = InstanceLock(instance_lock_path(enrollment.worker_agent_id, self._state_dir))
@@ -228,6 +240,11 @@ class RoomNativeAgent:
                 resolve_credential=self._resolve_credential,
                 after_local_validation=lock.acquire,
             )
+            # The startup gate on the coding runtime. Deliberately *before* the
+            # state file: a Bridge that cannot code must not be the reason a
+            # room's backlog gets written off as read, and the cheapest place to
+            # discover that is while this process still owns nothing but a lock.
+            await self._coding_session.ensure_ready()
             state = open_state(
                 state_path(enrollment.worker_agent_id, self._state_dir),
                 worker_agent_id=enrollment.worker_agent_id,

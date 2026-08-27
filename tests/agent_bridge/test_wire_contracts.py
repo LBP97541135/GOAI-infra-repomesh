@@ -22,11 +22,15 @@ import pytest
 from repomesh_agent_bridge.contracts import (
     CODING_PROFILES,
     ROOM_OBSERVATION_SCHEMA_VERSION,
+    BindingRefused,
+    BridgeStartupError,
     EnrollmentInvalid,
     ExternalWorkerEnrollment,
     RoomObservation,
+    SessionNotReady,
     WorkerBinding,
 )
+from repomesh_agent_bridge.ports import RoomTransportError
 from repomesh_runner.profiles import PROFILES
 
 from .conftest import TEAM_ROOM, WORKER_ROOM, binding_wire, enrollment_wire
@@ -50,6 +54,39 @@ def _observation_wire(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+# ---------------------------------------------------------------------------
+# The refusal families, and the line between them
+# ---------------------------------------------------------------------------
+
+
+def test_a_runtime_that_is_not_ready_is_a_startup_refusal_like_every_other() -> None:
+    """One exit code for "this instance did not start", however it failed to.
+
+    A missing CLI, an unresolvable credential and a binding RepoMesh will not
+    confirm are the same fact to whoever is supervising this process: nothing is
+    serving, and retrying the command will not change that until a human does
+    something. The subclass exists so a test or an operator can say *which*,
+    never so a caller can branch differently.
+    """
+
+    assert issubclass(SessionNotReady, BridgeStartupError)
+    assert not issubclass(SessionNotReady, BindingRefused), (
+        "the coding runtime and the control plane fail for unrelated reasons"
+    )
+
+
+def test_a_room_transport_failure_is_not_a_startup_refusal() -> None:
+    """Deliberately two families, joined only at the composition root.
+
+    A homeserver that stops answering three hours in has not stopped anything
+    from starting, and the supervisor's backoff is built on being able to catch
+    the transport family without also catching every way a start can be refused.
+    """
+
+    assert not issubclass(RoomTransportError, BridgeStartupError)
+    assert not issubclass(BridgeStartupError, RoomTransportError)
 
 
 # ---------------------------------------------------------------------------

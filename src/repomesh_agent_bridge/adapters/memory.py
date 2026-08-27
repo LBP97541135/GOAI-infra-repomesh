@@ -192,6 +192,16 @@ class InertCodingSession:
         self.turns: list[TurnRequest] = []
         self.closed = False
 
+    async def ensure_ready(self) -> None:
+        """Nothing to verify, so nothing is verified.
+
+        Not a stub standing in for work this class ought to do: there is no
+        binary to resolve, no credential to check and no isolation to prove,
+        because this session spawns nothing. The gate exists so that a runtime
+        with something to prove has somewhere to prove it, and the honest answer
+        from a runtime with nothing to prove is to return.
+        """
+
     async def respond(self, turn: TurnRequest) -> TurnOutcome:
         """Answer with a single note, and never with anything else.
 
@@ -233,19 +243,35 @@ class ScriptedCodingSession:
     ``turns`` is the record that matters most: it is where the resume handle the
     supervisor offered shows up, and "the second mention in this thread carried
     the handle the first one announced" is only observable there.
+
+    ``not_ready`` scripts the startup gate the same way: a real CLI adapter
+    refuses when the binary is missing or the machine cannot isolate it, and
+    handing this double the same refusal is what lets "a Bridge that cannot code
+    never touches a room" be tested without one.
     """
 
     def __init__(
         self,
         *answers: TurnOutcome | BaseException,
         default: TurnOutcome | None = None,
+        not_ready: BaseException | None = None,
     ) -> None:
         self._answers: list[TurnOutcome | BaseException] = list(answers)
         self._default = default or TurnOutcome(
             observations=(), native_session_id=None, status="completed"
         )
+        self._not_ready = not_ready
         self.turns: list[TurnRequest] = []
+        self.ready_calls = 0
+        """How often the gate was asked. Counted rather than flagged so a caller
+        can tell "never reached" from "reached once" from "reached every round",
+        which are three different bugs."""
         self.closed = False
+
+    async def ensure_ready(self) -> None:
+        self.ready_calls += 1
+        if self._not_ready is not None:
+            raise self._not_ready
 
     async def respond(self, turn: TurnRequest) -> TurnOutcome:
         self.turns.append(turn)

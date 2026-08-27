@@ -24,7 +24,10 @@ import repomesh_agent_bridge
 from repomesh_agent_bridge.contracts import RoomObservation
 from repomesh_agent_bridge.inbox import Inbox, Trigger
 from repomesh_agent_bridge.outbox import (
+    LANES,
+    NOTE_LANE,
     ROOM_OBSERVATION_NAMESPACE,
+    TURN_LANE,
     TXN_PREFIX,
     Outbox,
     observation_id,
@@ -389,25 +392,32 @@ def test_the_seen_set_evicts_in_insertion_order_and_leaves_the_rest_alone(
 # ---------------------------------------------------------------------------
 
 
-def test_the_transaction_id_is_derived_from_the_trigger_and_the_position() -> None:
-    first = observation_txn_id("$trigger", 0)
+def test_the_transaction_id_is_derived_from_the_trigger_the_lane_and_the_position() -> None:
+    first = observation_txn_id("$trigger", TURN_LANE, 0)
 
-    assert first == observation_txn_id("$trigger", 0), "derivation, not generation"
-    assert first != observation_txn_id("$trigger", 1)
-    assert first != observation_txn_id("$other", 0)
+    assert first == observation_txn_id("$trigger", TURN_LANE, 0), "derivation, not generation"
+    assert first != observation_txn_id("$trigger", TURN_LANE, 1)
+    assert first != observation_txn_id("$other", TURN_LANE, 0)
+    assert first != observation_txn_id("$trigger", NOTE_LANE, 0), (
+        "a synthesised note and a session's first answer to the same mention are two "
+        "messages; deriving one name for both makes the homeserver drop the second"
+    )
     assert first.startswith(TXN_PREFIX)
     assert len(first) == len(TXN_PREFIX) + 40
     assert "$" not in first, "a Matrix event id would need escaping in the request path"
 
 
-def test_the_observation_id_is_a_uuid5_over_the_four_parts_that_name_a_response() -> None:
-    derived = observation_id(WORKER_UUID, TEAM_ROOM, "$trigger", 0)
+def test_the_observation_id_is_a_uuid5_over_the_five_parts_that_name_a_response() -> None:
+    derived = observation_id(WORKER_UUID, TEAM_ROOM, "$trigger", TURN_LANE, 0)
 
     assert derived == uuid5(
-        ROOM_OBSERVATION_NAMESPACE, f"{WORKER_UUID}|{TEAM_ROOM}|$trigger|0"
+        ROOM_OBSERVATION_NAMESPACE, f"{WORKER_UUID}|{TEAM_ROOM}|$trigger|{TURN_LANE}|0"
     )
-    assert derived != observation_id(WORKER_UUID, TEAM_ROOM, "$trigger", 1)
-    assert derived != observation_id(WORKER_UUID, WORKER_ROOM, "$trigger", 0)
+    assert derived != observation_id(WORKER_UUID, TEAM_ROOM, "$trigger", TURN_LANE, 1)
+    assert derived != observation_id(WORKER_UUID, WORKER_ROOM, "$trigger", TURN_LANE, 0)
+    assert derived != observation_id(WORKER_UUID, TEAM_ROOM, "$trigger", NOTE_LANE, 0), (
+        "the lane is part of a response's identity, not just of its transaction id"
+    )
     assert derived.version == 5, "the schema says format: uuid, so a digest string will not do"
 
 
@@ -424,9 +434,10 @@ def test_two_observations_for_one_trigger_take_ordinals_zero_and_one(
     )
 
     assert [send.ordinal for send in sends] == [0, 1]
+    assert [send.lane for send in sends] == [TURN_LANE, TURN_LANE], "the default lane"
     assert sends[0].txn_id != sends[1].txn_id
     assert sends[0].observation_id != sends[1].observation_id
-    assert sends[0].txn_id == observation_txn_id(trigger.event_id, 0)
+    assert sends[0].txn_id == observation_txn_id(trigger.event_id, TURN_LANE, 0)
 
 
 def test_the_outbox_overrides_the_identity_the_session_handed_it(
@@ -445,7 +456,9 @@ def test_the_outbox_overrides_the_identity_the_session_handed_it(
     )
 
     assert send.observation_id != observation.observation_id
-    assert send.observation_id == observation_id(WORKER_UUID, trigger.room_id, "$one", 0)
+    assert send.observation_id == observation_id(
+        WORKER_UUID, trigger.room_id, "$one", TURN_LANE, 0
+    )
 
 
 def test_enqueueing_the_same_trigger_twice_adds_no_rows(
@@ -502,6 +515,255 @@ def test_acknowledging_a_send_removes_it_from_pending_and_is_idempotent(
     assert outbox.pending() == ()
     assert outbox.mark_sent(send.txn_id, "$sent") is False, "a second ack changes nothing"
     assert outbox.pending() == ()
+
+
+# ---------------------------------------------------------------------------
+# Lanes: two independent sequences of answers to one mention
+# ---------------------------------------------------------------------------
+
+
+def test_the_two_lanes_share_an_ordinal_space_without_colliding(
+    inbox: Inbox, outbox: Outbox, state: BridgeState
+) -> None:
+    """The account-B fix, at the level where the collision used to happen.
+
+    A turn that timed out put one note at position zero. When the replay
+    succeeds and produces two real answers, those also start at zero — and in
+    one ordinal space ``INSERT OR IGNORE`` would drop the first of them, leaving
+    the room showing "I ran out of time" as the only reply to a mention that was
+    in fact answered.
+    """
+
+    trigger = _claimed(inbox)
+    outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("I ran out of time"),),
+        lane=NOTE_LANE,
+    )
+
+    answers = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("first"), _observation("second")),
+    )
+
+    rows = state.sends_for_trigger(trigger.event_id)
+    assert [(row.lane, row.ordinal) for row in rows] == [
+        (NOTE_LANE, 0),
+        (TURN_LANE, 0),
+        (TURN_LANE, 1),
+    ]
+    assert len({row.txn_id for row in rows}) == 3
+    assert len({row.observation_id for row in rows}) == 3
+    assert [send.ordinal for send in answers] == [0, 0, 1], (
+        "the note is still owed too, and enqueue answers with everything unsent"
+    )
+
+
+def test_sends_are_read_back_in_write_order_not_by_a_lane_local_ordinal(
+    inbox: Inbox, outbox: Outbox, state: BridgeState
+) -> None:
+    """Write order is what the room saw; an ordinal only orders within its lane.
+
+    The turn lane's two answers are written first, then the note lane's single
+    answer at ordinal zero, so the row-id order (turn 0, turn 1, note 0) and the
+    ordinal order (turn 0, note 0, turn 1) genuinely disagree. Reading back by
+    ordinal would slip the note between the two answers; reading back by row id
+    keeps the sequence the room actually received. Both readers the drain relies
+    on promise write order, and this is the case that tells the two apart — the
+    sibling test above writes the note first, where the two orders happen to
+    coincide.
+    """
+
+    trigger = _claimed(inbox)
+    outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("first"), _observation("second")),
+        lane=TURN_LANE,
+    )
+    outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("ran out of time"),),
+        lane=NOTE_LANE,
+    )
+
+    write_order = [(TURN_LANE, 0), (TURN_LANE, 1), (NOTE_LANE, 0)]
+    assert [
+        (row.lane, row.ordinal) for row in state.sends_for_trigger(trigger.event_id)
+    ] == write_order
+    assert [(send.lane, send.ordinal) for send in outbox.pending()] == write_order
+
+
+def test_re_enqueueing_a_lane_is_a_no_op_and_leaves_the_other_lane_alone(
+    inbox: Inbox, outbox: Outbox, state: BridgeState
+) -> None:
+    trigger = _claimed(inbox)
+    note = {
+        "room_id": trigger.room_id,
+        "thread_root_id": None,
+        "trigger_event_id": trigger.event_id,
+        "observations": (_observation("I ran out of time"),),
+        "lane": NOTE_LANE,
+    }
+    outbox.enqueue(**note)
+    outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("the real answer"),),
+    )
+
+    outbox.enqueue(**note)
+
+    rows = state.sends_for_trigger(trigger.event_id)
+    assert [(row.lane, row.ordinal) for row in rows] == [(NOTE_LANE, 0), (TURN_LANE, 0)]
+
+
+def test_an_unknown_lane_is_refused_rather_than_minting_a_third_identity_space(
+    inbox: Inbox, outbox: Outbox
+) -> None:
+    """A lane is part of a message's durable name.
+
+    A typo would derive transaction ids that collide with nothing, so every
+    replay would post a new message and the deduplication the outbox exists for
+    would be silently off for that caller. Refusing is the only way that shows.
+    """
+
+    trigger = _claimed(inbox)
+
+    with pytest.raises(ValueError):
+        outbox.enqueue(
+            room_id=trigger.room_id,
+            thread_root_id=None,
+            trigger_event_id=trigger.event_id,
+            observations=(_observation(),),
+            lane="chatter",
+        )
+
+
+def test_the_lane_vocabulary_is_closed() -> None:
+    assert LANES == (TURN_LANE, NOTE_LANE)
+
+
+# ---------------------------------------------------------------------------
+# Dead letters
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_intent_leaves_the_queue_and_never_returns_to_it(
+    inbox: Inbox, outbox: Outbox, state: BridgeState
+) -> None:
+    """Account A's send half: neither delivered nor owed.
+
+    The drain runs at the head of every round and stops at the first failure, so
+    an intent the room will never accept has to leave the queue or nothing
+    behind it ever moves. It must not leave by being deleted either — the row is
+    the record that this was owed and was refused.
+    """
+
+    trigger = _claimed(inbox)
+    (first, second) = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("rejected"), _observation("still fine")),
+    )
+
+    assert outbox.mark_refused(first.txn_id) is True
+
+    assert [send.txn_id for send in outbox.pending()] == [second.txn_id]
+    (refused, _) = state.sends_for_trigger(trigger.event_id)
+    assert refused.refused_at is not None
+    assert refused.sent_event_id is None, "a dead letter is not a delivery"
+
+
+def test_enqueue_never_hands_back_an_intent_the_room_already_refused(
+    inbox: Inbox, outbox: Outbox
+) -> None:
+    """What ``enqueue`` returns is "what still needs sending", and this does not.
+
+    Worth pinning separately from ``pending``: the two answers are computed from
+    different queries over the same rows, and a caller that drained the return
+    value rather than the queue would resurrect a dead letter — which is exactly
+    the retry-forever loop the dead letter was created to end.
+    """
+
+    trigger = _claimed(inbox)
+    (dead,) = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("the room refused this"),),
+        lane=NOTE_LANE,
+    )
+    outbox.mark_refused(dead.txn_id)
+
+    still_owed = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation("but this is owed"),),
+    )
+
+    assert [send.txn_id for send in still_owed] == [
+        observation_txn_id(trigger.event_id, TURN_LANE, 0)
+    ]
+
+
+def test_a_refused_intent_can_never_be_recorded_as_delivered(
+    inbox: Inbox, outbox: Outbox, state: BridgeState
+) -> None:
+    """Otherwise the outbox would claim a room saw something it refused."""
+
+    trigger = _claimed(inbox)
+    (send,) = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation(),),
+    )
+    outbox.mark_refused(send.txn_id)
+
+    assert outbox.mark_sent(send.txn_id, "$never-happened") is False
+    (row,) = state.sends_for_trigger(trigger.event_id)
+    assert row.sent_event_id is None
+
+
+def test_refusing_an_intent_twice_changes_nothing(inbox: Inbox, outbox: Outbox) -> None:
+    trigger = _claimed(inbox)
+    (send,) = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation(),),
+    )
+
+    assert outbox.mark_refused(send.txn_id) is True
+    assert outbox.mark_refused(send.txn_id) is False
+
+
+def test_an_acknowledged_intent_cannot_be_turned_into_a_dead_letter(
+    inbox: Inbox, outbox: Outbox
+) -> None:
+    """It reached the room. Nothing that happens later makes that untrue."""
+
+    trigger = _claimed(inbox)
+    (send,) = outbox.enqueue(
+        room_id=trigger.room_id,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+        observations=(_observation(),),
+    )
+    outbox.mark_sent(send.txn_id, "$in-the-room")
+
+    assert outbox.mark_refused(send.txn_id) is False
 
 
 def _claimed(inbox: Inbox, event_id: str = "$one") -> Trigger:

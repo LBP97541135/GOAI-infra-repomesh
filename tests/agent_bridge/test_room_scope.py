@@ -46,13 +46,14 @@ from repomesh_agent_bridge.adapters.memory import (
 from repomesh_agent_bridge.application import RoomNativeAgent
 from repomesh_agent_bridge.cli import EXIT_STARTUP_REFUSED, main
 from repomesh_agent_bridge.contracts import ExternalWorkerEnrollment, RoomObservation
-from repomesh_agent_bridge.outbox import observation_txn_id
+from repomesh_agent_bridge.outbox import NOTE_LANE, TURN_LANE, observation_txn_id
 from repomesh_agent_bridge.ports import (
     CodingSessionPort,
     RoomBatch,
     RoomBody,
     RoomEvent,
     RoomInvite,
+    RoomRefused,
     TurnOutcome,
     TurnRequest,
 )
@@ -140,6 +141,57 @@ class HangingCodingSession(ScriptedCodingSession):
         self.entered.set()
         await asyncio.Event().wait()
         raise AssertionError("a hanging session is only ever left by cancellation")
+
+
+class HangingThenDyingSession(ScriptedCodingSession):
+    """Runs out of time on the first turn and takes the machine down on the second.
+
+    The only arrangement that puts a crash in the window account B needs: after
+    a timeout note has been written, rendered, sent *and* acknowledged, but
+    before the round reaches its commit. Nothing between those two points
+    awaits, so the crash has to arrive through the next turn in the same batch.
+    """
+
+    async def respond(self, turn: TurnRequest) -> TurnOutcome:
+        self.turns.append(turn)
+        if len(self.turns) == 1:
+            await asyncio.Event().wait()
+        raise ProcessDied("the machine went down before the batch was acknowledged")
+
+
+class RefusingRoomPort(InMemoryRoomPort):
+    """A homeserver that will never accept certain messages or certain rooms.
+
+    Refusals are addressed by transaction id and room id rather than by call
+    count, so a test says *which* message the room rejects and stays readable
+    when the surrounding script changes.
+    """
+
+    def __init__(
+        self,
+        *answers: RoomBatch | BaseException,
+        refuse_sends: tuple[str, ...] = (),
+        refuse_joins: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(*answers)
+        self._refuse_sends = refuse_sends
+        self._refuse_joins = refuse_joins
+
+    async def join(self, room_id: str) -> None:
+        if room_id in self._refuse_joins:
+            self.calls.append("join")
+            raise RoomRefused(f"the homeserver refused POST /rooms/{room_id}/join with 403")
+        await super().join(room_id)
+
+    async def send(
+        self, *, room_id: str, thread_root_id: str | None, txn_id: str, body: RoomBody
+    ) -> str:
+        if txn_id in self._refuse_sends:
+            self.calls.append("send")
+            raise RoomRefused(f"the homeserver refused PUT /rooms/{room_id}/send with 403")
+        return await super().send(
+            room_id=room_id, thread_root_id=thread_root_id, txn_id=txn_id, body=body
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +320,30 @@ async def _serve(
     return await _drive(agent.run(enrollment), room)
 
 
+def _supervisor(
+    enrollment: ExternalWorkerEnrollment,
+    state: BridgeState,
+    room: InMemoryRoomPort,
+    session: CodingSessionPort,
+    **overrides: Any,
+) -> RoomSupervisor:
+    """A supervisor over a state file a test already opened.
+
+    For the cases that need to inject a clock or a sleep — the two things
+    ``RoomNativeAgent`` deliberately does not expose, because production has no
+    reason to vary them.
+    """
+
+    return RoomSupervisor(
+        enrollment=enrollment,
+        confirmed_room_ids=CONFIRMED,
+        room_port=room,
+        coding_session=session,
+        state=state,
+        **overrides,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Acceptance 1: the first round establishes where it starts, and runs nothing
 # ---------------------------------------------------------------------------
@@ -370,7 +446,7 @@ async def test_a_crash_after_the_send_replays_under_the_identical_transaction_id
 
     assert second_room.calls[:2] == ["start", "send"], "the drain runs before the first sync"
     assert second_room.sent[0].txn_id == first_room.sent[0].txn_id
-    assert second_room.sent[0].txn_id == observation_txn_id("$one", 0)
+    assert second_room.sent[0].txn_id == observation_txn_id("$one", TURN_LANE, 0)
     assert second_session.turns == [], "the turn had already happened; only the send was owed"
 
 
@@ -414,8 +490,8 @@ async def test_an_intent_that_never_left_is_sent_by_the_next_start(
         "[note] second line",
     ]
     assert [message.txn_id for message in second_room.sent] == [
-        observation_txn_id("$one", 0),
-        observation_txn_id("$one", 1),
+        observation_txn_id("$one", TURN_LANE, 0),
+        observation_txn_id("$one", TURN_LANE, 1),
     ]
 
 
@@ -668,19 +744,17 @@ async def test_a_turn_that_runs_out_of_time_says_so_and_stays_answerable(
     room = InMemoryRoomPort(_batch(next_batch="s-0"), _batch(_event("$one"), next_batch="s-1"))
     session = HangingCodingSession()
     with _reopened(tmp_path) as state:
-        supervisor = RoomSupervisor(
-            enrollment=enrollment,
-            confirmed_room_ids=CONFIRMED,
-            room_port=room,
-            coding_session=session,
-            state=state,
-            turn_timeout_seconds=0.01,
-        )
+        supervisor = _supervisor(enrollment, state, room, session, turn_timeout_seconds=0.01)
 
         await _drive(supervisor.serve(), room)
 
         assert [message.body for message in room.sent] == [f"[note] {TIMEOUT_NOTE}"]
         assert state.turn_state(TEAM_ROOM, "$one", "$one") is None, "no terminal record is kept"
+        (row,) = state.sends_for_trigger("$one")
+        assert (row.lane, row.ordinal) == (NOTE_LANE, 0), (
+            "a line this module wrote on the session's behalf belongs in the other lane, "
+            "so a later attempt that actually answers is not filed on top of it"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -759,14 +833,7 @@ async def test_a_failing_sync_backs_off_without_moving_the_cursor_and_then_recov
     )
     session = ScriptedCodingSession(_answers("on it"))
     with _reopened(tmp_path) as state:
-        supervisor = RoomSupervisor(
-            enrollment=enrollment,
-            confirmed_room_ids=CONFIRMED,
-            room_port=room,
-            coding_session=session,
-            state=state,
-            sleep=record,
-        )
+        supervisor = _supervisor(enrollment, state, room, session, sleep=record)
 
         ended = await _drive(supervisor.serve(), room)
 
@@ -774,6 +841,231 @@ async def test_a_failing_sync_backs_off_without_moving_the_cursor_and_then_recov
         assert delays == [1.0, 2.0, 4.0, 1.0]
         assert room.syncs == [None, "s-0", "s-0", "s-0", "s-0", "s-1", "s-1"]
         assert len(session.turns) == 1
+
+
+# ---------------------------------------------------------------------------
+# Account A: a refusal is not an outage, and it costs what it actually costs
+# ---------------------------------------------------------------------------
+
+
+async def test_a_refused_sync_ends_the_run_and_unwinds_every_seam(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path, matrix_token: str
+) -> None:
+    """A revoked token is the case, and waiting is not a strategy for it.
+
+    Before this, every failure out of the room port went into the backoff, so a
+    Bridge whose token had been revoked logged a warning a minute for as long as
+    the machine stayed on: it looked alive to an operator, it was invisible to
+    the room, and nothing it did would ever recover. Ending the run says the
+    true thing in the one place a supervisor is watching — the process exits —
+    and the batch in hand is uncommitted, so nothing is lost by leaving.
+    """
+
+    room = InMemoryRoomPort(
+        _batch(next_batch="s-0"),
+        RoomRefused("the homeserver refused GET /_matrix/client/v3/sync with 401"),
+    )
+    session = ScriptedCodingSession()
+
+    ended = await _serve(
+        _agent(tmp_path=tmp_path, room=room, session=session), enrollment, room
+    )
+
+    assert isinstance(ended, RoomRefused)
+    assert room.closed and session.closed, "the exit stack unwound both seams in reverse"
+    with _reopened(tmp_path) as state:
+        cursor = state.cursor()
+        assert cursor is not None and cursor.since_token == "s-0"
+
+
+async def test_an_outage_is_waited_out_but_a_refusal_is_not(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path
+) -> None:
+    """The two halves of the vocabulary, in one run, told apart by the sleeps.
+
+    Asserted together on purpose: "the refusal did not back off" only means
+    something next to a failure that did, or a supervisor that had stopped
+    retrying *everything* would pass.
+    """
+
+    delays: list[float] = []
+
+    async def record(delay: float) -> None:
+        delays.append(delay)
+
+    room = InMemoryRoomPort(
+        _batch(next_batch="s-0"),
+        RoomUnavailable("the homeserver answered 502"),
+        RoomRefused("the homeserver refused GET /_matrix/client/v3/sync with 401"),
+    )
+    with _reopened(tmp_path) as state:
+        supervisor = _supervisor(enrollment, state, room, ScriptedCodingSession(), sleep=record)
+
+        ended = await _drive(supervisor.serve(), room)
+
+    assert isinstance(ended, RoomRefused)
+    assert delays == [1.0], "the outage was waited out; the refusal was not waited on at all"
+
+
+async def test_a_send_the_room_refuses_is_dead_lettered_and_the_next_one_still_goes(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path, matrix_token: str, caplog
+) -> None:
+    """A refused send must not become a refused *worker*.
+
+    Making this fatal would be worse than the bug it fixes: the drain runs at
+    the head of every round, so one message the homeserver will never accept
+    would be retried on every start, fail, and hold every intent behind it —
+    a Bridge that restarts forever and says nothing. The intent is put down, the
+    log says so with its transaction id, and the next answer goes out.
+    """
+
+    caplog.set_level(logging.ERROR)
+    rejected = observation_txn_id("$one", TURN_LANE, 0)
+    secret_body = "the room will not take this"
+    room = RefusingRoomPort(
+        _batch(next_batch="s-0"),
+        _batch(_event("$one"), next_batch="s-1"),
+        refuse_sends=(rejected,),
+    )
+    session = ScriptedCodingSession(_answers(secret_body, "but it takes this"))
+
+    await _serve(_agent(tmp_path=tmp_path, room=room, session=session), enrollment, room)
+
+    assert [message.body for message in room.sent] == ["[note] but it takes this"]
+    assert rejected in caplog.text and TEAM_ROOM in caplog.text
+    assert secret_body not in caplog.text, "an undelivered message is still the room's text"
+    with _reopened(tmp_path) as state:
+        dead, delivered = state.sends_for_trigger("$one")
+        assert dead.refused_at is not None and dead.sent_event_id is None
+        assert delivered.sent_event_id is not None
+        assert state.turn_state(TEAM_ROOM, "$one", "$one") == "completed", (
+            "the session answered; only one of its lines could not be delivered"
+        )
+
+    second_room = InMemoryRoomPort()
+    await _serve(
+        _agent(tmp_path=tmp_path, room=second_room, session=ScriptedCodingSession()),
+        enrollment,
+        second_room,
+    )
+
+    assert second_room.sent == [], "a dead letter is owed to nobody, on this start or any other"
+
+
+async def test_a_room_that_refuses_the_join_is_skipped_without_costing_the_round(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path, caplog
+) -> None:
+    """One room this worker cannot enter is not an outage of the homeserver.
+
+    Both invitations arrive in one batch, and the refusal of the first must not
+    take the second with it, must not back off, and must not stop the round from
+    reaching the mention that came after.
+    """
+
+    caplog.set_level(logging.WARNING)
+    delays: list[float] = []
+
+    async def record(delay: float) -> None:
+        delays.append(delay)
+
+    room = RefusingRoomPort(
+        _batch(
+            next_batch="s-0",
+            invites=(
+                RoomInvite(room_id=WORKER_ROOM, inviter="@manager:matrix.example.org"),
+                RoomInvite(room_id=TEAM_ROOM, inviter="@manager:matrix.example.org"),
+            ),
+        ),
+        _batch(_event("$one"), next_batch="s-1"),
+        refuse_joins=(WORKER_ROOM,),
+    )
+    session = ScriptedCodingSession(_answers("on it"))
+    with _reopened(tmp_path) as state:
+        supervisor = _supervisor(enrollment, state, room, session, sleep=record)
+
+        ended = await _drive(supervisor.serve(), room)
+
+    assert ended is None, "a room that will not open never ends the run"
+    assert room.joined == [TEAM_ROOM]
+    assert delays == [], "and it is not something to wait out either"
+    assert len(session.turns) == 1, "the round carried on to the mention behind it"
+    assert WORKER_ROOM in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Account B: a timeout note and the answer that followed it are two messages
+# ---------------------------------------------------------------------------
+
+
+async def test_a_timed_out_turn_that_crashed_before_the_commit_is_answered_on_the_replay(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path
+) -> None:
+    """The whole of account B, walked as three processes over one state file.
+
+    The bug this closes needed all three conditions at once: a turn times out
+    and its note reaches the room; the batch is lost before it is acknowledged;
+    the replay succeeds. In a single ordinal space the replay's first real
+    answer derived the transaction id the note already held, ``INSERT OR
+    IGNORE`` dropped the row, and the room's last word on the mention stayed
+    "I ran out of time" — for a mention that had in fact been answered.
+
+    Two lanes make the two sequences independently idempotent. The room keeps
+    the note, because it genuinely happened and deleting history is not
+    available, and then gets both answers. A third process replaying the same
+    batch does nothing at all, which is the property that has to survive.
+    """
+
+    mentions = _batch(_event("$one"), _event("$two"), next_batch="s-1")
+    first_room = InMemoryRoomPort(_batch(next_batch="s-0"), mentions)
+    with _reopened(tmp_path) as state:
+        died = await _drive(
+            _supervisor(
+                enrollment,
+                state,
+                first_room,
+                HangingThenDyingSession(),
+                turn_timeout_seconds=0.01,
+            ).serve(),
+            first_room,
+        )
+
+    assert isinstance(died, ProcessDied)
+    assert [message.body for message in first_room.sent] == [f"[note] {TIMEOUT_NOTE}"]
+
+    second_room = InMemoryRoomPort(mentions)
+    answering = ScriptedCodingSession(_answers("first line", "second line"))
+    with _reopened(tmp_path) as state:
+        await _drive(_supervisor(enrollment, state, second_room, answering).serve(), second_room)
+
+        assert state.cursor().since_token == "s-1", "this round did reach its commit"
+        rows = state.sends_for_trigger("$one")
+        assert [(row.lane, row.ordinal) for row in rows] == [
+            (NOTE_LANE, 0),
+            (TURN_LANE, 0),
+            (TURN_LANE, 1),
+        ]
+
+    assert len(answering.turns) == 1, "the mention that took the machine down is settled"
+    delivered = first_room.sent + second_room.sent
+    assert [message.body for message in delivered] == [
+        f"[note] {TIMEOUT_NOTE}",
+        "[note] first line",
+        "[note] second line",
+    ]
+    assert [message.txn_id for message in delivered] == [
+        observation_txn_id("$one", NOTE_LANE, 0),
+        observation_txn_id("$one", TURN_LANE, 0),
+        observation_txn_id("$one", TURN_LANE, 1),
+    ]
+    assert len(set(message.txn_id for message in delivered)) == 3, "three messages, three names"
+
+    third_room = InMemoryRoomPort(mentions)
+    replaying = ScriptedCodingSession(_answers("should never run"))
+    with _reopened(tmp_path) as state:
+        await _drive(_supervisor(enrollment, state, third_room, replaying).serve(), third_room)
+
+    assert replaying.turns == []
+    assert third_room.sent == [], "replaying the whole batch once more changes nothing"
 
 
 # ---------------------------------------------------------------------------
