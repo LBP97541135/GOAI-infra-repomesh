@@ -29,6 +29,9 @@ from uuid import UUID
 import pytest
 
 from repomesh_agent_bridge.adapters.coding_session import (
+    _BLOCKED_NOTE,
+    _DENIAL_DISCLOSURE,
+    _EMPTY_SUCCESS_NOTE,
     DriverCodingSession,
     _DenyAllPolicy,
     session_root,
@@ -217,6 +220,15 @@ def _ok_initialize() -> dict:
 
 def _ok_result() -> DriverResult:
     return DriverResult(status=DriverResultStatus.SUCCEEDED, summary="ok")
+
+
+def _denied_request(tool_name: str = "commandExecution", **payload: object) -> DriverEvent:
+    """One PERMISSION_REQUEST as the real drivers emit it under a deny-all policy."""
+
+    return DriverEvent(
+        kind=DriverEventKind.PERMISSION_REQUEST,
+        payload={"tool_name": tool_name, "decision": "deny", **payload},
+    )
 
 
 def response(request_id: int, result: object) -> dict:
@@ -549,7 +561,13 @@ async def test_respond_denies_every_tool_request(tmp_path) -> None:
     answer = next(frame for frame in sent_frames(process) if frame.get("id") == 90)
     assert answer["result"] == {"decision": "denied"}
     assert outcome.status == "completed"
-    assert [obs.body for obs in outcome.observations] == ["finished"]
+    assert outcome.denied_tool_requests == 1
+    assert len(outcome.observations) == 1
+    body = outcome.observations[0].body
+    assert body.startswith("finished"), "the summary still leads the note"
+    assert "1 tool action(s)" in body, "the room is told how many requests were refused"
+    assert "start task" in body, "and where real changes can happen instead"
+    assert "powershell.exe" not in body, "the denied command itself never reaches the room"
 
 
 async def test_thinking_and_tool_frames_never_reach_an_observation(tmp_path) -> None:
@@ -630,6 +648,52 @@ async def test_succeeded_maps_to_a_completed_note(tmp_path) -> None:
     assert note.room_id == ROOM
 
 
+async def test_a_delivered_turn_discloses_the_requests_it_was_denied(tmp_path) -> None:
+    driver = _FakeDriver(
+        DriverResult(status=DriverResultStatus.SUCCEEDED, summary="the answer"),
+        events=(_denied_request(), _denied_request("fileChange")),
+    )
+    session, _ = _make_session(tmp_path, driver)
+    await session.ensure_ready()
+
+    outcome = await session.respond(_turn())
+
+    assert outcome.status == "completed"
+    assert outcome.denied_tool_requests == 2
+    assert len(outcome.observations) == 1
+    body = outcome.observations[0].body
+    assert body.startswith("the answer")
+    assert body.endswith(_DENIAL_DISCLOSURE.format(n=2))
+
+
+async def test_a_delivered_turn_that_asked_for_nothing_carries_no_disclosure(tmp_path) -> None:
+    driver = _FakeDriver(DriverResult(status=DriverResultStatus.SUCCEEDED, summary="the answer"))
+    session, _ = _make_session(tmp_path, driver)
+    await session.ensure_ready()
+
+    outcome = await session.respond(_turn())
+
+    assert outcome.denied_tool_requests == 0
+    assert outcome.observations[0].body == "the answer", "an untouched summary stays untouched"
+
+
+async def test_only_the_count_of_a_permission_request_reaches_the_body(tmp_path) -> None:
+    denied = _denied_request("secret-tool-name", command="del C:\\secrets", call_id="exec-7")
+    driver = _FakeDriver(
+        DriverResult(status=DriverResultStatus.SUCCEEDED, summary="done"), events=(denied,)
+    )
+    session, _ = _make_session(tmp_path, driver)
+    await session.ensure_ready()
+
+    outcome = await session.respond(_turn())
+
+    body = outcome.observations[0].body
+    assert "secret-tool-name" not in body
+    assert "del C:\\secrets" not in body
+    assert "exec-7" not in body
+    assert "1 tool action(s)" in body, "the fact of the denial travels; the frame does not"
+
+
 @pytest.mark.parametrize(
     "status",
     [DriverResultStatus.FAILED, DriverResultStatus.TIMEOUT, DriverResultStatus.INTERRUPTED],
@@ -670,6 +734,23 @@ async def test_input_required_maps_to_a_blocked_note(tmp_path) -> None:
     assert "needs a human" not in outcome.observations[0].body
 
 
+async def test_a_blocked_turn_reports_its_denials_without_disclosing_them(tmp_path) -> None:
+    driver = _FakeDriver(
+        DriverResult(status=DriverResultStatus.INPUT_REQUIRED, diagnostics="needs a human"),
+        events=(_denied_request(), _denied_request()),
+    )
+    session, _ = _make_session(tmp_path, driver)
+    await session.ensure_ready()
+
+    outcome = await session.respond(_turn())
+
+    assert outcome.status == "blocked"
+    assert outcome.denied_tool_requests == 2, "the count is on the outcome for the supervisor"
+    assert outcome.observations[0].body == _BLOCKED_NOTE, (
+        "a turn that already says it did not deliver needs no second confession"
+    )
+
+
 async def test_succeeded_with_no_text_still_answers_the_room(tmp_path) -> None:
     driver = _FakeDriver(DriverResult(status=DriverResultStatus.SUCCEEDED, summary="   "))
     session, _ = _make_session(tmp_path, driver)
@@ -679,6 +760,22 @@ async def test_succeeded_with_no_text_still_answers_the_room(tmp_path) -> None:
 
     assert outcome.status == "completed"
     assert outcome.observations[0].body.strip() != ""
+
+
+async def test_an_empty_delivered_turn_still_discloses_its_denials(tmp_path) -> None:
+    driver = _FakeDriver(
+        DriverResult(status=DriverResultStatus.SUCCEEDED, summary="   "),
+        events=(_denied_request(), _denied_request(), _denied_request()),
+    )
+    session, _ = _make_session(tmp_path, driver)
+    await session.ensure_ready()
+
+    outcome = await session.respond(_turn())
+
+    assert outcome.denied_tool_requests == 3
+    assert outcome.observations[0].body == (
+        f"{_EMPTY_SUCCESS_NOTE}\n\n{_DENIAL_DISCLOSURE.format(n=3)}"
+    )
 
 
 async def test_native_session_id_falls_back_to_the_announced_thread(tmp_path) -> None:

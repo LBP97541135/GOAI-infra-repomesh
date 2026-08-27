@@ -246,6 +246,11 @@ class TurnOutcome:
     """``completed`` | ``failed`` | ``blocked``. Cancellation is synthesised by
     the supervisor, which is the only party that knows why the loop stopped."""
 
+    denied_tool_requests: int = 0
+    """How many tool/permission requests the session's policy denied this turn.
+    The *fact* of denial travels so a room can be told the answer ran nothing;
+    the frames that carried it — tool names, arguments, output — never do."""
+
 
 class CodingSessionPort(Protocol):
     """The local coding CLI, as the Bridge sees it.

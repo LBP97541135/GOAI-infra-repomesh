@@ -16,9 +16,12 @@ Three properties are structural rather than a matter of reading the branches:
   hands the driver projects *nothing*: THINKING, TOOL_USE, TOOL_RESULT, LOG,
   PERMISSION_REQUEST and every raw frame are dropped where they arrive, so there
   is no path by which one becomes a :class:`~repomesh_agent_bridge.contracts.RoomObservation`.
-* **Every tool call is denied.** The permission policy has one return value —
-  ``DENY`` — so a codex turn cannot run a command, and the Bridge never has to
-  answer an escalation it has no channel for this tier.
+* **Every tool call is denied, and the room is told so.** The permission policy
+  has one return value — ``DENY`` — so a codex turn cannot run a command, and the
+  Bridge never has to answer an escalation it has no channel for this tier. A
+  turn that asked anyway carries the *count* of denials into its note, because an
+  answer written without the commands it wanted must not read like one written
+  after them.
 * **A failed turn tells the room nothing.** Diagnostics go to this machine's
   log; the room gets one canned line with no summary, path or command in it,
   which is the same discipline the supervisor keeps for its own failures.
@@ -114,6 +117,16 @@ _BLOCKED_NOTE = (
 )
 _EMPTY_SUCCESS_NOTE = "I finished that turn, but it produced no text to show."
 
+# What a delivered turn adds when the model asked for tools it never got. Only
+# the count crosses over: the tool name, its arguments and its output stay in the
+# frames that were dropped. It names the RepoMesh task path because a room that
+# is only told "denied" learns nothing about where the work can actually happen.
+_DENIAL_DISCLOSURE = (
+    "I asked to run {n} tool action(s); every request was denied, so none executed — this "
+    "answer was written without them. Real changes go through a RepoMesh task: mention me "
+    'with "start task <task-id>".'
+)
+
 BinaryResolver = Callable[[tuple[str, ...]], str | None]
 
 
@@ -147,21 +160,28 @@ class _DenyAllPolicy:
 class _SessionObserver:
     """Consumes driver events and projects none of them into the room.
 
-    The room's whole view of a turn is ``DriverResult.summary``. The single thing
-    kept here is the native session id a SESSION_STARTED announces — a fallback
-    for the id the result carries, since a turn that fails may still have started
-    a thread. Every other event kind, TEXT included, is deliberately dropped, so
-    no THINKING block or tool frame can reach an observation.
+    The room's whole view of a turn is ``DriverResult.summary``. Two things are
+    kept here, both facts rather than content: the native session id a
+    SESSION_STARTED announces — a fallback for the id the result carries, since a
+    turn that fails may still have started a thread — and how many permission
+    requests went by. Every payload, PERMISSION_REQUEST's included, is dropped
+    where it arrives, so no THINKING block, tool name or argument can reach an
+    observation; a counter is the widest thing that survives.
     """
 
     def __init__(self) -> None:
         self.native_session_id: str | None = None
+        self.denied_requests = 0
+        """Every PERMISSION_REQUEST in this conversation is a denial, because the
+        policy the driver was handed has one return value."""
 
     def __call__(self, event: DriverEvent) -> None:
         if event.kind is DriverEventKind.SESSION_STARTED:
             value = event.payload.get("native_session_id")
             if isinstance(value, str) and value:
                 self.native_session_id = value
+        elif event.kind is DriverEventKind.PERMISSION_REQUEST:
+            self.denied_requests += 1
 
 
 class DriverCodingSession:
@@ -339,15 +359,25 @@ class DriverCodingSession:
         may already have announced a thread — falling back to the id the observer
         saw. Only a SUCCEEDED turn's summary reaches the room; every other status
         is one canned line, and the driver's diagnostics go to the log alone.
+
+        A delivered turn that asked for tools also carries the disclosure, because
+        a summary written after every request was denied is otherwise word for
+        word what a summary written after the commands ran would look like. The
+        canned failed and blocked lines already say a turn did not deliver, so
+        they are left as they are.
         """
 
         native = result.native_session_id or observer.native_session_id
+        denied = observer.denied_requests
         if result.status is DriverResultStatus.SUCCEEDED:
             body = result.summary.strip() or _EMPTY_SUCCESS_NOTE
+            if denied:
+                body = f"{body}\n\n{_DENIAL_DISCLOSURE.format(n=denied)}"
             return TurnOutcome(
                 observations=(self._note(turn, body),),
                 native_session_id=native,
                 status="completed",
+                denied_tool_requests=denied,
             )
         if result.status is DriverResultStatus.INPUT_REQUIRED:
             note, status = _BLOCKED_NOTE, "blocked"
@@ -366,6 +396,7 @@ class DriverCodingSession:
             observations=(self._note(turn, note),),
             native_session_id=native,
             status=status,
+            denied_tool_requests=denied,
         )
 
     def _note(self, turn: TurnRequest, body: str) -> RoomObservation:
