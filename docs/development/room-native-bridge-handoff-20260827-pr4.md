@@ -8,6 +8,37 @@
 
 ---
 
+## 0. 从这里开始(接手第一屏)
+
+```bash
+# 1) 确认你在本线分支上,且工作区干净(下面这些 M/?? 都是他线的,别动)
+git -C <repo> log --oneline -6
+git -C <repo> status --short
+
+# 2) 门禁(约 5–7 分钟;不要带 -p no:warnings)
+.venv/Scripts/python.exe -m ruff check .
+.venv/Scripts/python.exe -m pytest -q            # 期望 1674 passed / 21 skipped
+
+# 3) 只跑本线快测(秒级)
+.venv/Scripts/python.exe -m pytest tests/agent_bridge -q -m "not packaging"
+```
+
+- **代码在哪**:`src/repomesh_agent_bridge/`(Bridge 全部)、`src/repomesh/modules/agent_runtime/`(服务端 preflight 与 provisioning)。Bridge 内部结构见 §4 与上一份交接 §3.1/3.2 的行号地图。
+- **现在能做什么**:真 codex 以外部 Worker 身份进 Matrix 房间、被 @ 后回话、同 thread 可续,**但只会说话**(任何工具调用一律被拒)。
+- **下一步是什么**:见 §9 —— 平行轨 P 剩余项(PR 5 硬前置)与 PR 5 受治理执行。
+- **要复现活体环境**:见 §7.5 的完整命令配方。
+
+**PR 4 的四个提交**(分支 `feat/room-native-agent-bridge`):
+
+| 提交 | 内容 |
+|---|---|
+| `42483424` | W1:`ensure_ready` 门禁、失败三级分级、outbox 分 lane、schema v2(了结 A/B/C 三笔账) |
+| `f20872f1` | W2:受限 `ProcessFactory`(Low IL token + Job 全树 + env allowlist)+ 可验证 `IsolationReport` |
+| `d008ee9e` | W3:`DriverCodingSession`(deny-all、三段 gate、五路映射、取消传播)+ CLI 真实装配 |
+| `6b82acf2` / `1acf8720` | 本交接文档与 E2E 记录 |
+
+---
+
 ## 1. 这条线到哪了(30 秒版)
 
 把本地 Coding CLI 以 AgentTeams **外部 Worker**(`containerManaged:false`)身份接进 Matrix 房间。
@@ -204,6 +235,74 @@ $env:CODEX_HOME="<codex-home>"; New-Item -Path $env:CODEX_HOME -ItemType Directo
 这意味着**任何低完整性进程都能写它**,与操作者 `~/.codex`(Medium)的信任级别不同。
 这是"让受限 CLI 能维护自己会话状态"的必然代价,记账于此。
 
+### 7.5 复现完整 E2E 的命令配方(照此可重跑 §6.3)
+
+> 台账 `.superpowers/sdd/progress.md` 是 gitignored 的,所以这套配方**必须留在这里**。
+
+```bash
+# 1) controller forwarder(后端跑宿主时必需;controller 8090 未发布到宿主)
+NET=$(docker inspect agentteams-controller --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+docker run -d --name repomesh-controller-forwarder --network "$NET" \
+  -p 127.0.0.1:18090:8090 --entrypoint sh \
+  alpine/socat:latest -c "socat TCP-LISTEN:8090,fork,reuseaddr TCP:agentteams-controller:8090"
+
+# 2) 真凭据(.env 里的多个已失效,必须从容器取)
+CTL=$(docker exec agentteams-controller sh -c 'cat "$AGENTTEAMS_AUTH_TOKEN_FILE"')        # 641 字节
+AS=$(docker exec agentteams-controller sh -c 'printf %s "$AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN"')  # 64 字节
+
+# 3) 一次性 postgres + 迁移到 head
+docker run --rm -d --name repomesh-e2e-pg -e POSTGRES_PASSWORD=e2e -p 127.0.0.1:15547:5432 postgres:17-alpine
+REPOMESH_DATABASE_URL="postgresql+asyncpg://postgres:e2e@127.0.0.1:15547/postgres" \
+  .venv/Scripts/python.exe -m alembic upgrade head
+
+# 4) seed(见下方要点)、5) 后端
+REPOMESH_DATABASE_URL="postgresql+asyncpg://postgres:e2e@127.0.0.1:15547/postgres" \
+REPOMESH_AGENTTEAMS_CONTROLLER_URL="http://127.0.0.1:18090" \
+REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN="$CTL" \
+REPOMESH_RUNNER_CONTROL_TOKEN="live-runner-token" \
+  .venv/Scripts/python.exe -m uvicorn repomesh.bootstrap.app:create_app --factory --host 127.0.0.1 --port 8077
+
+# 6) 取 worker / leader 的 Matrix token(appservice login;external worker 没有容器 env 可取)
+curl -X POST -H "Authorization: Bearer $AS" -H "Content-Type: application/json" \
+  -d '{"type":"m.login.application_service","identifier":{"type":"m.id.user","user":"<worker-name>"}}' \
+  http://127.0.0.1:18080/_matrix/client/v3/login
+```
+
+**seed 要点**(脚本自写,约 40 行):
+
+- 用 `repomesh.bootstrap.app.build_default_container()`(**不是** `ApplicationContainer()`,后者要 10 个位置参数);收尾用 `await container.close()`(不是 `stop()`)。
+- admin:`container.local_account_service().bootstrap_admin(user, pass, display)` —— 仅当账户表为空时可用。
+- principal:`container.agent_directory.add(principal, idempotency_key=..., request_fingerprint=...)` 直写。
+  `AgentPrincipal` **接受显式 `id`**;`organization_id`/`repository_id` **无外键**,只有 `leader_agent_id` 是自引用外键。
+  preflight 只要求:**role=WORKER、status=ACTIVE、`agentteams_resource_name` 与 controller 里的 worker 同名**。
+- **省一次登录的关键手法**:把 worker principal 的 `id` 钉成**已登录过 codex 的那个 UUID**,
+  `session_root()` 就会落在已认证的 `CODEX_HOME` 上,`ensure_ready` 直接过。
+
+**登录接口**:`POST /api/v1/auth/login` → `{"access_token": ...}`,同时下发 `repomesh_session` cookie;
+admin 路由认 `Authorization: Bearer <access_token>`。
+
+**拆环境**:`docker rm -f repomesh-e2e-pg repomesh-controller-forwarder`,并**按 PID 杀进程** ——
+⚠️ Windows/Git Bash 下 `pkill -f` **杀不掉 `nohup env ... python` 起的进程**,要用
+`Get-CimInstance Win32_Process` 按 `CommandLine` 匹配再 `Stop-Process -Force`。
+
+### 7.6 端口与凭据(2026-08-27 实测)
+
+| 端口 | 服务 |
+|---|---|
+| **18080** | **Matrix client-server API**(conduit 内置在 agentteams-controller,已发布)—— 这就是 `matrixHomeserverUrl` |
+| 18090 | 本线自建的 socat forwarder → controller 8090(**用完删掉**) |
+| 8077 | E2E 的 RepoMesh 后端(一次性) |
+| 15547 | E2E 的一次性 postgres |
+| 5432 | 本机活体 postgres —— **谱系与本分支不符,绝不对它跑本分支迁移** |
+| 55432 / 8080 / 3000 / 5280 / 8100 | 他线,勿动 |
+
+| 凭据 | 位置 | 状态 |
+|---|---|---|
+| controller API token | 容器内 `$AGENTTEAMS_AUTH_TOKEN_FILE`(`/var/run/agentteams/cli-token`) | **有效** |
+| appservice as_token | 容器 env `AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN` | **有效**,是取 worker token 的钥匙 |
+| `.env` 的 controller / matrix token | | **已失效**(栈重建过) |
+| `/data/agentteams-controller/admin-token` | | **不是 API token** |
+
 ---
 
 ## 8. 待处理问题
@@ -242,12 +341,30 @@ RepoMesh provisioning 会用自己的投影覆盖 worker 的 runtime/skills;Dock
 ## 9. 下一步
 
 1. ~~完整 Matrix E2E~~ —— **已完成,见 §6.3/§6.4**。
-2. **平行轨 P 剩余**:WO-P3(mock Runner 镜像构建 + 活体诊断)、WO-S3(真机 smoke 服务端准备);
-   materialize 的活体验收(`handoff_doc_ids` 非空)仍未走过。二者是 PR 5 硬前置。
-3. **PR 5 — 复用完整 Runner 链的受治理执行**(估 6–10 人日):`GovernedTaskPort` 调
-   `start_assigned_task`、Bridge 兼任 Runner consumer、Worker-scoped 凭据、八条治理验收。
+2. **平行轨 P 剩余(PR 5 硬前置,建议先做)**:
+   - **WO-P3**:构建现有 mock Runner 镜像(`components/repomesh-runner/Dockerfile`)并做执行面活体诊断;
+     compose 明确**不增加第二个 Runner 消费者**(R8:Bridge 自己兼任)。
+   - **WO-S3**:真机 smoke 的服务端准备。
+   - **materialize 活体验收**:`handoff_doc_ids` 非空且无降级 warning —— 0036 迁移已就位、
+     `_register` 的 409 已修,但这条**从未在全栈上走过**,需要全栈 + LLM。
 
-**红线不变**:`src/repomesh_runner/**` 零改动(方案 (a));冻结契约改字段=升 v2。
+3. **PR 5 — 复用完整 Runner 链的受治理执行**(估 6–10 人日)。入手顺序建议:
+
+   1. 先补 **§8.2 缺口 P**(房间分不清"跑了"与"被拒后猜了")。它是 PR 4 刚暴露的、
+      且 PR 5 的房间叙事会**放大**它:`DriverResult.tool_call_count` 与审批被拒的事实
+      要能到达 observation。**不修它,PR 5 的"进度投影"从第一天起就不可信。**
+   2. `GovernedTaskPort`(`adapters/governed_task.py`):房间消息只是**唤醒**,
+      Task/assignee/权限/终态**只认 RepoMesh**,调 `start_assigned_task`。
+   3. `runner_consumer.py`:组合现有 `HttpLongPollTaskSource` / `serve/ExecuteRunnerTask` /
+      `DriverExecutor` / `HttpEventSink` / `TaskLedger` —— **不得复制 Runner 已有的
+      `TaskSource`/`RunnerEventSink` seam**。
+   4. **Worker-scoped 凭据**:lease 的认证主体绑定 `workerAgentId`,event sink 校验 run 确属该 Worker;
+      现有 managed Runner 的全局 token 路径保持兼容,**但 Bridge 不获得它**(当前 preflight 仍用
+      runner control token,这正是 PR 5 要收口的)。
+   5. 八条治理验收(执行计划 PR 5 节),全部自动化。
+
+**红线不变**:`src/repomesh_runner/**` 零改动(方案 (a));冻结契约改字段=升 v2;
+房间只收 `room-observation.v1` 投影,THINKING/协议帧永不入房。
 
 ---
 
