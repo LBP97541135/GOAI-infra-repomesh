@@ -860,7 +860,10 @@ async def test_real_codex_answers_an_initialize_handshake_under_restriction(tmp_
     the main session's job, so a host that cannot run it must not block delivery.
     """
 
-    from repomesh_agent_bridge.adapters.coding_session import _executable_path
+    from repomesh_agent_bridge.adapters.coding_session import (
+        executable_path,
+        session_environment,
+    )
     from repomesh_agent_bridge.adapters.restricted_process import (
         RestrictedProcessFactory,
         prepare_session_dirs,
@@ -885,7 +888,7 @@ async def test_real_codex_answers_an_initialize_handshake_under_restriction(tmp_
 
     session_dir = tmp_path / "session"
     dirs = prepare_session_dirs(session_dir, reset_workspace=True)
-    path_value = _executable_path(node, codex)
+    path_value = executable_path(node, codex)
     session = DriverCodingSession(
         AppServerDriver(factory),
         factory,
@@ -893,7 +896,7 @@ async def test_real_codex_answers_an_initialize_handshake_under_restriction(tmp_
         worker_name="smoke",
         resolve_binary=resolve_binary,
     )
-    environment = session._environment(dirs, path_value)  # the exact production env
+    environment = session_environment(dirs, path_value)  # the exact production env
 
     init = (
         json.dumps(

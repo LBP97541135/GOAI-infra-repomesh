@@ -26,7 +26,7 @@ from repomesh_agent_bridge.adapters.memory import (
     InMemoryWorkerBindingPort,
     ScriptedCodingSession,
 )
-from repomesh_agent_bridge.application import RoomNativeAgent
+from repomesh_agent_bridge.application import RoomNativeAgent, _single_failure
 from repomesh_agent_bridge.contracts import (
     BindingRefused,
     BindingUnavailable,
@@ -38,6 +38,7 @@ from repomesh_agent_bridge.contracts import (
     WorkerBinding,
 )
 from repomesh_agent_bridge.instance_lock import InstanceAlreadyRunning
+from repomesh_agent_bridge.ports import RoomRefused
 from repomesh_agent_bridge.state import state_path
 
 from .conftest import (
@@ -376,6 +377,35 @@ async def test_run_blocks_until_cancelled_and_then_unwinds_cleanly(
     assert room.closed
     assert session.closed
     assert not (asyncio.all_tasks() - before), "the supervisor starts no background task"
+
+
+def test_one_failure_out_of_the_dual_loop_arrives_as_itself_and_two_do_not() -> None:
+    """The seam between a task group and this package's failure vocabulary.
+
+    ``run`` serves the room loop and the Runner loop as peers in an
+    ``asyncio.TaskGroup``, which reports through an ``ExceptionGroup``. The CLI
+    above it maps failures onto exit codes *by type* — ``RoomTransportError``,
+    the startup-refusal family — and a group is neither, so an instance whose
+    homeserver revoked its token would stop printing one line and start printing
+    a traceback.
+
+    One failure is the overwhelmingly common case, because the second loop is
+    cancelled rather than failed and contributes nothing to the group; nesting is
+    unwrapped too, since a group may arrive wrapped in another. Two genuine
+    failures stay a group: collapsing that would mean choosing which of two real
+    reasons to report.
+    """
+
+    refusal = RoomRefused("the homeserver refused GET /_matrix/client/v3/sync with 401")
+    other = RuntimeError("the runner loop died")
+
+    assert _single_failure(BaseExceptionGroup("g", [refusal])) is refusal
+    assert (
+        _single_failure(BaseExceptionGroup("outer", [BaseExceptionGroup("inner", [refusal])]))
+        is refusal
+    )
+    both = BaseExceptionGroup("g", [refusal, other])
+    assert _single_failure(both) is both
 
 
 async def test_a_second_instance_for_the_same_worker_fails_before_preflight(

@@ -11,12 +11,16 @@ production path that no longer exists.
 """
 
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
 from repomesh_agent_bridge.adapters.coding_session import DriverCodingSession
-from repomesh_agent_bridge.adapters.memory import InMemoryWorkerBindingPort
+from repomesh_agent_bridge.adapters.memory import (
+    InertCodingSession,
+    InMemoryGovernedTaskPort,
+    InMemoryWorkerBindingPort,
+)
 from repomesh_agent_bridge.adapters.restricted_process import RestrictedProcessFactory
 from repomesh_agent_bridge.cli import (
     EXIT_ALREADY_RUNNING,
@@ -30,6 +34,8 @@ from repomesh_agent_bridge.contracts import (
     WorkerBinding,
 )
 from repomesh_agent_bridge.instance_lock import InstanceLock, instance_lock_path
+from repomesh_agent_bridge.ports import GovernedStartReceipt
+from repomesh_agent_bridge.runner_consumer import GovernedRuntime
 from repomesh_runner.drivers.app_server import AppServerDriver
 
 from .conftest import (
@@ -333,6 +339,223 @@ def test_run_exits_startup_refused_when_the_cli_is_missing(
 
     assert code == EXIT_STARTUP_REFUSED
     assert "codex" in capsys.readouterr().err
+
+
+# -- PR 5: governed execution is one switch (J-10) -------------------------
+
+
+class RecordingGovernedFactory:
+    """Stands in for the control plane and the Runner loop, and counts.
+
+    Neither half can be built for real in a test — one opens an HTTP client
+    against RepoMesh, the other would lease work — so what these tests assert is
+    that the CLI decided to build them, which is exactly the decision
+    ``--workspace-root`` exists to make.
+    """
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, enrollment: ExternalWorkerEnrollment) -> GovernedRuntime:
+        del enrollment
+        self.calls += 1
+        return GovernedRuntime(
+            task_port=InMemoryGovernedTaskPort(
+                GovernedStartReceipt(run_id=uuid4(), task_id=uuid4())
+            ),
+            build_consumer=lambda state: _NeverServes(),
+        )
+
+
+class _NeverServes:
+    async def serve(self) -> None:
+        raise AssertionError("these tests stop before anything serves")
+
+
+def _inert_session(enrollment: ExternalWorkerEnrollment) -> InertCodingSession:
+    return InertCodingSession(worker_name=enrollment.worker_name)
+
+
+def test_governed_execution_and_the_inert_stand_in_cannot_both_be_asked_for(
+    written_enrollment, tmp_path, capsys, default_state_home
+) -> None:
+    """One command line asking for two incompatible things is refused, not guessed.
+
+    ``--inert`` is the deliberate way to bring a Bridge up with something that
+    codes nothing; ``--workspace-root`` is the deliberate way to make it execute
+    governed runs. Picking a winner would either start runs against a stand-in or
+    silently drop a flag an operator typed.
+    """
+
+    code = main(
+        [
+            "run",
+            "--inert",
+            "--workspace-root",
+            str(tmp_path),
+            "--enrollment",
+            str(written_enrollment()),
+        ],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+    )
+
+    err = capsys.readouterr().err
+    assert code == EXIT_STARTUP_REFUSED
+    assert "--workspace-root" in err and "--inert" in err
+
+
+def test_a_workspace_root_that_does_not_exist_is_refused_at_startup(
+    written_enrollment, tmp_path, capsys, default_state_home
+) -> None:
+    """The platform prepares worktrees *under* this directory.
+
+    Discovering it is missing at the first lease means a task already dispatched
+    to a worker that cannot run it, so the check is at startup where the only
+    cost is a restart.
+    """
+
+    missing = tmp_path / "no-such-directory"
+
+    code = main(
+        [
+            "run",
+            "--workspace-root",
+            str(missing),
+            "--enrollment",
+            str(written_enrollment()),
+        ],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+    )
+
+    assert code == EXIT_STARTUP_REFUSED
+    assert str(missing) in capsys.readouterr().err
+
+
+def test_governed_execution_is_refused_for_a_profile_with_no_real_adapter(
+    written_enrollment, tmp_path, capsys, default_state_home
+) -> None:
+    """H-6 again, on the execution side and independently of the session's copy.
+
+    A test may substitute the coding session; it must not thereby acquire a
+    governed runtime the real assembly would have refused, so the profile is
+    checked where the runtime is built as well as where the session is.
+    """
+
+    payload = enrollment_wire(codingProfile="kimi")
+
+    code = main(
+        [
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--enrollment",
+            str(written_enrollment(payload)),
+        ],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+        coding_session_factory=_inert_session,
+    )
+
+    assert code == EXIT_STARTUP_REFUSED
+    assert "kimi" in capsys.readouterr().err
+
+
+def test_governed_execution_without_a_repomesh_credential_is_refused(
+    written_enrollment, tmp_path, capsys, default_state_home
+) -> None:
+    """The lease, the run events and the start action are all authenticated as
+    this worker, and RepoMesh scopes the lease to the token that names it — so an
+    enrollment with no ``repomesh`` reference cannot execute anything, whatever
+    the preflight port thought it needed."""
+
+    payload = enrollment_wire(credentialRefs={"matrix": "env:MATRIX"})
+
+    code = main(
+        [
+            "run",
+            "--workspace-root",
+            str(tmp_path),
+            "--enrollment",
+            str(written_enrollment(payload)),
+        ],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+        coding_session_factory=_inert_session,
+    )
+
+    assert code == EXIT_STARTUP_REFUSED
+    assert "credentialRefs.repomesh" in capsys.readouterr().err
+
+
+def test_a_workspace_root_builds_the_governed_runtime_the_agent_is_handed(
+    written_enrollment, tmp_path, default_state_home
+) -> None:
+    """The wiring assertion, read off the seam rather than off a private field.
+
+    The instance claim is taken inside ``run``, so an invocation that reaches
+    ``EXIT_ALREADY_RUNNING`` is one whose agent was fully assembled — and the
+    factory's counter says the governed half was part of that assembly.
+    """
+
+    governed = RecordingGovernedFactory()
+    held = InstanceLock(instance_lock_path(_worker_uuid()))
+    held.acquire()
+    try:
+        code = main(
+            [
+                "run",
+                "--workspace-root",
+                str(tmp_path),
+                "--enrollment",
+                str(written_enrollment()),
+            ],
+            binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+            coding_session_factory=_inert_session,
+            governed_runtime_factory=governed,
+        )
+    finally:
+        held.release()
+
+    assert code == EXIT_ALREADY_RUNNING
+    assert governed.calls == 1
+
+
+def test_a_run_without_a_workspace_root_builds_no_governed_runtime_at_all(
+    written_enrollment, default_state_home
+) -> None:
+    """The default is conversation-only, and it is an absence rather than a flag.
+
+    Nothing is constructed, so there is no control plane to reach and no second
+    loop to start — which is what makes "this instance cannot start governed
+    runs" a true thing for the supervisor to say.
+    """
+
+    governed = RecordingGovernedFactory()
+    held = InstanceLock(instance_lock_path(_worker_uuid()))
+    held.acquire()
+    try:
+        code = main(
+            ["run", "--enrollment", str(written_enrollment())],
+            binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+            coding_session_factory=_inert_session,
+            governed_runtime_factory=governed,
+        )
+    finally:
+        held.release()
+
+    assert code == EXIT_ALREADY_RUNNING
+    assert governed.calls == 0
+
+
+def test_check_reports_that_it_wires_no_governed_execution(written_enrollment, capsys) -> None:
+    """``check`` gained a third absence to report and none of the behaviour."""
+
+    code = main(
+        ["check", "--enrollment", str(written_enrollment())],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+    )
+
+    out = capsys.readouterr().out
+    assert code == EXIT_OK
+    assert "governed execution: not wired" in out
 
 
 def _worker_uuid() -> UUID:

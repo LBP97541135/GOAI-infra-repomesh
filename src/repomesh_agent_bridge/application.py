@@ -8,6 +8,7 @@ diagnosing the wrong program. Nothing outside this package may import
 :func:`_startup`.
 """
 
+import asyncio
 import contextlib
 import logging
 import os
@@ -24,6 +25,7 @@ from .contracts import (
 )
 from .instance_lock import InstanceLock, instance_lock_path
 from .ports import CodingSessionPort, RoomPort, WorkerBindingPort
+from .runner_consumer import GovernedRuntime, RunnerConsumer
 from .state import open_state, state_path
 from .supervisor import RoomSupervisor
 
@@ -185,12 +187,21 @@ class RoomNativeAgent:
         coding_session: CodingSessionPort,
         state_dir: Path | None = None,
         resolve_credential: CredentialResolver = resolve_env_credential,
+        governed: GovernedRuntime | None = None,
     ) -> None:
         self._binding_port = binding_port
         self._room_port = room_port
         self._coding_session = coding_session
         self._state_dir = state_dir
         self._resolve_credential = resolve_credential
+        self._governed = governed
+        """Governed execution, or ``None`` for a conversation-only instance.
+
+        One value rather than two seams because the wake-up port and the run
+        consumer are not independently useful: an instance that could accept
+        ``start task <id>`` but never execute it would hand the room a receipt
+        for work nothing on this machine will do (J-10).
+        """
 
     async def run(self, enrollment: ExternalWorkerEnrollment) -> None:
         """Validate, claim the worker, preflight, gate the runtime, and serve.
@@ -224,8 +235,19 @@ class RoomNativeAgent:
         ``CancelledError`` propagates so the caller learns the loop ended. A
         ``RoomRefused`` out of the steady-state sync leaves the same way and for
         the same reason — the supervisor ends the run rather than retrying a
-        decision — so the shutdown path has one shape, not two. The supervisor
-        starts no background tasks, so there is nothing else to wait for.
+        decision — so the shutdown path has one shape, not two.
+
+        What serves at the end is one of two arrangements, and the unwind above
+        is the same for both. Conversation-only, the supervisor is simply
+        awaited and this process has no other task. With governed execution the
+        supervisor and the Runner consumer are two peers in one
+        ``asyncio.TaskGroup``: the room loop answers mentions and drains, the
+        consumer leases and executes, and neither is the other's parent. They are
+        siblings rather than one hosting the other because either failing means
+        this instance cannot do its job — a homeserver that revoked the token and
+        a control plane that will not lease are both reasons to stop — and a
+        group is the arrangement in which one failure cancels the other and the
+        exit stack still unwinds once, in order.
         """
 
         lock = InstanceLock(instance_lock_path(enrollment.worker_agent_id, self._state_dir))
@@ -267,15 +289,57 @@ class RoomNativeAgent:
                 access_token=self._resolve_credential(enrollment.credential_refs.matrix),
             )
             _logger.info(
-                "bridge ready: worker=%s profile=%s rooms=%d",
+                "bridge ready: worker=%s profile=%s rooms=%d governed=%s",
                 enrollment.worker_name,
                 enrollment.coding_profile,
                 len(outcome.confirmed_room_ids),
+                "off" if self._governed is None else "on",
             )
-            await RoomSupervisor(
+            supervisor = RoomSupervisor(
                 enrollment=enrollment,
                 confirmed_room_ids=outcome.confirmed_room_ids,
                 room_port=self._room_port,
                 coding_session=self._coding_session,
                 state=state,
-            ).serve()
+                governed_task=None if self._governed is None else self._governed.task_port,
+            )
+            if self._governed is None:
+                await supervisor.serve()
+            else:
+                await _serve_both(supervisor, self._governed.build_consumer(state))
+
+
+async def _serve_both(supervisor: RoomSupervisor, consumer: RunnerConsumer) -> None:
+    """Run the room loop and the Runner loop until one of them ends.
+
+    A task group is what makes "either failure cancels the other" structural: the
+    alternative — one loop awaiting the other, or a bare ``create_task`` — leaves
+    a way for the Bridge to keep syncing a room while it has silently stopped
+    executing the runs that room asked for, which is the worst of the available
+    failures because it looks alive.
+
+    The group reports through an ``ExceptionGroup``, and the composition root
+    above it does not: the CLI maps ``RoomTransportError`` and the startup
+    refusals onto exit codes by type, and a group is neither. One failure is the
+    overwhelmingly common case — the second loop is *cancelled*, not failed, so
+    it contributes nothing — so a single-leaf group is unwrapped back to the
+    exception the caller's vocabulary is written in. A genuine double failure is
+    left as a group, because collapsing that would mean choosing which of two
+    real reasons to report.
+    """
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            group.create_task(supervisor.serve())
+            group.create_task(consumer.serve())
+    except BaseExceptionGroup as failures:
+        raise _single_failure(failures) from None
+
+
+def _single_failure(failures: BaseExceptionGroup) -> BaseException:
+    """The one exception inside a group, however deeply nested, or the group."""
+
+    if len(failures.exceptions) != 1:
+        return failures
+    inner = failures.exceptions[0]
+    return _single_failure(inner) if isinstance(inner, BaseExceptionGroup) else inner

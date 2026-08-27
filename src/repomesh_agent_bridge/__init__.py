@@ -15,12 +15,13 @@ local SQLite state, the inbox and outbox, the adapters' internals — is
 package-private in effect: importing them from outside is importing an
 implementation detail.
 
-This tier answers. It syncs the confirmed rooms, accepts invitations into them,
-turns an explicit mention into exactly one turn, and says one honest thing back
-without losing or duplicating it across a crash. What it does not yet have is a
-coding CLI behind that conversation (PR 4) or governed execution behind that
-(PR 5), so the session it assembles today answers from memory and spawns
-nothing.
+This tier answers, and it works. It syncs the confirmed rooms, accepts
+invitations into them, turns an explicit mention into exactly one turn behind a
+real coding CLI, and says one honest thing back without losing or duplicating it
+across a crash. Given ``--workspace-root`` it also consumes its own worker's
+RepoMesh queue in this process: a mention that says ``start task <id>`` wakes a
+governed run, the run executes through the Runner's own driver chain and its own
+governance gates, and its lifecycle is narrated back into the thread that asked.
 """
 
 from .application import RoomNativeAgent, StartupOutcome, resolve_env_credential
@@ -41,6 +42,11 @@ from .contracts import (
 from .instance_lock import InstanceAlreadyRunning
 from .ports import (
     CodingSessionPort,
+    GovernedStartReceipt,
+    GovernedTaskError,
+    GovernedTaskPort,
+    GovernedTaskRefused,
+    GovernedTaskUnavailable,
     RoomBatch,
     RoomBody,
     RoomEvent,
@@ -53,6 +59,7 @@ from .ports import (
     TurnRequest,
     WorkerBindingPort,
 )
+from .runner_consumer import GovernedRuntime, RunnerConsumer
 
 __all__ = [
     "BINDING_SCHEMA_VERSION",
@@ -65,6 +72,12 @@ __all__ = [
     "CredentialRefs",
     "EnrollmentInvalid",
     "ExternalWorkerEnrollment",
+    "GovernedRuntime",
+    "GovernedStartReceipt",
+    "GovernedTaskError",
+    "GovernedTaskPort",
+    "GovernedTaskRefused",
+    "GovernedTaskUnavailable",
     "InstanceAlreadyRunning",
     "RoomBatch",
     "RoomBody",
@@ -76,6 +89,7 @@ __all__ = [
     "RoomRefused",
     "RoomTransportError",
     "RoomUnavailable",
+    "RunnerConsumer",
     "SessionNotReady",
     "StartupOutcome",
     "TurnOutcome",

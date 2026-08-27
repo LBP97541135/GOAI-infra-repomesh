@@ -25,14 +25,27 @@ from repomesh_runner.drivers.app_server import AppServerDriver
 from repomesh_runner.profiles import get_profile
 
 from .adapters.coding_session import CODEX_PROFILE_ID, DriverCodingSession, session_root
+from .adapters.governed_task import RepoMeshGovernedTaskAdapter
 from .adapters.matrix import MatrixRoomAdapter
 from .adapters.memory import InertCodingSession
 from .adapters.repomesh_binding import RepoMeshBindingAdapter
 from .adapters.restricted_process import RestrictedProcessFactory
-from .application import RoomNativeAgent, StartupOutcome, _startup
+from .application import (
+    RoomNativeAgent,
+    StartupOutcome,
+    _startup,
+    resolve_env_credential,
+)
 from .contracts import BridgeStartupError, EnrollmentInvalid, ExternalWorkerEnrollment
 from .instance_lock import InstanceAlreadyRunning
 from .ports import CodingSessionPort, RoomTransportError, WorkerBindingPort
+from .runner_consumer import (
+    GovernedRunConsumer,
+    GovernedRuntime,
+    build_runner_consumer,
+    runner_state_root,
+)
+from .state import BridgeState
 
 __all__ = ["EXIT_ALREADY_RUNNING", "EXIT_OK", "EXIT_STARTUP_REFUSED", "main"]
 
@@ -47,6 +60,7 @@ wrong, another instance already serves this worker."""
 
 BindingPortFactory = Callable[[ExternalWorkerEnrollment], WorkerBindingPort]
 CodingSessionFactory = Callable[[ExternalWorkerEnrollment], CodingSessionPort]
+GovernedRuntimeFactory = Callable[[ExternalWorkerEnrollment], GovernedRuntime]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -71,6 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the PR 3 stand-in that answers one honest note and spawns no CLI, "
         "instead of assembling the enrollment's real coding session",
     )
+    run.add_argument(
+        "--workspace-root",
+        type=Path,
+        default=None,
+        help="turn on governed execution: accept 'start task <id>' from a room and "
+        "consume this worker's RepoMesh runner queue, executing leased tasks in "
+        "worktrees under this existing directory",
+    )
     check = subcommands.add_parser(
         "check", help="run both startup validation stages and exit; joins nothing"
     )
@@ -83,15 +105,18 @@ def main(
     *,
     binding_port_factory: BindingPortFactory | None = None,
     coding_session_factory: CodingSessionFactory | None = None,
+    governed_runtime_factory: GovernedRuntimeFactory | None = None,
 ) -> int:
-    """Entry point. The two factories are the seams tests replace.
+    """Entry point. The three factories are the seams tests replace.
 
-    Factories rather than the ports themselves, because both production adapters
-    are built from the enrollment this function is about to read; factories
-    rather than monkeypatched globals, because a test that reaches around the
-    interface stops testing it. ``coding_session_factory`` lets a test drive the
-    run path without a real CLI spawn — a session whose gate refuses (a missing
-    binary, say) reaches ``main``'s exit mapping exactly as the real one would.
+    Factories rather than the ports themselves, because every production adapter
+    is built from the enrollment this function is about to read; factories rather
+    than monkeypatched globals, because a test that reaches around the interface
+    stops testing it. ``coding_session_factory`` lets a test drive the run path
+    without a real CLI spawn — a session whose gate refuses (a missing binary,
+    say) reaches ``main``'s exit mapping exactly as the real one would — and
+    ``governed_runtime_factory`` does the same for the control plane and the
+    Runner loop, neither of which a test may stand up for real.
     """
 
     arguments = build_parser().parse_args(argv)
@@ -105,11 +130,33 @@ def main(
             _report(outcome)
             return EXIT_OK
 
+        workspace_root = _governed_workspace_root(arguments)
+        # One factory for both halves of the process: the coding session's turns
+        # and a governed run's driver spawn through the same containment
+        # boundary, and two factories would be two Low-integrity stories to keep
+        # true on one machine.
+        process_factory = RestrictedProcessFactory()
+
         def build_session(enrolled: ExternalWorkerEnrollment) -> CodingSessionPort:
             if coding_session_factory is not None:
                 return coding_session_factory(enrolled)
             return _build_coding_session(
-                enrolled, inert=arguments.inert, state_dir=arguments.state_dir
+                enrolled,
+                inert=arguments.inert,
+                state_dir=arguments.state_dir,
+                process_factory=process_factory,
+            )
+
+        def build_governed(enrolled: ExternalWorkerEnrollment) -> GovernedRuntime | None:
+            if workspace_root is None:
+                return None
+            if governed_runtime_factory is not None:
+                return governed_runtime_factory(enrolled)
+            return _build_governed_runtime(
+                enrolled,
+                workspace_root=workspace_root,
+                state_dir=arguments.state_dir,
+                process_factory=process_factory,
             )
 
         agent = RoomNativeAgent(
@@ -117,6 +164,7 @@ def main(
             room_port=MatrixRoomAdapter(),
             coding_session=build_session(enrollment),
             state_dir=arguments.state_dir,
+            governed=build_governed(enrollment),
         )
         # Ctrl-C is how an operator stops this process, so it is a normal
         # ending, not a failure: ``asyncio.run`` has already cancelled the agent
@@ -160,8 +208,117 @@ def _default_binding_port(enrollment: ExternalWorkerEnrollment) -> WorkerBinding
     return RepoMeshBindingAdapter()
 
 
+def _governed_workspace_root(arguments: argparse.Namespace) -> Path | None:
+    """Read ``--workspace-root``, or refuse an invocation that cannot honour it.
+
+    ``--inert`` is the deliberate way to bring a Bridge up with a stand-in that
+    codes nothing, so asking for it *and* for governed execution is asking for
+    two incompatible things in one command line; guessing which one was meant
+    would either start runs against a stand-in or silently ignore the flag an
+    operator typed. A path that is not an existing directory is refused here
+    rather than at the first lease, because the platform prepares worktrees
+    *under* this directory and discovering it is missing an hour later means one
+    task already dispatched to a worker that cannot run it.
+    """
+
+    root: Path | None = arguments.workspace_root
+    if root is None:
+        return None
+    if arguments.inert:
+        raise BridgeStartupError(
+            "--workspace-root turns on governed execution and --inert turns off the "
+            "coding session that would carry it out; choose one"
+        )
+    if not root.is_dir():
+        raise BridgeStartupError(
+            f"--workspace-root must name an existing directory: {root}"
+        )
+    return root
+
+
+def _build_governed_runtime(
+    enrollment: ExternalWorkerEnrollment,
+    *,
+    workspace_root: Path,
+    state_dir: Path | None,
+    process_factory: RestrictedProcessFactory,
+) -> GovernedRuntime:
+    """Assemble both halves of governed execution (J-10, J-11).
+
+    The profile check is the session path's, for the session path's reason: only
+    ``codex`` has a real adapter in this build, and a Bridge that leased a task
+    it has no CLI for would fail every run after telling the room it had started
+    one. It is repeated here rather than left to ``_build_coding_session``
+    because a test may substitute the session and must not thereby acquire a
+    governed runtime the real assembly would have refused.
+
+    ``credentialRefs.repomesh`` is required outright. It is the credential the
+    lease, the events and the start action are all authenticated with, and
+    RepoMesh scopes the lease to the worker that token names, so an enrollment
+    without one cannot execute anything — whatever the preflight port thought it
+    needed.
+    """
+
+    if enrollment.coding_profile != CODEX_PROFILE_ID:
+        raise BridgeStartupError(
+            f"this build has no coding adapter for profile {enrollment.coding_profile!r}, so "
+            "it cannot execute governed runs; drop --workspace-root to serve conversation only"
+        )
+    reference = enrollment.credential_refs.repomesh
+    if reference is None:
+        raise BridgeStartupError(
+            "governed execution needs credentialRefs.repomesh: the lease, the run events "
+            "and the start action are all authenticated as this worker"
+        )
+    return GovernedRuntime(
+        task_port=RepoMeshGovernedTaskAdapter(
+            endpoint=enrollment.repomesh_endpoint,
+            # Resolved per call, never held: the secret's lifetime is the
+            # request's, exactly as it is for preflight and for Matrix.
+            credential=lambda: resolve_env_credential(reference),
+            adapter_id=enrollment.coding_profile,
+        ),
+        build_consumer=lambda state: _build_consumer(
+            state,
+            enrollment,
+            workspace_root=workspace_root,
+            state_dir=state_dir,
+            process_factory=process_factory,
+            control_token=resolve_env_credential(reference),
+        ),
+    )
+
+
+def _build_consumer(
+    state: BridgeState,
+    enrollment: ExternalWorkerEnrollment,
+    *,
+    workspace_root: Path,
+    state_dir: Path | None,
+    process_factory: RestrictedProcessFactory,
+    control_token: str,
+) -> GovernedRunConsumer:
+    """The Runner consumer, built against the state file ``run`` has just opened."""
+
+    return build_runner_consumer(
+        state,
+        worker_agent_id=enrollment.worker_agent_id,
+        worker_name=enrollment.worker_name,
+        endpoint=enrollment.repomesh_endpoint,
+        control_token=control_token,
+        workspace_root=workspace_root,
+        session_dir=session_root(enrollment.worker_agent_id, state_dir),
+        ledger_dir=runner_state_root(enrollment.worker_agent_id, state_dir),
+        process_factory=process_factory,
+    )
+
+
 def _build_coding_session(
-    enrollment: ExternalWorkerEnrollment, *, inert: bool, state_dir: Path | None
+    enrollment: ExternalWorkerEnrollment,
+    *,
+    inert: bool,
+    state_dir: Path | None,
+    process_factory: RestrictedProcessFactory,
 ) -> CodingSessionPort:
     """Assemble the session ``run`` serves with (H-6).
 
@@ -175,7 +332,8 @@ def _build_coding_session(
 
     Nothing here spawns. The restricted factory and the driver are only wired;
     the first process is the one ``ensure_ready`` starts, after preflight, inside
-    ``RoomNativeAgent.run``.
+    ``RoomNativeAgent.run``. The factory arrives from the caller because a
+    governed instance launches its runs through the same one.
     """
 
     if inert:
@@ -186,10 +344,9 @@ def _build_coding_session(
             "only 'codex' can serve a real session today. Re-run with --inert to bring the "
             "Bridge up with an honest stand-in instead"
         )
-    factory = RestrictedProcessFactory()
     return DriverCodingSession(
-        AppServerDriver(factory),
-        factory,
+        AppServerDriver(process_factory),
+        process_factory,
         session_dir=session_root(enrollment.worker_agent_id, state_dir),
         worker_name=enrollment.worker_name,
         profile=get_profile(CODEX_PROFILE_ID),
@@ -213,5 +370,6 @@ def _report(outcome: StartupOutcome) -> None:
         *(f"  {room_id}" for room_id in outcome.confirmed_room_ids),
         "matrix sync: not started (check joins nothing)",
         "coding session: not spawned (check spawns nothing)",
+        "governed execution: not wired (run --workspace-root turns it on)",
     ]
     print("\n".join(lines))

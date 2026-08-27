@@ -70,7 +70,13 @@ from .restricted_process import (
     prepare_session_dirs,
 )
 
-__all__ = ["CODEX_PROFILE_ID", "DriverCodingSession", "session_root"]
+__all__ = [
+    "CODEX_PROFILE_ID",
+    "DriverCodingSession",
+    "executable_path",
+    "session_environment",
+    "session_root",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -252,7 +258,7 @@ class DriverCodingSession:
                 f"codex needs Node.js to start but {_NODE_BINARIES[0]!r} is not installed or "
                 "not on PATH; install Node.js and start the Bridge again"
             )
-        path_value = _executable_path(node_binary, binary)
+        path_value = executable_path(node_binary, binary)
         report = await self._factory.probe()
         if not report.required_ok:
             raise SessionNotReady(
@@ -279,7 +285,7 @@ class DriverCodingSession:
             executable=binary,
             arguments=tuple(self._profile.base_arguments),
             working_directory=dirs.workspace,
-            environment=self._environment(dirs, path_value),
+            environment=session_environment(dirs, path_value),
         )
         handle = await self._factory.spawn(spec)
         try:
@@ -333,7 +339,7 @@ class DriverCodingSession:
             workspace=self._dirs.workspace,
             prompt=turn.prompt,
             permission_policy=_DenyAllPolicy(),
-            environment=self._environment(self._dirs, self._path),
+            environment=session_environment(self._dirs, self._path),
             model=None,
             resume_session_id=turn.native_session_id,
             idle_window_seconds=_IDLE_WINDOW_SECONDS,
@@ -416,37 +422,6 @@ class DriverCodingSession:
             body=body,
         )
 
-    def _environment(self, dirs: SessionDirs, path_value: str) -> dict[str, str]:
-        """The only variables the child ever sees (H-13, minimal-non-secret form).
-
-        An explicit allowlist, never a merge of ``os.environ``: SCM credentials
-        and the control-plane token must not reach the CLI through inherited
-        variables. ``SystemRoot`` (and ``windir``) are present because node/codex
-        cannot start without them on Windows; ``CODEX_HOME`` points codex at the
-        Bridge's own session state — never the operator's ``~/.codex`` — so a
-        restart can still resume the thread; ``TMP``/``TEMP`` name the one
-        writable scratch directory the restriction leaves it.
-
-        ``PATH`` carries *only* the node and codex directories, so the npm
-        launcher can find the interpreter it shells out to. It is not the
-        operator's ``PATH`` and holds nothing else: adding it does not widen what
-        the child may write — that boundary is the Low-integrity token, which is
-        indifferent to ``PATH`` — and it names no secret and none of the
-        operator's other ``PATH`` entries. A live probe confirmed these six keys
-        are sufficient for codex to answer an ``initialize`` handshake.
-        """
-
-        environment: dict[str, str] = {}
-        for key in ("SystemRoot", "windir"):
-            value = os.environ.get(key)
-            if value:
-                environment[key] = value
-        environment["CODEX_HOME"] = str(dirs.codex_home)
-        environment["TMP"] = str(dirs.tmp)
-        environment["TEMP"] = str(dirs.tmp)
-        environment["PATH"] = path_value
-        return environment
-
     async def close(self) -> None:
         """Release the session. Safe when nothing was ever spawned, and safe twice.
 
@@ -459,7 +434,7 @@ class DriverCodingSession:
         self._closed = True
 
 
-def _executable_path(*binaries: str) -> str:
+def executable_path(*binaries: str) -> str:
     """A ``PATH`` of just the directories the given executables live in.
 
     Absolute, de-duplicated, in argument order. It is the whole of the child's
@@ -473,6 +448,43 @@ def _executable_path(*binaries: str) -> str:
         if directory not in directories:
             directories.append(directory)
     return os.pathsep.join(directories)
+
+
+def session_environment(dirs: SessionDirs, path_value: str) -> dict[str, str]:
+    """The only variables a restricted CLI child ever sees (H-13).
+
+    An explicit allowlist, never a merge of ``os.environ``: SCM credentials and
+    the control-plane token must not reach the CLI through inherited variables.
+    ``SystemRoot`` (and ``windir``) are present because node/codex cannot start
+    without them on Windows; ``CODEX_HOME`` points codex at the Bridge's own
+    session state — never the operator's ``~/.codex`` — so a restart can still
+    resume the thread; ``TMP``/``TEMP`` name the one writable scratch directory
+    the restriction leaves it.
+
+    ``PATH`` carries *only* the node and codex directories, so the npm launcher
+    can find the interpreter it shells out to. It is not the operator's ``PATH``
+    and holds nothing else: adding it does not widen what the child may write —
+    that boundary is the Low-integrity token, which is indifferent to ``PATH`` —
+    and it names no secret and none of the operator's other ``PATH`` entries. A
+    live probe confirmed these six keys are sufficient for codex to answer an
+    ``initialize`` handshake.
+
+    Module level rather than a method because the conversation track is no
+    longer the only caller: a governed run launches the same CLI through the
+    same restricted factory (PR 5, J-12), and the whole value of an allowlist is
+    that there is exactly one of it.
+    """
+
+    environment: dict[str, str] = {}
+    for key in ("SystemRoot", "windir"):
+        value = os.environ.get(key)
+        if value:
+            environment[key] = value
+    environment["CODEX_HOME"] = str(dirs.codex_home)
+    environment["TMP"] = str(dirs.tmp)
+    environment["TEMP"] = str(dirs.tmp)
+    environment["PATH"] = path_value
+    return environment
 
 
 async def _first_nonempty_line(handle: ProcessHandle) -> bytes | None:
