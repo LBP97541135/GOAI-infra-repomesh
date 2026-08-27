@@ -339,7 +339,10 @@ def build_default_container(
             validation_reader=validation,
         )
         observations = SCMObservationService(PostgresSCMObservationStore(database))
-        commands = SCMCommandService(PostgresSCMCommandStore(database))
+        commands = SCMCommandService(
+            PostgresSCMCommandStore(database),
+            lease_seconds=settings.scm_command_lease_seconds,
+        )
         coordinator = ChangeSetSCMCoordinator(
             delivery,
             repository_catalog,
@@ -380,6 +383,9 @@ def build_default_container(
                     repository_catalog,
                     scm_adapter,
                     interval_seconds=settings.scm_command_dispatch_interval_seconds,
+                    lease_renew_interval_seconds=(
+                        settings.scm_command_lease_renew_interval_seconds
+                    ),
                 ),
                 GitHubObservationPoller(
                     delivery,

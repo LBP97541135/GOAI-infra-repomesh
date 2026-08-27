@@ -73,7 +73,40 @@ class SCMCommandStore(Protocol):
 
     async def get_by_idempotency_key(self, key: str) -> SCMCommand | None: ...
 
-    async def update(self, command: SCMCommand, *, expected_version: int) -> None: ...
+    async def claim_batch(
+        self,
+        *,
+        lease_owner: str,
+        lease_seconds: int,
+        max_attempts: int,
+        limit: int,
+    ) -> tuple[SCMCommand, ...]: ...
+
+    async def renew(
+        self,
+        command_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+        lease_seconds: int,
+    ) -> SCMCommand: ...
+
+    async def accept(
+        self,
+        command_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> SCMCommand: ...
+
+    async def fail(
+        self,
+        command_id: UUID,
+        error: str,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> SCMCommand: ...
 
     async def list_dispatchable(
         self, *, stale_before: datetime, max_attempts: int, limit: int

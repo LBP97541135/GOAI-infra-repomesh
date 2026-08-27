@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)
     scm_command_dispatch_interval_seconds: int = Field(default=5, ge=1)
+    scm_command_lease_seconds: int = Field(default=300, ge=10)
+    scm_command_lease_renew_interval_seconds: int = Field(default=60, ge=1)
 
 
 @lru_cache

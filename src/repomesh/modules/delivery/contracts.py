@@ -145,6 +145,8 @@ class SCMCommandView:
     last_error: str | None
     created_at: datetime
     claimed_at: datetime | None
+    lease_owner: str | None
+    lease_expires_at: datetime | None
     completed_at: datetime | None
 
 

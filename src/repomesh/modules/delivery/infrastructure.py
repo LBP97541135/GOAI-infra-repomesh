@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import (
@@ -8,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    and_,
     or_,
     select,
 )
@@ -55,6 +57,15 @@ JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _validate_scm_lease(owner: str, lease_seconds: int, limit: int) -> None:
+    if not owner.strip() or len(owner) > 128:
+        raise ValueError("lease owner must contain 1-128 characters")
+    if lease_seconds < 1:
+        raise ValueError("lease seconds must be positive")
+    if limit < 1:
+        raise ValueError("claim limit must be positive")
 
 
 class ChangeSetRecord(Base):
@@ -244,6 +255,10 @@ class SCMCommandRecord(Base):
     last_error: Mapped[str | None] = mapped_column(String(2000))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_owner: Mapped[str | None] = mapped_column(String(128))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -265,15 +280,16 @@ class InMemorySCMCommandStore:
         command_id = self.keys.get(key)
         return self.items.get(command_id) if command_id else None
 
-    async def update(self, command: SCMCommand, *, expected_version: int) -> None:
-        current = self.items.get(command.id)
-        if current is None or current.version != expected_version:
-            raise DeliveryConflict("SCM command version changed")
-        self.items[command.id] = command
-
-    async def list_dispatchable(
-        self, *, stale_before: datetime, max_attempts: int, limit: int
+    async def claim_batch(
+        self,
+        *,
+        lease_owner: str,
+        lease_seconds: int,
+        max_attempts: int,
+        limit: int,
     ) -> tuple[SCMCommand, ...]:
+        _validate_scm_lease(lease_owner, lease_seconds, limit)
+        now = datetime.now(UTC)
         values = (
             item
             for item in self.items.values()
@@ -282,12 +298,102 @@ class InMemorySCMCommandStore:
                 item.status in {SCMCommandStatus.PENDING, SCMCommandStatus.FAILED}
                 or (
                     item.status is SCMCommandStatus.PROCESSING
-                    and item.claimed_at is not None
-                    and item.claimed_at <= stale_before
+                    and (
+                        item.lease_expires_at is None or item.lease_expires_at <= now
+                    )
                 )
             )
         )
-        return tuple(sorted(values, key=lambda item: item.created_at)[:limit])
+        claimed = tuple(
+            item.claim(
+                now,
+                owner=lease_owner,
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+            )
+            for item in sorted(values, key=lambda item: item.created_at)[:limit]
+        )
+        self.items.update((item.id, item) for item in claimed)
+        return claimed
+
+    async def renew(
+        self,
+        command_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+        lease_seconds: int,
+    ) -> SCMCommand:
+        _validate_scm_lease(lease_owner, lease_seconds, 1)
+        current = self._owned(command_id, lease_owner, fencing_version)
+        now = datetime.now(UTC)
+        if current.lease_expires_at is None or current.lease_expires_at <= now:
+            raise DeliveryConflict("SCM command lease expired")
+        renewed = replace(current, lease_expires_at=now + timedelta(seconds=lease_seconds))
+        self.items[command_id] = renewed
+        return renewed
+
+    async def accept(
+        self, command_id: UUID, *, lease_owner: str, fencing_version: int
+    ) -> SCMCommand:
+        current = self._owned(command_id, lease_owner, fencing_version)
+        accepted = current.accept(datetime.now(UTC))
+        self.items[command_id] = accepted
+        return accepted
+
+    async def fail(
+        self,
+        command_id: UUID,
+        error: str,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> SCMCommand:
+        current = self._owned(command_id, lease_owner, fencing_version)
+        failed = current.fail(error)
+        self.items[command_id] = failed
+        return failed
+
+    def _owned(self, command_id: UUID, owner: str, version: int) -> SCMCommand:
+        current = self.items.get(command_id)
+        if (
+            current is None
+            or current.status is not SCMCommandStatus.PROCESSING
+            or current.lease_owner != owner
+            or current.version != version
+        ):
+            raise DeliveryConflict("SCM command lease ownership changed")
+        if (
+            current.lease_expires_at is None
+            or current.lease_expires_at <= datetime.now(UTC)
+        ):
+            raise DeliveryConflict("SCM command lease expired")
+        return current
+
+    async def list_dispatchable(
+        self, *, stale_before: datetime, max_attempts: int, limit: int
+    ) -> tuple[SCMCommand, ...]:
+        del stale_before
+        now = datetime.now(UTC)
+        return tuple(
+            sorted(
+                (
+                    item
+                    for item in self.items.values()
+                    if item.attempts < max_attempts
+                    and (
+                        item.status in {SCMCommandStatus.PENDING, SCMCommandStatus.FAILED}
+                        or (
+                            item.status is SCMCommandStatus.PROCESSING
+                            and (
+                                item.lease_expires_at is None
+                                or item.lease_expires_at <= now
+                            )
+                        )
+                    )
+                ),
+                key=lambda item: item.created_at,
+            )[:limit]
+        )
 
 
 class PostgresSCMCommandStore:
@@ -313,21 +419,103 @@ class PostgresSCMCommandStore:
             )
         return self._hydrate(record) if record else None
 
-    async def update(self, command: SCMCommand, *, expected_version: int) -> None:
+    async def claim_batch(
+        self,
+        *,
+        lease_owner: str,
+        lease_seconds: int,
+        max_attempts: int,
+        limit: int,
+    ) -> tuple[SCMCommand, ...]:
+        _validate_scm_lease(lease_owner, lease_seconds, limit)
+        now = datetime.now(UTC)
+        statement = (
+            select(SCMCommandRecord)
+            .where(
+                SCMCommandRecord.attempts < max_attempts,
+                or_(
+                    SCMCommandRecord.status.in_(
+                        (SCMCommandStatus.PENDING.value, SCMCommandStatus.FAILED.value)
+                    ),
+                    and_(
+                        SCMCommandRecord.status == SCMCommandStatus.PROCESSING.value,
+                        or_(
+                            SCMCommandRecord.lease_expires_at.is_(None),
+                            SCMCommandRecord.lease_expires_at <= now,
+                        ),
+                    ),
+                ),
+            )
+            .order_by(SCMCommandRecord.created_at, SCMCommandRecord.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        )
         async with self._database.transaction() as session:
-            record = await session.get(SCMCommandRecord, command.id)
-            if record is None or record.version != expected_version:
-                raise DeliveryConflict("SCM command version changed")
-            record.status = command.status.value
-            record.attempts = command.attempts
-            record.version = command.version
-            record.last_error = command.last_error
-            record.claimed_at = command.claimed_at
-            record.completed_at = command.completed_at
+            records = (await session.scalars(statement)).all()
+            expires_at = now + timedelta(seconds=lease_seconds)
+            for record in records:
+                record.status = SCMCommandStatus.PROCESSING.value
+                record.attempts += 1
+                record.version += 1
+                record.claimed_at = now
+                record.lease_owner = lease_owner
+                record.lease_expires_at = expires_at
+                record.last_error = None
+            await session.flush()
+            return tuple(self._hydrate(record) for record in records)
+
+    async def renew(
+        self,
+        command_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+        lease_seconds: int,
+    ) -> SCMCommand:
+        _validate_scm_lease(lease_owner, lease_seconds, 1)
+        async with self._database.transaction() as session:
+            record = await self._owned(session, command_id, lease_owner, fencing_version)
+            now = datetime.now(UTC)
+            if record.lease_expires_at is None or _aware(record.lease_expires_at) <= now:
+                raise DeliveryConflict("SCM command lease expired")
+            record.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            return self._hydrate(record)
+
+    async def accept(
+        self, command_id: UUID, *, lease_owner: str, fencing_version: int
+    ) -> SCMCommand:
+        async with self._database.transaction() as session:
+            record = await self._owned(session, command_id, lease_owner, fencing_version)
+            record.status = SCMCommandStatus.ACCEPTED.value
+            record.version += 1
+            record.completed_at = datetime.now(UTC)
+            record.last_error = None
+            record.lease_owner = None
+            record.lease_expires_at = None
+            return self._hydrate(record)
+
+    async def fail(
+        self,
+        command_id: UUID,
+        error: str,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> SCMCommand:
+        async with self._database.transaction() as session:
+            record = await self._owned(session, command_id, lease_owner, fencing_version)
+            record.status = SCMCommandStatus.FAILED.value
+            record.version += 1
+            record.last_error = error[:2000]
+            record.lease_owner = None
+            record.lease_expires_at = None
+            return self._hydrate(record)
 
     async def list_dispatchable(
         self, *, stale_before: datetime, max_attempts: int, limit: int
     ) -> tuple[SCMCommand, ...]:
+        del stale_before
+        now = datetime.now(UTC)
         async with self._database.transaction() as session:
             records = (
                 await session.scalars(
@@ -338,17 +526,42 @@ class PostgresSCMCommandStore:
                             SCMCommandRecord.status.in_(
                                 (SCMCommandStatus.PENDING.value, SCMCommandStatus.FAILED.value)
                             ),
-                            (
-                                (SCMCommandRecord.status == SCMCommandStatus.PROCESSING.value)
-                                & (SCMCommandRecord.claimed_at <= stale_before)
+                            and_(
+                                SCMCommandRecord.status
+                                == SCMCommandStatus.PROCESSING.value,
+                                or_(
+                                    SCMCommandRecord.lease_expires_at.is_(None),
+                                    SCMCommandRecord.lease_expires_at <= now,
+                                ),
                             ),
                         ),
                     )
-                    .order_by(SCMCommandRecord.created_at)
+                    .order_by(SCMCommandRecord.created_at, SCMCommandRecord.id)
                     .limit(limit)
                 )
             ).all()
         return tuple(self._hydrate(record) for record in records)
+
+    @staticmethod
+    async def _owned(session, command_id: UUID, owner: str, version: int):
+        record = await session.scalar(
+            select(SCMCommandRecord)
+            .where(SCMCommandRecord.id == command_id)
+            .with_for_update()
+        )
+        if (
+            record is None
+            or record.status != SCMCommandStatus.PROCESSING.value
+            or record.lease_owner != owner
+            or record.version != version
+        ):
+            raise DeliveryConflict("SCM command lease ownership changed")
+        if (
+            record.lease_expires_at is None
+            or _aware(record.lease_expires_at) <= datetime.now(UTC)
+        ):
+            raise DeliveryConflict("SCM command lease expired")
+        return record
 
     @staticmethod
     def _record(command: SCMCommand) -> SCMCommandRecord:
@@ -365,6 +578,8 @@ class PostgresSCMCommandStore:
             last_error=command.last_error,
             created_at=command.created_at,
             claimed_at=command.claimed_at,
+            lease_owner=command.lease_owner,
+            lease_expires_at=command.lease_expires_at,
             completed_at=command.completed_at,
         )
 
@@ -383,6 +598,10 @@ class PostgresSCMCommandStore:
             last_error=record.last_error,
             created_at=_aware(record.created_at),
             claimed_at=_aware(record.claimed_at) if record.claimed_at else None,
+            lease_owner=record.lease_owner,
+            lease_expires_at=(
+                _aware(record.lease_expires_at) if record.lease_expires_at else None
+            ),
             completed_at=_aware(record.completed_at) if record.completed_at else None,
         )
 
