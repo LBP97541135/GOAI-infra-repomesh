@@ -34,8 +34,10 @@ class RunnerControlGateway:
     async def next_task(self, worker_agent_id: UUID | None) -> dict[str, object] | None:
         return await self._store.lease_next(worker_agent_id)
 
-    async def receive_event(self, event: dict[str, object]) -> bool:
-        inserted = await self._store.record_event(event)
+    async def receive_event(
+        self, event: dict[str, object], *, worker_agent_id: UUID | None = None
+    ) -> bool:
+        inserted = await self._store.record_event(event, expected_worker_agent_id=worker_agent_id)
         if str(event.get("eventType")) in {
             "runner.completed",
             "runner.failed",

@@ -65,6 +65,15 @@ class RunnerGatewayConflict(ValueError):
     pass
 
 
+class RunnerGatewayForbidden(Exception):
+    """An event written to a run that belongs to a different worker.
+
+    Deliberately not a ``ValueError`` like its sibling above: the API turns
+    those into 409, and this is a 403 — the event is well formed and the run is
+    real, the credential presenting it simply does not own it.
+    """
+
+
 class PostgresRunnerGatewayStore:
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -207,7 +216,19 @@ class PostgresRunnerGatewayStore:
             for event, dispatch in rows
         )
 
-    async def record_event(self, event: dict[str, object]) -> bool:
+    async def record_event(
+        self, event: dict[str, object], *, expected_worker_agent_id: UUID | None = None
+    ) -> bool:
+        """Record one Runner event, optionally only for one worker's own runs.
+
+        ``expected_worker_agent_id`` is the *authenticated* worker, never a
+        field of the event: the wire schema carries no worker id, and one it
+        carried would be the caller's claim rather than a fact. Ownership is
+        the dispatch row's, joined here by ``runId``. ``None`` — the managed
+        Runner's global credential — leases and reports for every worker, so it
+        skips the check rather than failing it.
+        """
+
         event_id = UUID(str(event["eventId"]))
         run_id = UUID(str(event["runId"]))
         try:
@@ -215,6 +236,11 @@ class PostgresRunnerGatewayStore:
                 dispatch = await session.get(RunnerDispatchRecord, run_id)
                 if dispatch is None:
                     raise RunnerGatewayConflict("runner event references an unknown run")
+                if (
+                    expected_worker_agent_id is not None
+                    and dispatch.worker_agent_id != expected_worker_agent_id
+                ):
+                    raise RunnerGatewayForbidden("runner event belongs to another worker")
                 self._verify_binding(dispatch, event)
                 session.add(
                     RunnerEventRecord(

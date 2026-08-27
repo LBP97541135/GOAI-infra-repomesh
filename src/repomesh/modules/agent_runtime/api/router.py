@@ -1,3 +1,5 @@
+import hmac
+import json
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -21,6 +23,7 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     WorkerBindingReader,
     WorkerControlPlaneUnavailable,
 )
+from repomesh.modules.agent_runtime.runner_store import RunnerGatewayForbidden
 from repomesh.settings import get_settings
 
 from .models import (
@@ -40,16 +43,32 @@ async def next_runner_task(
     request: Request,
     worker_agent_id: Annotated[UUID | None, Query(alias="workerAgentId")] = None,
 ) -> dict[str, object] | Response:
-    _authorize_runner(request)
+    authenticated = _authorize_runner(request)
+    if authenticated is not None:
+        # ``workerAgentId`` is a self-report, and a credential that names one
+        # worker outranks it: it may only be repeated back, never used to lease
+        # somebody else's queue.
+        if worker_agent_id is not None and worker_agent_id != authenticated:
+            raise HTTPException(
+                status_code=403, detail="a worker credential may only lease its own tasks"
+            )
+        worker_agent_id = authenticated
     payload = await request.app.state.container.runner_gateway().next_task(worker_agent_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT) if payload is None else payload
 
 
 @router.post("/runtime/runner-events", status_code=202)
 async def receive_runner_event(body: dict[str, Any], request: Request) -> dict[str, bool]:
-    _authorize_runner(request)
+    # The event schema carries no worker id (and must not: it would be the
+    # sender's claim), so ownership is settled one layer down by joining the
+    # authenticated worker to the dispatch row this event's ``runId`` names.
+    authenticated = _authorize_runner(request)
     try:
-        inserted = await request.app.state.container.runner_gateway().receive_event(body)
+        inserted = await request.app.state.container.runner_gateway().receive_event(
+            body, worker_agent_id=authenticated
+        )
+    except RunnerGatewayForbidden as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return {"accepted": True, "duplicate": not inserted}
@@ -63,12 +82,13 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
     external and which rooms it may act in — it holds no AgentTeams management
     credential and never calls the Go controller (ADR 0004 decisions 4, 5).
 
-    Authenticated with the runner control token, the same credential the other
-    ``/runtime`` reads on this router take: the caller is an out-of-cluster
-    runtime process reading control-plane state, which is exactly what that
-    token already names, and per ADR 0004 decision 6 the Bridge is its worker's
-    Runner consumer, so it holds one already. A worker-scoped credential is PR
-    5's subject, not this endpoint's to invent.
+    Authenticated the way the other ``/runtime`` reads on this router are, and
+    since PR 5 that is two credentials rather than one: the managed Runner's
+    global control token, which has no subject and may read any worker's
+    binding, or a worker's own token, which may read only its own — a Bridge
+    holds one per ADR 0004 decision 6. Reading a binding is how a Bridge learns
+    which rooms it may act in, so a worker credential pointed at another
+    worker's id is a 403 rather than a document.
 
     The body is returned as the contract's own dict rather than through a
     response model, so the wire shape is the one ``to_wire`` produces and
@@ -84,7 +104,11 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
     tell an operator to go and fix a binding that is fine.
     """
 
-    _authorize_runner(request)
+    authenticated = _authorize_runner(request)
+    if authenticated is not None and authenticated != worker_agent_id:
+        raise HTTPException(
+            status_code=403, detail="a worker credential may only read its own binding"
+        )
     container = request.app.state.container
     control_plane: WorkerBindingReader | None = container.external_worker_binding_control_plane()
     if control_plane is None:
@@ -106,12 +130,91 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
     return binding.to_wire()
 
 
-def _authorize_runner(request: Request) -> None:
-    expected = get_settings().runner_control_token
-    if not expected:
+def _authorize_runner(request: Request) -> UUID | None:
+    """Who is calling: ``None`` for the managed Runner, a worker id for a Bridge.
+
+    One auth point for every ``/runtime`` route on this router, and the only
+    place a worker identity is established. The global control token has no
+    subject, so it keeps meaning "every worker's queue"; a worker token names
+    exactly one, and the routes below use the returned id instead of the one
+    the caller reports about itself.
+
+    The 503 is today's semantics, widened by one word: no credential of *either*
+    kind configured is a deployment that cannot answer, not a request that may
+    be refused. Either alone is enough — a deployment whose only Runners are
+    out-of-cluster Bridges never sets the global token.
+    """
+
+    settings = get_settings()
+    credentials = _worker_credentials()
+    if not settings.runner_control_token and not credentials:
         raise HTTPException(status_code=503, detail="runner control token is not configured")
-    if request.headers.get("Authorization") != f"Bearer {expected}":
+    presented = request.headers.get("Authorization", "").strip()
+    if not presented:
         raise HTTPException(status_code=401, detail="invalid runner control token")
+    if settings.runner_control_token and _presents(request, settings.runner_control_token):
+        return None
+    worker_agent_id = _authenticate_worker(request, credentials)
+    if worker_agent_id is None:
+        raise HTTPException(status_code=401, detail="invalid runner control token")
+    return worker_agent_id
+
+
+_MALFORMED_WORKER_TOKENS = "runner worker tokens are not a valid credential document"
+
+
+def _worker_credentials() -> tuple[tuple[UUID, bytes], ...]:
+    """``REPOMESH_RUNNER_WORKER_TOKENS`` as (worker agent id, expected header) pairs.
+
+    A JSON object keyed by worker agent id, one bearer token each: all of PR 5's
+    credential storage. No table and no issuance route, because a second answer
+    to "who is this Bridge" is worth building only once the first has been used,
+    and the pairs are few and rotated by redeploying.
+
+    Kept as a sequence rather than a dict so the scan below compares every
+    entry with ``compare_digest``; a dict lookup would decide membership by
+    hashing the presented secret instead.
+
+    Anything malformed is a fault of the deployment rather than a verdict on the
+    request, so it wears the same 503 as an unconfigured control plane. Never a
+    silent skip: an operator who mistyped one entry would otherwise read 401
+    from a worker they believe they credentialed.
+    """
+
+    raw = get_settings().runner_worker_tokens
+    if not raw:
+        return ()
+    try:
+        document = json.loads(raw)
+    except ValueError as error:
+        raise HTTPException(status_code=503, detail=_MALFORMED_WORKER_TOKENS) from error
+    if not isinstance(document, dict):
+        raise HTTPException(status_code=503, detail=_MALFORMED_WORKER_TOKENS)
+    credentials: list[tuple[UUID, bytes]] = []
+    for worker_agent_id, token in document.items():
+        if not isinstance(token, str):
+            raise HTTPException(status_code=503, detail=_MALFORMED_WORKER_TOKENS)
+        try:
+            credentials.append((UUID(worker_agent_id), f"Bearer {token}".encode()))
+        except ValueError as error:
+            raise HTTPException(status_code=503, detail=_MALFORMED_WORKER_TOKENS) from error
+    return tuple(credentials)
+
+
+def _authenticate_worker(
+    request: Request, credentials: tuple[tuple[UUID, bytes], ...]
+) -> UUID | None:
+    presented = request.headers.get("Authorization", "").encode()
+    for worker_agent_id, expected in credentials:
+        if hmac.compare_digest(presented, expected):
+            return worker_agent_id
+    return None
+
+
+def _presents(request: Request, expected: str) -> bool:
+    return hmac.compare_digest(
+        request.headers.get("Authorization", "").encode(), f"Bearer {expected}".encode()
+    )
 
 
 @router.put("/runtime/external-workers/{worker_agent_id}", response_model=None)
@@ -225,7 +328,7 @@ async def _authorize_administrator(request: Request) -> None:
     status_code=202,
 )
 async def start_worker_task(body: WorkerTaskStartCreate, request: Request) -> WorkerTaskStartView:
-    _authorize_agent_action(request)
+    _authorize_agent_action(request, body.worker_agent_id)
     try:
         started = await request.app.state.container.worker_execution_service().execute(
             StartAssignedWorkerTaskCommand(
@@ -251,12 +354,32 @@ async def start_worker_task(body: WorkerTaskStartCreate, request: Request) -> Wo
     )
 
 
-def _authorize_agent_action(request: Request) -> None:
-    expected = get_settings().agent_action_token
-    if not expected:
+def _authorize_agent_action(request: Request, worker_agent_id: UUID) -> None:
+    """Either the agent-action token, or the worker's own runner credential.
+
+    The action token stays what it is: a shared secret with no subject, so
+    whoever holds it starts any worker's task, exactly as today. A worker token
+    names one worker, and starting work is the loudest thing on this router, so
+    it is checked against the body rather than trusted to describe itself — the
+    id in the body is the caller's claim, the one behind the token is not.
+
+    The 503 widens the same way ``_authorize_runner``'s does: it fires only when
+    neither credential kind is configured at all.
+    """
+
+    settings = get_settings()
+    credentials = _worker_credentials()
+    if not settings.agent_action_token and not credentials:
         raise HTTPException(status_code=503, detail="agent action token is not configured")
-    if request.headers.get("Authorization") != f"Bearer {expected}":
+    if settings.agent_action_token and _presents(request, settings.agent_action_token):
+        return
+    authenticated = _authenticate_worker(request, credentials)
+    if authenticated is None:
         raise HTTPException(status_code=401, detail="invalid agent action token")
+    if authenticated != worker_agent_id:
+        raise HTTPException(
+            status_code=403, detail="a worker credential may only start its own task"
+        )
 
 
 @router.post("/coding-runs/mock", response_model=CodingRunView, status_code=202)

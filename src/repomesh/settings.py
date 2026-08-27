@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     agentteams_manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
     agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     runner_control_token: str | None = None
+    #: Worker-scoped runner credentials: a JSON object mapping worker agent id
+    #: to that worker's own bearer token, e.g. ``{"<uuid>": "<token>"}``. The
+    #: token above has no subject and so opens every worker's queue; one of
+    #: these names exactly one worker, which is all an out-of-cluster Bridge
+    #: needs (ADR 0004 decision 6). Kept as an env document rather than a table
+    #: because issuance is a deployment act this round, not a product feature.
+    runner_worker_tokens: str | None = None
     agent_action_token: str | None = None
     #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
     #: else is refused before a request leaves this process.

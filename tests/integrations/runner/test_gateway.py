@@ -8,6 +8,7 @@ from repomesh.integrations.runner.gateway import RunnerControlGateway
 from repomesh.modules.agent_runtime.runner_store import (
     PostgresRunnerGatewayStore,
     RunnerGatewayConflict,
+    RunnerGatewayForbidden,
 )
 from repomesh.modules.task_orchestration.contracts import TaskStatus
 from repomesh.modules.task_orchestration.domain import Task
@@ -244,6 +245,59 @@ async def test_event_binding_mismatch_is_rejected(tmp_path) -> None:
     }
     with pytest.raises(ValueError, match="binding mismatch"):
         await store.record_event(event)
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_event_from_another_worker_is_refused_and_writes_nothing(tmp_path) -> None:
+    """The server side of PR 5's events guard, against a real store.
+
+    The wire schema carries no worker id, so ownership can only come from the
+    dispatch row this run belongs to — which is the point of joining rather
+    than reading a field. A credential that owns a different worker gets
+    ``RunnerGatewayForbidden`` (a 403 at the API, not the 409 its
+    ``ValueError`` siblings wear) and the event does not reach the table: were
+    it recorded, the refusal would be advice rather than a boundary, and the
+    same event replayed under the right credential would then be a duplicate.
+    """
+
+    gateway, database, business_task, run_id = await _gateway_with_dispatch(
+        tmp_path, "scoped-events.db"
+    )
+    store = PostgresRunnerGatewayStore(database)
+    event = _event(business_task, run_id, "runner.accepted")
+
+    with pytest.raises(RunnerGatewayForbidden):
+        await store.record_event(event, expected_worker_agent_id=uuid4())
+
+    dispatch = await store.get_dispatch(run_id)
+    assert dispatch is not None and dispatch.status == "queued"
+
+    # The same event, under the credential that owns the run, is recorded --
+    # so the refusal above was about the caller and nothing else.
+    assert (
+        await store.record_event(
+            event, expected_worker_agent_id=business_task.assignee_agent_id
+        )
+        is True
+    )
+    settled = await store.get_dispatch(run_id)
+    assert settled is not None and settled.status == "accepted"
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_unscoped_credential_records_any_workers_event(tmp_path) -> None:
+    """``None`` is the managed Runner, which reports for every worker it runs."""
+
+    gateway, database, business_task, run_id = await _gateway_with_dispatch(
+        tmp_path, "unscoped-events.db"
+    )
+
+    assert await gateway.receive_event(_event(business_task, run_id, "runner.accepted")) is True
+
+    dispatch = await PostgresRunnerGatewayStore(database).get_dispatch(run_id)
+    assert dispatch is not None and dispatch.status == "accepted"
     await database.dispose()
 
 
