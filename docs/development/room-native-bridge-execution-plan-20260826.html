@@ -1,0 +1,580 @@
+<title>Room-Native Bridge 施工图</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;700;900&family=Noto+Sans+SC:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #f7f9f4;
+    --card: #fdfefb;
+    --ink: #1b241e;
+    --muted: #5b6a5f;
+    --line: #dce4d8;
+    --pine: #38624c;
+    --pine-soft: #e4eee6;
+    --amber: #a37010;
+    --amber-soft: #f5e9cf;
+    --red: #a5433a;
+    --red-soft: #f6e4e1;
+    --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+    --serif: "Noto Serif SC", "Source Han Serif SC", serif;
+    --sans: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #131a15;
+      --card: #1a231d;
+      --ink: #e7ece6;
+      --muted: #93a297;
+      --line: #2b372e;
+      --pine: #82b898;
+      --pine-soft: #223529;
+      --amber: #dfa74a;
+      --amber-soft: #3a2f16;
+      --red: #d98077;
+      --red-soft: #3a211e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #131a15;
+    --card: #1a231d;
+    --ink: #e7ece6;
+    --muted: #93a297;
+    --line: #2b372e;
+    --pine: #82b898;
+    --pine-soft: #223529;
+    --amber: #dfa74a;
+    --amber-soft: #3a2f16;
+    --red: #d98077;
+    --red-soft: #3a211e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.75;
+    margin: 0;
+    padding: 48px 20px 80px;
+  }
+  .page { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+
+  /* ---------- header ---------- */
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .08em;
+    color: var(--muted); text-transform: uppercase;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 900; font-size: 40px;
+    line-height: 1.2; margin: 8px 0 12px; text-wrap: balance;
+  }
+  .lede { color: var(--muted); max-width: 62ch; margin: 0 0 18px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; padding: 3px 10px;
+    border: 1px solid var(--line); border-radius: 999px; color: var(--muted);
+    background: var(--card);
+  }
+  .chip.amber { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
+  .chip.pine  { border-color: var(--pine);  color: var(--pine);  background: var(--pine-soft); }
+
+  /* ---------- stat strip ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .stat .num {
+    font-family: var(--serif); font-weight: 700; font-size: 26px;
+    font-variant-numeric: tabular-nums; line-height: 1.2;
+  }
+  .stat .lbl { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+  /* ---------- sections ---------- */
+  h2 {
+    font-family: var(--serif); font-weight: 700; font-size: 23px;
+    margin: 0 0 4px; text-wrap: balance;
+  }
+  .sec-note { color: var(--muted); font-size: 13.5px; margin: 0 0 16px; max-width: 70ch; }
+  section { display: flex; flex-direction: column; }
+
+  /* ---------- decisions ---------- */
+  ol.decisions { margin: 8px 0 0; padding-left: 0; list-style: none; counter-reset: d; display: grid; gap: 8px; }
+  ol.decisions li {
+    counter-increment: d; background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px 10px 46px; position: relative; font-size: 14px;
+  }
+  ol.decisions li::before {
+    content: counter(d, decimal-leading-zero);
+    position: absolute; left: 14px; top: 11px;
+    font-family: var(--mono); font-size: 12px; color: var(--pine);
+  }
+  ol.decisions code, .files code, td code {
+    font-family: var(--mono); font-size: .87em;
+    background: var(--pine-soft); color: inherit;
+    padding: 1px 5px; border-radius: 4px; word-break: break-all;
+  }
+
+  /* ---------- roadmap swimlane ---------- */
+  .lane-scroll { overflow-x: auto; }
+  .lanes {
+    min-width: 820px;
+    display: grid;
+    grid-template-columns: 92px repeat(8, 1fr);
+    gap: 6px 0;
+    align-items: stretch;
+  }
+  .lanes .whead {
+    grid-row: 1; font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    text-align: center; padding-bottom: 6px; border-bottom: 1px solid var(--line);
+    grid-column: span 1;
+  }
+  .lanes .lname {
+    font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    display: flex; align-items: center; padding-right: 10px;
+  }
+  .bar {
+    border-radius: 6px; padding: 8px 12px; margin: 4px 3px;
+    background: var(--card); border: 1px solid var(--line);
+    display: flex; flex-direction: column; justify-content: center; gap: 1px;
+  }
+  .bar b { font-size: 13.5px; font-weight: 700; }
+  .bar small { font-size: 11.5px; color: var(--muted); }
+  .bar.next  { border-color: var(--amber); background: var(--amber-soft); }
+  .bar.next b { color: var(--amber); }
+  .bar.done  { border-color: var(--pine); background: var(--pine-soft); }
+  .bar.done b { color: var(--pine); }
+  .legend { display: flex; gap: 18px; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; border: 1px solid var(--line); background: var(--card); }
+  .dot.done { background: var(--pine-soft); border-color: var(--pine); }
+  .dot.next { background: var(--amber-soft); border-color: var(--amber); }
+
+  /* ---------- PR cards ---------- */
+  .prs { display: grid; gap: 16px; }
+  .pr {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .pr.next { border-color: var(--amber); }
+  .pr-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .pr-no {
+    font-family: var(--mono); font-size: 12px; color: var(--pine);
+    letter-spacing: .06em;
+  }
+  .pr.next .pr-no { color: var(--amber); }
+  .pr-head h3 { font-family: var(--serif); font-size: 18px; font-weight: 700; margin: 0; flex: 1; }
+  .pr-goal { font-size: 14px; color: var(--muted); margin: 0; max-width: 72ch; }
+  .pr-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
+  @media (max-width: 720px) { .pr-cols { grid-template-columns: 1fr; } }
+  .pr-col h4 {
+    font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 6px; font-weight: 700;
+  }
+  .files { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font-size: 13px; }
+  .files li { padding-left: 14px; position: relative; }
+  .files li::before { content: ""; position: absolute; left: 0; top: .62em; width: 6px; height: 6px; border-radius: 2px; background: var(--line); }
+  .files li.add::before { background: var(--pine); }
+  .files li.mod::before { background: var(--amber); }
+  .files li .why { color: var(--muted); }
+  .accept { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13.5px; }
+  .accept li { padding-left: 22px; position: relative; }
+  .accept li::before {
+    content: "✓"; position: absolute; left: 2px; top: 0;
+    color: var(--pine); font-weight: 700;
+  }
+  .redline { font-size: 13px; color: var(--red); background: var(--red-soft); border-radius: 6px; padding: 7px 12px; }
+
+  /* ---------- tables ---------- */
+  .tbl-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); font-weight: 700; background: var(--paper); }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .lvl { font-family: var(--mono); font-size: 12px; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+  .lvl.zero { background: var(--pine-soft); color: var(--pine); }
+  .lvl.big  { background: var(--amber-soft); color: var(--amber); }
+  .lvl.small{ background: var(--paper); color: var(--muted); border: 1px solid var(--line); }
+
+  /* ---------- skip strip / footer ---------- */
+  .skip { background: var(--card); border: 1px dashed var(--line); border-radius: 8px; padding: 14px 18px; font-size: 13.5px; color: var(--muted); }
+  .skip b { color: var(--ink); }
+  footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 16px; }
+  footer code { font-family: var(--mono); font-size: .9em; }
+  a { color: var(--pine); }
+</style>
+
+<div class="page">
+
+  <header>
+    <div class="eyebrow">执行计划 · 2026-08-26 · feat/room-native-agent-bridge</div>
+    <h1>Room-Native Bridge 施工图</h1>
+    <p class="lede">把本地 Coding CLI 以 AgentTeams 外部 Worker 身份接进 Matrix 房间,同时保持 RepoMesh
+    的任务治理和宿主机隔离。本期交付档位 B+:PR 0–5 加一条平行修复轨。</p>
+    <div class="chips">
+      <span class="chip">Day 1:ADR + contract 初稿</span>
+      <span class="chip amber">下一步:PR 0 契约校正</span>
+      <span class="chip">Runtime v1 零改动</span>
+      <span class="chip">Codex 先行</span>
+      <span class="chip pine">受限本机进程</span>
+    </div>
+  </header>
+
+  <section class="stats">
+    <div class="stat"><div class="num">25–40</div><div class="lbl">总估算(人日,含平行轨)</div></div>
+    <div class="stat"><div class="num">5–8 周</div><div class="lbl">单人排期,五个里程碑</div></div>
+    <div class="stat"><div class="num">6 + P</div><div class="lbl">PR 0–5 + 一条平行修复轨</div></div>
+    <div class="stat"><div class="num">0</div><div class="lbl">Runtime v1 wire · Go Controller · 前端改动</div></div>
+  </section>
+
+  <section>
+    <h2>PR 0 后固定的裁决</h2>
+    <p class="sec-note">当前是待落实基线;PR 0 修正 ADR 和 contract 后冻结。</p>
+    <ol class="decisions">
+      <li>Bridge 是独立进程;需要改 Runner 语义 = 升 Runtime v2,另行 ADR。</li>
+      <li>外部 Worker 走 <code>containerManaged: false</code>,Go Controller 零改动。</li>
+      <li>Bridge 是深模块;外部 interface 只有 <code>RoomNativeAgent.run(enrollment)</code>,内部真实 seam 是 Worker binding、room、coding session 和 governed task。</li>
+      <li><code>CodingSessionPort</code> 直接消费 <code>ProtocolDriver.execute</code>;PR 5 复用完整 Runner 执行链,不重写执行器、测试和提交逻辑。</li>
+      <li>Bridge 兼任该 Worker 的 Runner consumer,不起第二个本地 Runner;控制凭据必须 Worker-scoped。</li>
+      <li>房间只收 <code>repomesh.room-observation.v1</code> allowlist 投影;THINKING、协议帧、未脱敏输出永不入房。</li>
+      <li><code>deny-all</code> 不是隔离;真实 CLI 必须经受限 ProcessFactory 启动,隔离 probe 失败则只允许 fake。</li>
+      <li>允许 Runner composition root 做保持默认行为的注入式小改;Runtime v1 wire、ProtocolDriver interface、Go Controller 和前端不改。</li>
+      <li>实验分支只取设计与测试场景,禁 cherry-pick 它的 driver 与 projector。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>排期泳道</h2>
+    <p class="sec-note">主线五个里程碑顺序推进;平行轨 P 可在 M1 后并行,唯一硬约束是先于 PR 5 完成。</p>
+    <div class="lane-scroll">
+      <div class="lanes">
+        <div class="lname" style="grid-row:1"></div>
+        <div class="whead" style="grid-column:2">W1</div>
+        <div class="whead" style="grid-column:3">W2</div>
+        <div class="whead" style="grid-column:4">W3</div>
+        <div class="whead" style="grid-column:5">W4</div>
+        <div class="whead" style="grid-column:6">W5</div>
+        <div class="whead" style="grid-column:7">W6</div>
+        <div class="whead" style="grid-column:8">W7</div>
+        <div class="whead" style="grid-column:9">W8</div>
+
+        <div class="lname" style="grid-row:2">契约</div>
+        <div class="bar next" style="grid-row:2; grid-column:2/span 1"><b>M0 · PR 0</b><small>契约校正 · 1–2 日</small></div>
+
+        <div class="lname" style="grid-row:3">主线</div>
+        <div class="bar" style="grid-row:3; grid-column:2/span 2"><b>M1 · PR 1+2</b><small>投影 + 可启动骨架 · 5–7 日</small></div>
+        <div class="bar" style="grid-row:3; grid-column:4/span 2"><b>M2 · PR 3</b><small>Matrix 可靠性 · 5–8 日</small></div>
+        <div class="bar" style="grid-row:3; grid-column:6/span 2"><b>M3 · PR 4</b><small>受限 Codex 对话 · 5–8 日</small></div>
+        <div class="bar" style="grid-row:3; grid-column:8/span 2"><b>M4 · PR 5</b><small>受治理执行 · 6–10 日</small></div>
+
+        <div class="lname" style="grid-row:4">平行轨</div>
+        <div class="bar" style="grid-row:4; grid-column:5/span 3"><b>P · 执行面修复</b><small>迁移 + 409 + mock 镜像验证 · 3–5 日</small></div>
+      </div>
+    </div>
+    <div class="legend">
+      <span><span class="dot next"></span>下一步</span>
+      <span><span class="dot"></span>排队中</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>逐个 PR 的改动范围</h2>
+    <p class="sec-note">绿点 = 新增文件,琥珀点 = 修改既有文件。每张卡片的验收即该 PR 的合并门禁。</p>
+    <div class="prs">
+
+      <article class="pr next">
+        <div class="pr-head">
+          <span class="pr-no">PR 0 · 下一步</span>
+          <h3>契约校正与安全 Spike</h3>
+          <span class="chip">1–2 人日 · 全案硬前置</span>
+        </div>
+        <p class="pr-goal">补齐 Worker 身份、Matrix 连接、联网 preflight 与宿主隔离承诺;三个 schema 可实现、可测试后再冻结 v1。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>修改 contract 与 ADR</h4>
+            <ul class="files">
+              <li class="mod"><code>docs/adr/0004-room-native-agent-bridge.md</code></li>
+              <li class="mod"><code>contracts/agent-bridge/v1/README.md</code></li>
+              <li class="mod"><code>external-worker-enrollment.schema.json</code> <span class="why">补 workerAgentId + matrixHomeserverUrl</span></li>
+              <li class="add"><code>external-worker-binding.schema.json</code> <span class="why">RepoMesh preflight 返回</span></li>
+              <li class="mod"><code>room-observation.schema.json</code> <span class="why">统一版本名与事件语义</span></li>
+              <li class="add"><code>tests/contracts/test_agent_bridge_v1_contract.py</code></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收</h4>
+            <ul class="accept">
+              <li>本地校验与联网 preflight 的顺序明确</li>
+              <li>Bridge 不持有 AgentTeams 管理凭据</li>
+              <li>平台 heartbeat 移到档位 C,本期仅本机 health probe</li>
+              <li>三个 schema 有 round-trip contract test</li>
+              <li>安全承诺落到受限 OS 身份/ACL,不把 deny-all 当隔离</li>
+            </ul>
+            <p class="redline" style="margin:10px 0 0">红线:PR 0 不实现 Matrix、CLI 或任务执行;未通过不得开始 PR 1</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="pr">
+        <div class="pr-head">
+          <span class="pr-no">PR 1</span>
+          <h3>外部 Worker 投影与绑定查询</h3>
+          <span class="chip">3–4 人日</span>
+        </div>
+        <p class="pr-goal">用显式 application command 创建、读回并校验 <code>containerManaged: false</code> Worker,并向 Bridge 提供只读 preflight;默认 Project Runtime 仍是 managed。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>主要改动</h4>
+            <ul class="files">
+              <li class="mod"><code>modules/agent_runtime/ports/agent_team.py</code> <span class="why">WorkerProjection 增 container_managed=True</span></li>
+              <li class="mod"><code>integrations/agentteams/control_plane.py</code> <span class="why">ensure/get/reconcile 携带并检查;不匹配 = Conflict</span></li>
+              <li class="mod"><code>modules/agent_runtime/contracts.py</code> <span class="why">external command/query + binding view</span></li>
+              <li class="add"><code>modules/agent_runtime/application/external_worker.py</code> <span class="why">显式 use case</span></li>
+              <li class="mod"><code>modules/agent_runtime/api/router.py</code> <span class="why">受认证 preflight</span></li>
+              <li class="mod"><code>integrations/agentteams/runtime_projection.py</code> <span class="why">adapter 供 use case 调用;默认路径不变</span></li>
+              <li class="mod"><code>tests/contracts/test_agentteams_integration.py</code></li>
+              <li class="mod"><code>tests/integrations/agentteams/test_runtime_projection.py</code></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收</h4>
+            <ul class="accept">
+              <li>契约测试:默认仍 managed,显式 external 为 false</li>
+              <li>managed ↔ external 冲突被拒</li>
+              <li>真机 smoke:external Worker 有 Matrix 身份、无容器、可进 Team</li>
+              <li>preflight 绑定 workerAgentId、Worker、Matrix 用户和 allowed rooms</li>
+              <li>错误绑定 fail-closed,响应不含 secret</li>
+            </ul>
+            <p class="redline" style="margin:10px 0 0">红线:不建 Bridge、不启 CLI、不用环境变量或隐式名单决定 external Worker</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="pr">
+        <div class="pr-head">
+          <span class="pr-no">PR 2</span>
+          <h3>可启动 Bridge v1 骨架</h3>
+          <span class="chip">2–3 人日</span>
+        </div>
+        <p class="pr-goal">保持 <code>RoomNativeAgent.run(enrollment)</code> 为唯一外部 interface;加入 WorkerBinding、Room、CodingSession 三个真实 seam,并产出可安装、可检查、可启动的单 Worker 进程。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>主要改动</h4>
+            <ul class="files">
+              <li class="add"><code>src/repomesh_agent_bridge/application.py</code> <span class="why">主循环骨架</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/contracts.py</code> <span class="why">与 schema 对齐</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/ports.py</code> <span class="why">WorkerBindingPort + RoomPort + CodingSessionPort</span></li>
+              <li class="add"><code>adapters/repomesh_binding.py</code> <span class="why">RepoMesh HTTP preflight adapter</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/cli.py · __main__.py</code> <span class="why">run/check,不输出 secret</span></li>
+              <li class="add"><code>components/repomesh-agent-bridge/README.md · component.toml</code></li>
+              <li class="add"><code>tests/agent_bridge/test_application.py · test_cli.py</code></li>
+              <li class="mod"><code>pyproject.toml · docs/architecture/module-map.md</code> <span class="why">entrypoint + 责任归属</span></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收</h4>
+            <ul class="accept">
+              <li>schema/profile/credential-ref 错误零网络 fail-fast</li>
+              <li>联网 preflight 拒绝非 external、身份错配和房间越权</li>
+              <li><code>--check</code> 不启动 Matrix 或 CLI</li>
+              <li>空运行生命周期:启动 → 取消 → 干净收尾</li>
+              <li>同一 Worker 的第二个 Bridge 实例 fail-fast</li>
+              <li>wheel 安装后的 entrypoint smoke 通过</li>
+              <li>测试只穿 RoomNativeAgent interface</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="pr">
+        <div class="pr-head">
+          <span class="pr-no">PR 3</span>
+          <h3>Matrix 与可靠性核心</h3>
+          <span class="chip">5–8 人日 · 全案最重</span>
+        </div>
+        <p class="pr-goal">fake coding session 下,真实语义地收提及、回消息、去重和重启恢复。从实验分支只提取 cursor 基线、受信邀请、turn ledger、session store、outbox 与确定性 txn id 的设计和测试场景。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>主要新增</h4>
+            <ul class="files">
+              <li class="add"><code>src/repomesh_agent_bridge/adapters/matrix.py</code> <span class="why">RoomPort 生产 adapter</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/state.py</code> <span class="why">sqlite:cursor/inbox/session refs,internal seam</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/inbox.py</code> <span class="why">去重 + turn ledger</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/outbox.py</code> <span class="why">发送意图先落盘;txn id 来自 trigger + ordinal</span></li>
+              <li class="add"><code>src/repomesh_agent_bridge/supervisor.py</code> <span class="why">Matrix 循环、重连、取消;CLI 收尾仍归 Driver</span></li>
+              <li class="add"><code>tests/agent_bridge/test_inbox.py · test_recovery.py · test_room_scope.py</code></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收</h4>
+            <ul class="accept">
+              <li>首轮不执行历史消息</li>
+              <li>同一 event 重放只产生一个回合</li>
+              <li>三个 crash window 均不丢回合、不重复发房间消息</li>
+              <li>只响应 allowlist 房间内的明确提及</li>
+              <li>状态测试用临时目录真 sqlite,不写 in-memory 替身</li>
+              <li>observationId 与 Matrix txn id 可重放确定,重试不生成随机身份</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="pr">
+        <div class="pr-head">
+          <span class="pr-no">PR 4</span>
+          <h3>受限本机进程 + Codex 对话</h3>
+          <span class="chip">5–8 人日</span>
+        </div>
+        <p class="pr-goal">真 Codex 进房对话并恢复 thread;对话会话不获得 worktree、SCM 凭据或控制面 token,并由可验证的受限 ProcessFactory 阻止宿主机越界访问。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>主要新增 · Runner 本 PR 零改动</h4>
+            <ul class="files">
+              <li class="add"><code>src/repomesh_agent_bridge/adapters/coding_session.py</code> <span class="why">消费 ProtocolDriver.execute;一次性只读 workspace + deny-all 权限</span></li>
+              <li class="add"><code>adapters/restricted_process.py</code> <span class="why">Runner ProcessFactory;Windows-first 受限身份/ACL/环境 allowlist</span></li>
+              <li class="add"><code>tests/agent_bridge/test_coding_session.py</code> <span class="why">scripted 与真 driver 共用行为 contract</span></li>
+              <li class="add"><code>tests/agent_bridge/test_process_isolation.py</code> <span class="why">sentinel 越权、环境泄漏、进程树终止</span></li>
+              <li><code>src/repomesh_runner/**</code> <span class="why">零改动(方案 a 红线;缺口 → 升级方案 b 另议)</span></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收</h4>
+            <ul class="accept">
+              <li>同一 Room 第二次提及恢复同一 Codex thread</li>
+              <li>另一 Room 不能串入该会话</li>
+              <li>任何工具调用被 deny-all 拒绝</li>
+              <li>CLI 看不到仓库外 sentinel、SCM 凭据和控制 token</li>
+              <li>运行前后真实仓库状态不变;取消后无子进程残留</li>
+              <li>真机 smoke 一轮</li>
+            </ul>
+            <p class="redline" style="margin:10px 0 0">降级规则:隔离 probe 失败时真实 CLI 拒绝启动,只允许 fake</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="pr">
+        <div class="pr-head">
+          <span class="pr-no">平行轨 P</span>
+          <h3>执行面修复</h3>
+          <span class="chip">3–5 人日 · PR 5 硬前置</span>
+        </div>
+        <p class="pr-goal">已核实的执行面缺口,不修则 PR 5 验收跑不通。与 PR 2–4 并行。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>三项修复</h4>
+            <ul class="files">
+              <li class="add"><code>migrations/versions/20260826_0036_*.py</code> <span class="why">P1:handoff_docs 缺表 → materialize 500(链尾现为 0035)</span></li>
+              <li class="mod"><code>integrations/runner/context_materializer.py 或拓扑默认值</code> <span class="why">P2:默认值错配 → 已建团仓库 409,落点待侦察</span></li>
+              <li class="mod"><code>components/repomesh-runner/Dockerfile + compose 文档</code> <span class="why">P3:Dockerfile 已存在;构建 mock 镜像做活体诊断,不加第二消费者</span></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收</h4>
+            <ul class="accept">
+              <li>已建团仓库 materialize 不再 409 / 500</li>
+              <li>start_assigned_task 全链路在 compose 环境走通</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+      <article class="pr">
+        <div class="pr-head">
+          <span class="pr-no">PR 5</span>
+          <h3>复用完整 Runner 链的受治理执行</h3>
+          <span class="chip">6–10 人日</span>
+        </div>
+        <p class="pr-goal">Bridge 兼任该 Worker 的 Runner consumer,但组合现有任务源、执行器、证据收集、事件 sink 与 ledger;房间进度是 Room Observation,不伪造尚未发布的 Runtime progress event。</p>
+        <div class="pr-cols">
+          <div class="pr-col">
+            <h4>组合既有深模块,不复制 seam</h4>
+            <ul class="files">
+              <li class="add"><code>adapters/governed_task.py</code> <span class="why">调用 start_assigned_task;RepoMesh 校验 Task/assignee</span></li>
+              <li class="add"><code>runner_consumer.py</code> <span class="why">组合 HttpLongPollTaskSource、serve/ExecuteRunnerTask、DriverExecutor、HttpEventSink、TaskLedger</span></li>
+              <li class="add"><code>tests/agent_bridge/test_governed_execution.py</code></li>
+              <li class="mod"><code>src/repomesh_agent_bridge/ports.py</code> <span class="why">只补 GovernedTaskPort;复用 Runner 已有 TaskSource/RunnerEventSink</span></li>
+              <li class="mod"><code>src/repomesh_runner/executor.py</code> <span class="why">composition root 可注入 ProcessFactory/observer,默认不变</span></li>
+              <li class="mod"><code>modules/agent_runtime/api/router.py</code> <span class="why">Worker-scoped lease/event auth</span></li>
+              <li><code>integrations/runner/{worker_execution,dispatch,task_projection,gateway}.py · workspace/git_worktree.py</code> <span class="why">复用,预期零改动或小改</span></li>
+            </ul>
+          </div>
+          <div class="pr-col">
+            <h4>验收(八条,全自动化)</h4>
+            <ul class="accept">
+              <li>普通聊天要求改代码 → 拒绝并提示走 Task</li>
+              <li>非 assignee 不能启动</li>
+              <li>allowed path 之外的改动失败</li>
+              <li>测试失败不创建 commit</li>
+              <li>相同 Task 重投复用 in-flight Run</li>
+              <li>房间文本"完成"不推进 Task,只认 Runner 终态事件</li>
+              <li>Bridge token 改写 Worker 或投递其他 Worker 的 run event → 401/403</li>
+              <li>Matrix + Runner 两循环任一失败不留子进程、不丢 cursor</li>
+            </ul>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>改动面汇总</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>区域</th><th>级别</th><th>数量</th></tr></thead>
+        <tbody>
+          <tr><td>新增:<code>src/repomesh_agent_bridge/</code> + <code>tests/agent_bridge/</code> + 组件说明</td><td><span class="lvl big">大</span></td><td class="num">~20–24 文件</td></tr>
+          <tr><td>修改/新增:<code>contracts/agent-bridge/v1/</code> + ADR 0004 + contract test</td><td><span class="lvl big">中</span></td><td class="num">6 文件</td></tr>
+          <tr><td>修改:agent_runtime contracts/application/API + agentteams integration</td><td><span class="lvl big">中</span></td><td class="num">~6–8 文件</td></tr>
+          <tr><td>修改:Runner composition root + 测试</td><td><span class="lvl small">小</span></td><td class="num">2–3 文件</td></tr>
+          <tr><td>新增:迁移 + compose 文档(平行轨 P)</td><td><span class="lvl small">小</span></td><td class="num">2–3 文件</td></tr>
+          <tr><td>Go Controller · Runtime v1 wire contract · 前端</td><td><span class="lvl zero">零改动</span></td><td class="num">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>风险与缓解</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th style="width:42px">#</th><th>风险</th><th>缓解</th></tr></thead>
+        <tbody>
+          <tr><td class="num">R1</td><td>Enrollment 身份/连接不足</td><td>PR 0 补 workerAgentId、homeserver URL 与 binding schema;PR 1 preflight 校验</td></tr>
+          <tr><td class="num">R2</td><td>凭据交付</td><td>本机 keyring/env 引用 + 人工放置 token;不做在线秘密交换,日志不展开引用值</td></tr>
+          <tr><td class="num">R3</td><td>Matrix 重放 / 崩溃一致性</td><td>PR 3 用 inbox + outbox + deterministic txn 覆盖三个 crash window</td></tr>
+          <tr><td class="num">R4</td><td>协作式权限被误当隔离</td><td>受限 ProcessFactory + sentinel 测试为硬门禁;probe 失败拒绝真实 CLI</td></tr>
+          <tr><td class="num">R5</td><td>Worker 越权领取/回写</td><td>Worker-scoped token;服务端从认证主体派生 Worker,不信任 query/body 自报身份</td></tr>
+          <tr><td class="num">R6</td><td>Windows 差异(CRLF / MSYS / ACL / 进程树)</td><td>Windows-first 活体 isolation test;Linux adapter 后续;估算取上限</td></tr>
+          <tr><td class="num">R7</td><td>实验分支漂移</td><td>只取场景与设计;禁 cherry-pick driver / projector</td></tr>
+          <tr><td class="num">R8</td><td>双 Runner 消费者竞争</td><td>Bridge 兼任 consumer;compose 不加第二 Runner;同 Worker 启动锁 fail-fast</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>每个 PR 的统一合并门禁</h2>
+    <ol class="decisions">
+      <li>interface 行为测试先于实现细节测试;不得用目录结构断言替代行为验收。</li>
+      <li>每个外部副作用具备幂等键或 retry policy;新增远程 seam 同时有 production 与 in-memory/test adapter。</li>
+      <li><code>ruff check .</code> 与 <code>pytest</code> 全绿;真实 Matrix/Codex smoke 独立标记,无凭据时明确 skip。</li>
+      <li>扫描日志、fixture 与 Enrollment,确认无 token、系统提示、THINKING、原始协议帧或绝对私有路径。</li>
+      <li>跨模块只依赖 <code>repomesh.modules.&lt;producer&gt;.contracts</code>;composition root 才连接具体 adapter。</li>
+      <li>PR 描述列出验证证据、回滚方式和剩余风险;禁止混入当前工作区无关改动。</li>
+    </ol>
+  </section>
+
+  <section>
+    <div class="skip"><b>本期明确不做(档位 C,另行立项):</b>
+    input_required 房间问答闭环 · claude-code / kimi adapter · 多 Worker supervisor ·
+    Linux 宿主隔离 adapter · Windows Service / systemd 安装器 · 在线凭据交换/轮换 ·
+    平台 heartbeat / OTLP 观测 · 前端 external/online 展示</div>
+  </section>
+
+  <footer>
+    事实源:<code>docs/development/room-native-bridge-execution-plan-20260826.md</code>(执行用完整版)·
+    依据:<code>docs/development/room-native-coding-agent-bridge-proposal-20260826.md</code> ·
+    <code>docs/adr/0004-room-native-agent-bridge.md</code> · <code>contracts/agent-bridge/v1/</code>
+  </footer>
+
+</div>
