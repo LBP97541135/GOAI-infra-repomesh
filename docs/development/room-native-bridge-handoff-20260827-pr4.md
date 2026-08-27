@@ -1,8 +1,8 @@
-# Room-Native Bridge 交接文档(至 PR 4 收口 + 会话级活体验收)
+# Room-Native Bridge 交接文档(至 PR 4 收口 + 完整 Matrix E2E)
 
 > 日期:2026-08-27
-> 分支:`feat/room-native-agent-bridge`(**main 之上 33 提交,未推送**)
-> 状态:**PR 0–4 全部收口;PR 4 的会话级活体验收全项通过(真 codex 进受限进程对话)**
+> 分支:`feat/room-native-agent-bridge`(**main 之上 35 提交,未推送**)
+> 状态:**PR 0–4 全部收口;会话级验收 + 完整 Matrix E2E 均已通过(真 codex 在真团队房回话)**
 > 上一份交接:`docs/development/room-native-bridge-handoff-20260827.md`(至 PR 3,历史仍有效)
 > 读者:零上下文接手本线的工程师或 agent 会话
 
@@ -94,7 +94,7 @@ $ .venv/Scripts/python.exe -m pytest -q
 
 ---
 
-## 6. 活体验收(全部真机)
+## 6. 活体验收(全部真机:会话级 + 完整 E2E)
 
 ### 6.1 隔离 probe(本机 required_ok=True)
 
@@ -119,7 +119,50 @@ $ .venv/Scripts/python.exe -m pytest -q
 
 **旁证**:回合三属于另一个 thread,拿到的是**不同 session id**(`...29305`)——跨会话不串味的活体佐证。
 
-### 6.3 未登录时 gate 真拒绝
+### 6.3 完整 Matrix E2E(真房间 + 真 codex)
+
+复用阶段 1 遗留的 `repomesh-preflight-{probe,leader,team}`(probe 本就是 `containerManaged:false`、
+有 Matrix 身份与房间),**本轮零新增 controller 残留**。一次性 postgres @15547 迁到 head,
+seed 出 admin + org leader + worker principal,uvicorn 8077,socat 18090 → controller 8090。
+
+> **关键手法**:worker principal 的 id 钉成 `4d1e6f00-0000-4000-8000-000000000004` ——
+> 与 §7.1 已登录 codex 的会话目录同一个 UUID,于是 `session_root()` 直接落在已认证的
+> `CODEX_HOME` 上,`ensure_ready` 无需二次登录即通过。
+
+链路:`admin PUT` → 200 `{containerManaged:false}`;`GET binding` → 200 完整 binding.v1、
+两个 allowedRoomIds;无 token → 401;`bridge check` → exit 0(profile=codex);
+`bridge run` → 三段 gate 全过(含受限下真 codex 握手)→ `bridge ready ... profile=codex rooms=2`。
+
+房间里的最终画面(同一个团队房,两代 build 的回答上下相邻):
+
+```
+@repomesh-preflight-probe  | [note] I am in this room and I can hear you, but this build cannot run a coding session yet.   ← 阶段 1(inert)
+@repomesh-preflight-leader | @repomesh-preflight-probe What is 17 plus 25? ... which coding CLI you are running as.
+@repomesh-preflight-probe  | [note] 42. I'm running as the Codex CLI.                                                      ← 本轮(真 codex)
+@repomesh-preflight-leader | (线程内)Which number did you just give me in this thread?
+@repomesh-preflight-probe  | [note] 42                                                                                     ← rel_type m.thread
+```
+
+**resume 的 rollout 级证据**:两条提示词落在**同一个 rollout 文件**(session `01a04429-8284-…`),
+而后来的顶层提及另开了 session(`01a0442a-fba0-…`)—— `thread/resume` 确实复用了会话,
+不同 thread 也确实不共享。仓库前后不变;拆环境后进程归零。
+
+### 6.4 deny-all 活体:结论正确,但首读是个陷阱
+
+在房间里要求执行 `echo E2E_TOOL_SENTINEL_9931` 并报告 stdout,房间回了
+`[note] E2E_TOOL_SENTINEL_9931` —— **看起来像工具跑了**。rollout 说的是反面:codex 调了两次
+`exec`(第二次还带 `sandbox_permissions=require_escalated` 与理由),**两次都被拒**:
+
+```
+exec_command failed for `powershell.exe -Command 'echo E2E_TOOL_SENTINEL_9931'`:
+CreateProcess { message: "Rejected(\"approval request failed\")" }
+```
+
+命令从未执行,那串 sentinel 是模型**猜**出来的(`echo` 的输出太好猜)。**隔离成立**。
+测试设计教训:输出可被 LLM 猜到的 deny-all 探针,**单看房间文本什么也证明不了** ——
+要么读 rollout,要么用模型无法预测的输出。
+
+### 6.5 未登录时 gate 真拒绝
 
 对全新会话目录跑 `ensure_ready`:真起了 codex、过了握手,然后因缺 `auth.json` 拒绝,
 并打印 `CODEX_HOME=<dir> codex login`。**gate 自 reap,零残留 pid。**
@@ -187,6 +230,7 @@ $env:CODEX_HOME="<codex-home>"; New-Item -Path $env:CODEX_HOME -ItemType Directo
 | **M** | **读隔离(restricted SIDs)本期不做**,`IsolationReport` 如实标 unsupported。要挡"CLI 自发读盘"需给真实用户目录加 ACE |
 | **N** | **POSIX 无隔离 adapter**:`probe()` 全项 unsupported、`spawn` 拒绝,故非 Windows 只能 `--inert` |
 | **O** | claude-code / kimi **无真 adapter**(H-6 拒绝启动并指路 `--inert`) |
+| **P** | **房间分不清「跑了得到 X」与「被拒后猜了 X」**(§6.4 实测):全部工具调用被拒的回合仍报 `completed`,房间只看到一个自信的答案。`DriverResult` 带着 `tool_call_count`、驱动也知道审批被拒,但这些都没进 observation。**归 PR 5 处理**——受治理执行绝不能继承这个:房间文本读起来像命令结果而实际什么都没跑,正是本线要消灭的「四层假绿」 |
 
 ### 8.3 环境侧(非代码,沿用上一份)
 
@@ -197,9 +241,7 @@ RepoMesh provisioning 会用自己的投影覆盖 worker 的 runtime/skills;Dock
 
 ## 9. 下一步
 
-1. **完整 Matrix E2E**(本轮按用户决定顺延):重建阶段 1 全栈(一次性 postgres + 迁移 + seed +
-   uvicorn + socat forwarder + appservice login 取 worker token),在真房间 @ 它让**真 codex** 回话。
-   会话级已证明 codex 侧全通,E2E 要证的是两者接起来。
+1. ~~完整 Matrix E2E~~ —— **已完成,见 §6.3/§6.4**。
 2. **平行轨 P 剩余**:WO-P3(mock Runner 镜像构建 + 活体诊断)、WO-S3(真机 smoke 服务端准备);
    materialize 的活体验收(`handoff_doc_ids` 非空)仍未走过。二者是 PR 5 硬前置。
 3. **PR 5 — 复用完整 Runner 链的受治理执行**(估 6–10 人日):`GovernedTaskPort` 调
