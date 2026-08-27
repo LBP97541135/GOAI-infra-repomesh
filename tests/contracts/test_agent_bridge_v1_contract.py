@@ -1,19 +1,30 @@
-"""Structural round-trip tests for the Agent Bridge v1 contracts (PR 0).
+"""Round-trip tests for the Agent Bridge v1 contracts (PR 0).
 
-No implementation code exists yet (``src/repomesh_agent_bridge`` lands in PR 2), so "round-trip"
-here means: canonical fixture payloads are checked structurally against the schema's own
+Fixture payloads are checked against the schema's own
 ``required``/``properties``/``enum``/``pattern``/``const`` declarations, the same hand-rolled
-style as ``tests/contracts/test_runtime_v1_contract.py``. When ``contracts.py`` lands in PR 2,
-these fixtures should be replaced by real dataclass ``to_wire()`` payloads without changing the
-shape of these assertions.
+style as ``tests/contracts/test_runtime_v1_contract.py``.
+
+The binding fixture is no longer hand-written: it is what
+``ExternalWorkerBindingView.to_wire()`` produces, which is the document the preflight endpoint
+actually returns. A schema and a dataclass that were only ever compared through a third,
+hand-kept payload can drift apart while every test stays green — the fixture would simply be
+edited to match whichever side moved. Now the producer is under test and the schema is the
+assertion.
+
+Enrollment and observation stay hand-written, because their producer is the Bridge and its
+dataclasses do not exist yet (``src/repomesh_agent_bridge``); those two swap over the same way
+once it lands.
 """
 
 import json
 import re
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
+
+from repomesh.modules.agent_runtime.contracts import ExternalWorkerBindingView
 
 CONTRACT_ROOT = Path(__file__).parents[2] / "contracts" / "agent-bridge" / "v1"
 
@@ -58,16 +69,16 @@ def make_enrollment() -> dict[str, Any]:
 
 
 def make_binding() -> dict[str, Any]:
-    return {
-        "schemaVersion": BINDING_SCHEMA_VERSION,
-        "organizationId": "00000000-0000-0000-0000-000000000001",
-        "teamName": "pricing-repo-team",
-        "workerAgentId": "00000000-0000-0000-0000-000000000002",
-        "workerName": "pricing-codex-worker",
-        "matrixUserId": "@pricing-codex-worker:matrix.example.org",
-        "allowedRoomIds": ["!room1:matrix.example.org"],
-        "containerManaged": False,
-    }
+    """The wire document RepoMesh's own producer emits, not a copy of it."""
+
+    return ExternalWorkerBindingView(
+        organization_id=UUID("00000000-0000-0000-0000-000000000001"),
+        team_name="pricing-repo-team",
+        worker_agent_id=UUID("00000000-0000-0000-0000-000000000002"),
+        worker_name="pricing-codex-worker",
+        matrix_user_id="@pricing-codex-worker:matrix.example.org",
+        allowed_room_ids=("!room1:matrix.example.org",),
+    ).to_wire()
 
 
 def make_observation() -> dict[str, Any]:
@@ -146,6 +157,10 @@ def test_binding_canonical_fixture_matches_schema(binding_schema: dict[str, Any]
     properties = binding_schema["properties"]
     assert properties["containerManaged"]["const"] is False
     assert fixture["containerManaged"] is False
+    # Worth an assertion only now that the fixture is the producer's own
+    # output: this compares the constant the endpoint stamps on every response
+    # against the one the frozen schema declares.
+    assert fixture["schemaVersion"] == properties["schemaVersion"]["const"]
     assert re.match(properties["matrixUserId"]["pattern"], fixture["matrixUserId"])
     room_pattern = properties["allowedRoomIds"]["items"]["pattern"]
     for room_id in fixture["allowedRoomIds"]:

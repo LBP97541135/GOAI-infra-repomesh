@@ -22,14 +22,23 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from integrations.agentteams.fakes import StubDirectory
 
 from repomesh.api.router import api_router
 from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalStatus,
     AgentPrincipalView,
     AgentRole,
+)
+from repomesh.modules.agent_runtime.application.external_worker import (
+    ResolveExternalWorkerBinding,
+)
+from repomesh.modules.agent_runtime.contracts import (
+    ExternalWorkerBindingQuery,
+    ExternalWorkerError,
 )
 from repomesh.modules.agent_runtime.ports.agent_team import (
     TeamRuntimeRef,
@@ -42,17 +51,27 @@ WORKER_ID = uuid4()
 ORGANIZATION_ID = uuid4()
 WORKER_NAME = "repomesh-worker-bridge"
 HEADERS = {"Authorization": "Bearer runner-secret"}
+FAULT_DETAIL = "psycopg.OperationalError: password authentication failed for user 'repomesh'"
 
 
-class StubDirectory:
-    def __init__(self, views: dict[UUID, AgentPrincipalView]) -> None:
-        self._views = views
+class ControllerFault(RuntimeError):
+    """Something the endpoint has no answer for.
 
-    async def get_view(self, agent_id: UUID) -> AgentPrincipalView | None:
-        return self._views.get(agent_id)
+    Not an ``ExternalWorkerError``: those are verdicts on the request and each
+    has its status code. This is the third kind of failure — the read broke in
+    a way nobody classified — and it carries a message of exactly the sort that
+    must not reach a Bridge.
+    """
 
-    async def list_views(self) -> tuple[AgentPrincipalView, ...]:
-        return tuple(self._views.values())
+
+class FaultyControlPlane:
+    """A control plane whose reads raise something unclassified."""
+
+    async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
+        raise ControllerFault(FAULT_DETAIL)
+
+    async def get_team(self, name: str) -> TeamRuntimeRef | None:
+        raise ControllerFault(FAULT_DETAIL)
 
 
 class StubControlPlane:
@@ -114,13 +133,22 @@ def _worker_principal(
     )
 
 
-def _client(*, directory: StubDirectory, control_plane: object | None, monkeypatch) -> TestClient:
+def _client(
+    *,
+    directory: StubDirectory,
+    control_plane: object | None,
+    monkeypatch,
+    raise_server_exceptions: bool = True,
+) -> TestClient:
     monkeypatch.setenv("REPOMESH_RUNNER_CONTROL_TOKEN", "runner-secret")
     get_settings.cache_clear()
     application = FastAPI()
     application.include_router(api_router)
     application.state.container = StubContainer(directory=directory, control_plane=control_plane)
-    return TestClient(application)
+    # ``raise_server_exceptions=False`` is how a test sees the response a real
+    # deployment sends for an unhandled exception; the default re-raises it in
+    # the test process instead, which cannot answer "what did the Bridge get".
+    return TestClient(application, raise_server_exceptions=raise_server_exceptions)
 
 
 def _get(
@@ -137,7 +165,7 @@ def _get(
 
 def test_missing_token_is_401(monkeypatch) -> None:
     client = _client(
-        directory=StubDirectory({WORKER_ID: _worker_principal()}),
+        directory=StubDirectory(_worker_principal()),
         control_plane=StubControlPlane(),
         monkeypatch=monkeypatch,
     )
@@ -147,7 +175,7 @@ def test_missing_token_is_401(monkeypatch) -> None:
 
 def test_wrong_token_is_401(monkeypatch) -> None:
     client = _client(
-        directory=StubDirectory({WORKER_ID: _worker_principal()}),
+        directory=StubDirectory(_worker_principal()),
         control_plane=StubControlPlane(),
         monkeypatch=monkeypatch,
     )
@@ -157,7 +185,7 @@ def test_wrong_token_is_401(monkeypatch) -> None:
 
 def test_unknown_worker_agent_id_is_404(monkeypatch) -> None:
     client = _client(
-        directory=StubDirectory({}),
+        directory=StubDirectory(),
         control_plane=StubControlPlane(),
         monkeypatch=monkeypatch,
     )
@@ -169,7 +197,7 @@ def test_a_managed_worker_is_refused_as_409(monkeypatch) -> None:
     """The controller still owns this worker's container -- no binding."""
 
     client = _client(
-        directory=StubDirectory({WORKER_ID: _worker_principal()}),
+        directory=StubDirectory(_worker_principal()),
         control_plane=StubControlPlane(
             worker=WorkerRuntimeRef(
                 name=WORKER_NAME,
@@ -189,7 +217,7 @@ def test_an_unreachable_control_plane_is_503(monkeypatch) -> None:
     """Regression pin: this used to escape as an unhandled 500."""
 
     client = _client(
-        directory=StubDirectory({WORKER_ID: _worker_principal()}),
+        directory=StubDirectory(_worker_principal()),
         control_plane=StubControlPlane(unavailable=True),
         monkeypatch=monkeypatch,
     )
@@ -200,7 +228,7 @@ def test_an_unreachable_control_plane_is_503(monkeypatch) -> None:
 
 def test_an_unconfigured_control_plane_is_503(monkeypatch) -> None:
     client = _client(
-        directory=StubDirectory({WORKER_ID: _worker_principal()}),
+        directory=StubDirectory(_worker_principal()),
         control_plane=None,
         monkeypatch=monkeypatch,
     )
@@ -211,7 +239,7 @@ def test_an_unconfigured_control_plane_is_503(monkeypatch) -> None:
 
 def test_a_confirmed_binding_is_200_with_the_exact_wire_body(monkeypatch) -> None:
     client = _client(
-        directory=StubDirectory({WORKER_ID: _worker_principal()}),
+        directory=StubDirectory(_worker_principal()),
         control_plane=StubControlPlane(
             worker=WorkerRuntimeRef(
                 name=WORKER_NAME,
@@ -249,3 +277,56 @@ def test_a_confirmed_binding_is_200_with_the_exact_wire_body(monkeypatch) -> Non
         ],
         "containerManaged": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# A fault is not a verdict: 500, and it says nothing else (PR 1 Minor)
+# ---------------------------------------------------------------------------
+
+
+def test_an_unclassified_control_plane_fault_is_an_untranslated_500(monkeypatch) -> None:
+    """The fourth outcome, pinned so it cannot drift into one of the other three.
+
+    404, 409 and 503 are answers about the request: this agent is unknown, this
+    binding does not add up, the controller did not respond. A fault is none of
+    them — something inside RepoMesh broke — and translating it would tell an
+    operator to go and fix a worker that is fine, or a Bridge to retry
+    something no retry will fix. The refusals are enumerated in the router; the
+    absence of a bare ``except Exception`` beside them is the contract, and
+    this is what holds it.
+
+    The body matters as much as the code. This endpoint answers a process that
+    holds no AgentTeams credential, so an internal message reaching it is both
+    a confusing answer and a leak.
+    """
+
+    client = _client(
+        directory=StubDirectory(_worker_principal()),
+        control_plane=FaultyControlPlane(),
+        monkeypatch=monkeypatch,
+        raise_server_exceptions=False,
+    )
+    response = _get(client)
+
+    assert response.status_code == 500
+    assert FAULT_DETAIL not in response.text
+    assert "ControllerFault" not in response.text
+    assert "Traceback" not in response.text
+
+
+async def test_the_use_case_lets_an_unclassified_fault_through_unchanged() -> None:
+    """The other half of the pin, one layer down.
+
+    The router can only decline to translate what reaches it unchanged, so the
+    use case has to be fail-*loud* here rather than fail-closed: an unexpected
+    exception is not an ``ExternalWorkerRefused``, and turning it into one
+    would make a 409 out of a broken read — a refusal nobody can act on.
+    """
+
+    with pytest.raises(ControllerFault) as raised:
+        await ResolveExternalWorkerBinding(
+            StubDirectory(_worker_principal()), FaultyControlPlane()
+        ).execute(ExternalWorkerBindingQuery(worker_agent_id=WORKER_ID))
+
+    assert not isinstance(raised.value, ExternalWorkerError)
+    assert str(raised.value) == FAULT_DETAIL

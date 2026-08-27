@@ -161,7 +161,38 @@ class WorkerControlPlaneUnavailable(RuntimeError):
     """
 
 
-class AgentTeamControlPlane(Protocol):
+class WorkerBindingReader(Protocol):
+    """The two reads the bridge preflight makes, and nothing else.
+
+    RepoMesh's side of the port the Bridge calls ``WorkerBindingPort``: one
+    worker document, one Team document, no writes and no way to reach anything
+    else on the controller's surface. ``ResolveExternalWorkerBinding`` and the
+    router depend on *this*, not on ``AgentTeamControlPlane``, because narrow
+    is the security property — a use case that cannot ensure cannot provision,
+    and a Bridge-facing endpoint holding a full control-plane handle is one
+    refactor away from being a proxy for it (ADR 0004 decisions 4, 5).
+
+    It is also what the composition root actually supplies: the adapter behind
+    the preflight (``ExternalWorkerProjection``) implements these two reads and
+    a provisioning method, and never implemented the rest of
+    ``AgentTeamControlPlane`` at all.
+
+    Both reads raise ``WorkerControlPlaneUnavailable`` when the controller
+    cannot be reached, which is the whole reason the adapter exists.
+    """
+
+    async def get_worker(self, name: str) -> WorkerRuntimeRef | None: ...
+
+    async def get_team(self, name: str) -> TeamRuntimeRef | None:
+        """Read a team's runtime without creating it.
+
+        `ensure_team` also returns a TeamRuntimeRef, but it provisions when the
+        team is absent — unusable from a read-only endpoint.
+        """
+        ...
+
+
+class AgentTeamControlPlane(WorkerBindingReader, Protocol):
     async def ensure_manager(
         self, projection: ManagerProjection, *, idempotency_key: str
     ) -> ManagerRuntimeRef: ...
@@ -175,16 +206,6 @@ class AgentTeamControlPlane(Protocol):
     ) -> TeamRuntimeRef: ...
 
     async def get_manager(self, name: str) -> ManagerRuntimeRef | None: ...
-
-    async def get_worker(self, name: str) -> WorkerRuntimeRef | None: ...
-
-    async def get_team(self, name: str) -> TeamRuntimeRef | None:
-        """Read a team's runtime without creating it.
-
-        `ensure_team` also returns a TeamRuntimeRef, but it provisions when the
-        team is absent — unusable from a read-only endpoint.
-        """
-        ...
 
     async def ensure_worker_ready(
         self, name: str, *, idempotency_key: str

@@ -41,8 +41,8 @@ from repomesh.modules.agent_runtime.contracts import (
     UnknownExternalWorker,
 )
 from repomesh.modules.agent_runtime.ports.agent_team import (
-    AgentTeamControlPlane,
     ExternalWorkerProvisioner,
+    WorkerBindingReader,
 )
 
 
@@ -99,11 +99,14 @@ class ResolveExternalWorkerBinding:
     is worth a network round-trip at all.
 
     Not a proxy: it exposes these joined facts and nothing else, so a Bridge
-    cannot reach the controller's surface through it.
+    cannot reach the controller's surface through it. That is held by the
+    dependency as much as by the code — ``WorkerBindingReader`` is two reads,
+    so there is no ``ensure_*`` in scope to be tempted by and no widening of
+    this endpoint that does not first widen a port.
     """
 
     def __init__(
-        self, directory: AgentPrincipalReader, control_plane: AgentTeamControlPlane
+        self, directory: AgentPrincipalReader, control_plane: WorkerBindingReader
     ) -> None:
         self._directory = directory
         self._control_plane = control_plane

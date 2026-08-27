@@ -14,7 +14,10 @@ from repomesh.modules.agent_runtime.contracts import (
     UnknownExternalWorker,
 )
 from repomesh.modules.agent_runtime.ports import CodingRunRequest
-from repomesh.modules.agent_runtime.ports.agent_team import WorkerControlPlaneUnavailable
+from repomesh.modules.agent_runtime.ports.agent_team import (
+    WorkerBindingReader,
+    WorkerControlPlaneUnavailable,
+)
 from repomesh.settings import get_settings
 
 from .models import (
@@ -66,11 +69,20 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
     The body is returned as the contract's own dict rather than through a
     response model, so the wire shape is the one ``to_wire`` produces and
     nothing re-derives it.
+
+    The handle this reads through is a ``WorkerBindingReader`` — two reads, no
+    writes — so what a Bridge can reach through this endpoint is bounded by a
+    port rather than by this function's restraint. Anything not named below
+    (an ``ExternalWorkerRefused``, an ``UnknownExternalWorker``, a
+    ``WorkerControlPlaneUnavailable``) is a fault of RepoMesh's or the
+    controller's, not a verdict on the request, and is deliberately left
+    untranslated: a 500 says "this is broken", which is true, where a 409 would
+    tell an operator to go and fix a binding that is fine.
     """
 
     _authorize_runner(request)
     container = request.app.state.container
-    control_plane = container.external_worker_binding_control_plane()
+    control_plane: WorkerBindingReader | None = container.external_worker_binding_control_plane()
     if control_plane is None:
         # Fail-closed: with no controller there is nothing to confirm against,
         # and an unconfirmed binding is worse than no answer.

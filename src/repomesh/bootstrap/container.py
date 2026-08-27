@@ -14,6 +14,7 @@ from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
+    WorkerBindingReader,
 )
 from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
@@ -449,7 +450,7 @@ class ApplicationContainer:
             worker_task_control_url=get_settings().worker_task_control_url,
         )
 
-    def external_worker_binding_control_plane(self) -> AgentTeamControlPlane | None:
+    def external_worker_binding_control_plane(self) -> WorkerBindingReader | None:
         """The control plane the bridge preflight (ADR 0004) reads through.
 
         Wraps ``agent_team_control_plane`` in ``ExternalWorkerProjection`` so
@@ -457,6 +458,12 @@ class ApplicationContainer:
         as ``WorkerControlPlaneUnavailable`` rather than the integration's own
         ``AgentTeamsUnavailable`` — the router maps the former to 503 without
         importing ``repomesh.integrations.*``, which module code may not do.
+
+        Typed as the narrow ``WorkerBindingReader`` because that is what this
+        returns and what the preflight may have: the adapter implements two
+        reads and a provisioning method, never the whole
+        ``AgentTeamControlPlane``, and an annotation claiming otherwise invites
+        a caller to reach for an ``ensure_*`` that is not there.
 
         Scoped to this one call site: every other reader of
         ``agent_team_control_plane`` (``ProjectRuntimeProjection``,
