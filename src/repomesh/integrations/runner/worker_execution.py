@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
@@ -9,6 +11,8 @@ from repomesh.modules.agent_runtime.contracts import (
     DispatchWorkerTaskCommand,
     StartAssignedWorkerTaskCommand,
     WorkerDispatchReader,
+    WorkerExecutionReservation,
+    WorkerExecutionReservationPort,
 )
 from repomesh.modules.capability_management import ResolveAgentCapabilities
 from repomesh.modules.context.application import PublishContextBundle
@@ -101,6 +105,10 @@ class StartAssignedWorkerTask:
         states: TaskExecutionStateGateway,
         reporter: TaskReportGateway | None = None,
         dispatches: WorkerDispatchReader | None = None,
+        reservations: WorkerExecutionReservationPort | None = None,
+        reservation_lease_seconds: int = 300,
+        reservation_wait_seconds: int = 30,
+        reservation_owner: str | None = None,
     ) -> None:
         self._directory = directory
         self._tasks = tasks
@@ -113,6 +121,10 @@ class StartAssignedWorkerTask:
         self._states = states
         self._reporter = reporter
         self._dispatches = dispatches
+        self._reservations = reservations
+        self._reservation_lease_seconds = reservation_lease_seconds
+        self._reservation_wait_seconds = reservation_wait_seconds
+        self._reservation_owner = reservation_owner or f"{socket.gethostname()}:{uuid4()}"
 
     async def execute(self, command: StartAssignedWorkerTaskCommand) -> WorkerExecutionStarted:
         principal = await self._directory.get_view(command.worker_agent_id)
@@ -130,7 +142,26 @@ class StartAssignedWorkerTask:
         in_flight = await self._in_flight_run(task.id, command.worker_agent_id)
         if in_flight is not None:
             return in_flight
-        run_id = uuid4()
+        reservation = None
+        if self._reservations is not None:
+            try:
+                reserved = await self._reservations.reserve(
+                    organization_id=task.organization_id,
+                    project_id=task.project_id,
+                    repository_id=task.repository_id,
+                    task_id=task.id,
+                    worker_agent_id=command.worker_agent_id,
+                    lease_owner=self._reservation_owner,
+                    lease_seconds=self._reservation_lease_seconds,
+                )
+            except Exception as error:
+                raise WorkerExecutionStartError(
+                    f"worker execution reservation unavailable: {error}"
+                ) from error
+            reservation = reserved.reservation
+            if not reserved.created:
+                return await self._wait_for_reserved_execution(reservation)
+        run_id = reservation.run_id if reservation is not None else uuid4()
         await self._states.start(task.id, agent_id=command.worker_agent_id)
         try:
             repository = await self._repositories.get(task.repository_id)
@@ -185,7 +216,16 @@ class StartAssignedWorkerTask:
                 expires_at=datetime.now(UTC) + timedelta(hours=4),
             )
             await self._bundles.execute(bundle, permission_layers=())
+            if reservation is not None and self._reservations is not None:
+                await self._reservations.renew(
+                    reservation.id,
+                    lease_owner=self._reservation_owner,
+                    fencing_version=reservation.version,
+                    lease_seconds=self._reservation_lease_seconds,
+                )
         except Exception as error:
+            if reservation is not None:
+                await self._fail_reservation(reservation, error)
             summary = f"Execution preparation blocked: {type(error).__name__}: {error}"
             await self._states.block(task.id, agent_id=command.worker_agent_id, summary=summary)
             if self._reporter is not None:
@@ -199,8 +239,9 @@ class StartAssignedWorkerTask:
                     idempotency_key=f"{task.id}:prepare:{run_id}:blocked",
                 )
             raise WorkerExecutionStartError(summary) from error
-        return await self._execution.execute(
-            DispatchWorkerTaskCommand(
+        try:
+            started = await self._execution.execute(
+                DispatchWorkerTaskCommand(
                 organization_id=task.organization_id,
                 project_id=task.project_id,
                 repository_id=task.repository_id,
@@ -213,7 +254,63 @@ class StartAssignedWorkerTask:
                 base_revision=command.base_revision,
                 task_features=command.task_features,
             )
-        )
+            )
+            if reservation is not None and self._reservations is not None:
+                await self._reservations.bind_payload(
+                    reservation.id,
+                    started.task.to_wire(),
+                    lease_owner=self._reservation_owner,
+                    fencing_version=reservation.version,
+                )
+            return started
+        except Exception as error:
+            if reservation is not None:
+                await self._fail_reservation(reservation, error)
+            raise
+
+    async def _wait_for_reserved_execution(
+        self, reservation: WorkerExecutionReservation
+    ) -> WorkerExecutionStarted:
+        assert self._reservations is not None
+        deadline = asyncio.get_running_loop().time() + self._reservation_wait_seconds
+        current = reservation
+        while current.task_payload is None:
+            if asyncio.get_running_loop().time() >= deadline:
+                raise WorkerExecutionStartError(
+                    f"worker execution {current.run_id} is still preparing"
+                )
+            await asyncio.sleep(0.05)
+            refreshed = await self._reservations.get_active(current.task_id)
+            if refreshed is None:
+                raise WorkerExecutionStartError(
+                    f"worker execution {current.run_id} preparation did not complete"
+                )
+            current = refreshed
+        try:
+            return WorkerExecutionStarted(parse_runner_task(current.task_payload))
+        except WireError as error:
+            raise WorkerExecutionStartError(
+                f"reserved run {current.run_id} carries an unreadable dispatch payload: {error}"
+            ) from error
+
+    async def _fail_reservation(
+        self, reservation: WorkerExecutionReservation, error: Exception
+    ) -> None:
+        if self._reservations is None:
+            return
+        try:
+            await self._reservations.fail_preparation(
+                reservation.id,
+                f"{type(error).__name__}: {error}",
+                lease_owner=self._reservation_owner,
+                fencing_version=reservation.version,
+            )
+        except Exception:
+            _logger.exception(
+                "Could not release failed Worker execution reservation task_id=%s run_id=%s",
+                reservation.task_id,
+                reservation.run_id,
+            )
 
     async def _in_flight_run(
         self, task_id: UUID, worker_agent_id: UUID

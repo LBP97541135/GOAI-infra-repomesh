@@ -11,6 +11,11 @@ from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
 from .contracts import ActiveWorkerDispatch
+from .execution_reservation import (
+    ACTIVE_EXECUTION_STATES,
+    WorkerExecutionReservationRecord,
+    WorkerExecutionStatus,
+)
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
 
@@ -235,6 +240,29 @@ class PostgresRunnerGatewayStore:
                     dispatch.status = event_type.removeprefix("runner.")
                     dispatch.lease_until = None
                     dispatch.completed_at = datetime.now(UTC)
+                    reservation = await session.scalar(
+                        select(WorkerExecutionReservationRecord)
+                        .where(
+                            WorkerExecutionReservationRecord.run_id == run_id,
+                            WorkerExecutionReservationRecord.status.in_(
+                                ACTIVE_EXECUTION_STATES
+                            ),
+                        )
+                        .with_for_update()
+                    )
+                    if reservation is not None:
+                        terminal = {
+                            "completed": WorkerExecutionStatus.SUCCEEDED.value,
+                            "failed": WorkerExecutionStatus.FAILED.value,
+                            "interrupted": WorkerExecutionStatus.FAILED.value,
+                            "input_required": WorkerExecutionStatus.FAILED.value,
+                        }[event_type.removeprefix("runner.")]
+                        reservation.status = terminal
+                        reservation.lease_owner = None
+                        reservation.lease_expires_at = None
+                        reservation.version += 1
+                        reservation.updated_at = datetime.now(UTC)
+                        reservation.completed_at = datetime.now(UTC)
             return True
         except IntegrityError:
             return False

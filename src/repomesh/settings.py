@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     mcp_gateway_tokens: tuple[str, ...] = ()
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
+    worker_execution_reservation_lease_seconds: int = Field(default=300, ge=30)
+    worker_execution_reservation_wait_seconds: int = Field(default=30, ge=1)
     capability_root: Path = Path(".")
     # OTLP/HTTP collector base URL (e.g. a local AgentScope Studio). None keeps
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.

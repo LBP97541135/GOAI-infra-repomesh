@@ -1,5 +1,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
@@ -75,3 +77,82 @@ class WorkerDispatchReader(Protocol):
     async def get_active_dispatch_for_task(
         self, task_id: UUID, *, worker_agent_id: UUID
     ) -> ActiveWorkerDispatch | None: ...
+
+
+class WorkerExecutionStatus(StrEnum):
+    PREPARING = "preparing"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerExecutionReservation:
+    id: UUID
+    organization_id: UUID
+    project_id: UUID
+    repository_id: UUID
+    task_id: UUID
+    worker_agent_id: UUID
+    run_id: UUID
+    status: WorkerExecutionStatus
+    attempt: int
+    version: int
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    task_payload: Mapping[str, object] | None
+    error_detail: str | None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReservedWorkerExecution:
+    reservation: WorkerExecutionReservation
+    created: bool
+
+
+class WorkerExecutionReservationPort(Protocol):
+    async def reserve(
+        self,
+        *,
+        organization_id: UUID,
+        project_id: UUID,
+        repository_id: UUID,
+        task_id: UUID,
+        worker_agent_id: UUID,
+        lease_owner: str,
+        lease_seconds: int,
+    ) -> ReservedWorkerExecution: ...
+
+    async def get_active(self, task_id: UUID) -> WorkerExecutionReservation | None: ...
+
+    async def bind_payload(
+        self,
+        reservation_id: UUID,
+        payload: Mapping[str, object],
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> WorkerExecutionReservation: ...
+
+    async def renew(
+        self,
+        reservation_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+        lease_seconds: int,
+    ) -> WorkerExecutionReservation: ...
+
+    async def fail_preparation(
+        self,
+        reservation_id: UUID,
+        error: str,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> WorkerExecutionReservation: ...

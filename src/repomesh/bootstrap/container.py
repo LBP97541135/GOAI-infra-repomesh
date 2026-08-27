@@ -1581,6 +1581,7 @@ class ApplicationContainer:
             StartWorkerTaskExecution,
         )
         from repomesh.integrations.workspace import GitWorktreeManager
+        from repomesh.modules.agent_runtime import PostgresWorkerExecutionReservationStore
         from repomesh.modules.context.application import PublishContextBundle
         from repomesh.modules.task_orchestration import TaskExecutionState
 
@@ -1603,6 +1604,11 @@ class ApplicationContainer:
             states,
             self.task_report_gateway,
             dispatches=PostgresRunnerGatewayStore(self.database),
+            reservations=PostgresWorkerExecutionReservationStore(self.database),
+            reservation_lease_seconds=(
+                settings.worker_execution_reservation_lease_seconds
+            ),
+            reservation_wait_seconds=settings.worker_execution_reservation_wait_seconds,
         )
 
     async def close(self) -> None:

@@ -6,6 +6,9 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipalRecord
+from repomesh.modules.agent_runtime.execution_reservation import (
+    WorkerExecutionReservationRecord,
+)
 from repomesh.modules.collaboration.infrastructure import (
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
@@ -56,6 +59,7 @@ from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
     AgentPrincipalRecord,
+    WorkerExecutionReservationRecord,
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
     ContextObjectRecord,
