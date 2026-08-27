@@ -1,0 +1,20 @@
+name = "repomesh-agent-bridge"
+owner = "runtime-integrations"
+status = "foundation"
+language = "python"
+source = "../../src/repomesh_agent_bridge"
+contract = "../../contracts/agent-bridge/v1"
+responsibilities = [
+  "external worker enrollment validation",
+  "RepoMesh binding preflight",
+  "single instance claim per worker identity",
+  "Matrix room membership for one worker identity",
+  "local coding session lifecycle",
+]
+not_responsible_for = [
+  "project or task business state",
+  "AgentTeams resource reconciliation",
+  "AgentTeams management credentials",
+  "coding task execution semantics",
+  "delivery approval or remote merge",
+]

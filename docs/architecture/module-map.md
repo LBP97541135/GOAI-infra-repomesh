@@ -29,6 +29,7 @@ when the repository moves into an organization.
 | --- | --- | --- |
 | AgentTeams | runtime-integrations | first-party Go runtime resources, reconciliation, Matrix and Worker lifecycle |
 | RepoMesh Runner | runtime-integrations | first-party Python coding execution, native sessions and runtime events |
+| Room-Native Agent Bridge | runtime-integrations | operator-hosted process for one external Worker: enrollment validation, RepoMesh binding preflight, the per-worker instance claim, room membership and the local coding session; holds no AgentTeams management credential and owns no task, permission or delivery state |
 | Coding agents | runtime-integrations | provider CLI and native session differences |
 | Workspace | runtime-integrations | worktree isolation and recovery |
 | Worker task control | runtime-integrations | AgentTeams MCP start action, automatic Run/Context creation and durable Runner dispatch |
