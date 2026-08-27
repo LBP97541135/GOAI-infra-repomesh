@@ -11,6 +11,7 @@ import { fetchConsoleAgents, gridSourceMode } from "../api/grid";
 import { fetchCodingAgents, fetchSetupStatus } from "../api/platformSetup";
 import { LocalAccountsPanel } from "../components/LocalAccountsPanel";
 import { errText } from "../display";
+import { browserApiToken } from "../runtimeConfig";
 import { useRuntimeRows } from "./useRuntimeRows";
 
 /** 设置页（CONS-44）。
@@ -73,10 +74,6 @@ const CHECK_LABEL: Record<string, string> = {
   repositories: "仓库 catalog",
 };
 
-/** 必检五项：与后端 `platform_setup.py` 的 `required` 元组同一份。**只用于分组
- *  呈现**（必检 / 选检），不参与就绪判定。 */
-const REQUIRED_CHECKS = ["model", "database", "agentteams", "matrix", "internal_auth"];
-
 const AUTH_LABEL: Record<CodingAgentAdapterView["auth_status"], string> = {
   authorized: "已授权",
   unauthorized: "未授权",
@@ -109,7 +106,7 @@ function AdapterRow({ adapter }: { adapter: CodingAgentAdapterView }) {
   );
 }
 
-export function SettingsPage({ account }: { account: Account }) {
+export function SettingsPage({ account, onConfigure }: { account: Account; onConfigure: () => void }) {
   const fetcher = useCallback((withRuntime: boolean) => fetchConsoleAgents(withRuntime), []);
   const { rows, error, phase, probeError } = useRuntimeRows<ConsoleAgentView>(fetcher);
 
@@ -162,6 +159,9 @@ export function SettingsPage({ account }: { account: Account }) {
         : "「无事实」= AgentTeams 未配置，或 Controller 报告没有这个资源（404）";
 
   const base = import.meta.env.VITE_API_BASE ?? "";
+  const requiredChecks = new Set(
+    setup?.dependencies.filter((dependency) => dependency.required).map((item) => item.id) ?? [],
+  );
 
   return (
     <div className="max-w-[860px]">
@@ -182,12 +182,12 @@ export function SettingsPage({ account }: { account: Account }) {
               value={setup.ready_for_project_creation ? "是" : "否"}
               note={
                 setup.ready_for_project_creation
-                  ? "五项必检全通过（服务端判定，本页不重算）"
+                  ? "全部必检通过（服务端判定，本页不重算）"
                   : // next_actions 混装必检与选检。照抄会把 GitHub App 这类
                     // 「这套部署没走 GitHub 交付」说成拦路项，所以这里只报
                     // 真正挡路的那几项，其余在徽标里以灰色示意。
                     `必检未过：${setup.next_actions
-                      .filter((name) => REQUIRED_CHECKS.includes(name))
+                      .filter((name) => requiredChecks.has(name))
                       .map((name) => CHECK_LABEL[name] ?? name)
                       .join(" · ")}`
               }
@@ -199,12 +199,12 @@ export function SettingsPage({ account }: { account: Account }) {
                   className={`rounded-hard border px-2 py-px text-[11px] ${
                     passed
                       ? "border-olive text-olive"
-                      : REQUIRED_CHECKS.includes(name)
+                      : requiredChecks.has(name)
                         ? "border-salmon text-salmon"
                         : "border-line text-tx3"
                   }`}
                   title={
-                    REQUIRED_CHECKS.includes(name)
+                    requiredChecks.has(name)
                       ? "必检项：不通过则无法建项目"
                       : "选检项：不参与可建项目判定"
                   }
@@ -219,6 +219,14 @@ export function SettingsPage({ account }: { account: Account }) {
               红=必检未过 · 绿=已过 · 灰=选检未过（不挡建项目）。账号 {setup.counts.accounts}{" "}
               · 智能体 {setup.counts.agents} · 仓库 {setup.counts.repositories}。
             </p>
+            {Object.values(setup.checks).some((passed) => !passed) ? (
+              <button
+                className="mt-3 rounded-hard border border-amber px-3 py-1.5 text-[11.5px] text-amber hover:bg-amber/10"
+                onClick={onConfigure}
+              >
+                去配置
+              </button>
+            ) : null}
           </>
         )}
       </Section>
@@ -237,7 +245,7 @@ export function SettingsPage({ account }: { account: Account }) {
         <Row
           label="读模型 API"
           value={base === "" ? "同源（经 dev proxy /api）" : base}
-          note={`鉴权：${import.meta.env.VITE_API_TOKEN ? "已配置 Bearer 动作 token" : "未配置 token"} · 当前数据源 ${gridSourceMode()}`}
+          note={`鉴权：${browserApiToken() ? "已配置 Bearer 动作 token" : "未配置 token"} · 当前数据源 ${gridSourceMode()}`}
         />
         <Row
           label="本地身份服务"

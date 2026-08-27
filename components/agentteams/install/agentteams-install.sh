@@ -27,6 +27,8 @@
 #   AGENTTEAMS_MOUNT_SOCKET       Mount container runtime socket (default: 1)
 #   AGENTTEAMS_DATA_DIR           Docker volume name for persistent data (default: agentteams-data)
 #   AGENTTEAMS_WORKSPACE_DIR      Host directory for manager workspace (default: ~/agentteams-manager)
+#   AGENTTEAMS_WORKSPACE_VOLUME   Docker named volume for manager workspace (overrides directory)
+#   AGENTTEAMS_HOST_SHARE_VOLUME  Docker named volume for /host-share (overrides directory)
 #   AGENTTEAMS_VERSION            Image tag            (default: latest)
 #   AGENTTEAMS_REGISTRY           Image registry       (default: auto-detected by timezone)
 #   AGENTTEAMS_INSTALL_MANAGER_IMAGE       Override manager image (e.g., local build)
@@ -2481,6 +2483,11 @@ step_workspace() {
     log "$(msg workspace.title)"
     # ── Non-interactive guard (deep defense) ──────────────────────────
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        if [ -n "${AGENTTEAMS_WORKSPACE_VOLUME:-}" ]; then
+            log "  Manager workspace Docker volume: ${AGENTTEAMS_WORKSPACE_VOLUME} (non-interactive, skipped)"
+            export AGENTTEAMS_WORKSPACE_VOLUME
+            return 0
+        fi
         AGENTTEAMS_WORKSPACE_DIR="${AGENTTEAMS_WORKSPACE_DIR:-${HOME}/agentteams-manager}"
         AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
         mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
@@ -2905,6 +2912,11 @@ step_idle() {
 step_hostshare() {
     # ── Non-interactive guard (deep defense) ──────────────────────────
     if [ "${AGENTTEAMS_NON_INTERACTIVE}" = "1" ]; then
+        if [ -n "${AGENTTEAMS_HOST_SHARE_VOLUME:-}" ]; then
+            log "  Host-share Docker volume: ${AGENTTEAMS_HOST_SHARE_VOLUME} (non-interactive, skipped)"
+            export AGENTTEAMS_HOST_SHARE_VOLUME
+            return 0
+        fi
         AGENTTEAMS_HOST_SHARE_DIR="${AGENTTEAMS_HOST_SHARE_DIR:-${HOME}}"
         log "  $(msg host_share.label) = ${AGENTTEAMS_HOST_SHARE_DIR} (non-interactive, skipped)"
         export AGENTTEAMS_HOST_SHARE_DIR
@@ -3367,12 +3379,14 @@ install_manager() {
 
     # Post-machine defaults for any steps that were skipped
     AGENTTEAMS_DATA_DIR="${AGENTTEAMS_DATA_DIR:-agentteams-data}"
-    if [ -z "${AGENTTEAMS_WORKSPACE_DIR+x}" ] || [ -z "${AGENTTEAMS_WORKSPACE_DIR}" ]; then
+    if [ -z "${AGENTTEAMS_WORKSPACE_VOLUME:-}" ] && { [ -z "${AGENTTEAMS_WORKSPACE_DIR+x}" ] || [ -z "${AGENTTEAMS_WORKSPACE_DIR}" ]; }; then
         AGENTTEAMS_WORKSPACE_DIR="${HOME}/agentteams-manager"
         export AGENTTEAMS_WORKSPACE_DIR
     fi
-    AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
-    mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
+    if [ -z "${AGENTTEAMS_WORKSPACE_VOLUME:-}" ]; then
+        AGENTTEAMS_WORKSPACE_DIR="$(cd "${AGENTTEAMS_WORKSPACE_DIR}" 2>/dev/null && pwd || echo "${AGENTTEAMS_WORKSPACE_DIR}")"
+        mkdir -p "${AGENTTEAMS_WORKSPACE_DIR}"
+    fi
     AGENTTEAMS_MANAGER_RUNTIME="${AGENTTEAMS_MANAGER_RUNTIME:-copaw}"
     export AGENTTEAMS_MANAGER_RUNTIME
     AGENTTEAMS_DEFAULT_WORKER_RUNTIME="${AGENTTEAMS_DEFAULT_WORKER_RUNTIME:-copaw}"
@@ -3380,8 +3394,10 @@ install_manager() {
     export AGENTTEAMS_MATRIX_E2EE
     AGENTTEAMS_WORKER_IDLE_TIMEOUT="${AGENTTEAMS_WORKER_IDLE_TIMEOUT:-720}"
     export AGENTTEAMS_WORKER_IDLE_TIMEOUT
-    AGENTTEAMS_HOST_SHARE_DIR="${AGENTTEAMS_HOST_SHARE_DIR:-$HOME}"
-    export AGENTTEAMS_HOST_SHARE_DIR
+    if [ -z "${AGENTTEAMS_HOST_SHARE_VOLUME:-}" ]; then
+        AGENTTEAMS_HOST_SHARE_DIR="${AGENTTEAMS_HOST_SHARE_DIR:-$HOME}"
+        export AGENTTEAMS_HOST_SHARE_DIR
+    fi
 
     log ""
 
@@ -3530,8 +3546,10 @@ HIGRESS_ADMIN_WASM_PLUGIN_IMAGE_REGISTRY=${AGENTTEAMS_REGISTRY}
 AGENTTEAMS_DATA_DIR=${AGENTTEAMS_DATA_DIR:-agentteams-data}
 # Manager workspace (skills, memory, state — host-editable)
 AGENTTEAMS_WORKSPACE_DIR=${AGENTTEAMS_WORKSPACE_DIR:-}
+AGENTTEAMS_WORKSPACE_VOLUME=${AGENTTEAMS_WORKSPACE_VOLUME:-}
 # Host directory sharing
 AGENTTEAMS_HOST_SHARE_DIR=${AGENTTEAMS_HOST_SHARE_DIR:-}
+AGENTTEAMS_HOST_SHARE_VOLUME=${AGENTTEAMS_HOST_SHARE_VOLUME:-}
 
 # agentteams-dashboard (management UI)
 AGENTTEAMS_DASHBOARD=${AGENTTEAMS_DASHBOARD:-1}
@@ -3581,14 +3599,23 @@ EOF
     # Data mount: Docker volume
     DATA_MOUNT_ARGS="-v ${AGENTTEAMS_DATA_DIR}:/data"
 
-    # Manager workspace mount (always a host directory, defaulting to ~/agentteams-manager)
-    WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_DIR}:/root/manager-workspace"
+    # Manager workspace mount: named volume for containerized installers, host directory otherwise.
+    if [ -n "${AGENTTEAMS_WORKSPACE_VOLUME:-}" ]; then
+        ${DOCKER_CMD} volume create "${AGENTTEAMS_WORKSPACE_VOLUME}" > /dev/null
+        WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_VOLUME}:/root/manager-workspace"
+    else
+        WORKSPACE_MOUNT_ARGS="-v ${AGENTTEAMS_WORKSPACE_DIR}:/root/manager-workspace"
+    fi
 
     # Pass host timezone to container so date/time commands reflect local time
     TZ_ARGS="-e TZ=${AGENTTEAMS_TIMEZONE}"
 
     # Host directory mount
-    if [ -d "${AGENTTEAMS_HOST_SHARE_DIR}" ]; then
+    if [ -n "${AGENTTEAMS_HOST_SHARE_VOLUME:-}" ]; then
+        ${DOCKER_CMD} volume create "${AGENTTEAMS_HOST_SHARE_VOLUME}" > /dev/null
+        HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_VOLUME}:/host-share"
+        log "  Sharing Docker volume ${AGENTTEAMS_HOST_SHARE_VOLUME} at /host-share"
+    elif [ -d "${AGENTTEAMS_HOST_SHARE_DIR}" ]; then
         HOST_SHARE_MOUNT_ARGS="-v ${AGENTTEAMS_HOST_SHARE_DIR}:/host-share"
         log "$(msg host_share.sharing "${AGENTTEAMS_HOST_SHARE_DIR}")"
     else

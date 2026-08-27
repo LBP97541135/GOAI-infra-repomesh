@@ -37,6 +37,10 @@ from repomesh.modules.observability.infrastructure.trace_ingest import TraceStor
 from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
+from repomesh.modules.platform_config import (
+    PostgresBootstrapOperationStore,
+    PostgresPlatformCredentialStore,
+)
 from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
@@ -302,6 +306,14 @@ class ApplicationContainer:
             session_ttl_seconds=get_settings().local_session_ttl_seconds,
         )
 
+    @cached_service
+    def platform_credential_store(self) -> PostgresPlatformCredentialStore:
+        return PostgresPlatformCredentialStore(self.database)
+
+    @cached_service
+    def bootstrap_operation_store(self) -> PostgresBootstrapOperationStore:
+        return PostgresBootstrapOperationStore(self.database)
+
     def project_topology_creator(self):
         from repomesh.modules.project import CreateProjectAgentTopology
 
@@ -456,6 +468,9 @@ class ApplicationContainer:
     async def is_agentteams_ready(self) -> bool:
         if not self.agentteams_required:
             return True
+        return await self.is_agentteams_available()
+
+    async def is_agentteams_available(self) -> bool:
         return self.agentteams_probe is not None and await self.agentteams_probe.health()
 
     @cached_service

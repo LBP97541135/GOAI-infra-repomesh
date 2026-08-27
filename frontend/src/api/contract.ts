@@ -1495,12 +1495,31 @@ export interface CodingAgentsProbe {
   adapters: CodingAgentAdapterView[];
 }
 
-/** `/setup/status` 的九项检查。前五项（model / database / agentteams / matrix /
- *  internal_auth）是 `ready_for_project_creation` 的必检项，其余四项不参与那个
- *  判定——后端的 `required` 元组是唯一事实，前端不另立一套。 */
+/** `/setup/status` retains the boolean checks for compatibility. `dependencies`
+ * is the setup UI's source of truth for ownership and remediation. */
+export type SetupDependencyState =
+  | "checking"
+  | "ready"
+  | "missing"
+  | "repairing"
+  | "waiting_for_user"
+  | "failed"
+  | "optional"
+  | "pending_onboarding";
+
+export interface SetupDependencyView {
+  id: string;
+  state: SetupDependencyState;
+  owner: "system" | "user" | "onboarding";
+  remediation: "automatic" | "user_input" | "optional" | "workflow";
+  required: boolean;
+  message: string;
+}
+
 export interface SetupStatusView {
   ready_for_project_creation: boolean;
   checks: Record<string, boolean>;
+  dependencies: SetupDependencyView[];
   counts: { accounts: number; agents: number; repositories: number };
   /** 未通过项的名字，后端已算好 */
   next_actions: string[];

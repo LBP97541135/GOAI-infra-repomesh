@@ -185,7 +185,11 @@ async def create_native_agent(body: NativeAgentCreate, request: Request) -> dict
         responsibility_paths=tuple(body.responsibility_paths),
         agentteams_resource_name=body.resource_name,
     )
-    model = body.model or get_settings().deepseek_model
+    from repomesh.modules.platform_config import MODEL_NAME, effective_credential
+
+    model = body.model or await effective_credential(
+        request.app.state.container, MODEL_NAME, get_settings().deepseek_model
+    )
     manager = None
     worker = None
     if body.role is AgentRole.ORGANIZATION_LEADER:
@@ -246,7 +250,11 @@ async def onboard_repository_agent_team(
         )
     organization_leader = leaders[0]
     prefix = f"repo-{repository_id.hex[:12]}"
-    model = body.model or get_settings().deepseek_model
+    from repomesh.modules.platform_config import MODEL_NAME, effective_credential
+
+    model = body.model or await effective_credential(
+        request.app.state.container, MODEL_NAME, get_settings().deepseek_model
+    )
     registration = request.app.state.container.native_agent_registration()
     leader_name = f"{prefix}-leader"
     try:

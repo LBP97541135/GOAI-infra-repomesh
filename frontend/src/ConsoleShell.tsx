@@ -22,6 +22,8 @@ import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { ReviewDeskPage } from "./pages/ReviewDeskPage";
 import { RoomViewContainer } from "./pages/RoomViewContainer";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SetupWizardPage } from "./pages/SetupWizardPage";
+import { fetchSetupStatus } from "./api/platformSetup";
 import { TeamsPage } from "./pages/TeamsPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 
@@ -44,6 +46,8 @@ export default function ConsoleShell() {
     "checking",
   );
   const [authNote, setAuthNote] = useState<string | null>(null);
+  const [setupReady, setSetupReady] = useState<boolean | null>(null);
+  const [setupRequested, setSetupRequested] = useState(false);
   const [route, setRoute] = useState<Route>(readRoute);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -103,6 +107,17 @@ export default function ConsoleShell() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    let cancelled = false;
+    fetchSetupStatus()
+      .then((status) => !cancelled && setSetupReady(status.ready_for_project_creation))
+      .catch(() => !cancelled && setSetupReady(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [authState]);
 
   useEffect(() => {
     const onHash = () => setRoute(readRoute());
@@ -271,6 +286,22 @@ export default function ConsoleShell() {
     );
   }
 
+  if (setupReady === null) {
+    return <div className="grid h-screen place-items-center bg-ink"><p className="microlabel">检查平台配置…</p></div>;
+  }
+
+  if ((!setupReady || setupRequested) && account.is_admin) {
+    return (
+      <SetupWizardPage
+        account={account}
+        onReady={() => {
+          setSetupReady(true);
+          setSetupRequested(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
       <SidebarV2
@@ -353,7 +384,9 @@ export default function ConsoleShell() {
           ) : (
             <ObserveTrace />
           ))}
-        {route.nav === "settings" && <SettingsPage account={account} />}
+        {route.nav === "settings" && (
+          <SettingsPage account={account} onConfigure={() => setSetupRequested(true)} />
+        )}
       </main>
 
       <NewIssueModal

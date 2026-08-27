@@ -27,6 +27,8 @@ from repomesh.modules.delivery.infrastructure import (
     SCMObservationRecord,
     SCMPollCursorRecord,
 )
+from repomesh.modules.platform_config.bootstrap_store import BootstrapOperationRecord
+from repomesh.modules.platform_config.store import PlatformCredentialRecord
 from repomesh.modules.project.infrastructure import (
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
@@ -83,6 +85,8 @@ _REGISTERED_MODELS = (
     OutboxEventRecord,
     TraceLinkRecord,
     IdempotencyRecord,
+    PlatformCredentialRecord,
+    BootstrapOperationRecord,
 )
 
 config = context.config

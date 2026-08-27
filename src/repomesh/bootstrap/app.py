@@ -2,6 +2,7 @@ import base64
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -84,6 +85,15 @@ from repomesh.modules.observability.infrastructure.trace_ingest import (
 from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
+from repomesh.modules.platform_config import (
+    GITHUB_APP_ID,
+    GITHUB_PRIVATE_KEY,
+    GITHUB_WEBHOOK_SECRET,
+    MODEL_API_KEY,
+    MODEL_BASE_URL,
+    MODEL_NAME,
+    PostgresPlatformCredentialStore,
+)
 from repomesh.modules.project import ProjectCheckpointService
 from repomesh.modules.project.infrastructure import (
     PostgresHumanReviewRequestStore,
@@ -108,6 +118,8 @@ _API_LOGGER = logging.getLogger("repomesh.api")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    if application.state.container is None:
+        application.state.container = await build_default_container_from_database()
     try:
         await application.state.container.start()
         yield
@@ -136,8 +148,64 @@ def _trace_source(settings) -> TraceSource:
     return LocalTraceSource(settings.agentteams_storage_root)
 
 
-def build_default_container() -> ApplicationContainer:
+@dataclass(frozen=True, slots=True)
+class CredentialOverrides:
+    model_api_key: str | None = None
+    model_base_url: str | None = None
+    model_name: str | None = None
+    github_app_id: int | None = None
+    github_private_key: str | None = None
+    github_webhook_secret: str | None = None
+
+
+async def build_default_container_from_database() -> ApplicationContainer:
     settings = get_settings()
+    database = Database(settings.database_url)
+    try:
+        values = await PostgresPlatformCredentialStore(database).get_many(
+            {
+                MODEL_API_KEY,
+                MODEL_BASE_URL,
+                MODEL_NAME,
+                GITHUB_APP_ID,
+                GITHUB_PRIVATE_KEY,
+                GITHUB_WEBHOOK_SECRET,
+            }
+        )
+        overrides = CredentialOverrides(
+            model_api_key=values.get(MODEL_API_KEY).value if MODEL_API_KEY in values else None,
+            model_base_url=values.get(MODEL_BASE_URL).value if MODEL_BASE_URL in values else None,
+            model_name=values.get(MODEL_NAME).value if MODEL_NAME in values else None,
+            github_app_id=(
+                int(values[GITHUB_APP_ID].value) if GITHUB_APP_ID in values else None
+            ),
+            github_private_key=(
+                values[GITHUB_PRIVATE_KEY].value if GITHUB_PRIVATE_KEY in values else None
+            ),
+            github_webhook_secret=(
+                values[GITHUB_WEBHOOK_SECRET].value
+                if GITHUB_WEBHOOK_SECRET in values
+                else None
+            ),
+        )
+        return build_default_container(overrides=overrides, database=database)
+    except Exception:
+        await database.dispose()
+        raise
+
+
+def build_default_container(
+    *,
+    overrides: CredentialOverrides | None = None,
+    database: Database | None = None,
+) -> ApplicationContainer:
+    settings = get_settings()
+    overrides = overrides or CredentialOverrides()
+    model_api_key = overrides.model_api_key or settings.deepseek_api_key
+    model_base_url = overrides.model_base_url or settings.deepseek_base_url
+    model_name = overrides.model_name or settings.deepseek_model
+    github_app_id = overrides.github_app_id or settings.github_app_id
+    github_webhook_secret = overrides.github_webhook_secret or settings.github_webhook_secret
     selected_publisher: TaskAssignmentPublisher = AgentTeamsTaskPublisher(
         settings.agentteams_storage_root
     )
@@ -156,7 +224,7 @@ def build_default_container() -> ApplicationContainer:
     # their store's own vocabulary and both mean the same thing to the round
     # (A-10). One wrapper over the port covers them.
     task_publisher = storage_backed_task_publisher(selected_publisher)
-    database = Database(settings.database_url)
+    database = database or Database(settings.database_url)
     control_plane = AgentTeamsControlPlaneClient(
         settings.agentteams_controller_url,
         token=settings.agentteams_controller_token,
@@ -182,7 +250,14 @@ def build_default_container() -> ApplicationContainer:
     scm_adapter = None
     scm_token_provider = None
     github_private_key_loader: Callable[[], bytes] | None = None
-    if settings.github_app_private_key_base64 is not None:
+    if overrides.github_private_key is not None:
+        private_key = overrides.github_private_key.encode("utf-8")
+
+        def load_stored_github_private_key() -> bytes:
+            return private_key
+
+        github_private_key_loader = load_stored_github_private_key
+    elif settings.github_app_private_key_base64 is not None:
         encoded_key = settings.github_app_private_key_base64.get_secret_value()
 
         def load_encoded_github_private_key() -> bytes:
@@ -193,9 +268,9 @@ def build_default_container() -> ApplicationContainer:
         github_private_key_loader = private_key_file_loader(
             settings.github_app_private_key_file
         )
-    if settings.github_app_id and github_private_key_loader is not None:
+    if github_app_id and github_private_key_loader is not None:
         scm_token_provider = GitHubAppTokenProvider(
-            settings.github_app_id,
+            github_app_id,
             github_private_key_loader,
         )
         scm_adapter = GitHubAdapter(scm_token_provider)
@@ -255,7 +330,7 @@ def build_default_container() -> ApplicationContainer:
             AgentTeamsMatrixInboundPoller(matrix_client, inbound),
             CollaborationDeliveryRetryWorker(collaboration_store, collaboration),
         )
-    if settings.github_webhook_secret or scm_adapter is not None:
+    if github_webhook_secret or scm_adapter is not None:
         validation = ValidationSnapshotService(PostgresValidationSnapshotStore(database))
         delivery = DeliveryService(
             PostgresChangeSetStore(database),
@@ -287,7 +362,7 @@ def build_default_container() -> ApplicationContainer:
             auto_merge=settings.delivery_auto_enabled,
             rework_tasks=rework_tasks,
         )
-        if settings.github_webhook_secret:
+        if github_webhook_secret:
             background_services = (
                 *background_services,
                 SCMObservationReplayWorker(
@@ -405,9 +480,9 @@ def build_default_container() -> ApplicationContainer:
         specification_store=PostgresSpecificationStore(database),
         mock_coding_agent_factory=lambda scenario: MockCodingAgent(MockScenario(scenario)),
         llm_client=make_llm_client(
-            settings.deepseek_api_key,
-            base_url=settings.deepseek_base_url,
-            model=settings.deepseek_model,
+            model_api_key,
+            base_url=model_base_url,
+            model=model_name,
             usage_sink=usage_recorder.record,
         ),
         agent_team_control_plane=control_plane,
@@ -453,7 +528,7 @@ def create_app(container: ApplicationContainer | None = None) -> FastAPI:
         description="Multi-repository coding-agent orchestration infrastructure",
         lifespan=lifespan,
     )
-    application.state.container = container or build_default_container()
+    application.state.container = container
     application.include_router(api_router)
     application.add_exception_handler(Exception, _unhandled_exception_envelope)
     return application

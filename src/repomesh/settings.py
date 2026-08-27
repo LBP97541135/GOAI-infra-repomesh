@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     app_name: str = "RepoMesh"
     environment: Literal["development", "test", "staging", "production"] = "development"
     log_level: str = "INFO"
+    supervised: bool = False
     database_url: str = "postgresql+asyncpg://repomesh:repomesh@localhost:5432/repomesh"
     local_session_ttl_seconds: int = Field(default=28800, ge=300, le=604800)
     agentteams_required: bool = False
