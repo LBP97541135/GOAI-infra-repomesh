@@ -335,7 +335,14 @@ def test_handoff_doc_chain_is_undefined_table_at_0035_and_whole_at_head(
     assert listed.status_code == 200
     assert len(listed.json()) == 3
     assert fetched.status_code == 200
-    assert fetched.json()["decision"] == "approved"
+    # docs[0] was APPROVED and then superseded by the v2 regeneration above, so
+    # the derived ``decision`` reads None while the decision *history* survives.
+    superseded_wire = fetched.json()
+    assert superseded_wire["status"] == "SUPERSEDED"
+    assert superseded_wire["superseded_by_version"] == 2
+    assert superseded_wire["decision"] is None
+    assert superseded_wire["decided_by_agent_id"] == str(OWNER_ID)
+    assert superseded_wire["decision_reason"] == "interface change looks fine"
 
 
 def test_head_downgrade_0035_upgrade_head_round_trips(scratch_database: str) -> None:
