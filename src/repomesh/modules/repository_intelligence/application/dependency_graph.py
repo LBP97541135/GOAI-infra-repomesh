@@ -14,8 +14,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from itertools import permutations
 
-from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.repository_intelligence.application.service_registry import (
+    ServiceRegistry,
+    build_service_registry,
+)
+from repomesh.modules.repository_intelligence.domain import (
+    Mechanism,
+    RepositoryProfile,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,12 +32,25 @@ class GraphEdge:
 
     ``consumer`` calls ``producer``'s API.
     If producer changes, consumer may be affected.
+
+    ``confidence``:
+      - ``confirmed`` — hard evidence (mechanisms ① ② ⑤); the only class
+        that participates in topological ordering.
+      - ``declared`` — self-declared configuration (mechanisms ③ ④); a
+        discovery hint, never topology.
+
+    Every edge is evidence-backed: the legacy free-text ``deps`` string
+    guessing (old substring/suffix matching) was removed — a string that
+    does not resolve through the service registry never fabricates an edge.
+    ``mechanism`` — which evidence mechanism proved the edge (audit trail).
+    ``match_reason`` — human-readable audit trail.
     """
 
     producer: str
     consumer: str
-    confidence: str  # "confirmed" | "possible"
-    match_reason: str  # audit trail: "exact" | "substring:dep contains name"
+    confidence: str  # "confirmed" | "declared"
+    mechanism: Mechanism = "SOURCE"
+    match_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,8 +68,12 @@ class DependencyGraphService:
     "consumer depends on producer" (consumer calls producer's API).
     """
 
-    def __init__(self, profiles: list[RepositoryProfile]) -> None:
-        self._names: set[str] = {p.name for p in profiles}
+    def __init__(
+        self,
+        profiles: list[RepositoryProfile],
+        registry: ServiceRegistry | None = None,
+    ) -> None:
+        self._registry = registry or build_service_registry(profiles)
         self._edges: list[GraphEdge] = self._build_edges(profiles)
         self._forward: dict[str, list[GraphEdge]] = self._index_forward()
         self._reverse: dict[str, list[GraphEdge]] = self._index_reverse()
@@ -76,6 +101,11 @@ class DependencyGraphService:
     def topological_batches(self, repos: list[str]) -> TopoResult:
         """Topologically sort repos into execution batches.
 
+        Only ``confirmed`` edges constrain ordering: ``declared`` edges
+        (mechanisms ③ ④) are discovery hints and never topology
+        (:class:`GraphEdge`). A shared database or a compose ``depends_on``
+        must not reorder a deployment plan.
+
         Batch 1 = repos with no internal dependencies (safe to start first).
         Subsequent batches = repos whose dependencies are all in earlier batches.
 
@@ -83,7 +113,12 @@ class DependencyGraphService:
         and returned in ``cyclic_repos``.
         """
         repo_set = set(repos)
-        relevant = [e for e in self._edges if e.producer in repo_set and e.consumer in repo_set]
+        relevant = [
+            e for e in self._edges
+            if e.confidence == "confirmed"
+            and e.producer in repo_set
+            and e.consumer in repo_set
+        ]
 
         # Build adjacency: consumer → set(producers it depends on)
         deps: dict[str, set[str]] = {r: set() for r in repo_set}
@@ -126,98 +161,121 @@ class DependencyGraphService:
     def _build_edges(
         self, profiles: list[RepositoryProfile]
     ) -> list[GraphEdge]:
-        """Extract directed edges from AutoCard.deps via name matching.
+        """Extract directed edges from AutoCard dependency evidence.
 
-        Matching strategy (from-wide):
-        1. Exact match: dep string equals a repo name
-        2. Substring match: repo name appears as substring in dep
-        3. Suffix match: dep ends with repo name
+        Two paths, both producing :class:`GraphEdge` with ``mechanism`` +
+        ``confidence``:
 
-        Confirmed = exact match only.
-        Possible = substring or suffix match.
+        1. **Event-based (preferred)** — ``auto_card.dep_evidence``: each ref
+           names an identifier the service registry resolves exactly against
+           the catalog (repo name today; artifactId / spring.application.name
+           / Feign name / deploy service names once the Phase 2/3/5 parsers
+           fill the registry). No string guessing, so a public library can
+           never fabricate an edge (problem 5.2). BUILD, RUNTIME_CALL and
+           DEPLOY evidence all resolve here; DEPLOY contributes its
+           ``declared`` confidence as-is.
+        2. **Shared-resource edges** — ``SHARED_RESOURCE`` evidence (mechanism
+           ③) matches *resource identifier to resource identifier*, never
+           through the service registry: any two repositories declaring the
+           same database/Redis/MQ/bucket share it, so they get a bidirectional
+           ``declared`` edge (a discovery hint — shared state, not a call).
+
+        Edges are deduplicated per (consumer, producer); the event path wins
+        the slot when both paths would produce the same pair.
         """
         edges: list[GraphEdge] = []
         seen: set[tuple[str, str]] = set()
 
         for profile in profiles:
-            if not profile.auto_card or not profile.auto_card.deps:
+            if not profile.auto_card:
+                continue
+            card = profile.auto_card
+            if not card.dep_evidence:
                 continue
 
-            for dep in profile.auto_card.deps:
-                matched = self._match_dep_to_name(dep, profile.name)
-                if matched is None:
+            # Event-based edges: exact resolution via the service registry.
+            for ref in card.dep_evidence:
+                producer = self._resolve_evidence(ref.name, profile.name)
+                if producer is None:
                     continue
-
-                key = (profile.name, matched[0])  # (consumer, producer_name)
+                key = (profile.name, producer)
                 if key in seen:
                     continue
                 seen.add(key)
+                edges.append(
+                    GraphEdge(
+                        producer=producer,
+                        consumer=profile.name,
+                        confidence=ref.confidence,
+                        mechanism=ref.mechanism,
+                        match_reason=(
+                            f"{ref.mechanism}: '{ref.name}' resolves to repo "
+                            f"'{producer}'"
+                        ),
+                    )
+                )
 
-                edges.append(matched[1])  # GraphEdge
+        # Shared-resource edges: the identifier is a *resource*, so the
+        # match is resource-to-resource, not name-to-repository. Bidirectional
+        # and declared: shared state is a discovery hint, never topology.
+        for resource, repos in self._shared_resource_groups(profiles).items():
+            for consumer, producer in permutations(repos, 2):
+                key = (consumer, producer)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append(
+                    GraphEdge(
+                        producer=producer,
+                        consumer=consumer,
+                        confidence="declared",
+                        mechanism="SHARED_RESOURCE",
+                        match_reason=(
+                            f"SHARED_RESOURCE: '{consumer}' and '{producer}' "
+                            f"share resource '{resource}'"
+                        ),
+                    )
+                )
 
         return edges
 
-    def _match_dep_to_name(
-        self, dep: str, consumer: str
-    ) -> tuple[str, GraphEdge] | None:
-        """Match a dep string to the best registered repo name.
+    def _shared_resource_groups(
+        self, profiles: list[RepositoryProfile]
+    ) -> dict[str, list[str]]:
+        """Group repositories by the shared resources they declare.
 
-        Collects all candidate matches, then picks the best one by:
-        1. Match tier — exact > substring > suffix
-        2. Name length — longer name is more specific (auth-service > auth)
-
-        Returns (producer_name, GraphEdge) or None.
+        Returns ``{resource_identifier: [repo_a, repo_b, …]}`` for resources
+        declared by at least two repositories. Identifiers are compared
+        case-insensitively (``DATABASE:Orders-Db`` == ``DATABASE:orders-db``);
+        the returned key is lower-cased for the audit trail.
         """
-        dep_lower = dep.lower().strip()
-        candidates: list[tuple[int, int, str, GraphEdge]] = []
 
-        for name in self._names:
-            if name == consumer:
+        groups: dict[str, set[str]] = defaultdict(set)
+        for profile in profiles:
+            if profile.auto_card is None:
                 continue
-            name_lower = name.lower()
+            for evidence in profile.auto_card.dep_evidence:
+                if evidence.mechanism != "SHARED_RESOURCE":
+                    continue
+                groups[evidence.name.lower()].add(profile.name)
+        return {
+            resource: sorted(repos)
+            for resource, repos in groups.items()
+            if len(repos) >= 2
+        }
 
-            # Tier 0: exact match (highest priority)
-            if name_lower == dep_lower:
-                candidates.append((
-                    0, len(name), name,
-                    GraphEdge(
-                        producer=name, consumer=consumer,
-                        confidence="confirmed",
-                        match_reason=f"exact: dep == {name}",
-                    ),
-                ))
-                continue
+    def _resolve_evidence(self, identifier: str, consumer: str) -> str | None:
+        """Resolve an evidence identifier to a catalog repository.
 
-            # Tier 1: substring match (dep contains name)
-            if name_lower in dep_lower:
-                candidates.append((
-                    1, len(name), name,
-                    GraphEdge(
-                        producer=name, consumer=consumer,
-                        confidence="possible",
-                        match_reason=f"substring: '{name}' found in '{dep}'",
-                    ),
-                ))
-                continue
-
-            # Tier 2: suffix match (dep ends with name)
-            if dep_lower.endswith(name_lower):
-                candidates.append((
-                    2, len(name), name,
-                    GraphEdge(
-                        producer=name, consumer=consumer,
-                        confidence="possible",
-                        match_reason=f"suffix: dep ends with '{name}'",
-                    ),
-                ))
-
-        if not candidates:
+        Delegates to the service registry, which resolves exactly (no
+        substring guessing) and case-insensitively. Returns ``None`` for
+        identifiers that name no catalog repository — a public library, a
+        repo outside the scanned org — so no edge is built.
+        """
+        producer = self._registry.resolve(identifier)
+        if producer is None or producer == consumer:
             return None
-
-        # Sort: lowest tier number first, then longest name first
-        candidates.sort(key=lambda c: (c[0], -c[1]))
-        best = candidates[0]
-        return best[2], best[3]
+        return producer
 
     def _index_forward(self) -> dict[str, list[GraphEdge]]:
         """consumer → [edges where this consumer depends on producers]."""

@@ -129,6 +129,13 @@ services:
       # the matching token, so overriding this means overriding it for both.
       REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_CONSOLE_ACTION_TOKEN:-console-dev-token}
       REPOMESH_LOCAL_SESSION_TTL_SECONDS: ${REPOMESH_LOCAL_SESSION_TTL_SECONDS:-28800}
+      # Repository scanning: SSRF allowlist plus credentials for private repos.
+      # github.com / *.github.com / gitlab.com / any host containing "gitlab"
+      # scan by default; this allowlist only gates custom self-hosted domains
+      # the platform detection cannot name.
+      REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS: ${REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS:-github.com}
+      REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN: ${REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN:-}
+      REPOMESH_REPOSITORY_SCAN_GITLAB_TOKEN: ${REPOMESH_REPOSITORY_SCAN_GITLAB_TOKEN:-}
     # The image CMD is `alembic upgrade head && uvicorn ...`, so the container
     # migrates its own (private) database on every start.
     depends_on:

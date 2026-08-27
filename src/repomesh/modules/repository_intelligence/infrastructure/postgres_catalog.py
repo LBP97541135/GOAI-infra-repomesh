@@ -6,7 +6,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
+from repomesh.modules.repository_intelligence.domain import (
+    AutoCard,
+    DepEvidence,
+    RepositoryProfile,
+)
 from repomesh.persistence import Database
 from repomesh.persistence.models import AuditEventRecord, OutboxEventRecord, StateEventRecord
 from repomesh.shared.domain import DomainError
@@ -44,7 +48,7 @@ class PostgresRepositoryCatalog:
                         test_commands=list(profile.test_commands),
                         test_paths=list(profile.test_paths),
                         profiled_at=profile.profiled_at,
-                        metadata=_serialize_metadata(profile),
+                        metadata_payload=_serialize_metadata(profile),
                     )
                 )
                 for event in events:
@@ -91,6 +95,16 @@ def _serialize_metadata(profile: RepositoryProfile) -> dict[str, Any]:
         _METADATA_AUTO_CARD_KEY: {
             "top_dirs": list(card.top_dirs),
             "deps": list(card.deps),
+            "dep_evidence": [
+                {
+                    "name": evidence.name,
+                    "mechanism": evidence.mechanism,
+                    "confidence": evidence.confidence,
+                }
+                for evidence in card.dep_evidence
+            ],
+            "identities": list(card.identities),
+            "deploy_identities": list(card.deploy_identities),
             "recent_commits": list(card.recent_commits),
             "exposed_apis": list(card.exposed_apis),
             "low_signal": card.low_signal,
@@ -105,6 +119,16 @@ def _deserialize_auto_card(metadata: dict[str, Any] | None) -> AutoCard | None:
     return AutoCard(
         top_dirs=tuple(payload.get("top_dirs") or ()),
         deps=tuple(payload.get("deps") or ()),
+        dep_evidence=tuple(
+            DepEvidence(
+                name=item["name"],
+                mechanism=item["mechanism"],
+                confidence=item["confidence"],
+            )
+            for item in payload.get("dep_evidence") or ()
+        ),
+        identities=tuple(payload.get("identities") or ()),
+        deploy_identities=tuple(payload.get("deploy_identities") or ()),
         recent_commits=tuple(payload.get("recent_commits") or ()),
         exposed_apis=tuple(payload.get("exposed_apis") or ()),
         low_signal=bool(payload.get("low_signal", False)),

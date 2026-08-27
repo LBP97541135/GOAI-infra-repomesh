@@ -39,6 +39,11 @@ from .scan_remote import (
     scan_org,
     scan_single_repo,
 )
+from .service_registry import (
+    ServiceAliases,
+    ServiceRegistry,
+    build_service_registry,
+)
 
 __all__ = [
     "ConfirmationResult",
@@ -64,9 +69,12 @@ __all__ = [
     "RequirementAnalysis",
     "RequirementAnalyzer",
     "ScanRegistration",
+    "ServiceAliases",
+    "ServiceRegistry",
     "TaskNode",
     "TopoResult",
     "build_doc_content",
+    "build_service_registry",
     "extract_entry_repo_name",
     "identify_url_type",
     "infer_languages",

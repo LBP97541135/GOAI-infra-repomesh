@@ -454,15 +454,34 @@ def _scan_exposed_apis(root: Path) -> tuple[str, ...]:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for framework, pattern in _API_PATTERNS:
-            for match in pattern.finditer(text):
-                route = match.group(1).strip()
-                if route:
-                    apis.append(f"{framework}:{route}")
-    # Deduplicate, cap at 50.
+        apis.extend(_match_api_routes(text))
+    return _dedupe_api_routes(apis)
+
+
+def _match_api_routes(text: str) -> list[str]:
+    """Match ``framework:route`` entries in one source text.
+
+    Shared by the local scanner (:func:`_scan_exposed_apis`) and the remote
+    scanner (``scan_remote.py``) so both produce identical output shapes
+    from the same framework regexes.  Not deduplicated — callers aggregate
+    across files and run :func:`_dedupe_api_routes` once.
+    """
+
+    routes: list[str] = []
+    for framework, pattern in _API_PATTERNS:
+        for match in pattern.finditer(text):
+            route = match.group(1).strip()
+            if route:
+                routes.append(f"{framework}:{route}")
+    return routes
+
+
+def _dedupe_api_routes(routes: list[str]) -> tuple[str, ...]:
+    """Deduplicate ``framework:route`` entries and cap at 50."""
+
     seen: set[str] = set()
     unique: list[str] = []
-    for api in apis:
+    for api in routes:
         if api not in seen:
             seen.add(api)
             unique.append(api)

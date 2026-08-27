@@ -72,6 +72,17 @@ class RepositoryDiscoveryService:
             keywords=keywords,
         ).candidates
 
+    @staticmethod
+    def _scannable(profiles: list[RepositoryProfile]) -> list[RepositoryProfile]:
+        """Profiles whose scan actually produced a card.
+
+        ``scan_status != "ok"`` means the scan failed or was skipped, so the
+        profile carries no trustworthy signal — ranking it would rank noise.
+        Registered rows are ``ok`` by construction, so this is a guard for
+        in-memory scan pipelines, not a query optimisation.
+        """
+        return [p for p in profiles if p.scan_status == "ok"]
+
     def score(
         self,
         profiles: list[RepositoryProfile],
@@ -91,10 +102,13 @@ class RepositoryDiscoveryService:
         """
 
         by_name = {profile.name: profile for profile in profiles}
-        results = self._discover_with_llm(requirement, profiles) if self._llm else []
+        scannable = self._scannable(profiles)
+        results = self._discover_with_llm(requirement, scannable) if self._llm else []
         llm_used = bool(results)
         if not results:
-            results = self._discover_with_keywords(requirement, profiles, keywords or [])
+            results = self._discover_with_keywords(
+                requirement, scannable, keywords or []
+            )
         span = trace.get_current_span()
         span.set_attribute("repomesh.discovery.llm_used", llm_used)
         span.set_attribute("repomesh.discovery.candidate_count", len(results))

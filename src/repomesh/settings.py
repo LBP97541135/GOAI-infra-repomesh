@@ -35,9 +35,23 @@ class Settings(BaseSettings):
     agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     runner_control_token: str | None = None
     agent_action_token: str | None = None
-    #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
-    #: else is refused before a request leaves this process.
+    #: Hosts the scan endpoints may reach, comma separated. Anything else is
+    #: refused before a request leaves this process. Known hosting platforms
+    #: (github.com, *.github.com, gitlab.com, any host whose name contains
+    #: "gitlab") are reachable without an entry — platform support must not be
+    #: gated behind a per-domain list. This allowlist only gates custom domains
+    #: the platform detection cannot name.
     repository_scan_allowed_hosts: str = "github.com"
+    #: Explicit host→platform mapping for self-hosted instances, comma
+    #: separated ``host=platform`` pairs (e.g.
+    #: ``git.mycorp.com=gitlab,code.mycorp.com=github``). Platforms outside
+    #: the built-in known set are otherwise refused as unknown.
+    repository_scan_platforms: str = ""
+    #: Whether org scans include fork repositories. Default ``False``: a fork
+    #: duplicates its upstream's service and would register a second catalog
+    #: row for the same code. ``archived``/``empty`` are always skipped — they
+    #: are platform facts — while this switch is the operator's preference.
+    repository_scan_include_forks: bool = False
     #: Credentials the *console* scan endpoints use to read private
     #: repositories. The console's request bodies carry no token field on
     #: purpose (a browser is not a place to type a PAT), so this env is the

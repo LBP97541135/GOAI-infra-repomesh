@@ -16,6 +16,7 @@ from pathlib import Path
 
 from repomesh.modules.repository_intelligence.domain import (
     AutoCard,
+    DepEvidence,
     RepositoryProfile,
 )
 
@@ -189,6 +190,15 @@ def _serialize_profile(profile: RepositoryProfile) -> dict:
         data["auto_card"] = {
             "top_dirs": list(card.top_dirs),
             "deps": list(card.deps),
+            "dep_evidence": [
+                {
+                    "name": evidence.name,
+                    "mechanism": evidence.mechanism,
+                    "confidence": evidence.confidence,
+                }
+                for evidence in card.dep_evidence
+            ],
+            "identities": list(card.identities),
             "recent_commits": list(card.recent_commits),
             "exposed_apis": list(card.exposed_apis),
             "low_signal": card.low_signal,
@@ -204,6 +214,15 @@ def _deserialize_profile(data: dict) -> RepositoryProfile | None:
             auto_card = AutoCard(
                 top_dirs=tuple(ac.get("top_dirs") or ()),
                 deps=tuple(ac.get("deps") or ()),
+                dep_evidence=tuple(
+                    DepEvidence(
+                        name=item["name"],
+                        mechanism=item["mechanism"],
+                        confidence=item["confidence"],
+                    )
+                    for item in ac.get("dep_evidence") or ()
+                ),
+                identities=tuple(ac.get("identities") or ()),
                 recent_commits=tuple(ac.get("recent_commits") or ()),
                 exposed_apis=tuple(ac.get("exposed_apis") or ()),
                 low_signal=ac.get("low_signal", False),

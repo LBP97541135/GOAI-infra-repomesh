@@ -13,16 +13,37 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from repomesh.modules.repository_intelligence.application.call_declarations import (
+    parse_call_declarations,
+)
+from repomesh.modules.repository_intelligence.application.dep_parsers import (
+    BuildFileResult,
+    parse_build_file,
+)
+from repomesh.modules.repository_intelligence.application.deploy_parsers import (
+    is_compose_filename,
+    parse_deploy_file,
+)
+from repomesh.modules.repository_intelligence.application.resource_config import (
+    parse_resource_config,
+)
 from repomesh.modules.repository_intelligence.application.scan import (
     _BUSINESS_NAME_KEYWORDS,
     _GENERIC_DEPS,
     _GENERIC_DIR_NAMES,
+    _IGNORED_DIRS,
     _LOW_SIGNAL_THRESHOLD,
     _VAGUE_COMMIT_PATTERNS,
+    _dedupe_api_routes,
+    _match_api_routes,
     infer_name,
+)
+from repomesh.modules.repository_intelligence.application.source_refs import (
+    parse_source_ref_file,
 )
 from repomesh.modules.repository_intelligence.domain import (
     AutoCard,
+    DepEvidence,
     RepositoryProfile,
 )
 from repomesh.modules.repository_intelligence.infrastructure.platform import (
@@ -36,9 +57,12 @@ from repomesh.modules.repository_intelligence.infrastructure.platform import (
 
 _logger = logging.getLogger(__name__)
 
-#: Dependency files we know how to parse, keyed by ecosystem.
+#: Dependency files we know how to parse, keyed by ecosystem. ``setup.py``
+#: is deliberately absent — parsing it would require executing/AST-parsing
+#: Python code for a marginal legacy ecosystem, so it is not claimed as
+#: supported and is never fetched.
 _DEP_FILE_MAP: dict[str, tuple[str, ...]] = {
-    "python": ("requirements.txt", "pyproject.toml", "setup.py"),
+    "python": ("requirements.txt", "pyproject.toml"),
     "node": ("package.json",),
     "go": ("go.mod",),
     "rust": ("Cargo.toml",),
@@ -206,18 +230,43 @@ async def scan_remote(
 ) -> AutoCard:
     """Build an :class:`AutoCard` from a remote repository.
 
-    Makes 2-3 API calls per repo:
+    Makes 2-3 API calls per repo plus one per unique interesting file:
     1. File tree → top_dirs + detect dependency files
     2. Commits → recent_commits
     3. (Optional) Dependency file content → deps
+    4. (Optional) Source file content → exposed_apis
 
-    ``exposed_apis`` is left empty (requires reading every source file).
+    ``exposed_apis`` collects HTTP routes from up to 30 source files with
+    the same extraction as the local scanner (capped far lower because
+    every file costs an API round trip).
+
+    File content is cached by path for the duration of the scan: several
+    channels select overlapping files (``package.json``/``Cargo.toml`` feed
+    both the BUILD and the SOURCE channel), and a file that fails to fetch
+    once is not fetched again by a later channel.
     """
 
     # 1. File tree
     file_entries = await fetcher.fetch_file_tree(repo_info.url)
     top_dirs = _extract_top_dirs(file_entries)
     dep_files_present = _find_dep_files(file_entries)
+
+    # Per-path content cache, local to this repo scan. ``None`` (file
+    # missing or fetch failed) is cached too, so a path selected by several
+    # channels costs exactly one API round trip.
+    content_cache: dict[str, str | None] = {}
+
+    async def _fetch(path: str) -> str | None:
+        """Fetch one file once; every later channel reuses the result."""
+        if path not in content_cache:
+            try:
+                content_cache[path] = await fetcher.fetch_file_content(
+                    repo_info.url, path
+                )
+            except Exception:  # noqa: BLE001 — a scan survives one bad file
+                _logger.debug("Failed to fetch %s for %s", path, repo_info.name)
+                content_cache[path] = None
+        return content_cache[path]
 
     # 2. Commits
     try:
@@ -226,47 +275,154 @@ async def scan_remote(
         _logger.warning("Failed to fetch commits for %s", repo_info.name)
         commits = []
 
-    # 3. Dependency file content (if any dep files exist)
+    # 3. Dependency file content (if any dep files exist).
+    # Structured output: legacy names keep feeding the free-text ``deps``
+    # field, BUILD evidence feeds the graph, identities register as aliases.
     deps: list[str] = []
+    evidence: list[DepEvidence] = []
+    identities: list[str] = []
     for dep_file in dep_files_present:
         try:
-            content = await fetcher.fetch_file_content(repo_info.url, dep_file)
+            content = await _fetch(dep_file)
             if content is not None:
-                deps.extend(_parse_dep_file(dep_file, content))
+                parsed = _parse_dep_file(dep_file, content)
+                deps.extend(parsed.legacy_names)
+                evidence.extend(parsed.evidence)
+                identities.extend(parsed.identities)
         except Exception:  # noqa: BLE001
-            _logger.debug("Failed to fetch %s for %s", dep_file, repo_info.name)
+            _logger.debug("Failed to parse %s for %s", dep_file, repo_info.name)
 
-    # 3b. Scan Java source files for inter-service dependencies.
-    # pom.xml only reveals Maven (compile-time) deps; microservice
-    # call chains live in source code (RestTemplate, Feign, RabbitMQ).
-    java_files = _find_java_service_files(file_entries)
-    for java_path in java_files:
+    # 3b. Scan source files for runtime call declarations (Feign/Dubbo/gRPC).
+    # pom.xml only reveals Maven (compile-time) deps; call chains live in
+    # framework declarations. Only declared names are evidence — the
+    # first-generation string guessing (_JAVA_SERVICE_PATTERNS) is gone.
+    source_files = _find_java_service_files(file_entries)
+    for source_path in source_files:
         try:
-            content = await fetcher.fetch_file_content(repo_info.url, java_path)
+            content = await _fetch(source_path)
             if content is not None:
-                deps.extend(_extract_service_deps(content))
+                for target in parse_call_declarations(content):
+                    deps.append(target.name)
+                    evidence.append(
+                        DepEvidence(
+                            name=target.name,
+                            mechanism=target.mechanism,
+                            confidence=target.confidence,
+                        )
+                    )
         except Exception:  # noqa: BLE001
-            _logger.debug("Failed to fetch %s for %s", java_path, repo_info.name)
+            _logger.debug("Failed to parse %s for %s", source_path, repo_info.name)
 
-    # Deduplicate deps.
-    seen: set[str] = set()
-    unique_deps: list[str] = []
-    for dep in deps:
-        key = dep.lower()
-        if key not in seen:
-            seen.add(key)
-            unique_deps.append(dep)
+    # 3c. Application config (application.yml/.properties/.env) — mechanism ③.
+    # Resource identifiers are *shared* semantics, not call semantics, so they
+    # are kept out of the legacy ``deps`` list: the graph's name-matching
+    # fallback must never mint a call edge out of a database name.
+    config_files = _find_resource_files(file_entries)
+    for config_path in config_files:
+        try:
+            content = await _fetch(config_path)
+            if content is not None:
+                for target in parse_resource_config(config_path, content):
+                    evidence.append(
+                        DepEvidence(
+                            name=target.name,
+                            mechanism=target.mechanism,
+                            confidence=target.confidence,
+                        )
+                    )
+        except Exception:  # noqa: BLE001
+            _logger.debug("Failed to parse %s for %s", config_path, repo_info.name)
+
+    # 3d. Deployment manifests (docker-compose / k8s) — mechanism ④.
+    # ``depends_on`` and Service-selector references name *services*, so
+    # they resolve through the service registry exactly like mechanisms ①②
+    # — never resource-to-resource like ③. The service names this repo
+    # deploys (compose services, k8s app labels) are deploy identities, so
+    # other repos' deployment references can resolve back here.
+    deploy_files = _find_deploy_files(file_entries)
+    deploy_identities: list[str] = []
+    for deploy_path in deploy_files:
+        try:
+            content = await _fetch(deploy_path)
+            if content is not None:
+                parsed = parse_deploy_file(deploy_path, content)
+                for target in parsed.targets:
+                    evidence.append(
+                        DepEvidence(
+                            name=target.name,
+                            mechanism=target.mechanism,
+                            confidence=target.confidence,
+                        )
+                    )
+                deploy_identities.extend(parsed.identities)
+        except Exception:  # noqa: BLE001
+            _logger.debug("Failed to parse %s for %s", deploy_path, repo_info.name)
+
+    # 3e. Cross-repository source references — mechanism ⑤ (SOURCE).
+    # A submodule URL or a ``../`` workspace path names *code from another
+    # repository*, so it is confirmed evidence (the compiler/package
+    # manager executes it) — resolved through the service registry like
+    # mechanisms ①②④. In-repo entries (``use ./cmd``, ``packages/*``)
+    # are deliberately ignored by the parsers: they are not cross-repo
+    # references. source refs land in ``deps`` like other confirmed
+    # mechanisms so keyword discovery and scoring see them.
+    source_ref_files = _find_source_ref_files(file_entries)
+    for source_path in source_ref_files:
+        try:
+            content = await _fetch(source_path)
+            if content is not None:
+                parsed = parse_source_ref_file(source_path, content)
+                for ref in parsed.refs:
+                    deps.append(ref.name)
+                    evidence.append(
+                        DepEvidence(
+                            name=ref.name,
+                            mechanism=ref.mechanism,
+                            confidence=ref.confidence,
+                        )
+                    )
+        except Exception:  # noqa: BLE001
+            _logger.debug("Failed to parse %s for %s", source_path, repo_info.name)
+
+    # 3f. Exposed API routes (HTTP method + path) — lightweight collection.
+    # Same framework regexes and ``framework:route`` output shape as the
+    # local scanner (scan.py::_scan_exposed_apis), capped lower because
+    # every source file costs an API round trip.  Routes are card metadata
+    # for prompt clarity, not dependency evidence — nothing enters ``deps``
+    # or ``dep_evidence`` here.
+    api_files = _find_api_source_files(file_entries)
+    api_routes: list[str] = []
+    for api_path in api_files:
+        try:
+            content = await _fetch(api_path)
+            if content is not None:
+                api_routes.extend(_match_api_routes(content))
+        except Exception:  # noqa: BLE001
+            _logger.debug("Failed to parse %s for %s", api_path, repo_info.name)
+    exposed_apis = _dedupe_api_routes(api_routes)
+
+    # Deduplicate deps, evidence, identities, and deploy identities
+    # (case-insensitive keys).
+    (
+        unique_deps,
+        unique_evidence,
+        unique_identities,
+        unique_deploy_identities,
+    ) = _dedupe_scan_output(deps, evidence, identities, deploy_identities)
 
     # low_signal scoring (without exposed_apis, max score = 0.9).
     low_signal = _compute_remote_low_signal(
-        repo_info.name, top_dirs, tuple(unique_deps), tuple(commits)
+        repo_info.name, top_dirs, unique_deps, tuple(commits)
     )
 
     return AutoCard(
         top_dirs=tuple(top_dirs),
-        deps=tuple(unique_deps),
+        deps=unique_deps,
+        dep_evidence=unique_evidence,
+        identities=unique_identities,
+        deploy_identities=unique_deploy_identities,
         recent_commits=tuple(commits),
-        exposed_apis=(),
+        exposed_apis=exposed_apis,
         low_signal=low_signal,
     )
 
@@ -277,17 +433,27 @@ async def scan_org(
     *,
     on_progress: Callable[[int, int, str], None] | None = None,
     max_workers: int = 5,
+    include_forks: bool = False,
 ) -> list[RepositoryProfile]:
     """Scan all repos under a group/org URL.
 
     1. List all repos.
-    2. Filter out archived / empty / fork.
+    2. Filter out archived / empty / fork (unless *include_forks*).
     3. Concurrently build AutoCard for each.
     4. Return profiles.
+
+    A repository that fails to scan is returned as a profile with
+    ``scan_status="failed"`` and ``auto_card=None`` — never as a plausible
+    empty card. The caller decides what to do with it; :func:`register`
+    filters it out of the catalog.
     """
 
     all_repos = await fetcher.list_repos(group_url)
-    repos = [r for r in all_repos if not r.should_skip]
+    repos = [
+        r
+        for r in all_repos
+        if not r.should_skip and (include_forks or not r.fork)
+    ]
 
     total = len(repos)
     if total == 0:
@@ -304,8 +470,17 @@ async def scan_org(
             try:
                 card = await scan_remote(repo, fetcher)
             except Exception:  # noqa: BLE001
-                _logger.warning("Failed to scan %s, using empty card", repo.name)
-                card = AutoCard(low_signal=True)
+                _logger.warning("Failed to scan %s, marking scan failed", repo.name)
+                completed += 1
+                if on_progress is not None:
+                    on_progress(completed, total, repo.name)
+                return RepositoryProfile(
+                    name=repo.name,
+                    url=repo.url,
+                    description=repo.description,
+                    auto_card=None,
+                    scan_status="failed",
+                )
         completed += 1
         if on_progress is not None:
             on_progress(completed, total, repo.name)
@@ -327,10 +502,14 @@ async def scan_single_repo(
 ) -> RepositoryProfile:
     """Scan one repository given only its URL.
 
-    The single-repo peer of :func:`scan_org`. The name comes from the URL path
-    (:func:`extract_entry_repo_name`) instead of a metadata call, which is the
-    same inference the CLI entry point has always used — one API call saved,
-    and one fewer place for the name to disagree with itself.
+    The single-repo peer of :func:`scan_org`. The name comes from the
+    platform's own metadata (:meth:`PlatformFetcher.resolve_repo_name`) — the
+    same source ``scan_org`` uses for every repo it lists — and falls back to
+    the URL path (:func:`extract_entry_repo_name`) only when the platform
+    cannot confirm the URL names an existing repository. That keeps the
+    registered name authoritative (a GitLab project can be renamed in the UI
+    while its URL path stays the same, and ``order-service.git`` in a URL is
+    not the project's name) at the cost of one metadata call.
 
     Unlike :func:`scan_org`, a failure here is *not* swallowed into an empty
     AutoCard: an org scan of 40 repos should not die because one repo is
@@ -339,7 +518,9 @@ async def scan_single_repo(
     than an error.
     """
 
-    name = extract_entry_repo_name(repo_url)
+    name = await fetcher.resolve_repo_name(repo_url)
+    if name is None:
+        name = extract_entry_repo_name(repo_url)
     if name is None:
         raise ValueError(f"not a single-repository URL: {repo_url}")
 
@@ -370,176 +551,354 @@ def _extract_top_dirs(entries: list[FileEntry]) -> list[str]:
     return dirs[:80]
 
 
+#: Maximum dependency files fetched per repo, and per file kind (rate-limit
+#: friendly: a monorepo can hold dozens of pom.xml/package.json).
+_MAX_DEP_FILES_PER_TYPE = 10
+_MAX_DEP_FILES_PER_REPO = 30
+
+
 def _find_dep_files(entries: list[FileEntry]) -> list[str]:
-    """Find dependency files in the file tree (root level only)."""
+    """Find dependency files anywhere in the file tree.
+
+    Root-level scanning missed nested build files — a Go service in a
+    subdirectory, a monorepo with one pom.xml per module. Search the whole
+    tree, then apply the per-kind and per-repo caps so the fetch list stays
+    rate-limit friendly.
+    """
 
     found: list[str] = []
     for entry in entries:
         if entry.is_dir:
             continue
-        # Check root-level files only (no slash in path).
-        if "/" not in entry.path and entry.path in _ALL_DEP_FILES:
+        filename = entry.path.rsplit("/", 1)[-1]
+        if filename in _ALL_DEP_FILES:
             found.append(entry.path)
-    return found
+
+    # Per-kind cap first (at most N of any one file type), then overall cap.
+    capped: list[str] = []
+    per_type: dict[str, int] = {}
+    for path in sorted(found):
+        filename = path.rsplit("/", 1)[-1]
+        if per_type.get(filename, 0) >= _MAX_DEP_FILES_PER_TYPE:
+            continue
+        per_type[filename] = per_type.get(filename, 0) + 1
+        capped.append(path)
+    return capped[:_MAX_DEP_FILES_PER_REPO]
 
 
-# ---------------------------------------------------------------------------
-# Dependency file parsing (reuses logic from scan.py but adapted for text)
-# ---------------------------------------------------------------------------
+#: Application config files that may declare shared resources (mechanism ③).
+#: Only *application* configuration is read here — k8s/Helm manifests are
+#: deployment topology (mechanism ④, Phase 5) and are deliberately not
+#: matched by these patterns.
+_MAX_CONFIG_FILES_PER_REPO = 10
 
 
-def _parse_dep_file(filename: str, content: str) -> list[str]:
-    """Parse a dependency file and return package names."""
+def _is_resource_config_filename(filename: str) -> bool:
+    """True for application config files that declare shared resources.
 
-    if filename in ("requirements.txt",):
-        return _parse_requirements(content)
-    if filename in ("pyproject.toml",):
-        return _parse_pyproject(content)
-    if filename == "package.json":
-        return _parse_package_json(content)
-    if filename == "go.mod":
-        return _parse_go_mod(content)
-    if filename == "pom.xml":
-        return _parse_pom_xml(content)
-    # For unrecognised files, return empty (don't guess).
-    return []
-
-
-def _parse_pom_xml(content: str) -> list[str]:
-    """Parse a Maven pom.xml and return dependency artifact IDs.
-
-    Only extracts ``<artifactId>`` inside ``<dependency>`` blocks
-    (not ``<dependencyManagement>``).
+    ``application*.yml|yaml|properties`` (profiles included) and
+    ``bootstrap.yml|yaml``. ``.env`` files are deliberately excluded: they
+    are local environment overrides (often carrying secrets), not a
+    repository's declaration that it *shares* a resource — a
+    ``DATABASE_URL`` in .env is deployment config, not shared-state
+    evidence. A ``deployment.yaml`` or ``values.yaml`` is deployment
+    topology, not shared-resource config.
     """
 
-    import re  # noqa: PLC0415
-
-    deps: list[str] = []
-
-    # Find all <dependency>...</dependency> blocks
-    for block in re.finditer(
-        r"<dependency>(.*?)</dependency>", content, re.DOTALL,
+    fname = filename.lower()
+    if fname.startswith("application") and fname.endswith(
+        (".yml", ".yaml", ".properties")
     ):
-        inner = block.group(1)
-        m = re.search(r"<artifactId>\s*(.*?)\s*</artifactId>", inner)
-        if m and m.group(1).strip():
-            deps.append(m.group(1).strip())
-
-    return deps
+        return True
+    return fname in ("bootstrap.yml", "bootstrap.yaml")
 
 
-def _parse_requirements(content: str) -> list[str]:
-    import re  # noqa: PLC0415
+def _find_resource_files(entries: list[FileEntry]) -> list[str]:
+    """Find application config files anywhere in the file tree.
 
-    deps: list[str] = []
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or line.startswith("-"):
-            continue
-        name = re.split(r"[>=<!\[;]", line, maxsplit=1)[0].strip()
-        if name:
-            deps.append(name)
-    return deps
+    Whole-tree search like :func:`_find_dep_files` — Spring services keep
+    ``src/main/resources/application.yml``, not a root-level file — capped
+    so the fetch list stays rate-limit friendly.
+    """
 
-
-def _parse_pyproject(content: str) -> list[str]:
-    import re  # noqa: PLC0415
-
-    deps: list[str] = []
-    pattern = r'dependencies\s*=\s*\[(.*?)\]'
-    for match in re.finditer(pattern, content, re.DOTALL):
-        inner = match.group(1)
-        for quoted in re.findall(r'"([^"]+)"', inner):
-            name = re.split(r"[>=<!\[;]", quoted, maxsplit=1)[0].strip()
-            if name:
-                deps.append(name)
-    return deps
+    found = [
+        entry.path
+        for entry in entries
+        if not entry.is_dir and _is_resource_config_filename(entry.path.rsplit("/", 1)[-1])
+    ]
+    return sorted(found)[:_MAX_CONFIG_FILES_PER_REPO]
 
 
-def _parse_package_json(content: str) -> list[str]:
-    import json  # noqa: PLC0415
+#: Deployment manifests that may declare deployment topology (mechanism ④).
+#: Matched by filename shape (compose, k8s manifest keywords) or by living
+#: under a deployment directory (k8s/, deploy/, helm/, charts/, manifests/).
+_MAX_DEPLOY_FILES_PER_REPO = 10
 
-    try:
-        data = json.loads(content)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return []
-    deps: list[str] = []
-    for key in ("dependencies", "devDependencies", "peerDependencies"):
-        section = data.get(key)
-        if isinstance(section, dict):
-            deps.extend(section.keys())
-    return deps
-
-
-def _parse_go_mod(content: str) -> list[str]:
-    deps: list[str] = []
-    for line in content.splitlines():
-        line = line.strip()
-        if line.startswith("require") or line.startswith(")"):
-            continue
-        parts = line.split()
-        if len(parts) >= 2 and parts[0].startswith("github.com/"):
-            deps.append(parts[0])
-    return deps
-
-
-#: Regex patterns for extracting inter-service dependencies from Java source.
-#: Matches patterns like: getServiceUrl("ts-notification-service"),
-#: @FeignClient(name="ts-order-service"), restTemplate...("ts-x-service"),
-#: RestTemplate call URL string literals containing ts-* names.
-_JAVA_SERVICE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # getServiceUrl("ts-xxx-service") or getServiceUrl("ts-xxx")
-    re.compile(r'getServiceUrl\s*\(\s*"(ts-[\w-]+)"\s*\)'),
-    # @FeignClient(name="ts-xxx-service", ...)
-    re.compile(r'@FeignClient\s*\([^)]*name\s*=\s*"(ts-[\w-]+)"'),
-    # "http://ts-xxx-service" or "ts-xxx-service" in restTemplate exchange
-    re.compile(r'"(ts-[\w-]+-service)"'),
-    # RabbitMQ routing key patterns: sendService.send("ts-xxx-...")
-    re.compile(r'\.send\s*\(\s*"(ts-[\w-]+)"'),
+#: Filename keywords that mark a YAML as a k8s manifest.
+_K8S_MANIFEST_KEYWORDS = (
+    "deployment",
+    "statefulset",
+    "daemonset",
+    "service",
+    "ingress",
 )
 
-#: Java source files worth scanning (Service, Controller, Config, Client).
+#: Directories that conventionally hold deployment manifests.
+_DEPLOY_DIR_NAMES = ("k8s", "deploy", "deployments", "helm", "charts", "manifests")
+
+
+def _is_deploy_filename(filename: str, path: str) -> bool:
+    """True for compose files and k8s/Helm manifests.
+
+    Compose matches by name (``docker-compose*.yml``, ``compose*.yaml``).
+    Other manifests must be YAML and either carry a k8s keyword in the
+    filename (``deployment.yaml``, ``service.yaml``) or live under a
+    deployment directory (``k8s/``, ``helm/templates/``). Helm
+    ``values*.yaml`` files are deliberately excluded: they carry
+    chart-specific data, not dependency signals.
+    """
+
+    fname = filename.lower()
+    if is_compose_filename(fname):
+        return True
+    if fname.startswith("values"):
+        return False
+    if not fname.endswith((".yaml", ".yml")):
+        return False
+    if any(segment in path.lower().split("/") for segment in _DEPLOY_DIR_NAMES):
+        return True
+    return any(keyword in fname for keyword in _K8S_MANIFEST_KEYWORDS)
+
+
+def _find_deploy_files(entries: list[FileEntry]) -> list[str]:
+    """Find deployment manifests anywhere in the file tree.
+
+    Same whole-tree strategy as :func:`_find_resource_files`, capped so the
+    fetch list stays rate-limit friendly.
+    """
+
+    found = [
+        entry.path
+        for entry in entries
+        if not entry.is_dir
+        and _is_deploy_filename(entry.path.rsplit("/", 1)[-1], entry.path)
+    ]
+    return sorted(found)[:_MAX_DEPLOY_FILES_PER_REPO]
+
+
+#: Source-reference files that may pull in *another* repository's code
+#: (mechanism ⑤). `.gitmodules` pins submodule URLs; `go.work` points
+#: workspace modules outside the repo; `package.json`/`Cargo.toml` may
+#: declare cross-boundary workspaces/path deps. The BUILD channel also
+#: reads package.json/Cargo.toml — each mechanism keeps its own parse of
+#: the content (a small file, and the channels stay independent).
+_SOURCE_REF_FILE_NAMES = (".gitmodules", "go.work", "package.json", "Cargo.toml")
+_MAX_SOURCE_REF_FILES_PER_REPO = 10
+
+
+def _find_source_ref_files(entries: list[FileEntry]) -> list[str]:
+    """Find cross-repository source-reference files anywhere in the tree."""
+
+    found = [
+        entry.path
+        for entry in entries
+        if not entry.is_dir and entry.path.rsplit("/", 1)[-1] in _SOURCE_REF_FILE_NAMES
+    ]
+    return sorted(found)[:_MAX_SOURCE_REF_FILES_PER_REPO]
+
+
+#: Source suffixes scanned for exposed API routes — the same set as the
+#: local scanner (``scan.py::_scan_exposed_apis``), so local/remote
+#: extraction is structurally identical (see :func:`_match_api_routes`).
+_API_SOURCE_SUFFIXES = frozenset({".py", ".ts", ".tsx", ".js", ".jsx", ".go"})
+
+#: Maximum source files fetched per repo for API-route scanning.  The local
+#: scanner reads up to 500 files from disk; the remote scanner pays one API
+#: round trip per file, so the cap is far lower but the extraction logic is
+#: identical.
+_MAX_API_SOURCE_FILES_PER_REPO = 30
+
+
+def _find_api_source_files(entries: list[FileEntry]) -> list[str]:
+    """Find source files likely to declare API routes.
+
+    Same suffix set and ignored-directory filter as the local scanner's
+    :func:`scan._iter_source_files`, capped much lower because every file
+    costs an API round trip.  Sorted for determinism.
+    """
+
+    candidates: list[str] = []
+    for entry in entries:
+        if entry.is_dir:
+            continue
+        if not entry.path.endswith(tuple(_API_SOURCE_SUFFIXES)):
+            continue
+        if any(part in _IGNORED_DIRS for part in entry.path.split("/")):
+            continue
+        candidates.append(entry.path)
+    return sorted(candidates)[:_MAX_API_SOURCE_FILES_PER_REPO]
+
+
+# ---------------------------------------------------------------------------
+# Dependency file parsing — mechanism ① (BUILD) evidence
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _DepParseResult:
+    """What one build manifest contributes to the card and the graph.
+
+    ``legacy_names`` keep feeding the free-text ``deps`` field (keyword
+    discovery, low-signal scoring) exactly as before; ``evidence`` is the
+    structured Phase 2 output the graph consumes; ``identities`` are this
+    repository's own declared identifiers, which the service registry
+    registers as aliases so evidence naming them resolves back here.
+    """
+
+    legacy_names: tuple[str, ...] = ()
+    evidence: tuple[DepEvidence, ...] = ()
+    identities: tuple[str, ...] = ()
+
+
+def _dedupe_scan_output(
+    deps: list[str],
+    evidence: list[DepEvidence],
+    identities: list[str],
+    deploy_identities: list[str],
+) -> tuple[
+    tuple[str, ...],
+    tuple[DepEvidence, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+]:
+    """Deduplicate legacy deps, evidence, build identities, deploy identities.
+
+    Evidence names (``group:artifact`` coordinates) already carry the Maven
+    composite, so a bare ``artifact`` legacy dep is a different key than
+    ``group:artifact`` evidence — both are kept, and the graph's registry
+    resolution decides what they point to.
+    """
+
+    unique_deps: list[str] = []
+    seen_deps: set[str] = set()
+    for dep in deps:
+        key = dep.lower()
+        if key not in seen_deps:
+            seen_deps.add(key)
+            unique_deps.append(dep)
+
+    unique_evidence: list[DepEvidence] = []
+    seen_evidence: set[str] = set()
+    for ev in evidence:
+        key = f"{ev.name.lower()}|{ev.mechanism}"
+        if key not in seen_evidence:
+            seen_evidence.add(key)
+            unique_evidence.append(ev)
+
+    unique_identities: list[str] = []
+    seen_identities: set[str] = set()
+    for identity in identities:
+        key = identity.lower()
+        if key not in seen_identities:
+            seen_identities.add(key)
+            unique_identities.append(identity)
+
+    unique_deploy_identities: list[str] = []
+    seen_deploy_identities: set[str] = set()
+    for identity in deploy_identities:
+        key = identity.lower()
+        if key not in seen_deploy_identities:
+            seen_deploy_identities.add(key)
+            unique_deploy_identities.append(identity)
+
+    return (
+        tuple(unique_deps),
+        tuple(unique_evidence),
+        tuple(unique_identities),
+        tuple(unique_deploy_identities),
+    )
+
+
+def _parse_dep_file(filename: str, content: str) -> _DepParseResult:
+    """Parse a dependency file into legacy names, BUILD evidence, identities.
+
+    Delegates to :mod:`dep_parsers` (matched on the file's basename so
+    nested build files resolve too); file kinds that module does not handle
+    (``setup.py``) contribute nothing rather than a guess. Managed Maven
+    entries (``<dependencyManagement>``) are a version policy, so they
+    never become evidence.
+    """
+    base = filename.rsplit("/", 1)[-1]
+    result = parse_build_file(base, content)
+    if result is None:
+        return _DepParseResult()
+
+    direct = [dep for dep in result.deps if not dep.managed]
+    return _DepParseResult(
+        legacy_names=tuple(dep.coordinates for dep in direct),
+        evidence=tuple(
+            DepEvidence(
+                name=dep.coordinates,
+                mechanism="BUILD",
+                confidence="confirmed",
+            )
+            for dep in direct
+        ),
+        identities=_identity_aliases(result),
+    )
+
+
+def _identity_aliases(result: BuildFileResult) -> tuple[str, ...]:
+    """The aliases this repository answers to, most precise first.
+
+    A Maven identity ``com.example:auth-service`` yields both the composite
+    and the bare artifactId, so evidence that names either resolves.
+    """
+    if result.identity is None:
+        return ()
+    group, _, artifact = result.identity.partition(":")
+    if group and artifact:
+        return (result.identity, artifact)
+    return (result.identity,)
+
+
+#: Source files worth scanning for runtime call declarations (Feign/Dubbo
+#: live in Service/Controller/Client/Config classes; gRPC stubs live in
+#: generated ``*Grpc.java`` files).
 _JAVA_SCAN_PATTERNS = (
     "ServiceImpl.java",
     "Service.java",
     "Controller.java",
     "Client.java",
     "Config.java",
+    "Grpc.java",
 )
 
-#: Maximum number of Java files to fetch per repo (rate-limit friendly).
+#: Maximum number of source files to fetch per repo (rate-limit friendly).
 _MAX_JAVA_FILES_PER_REPO = 15
 
 
 def _find_java_service_files(entries: list[FileEntry]) -> list[str]:
-    """Find Java source files likely to contain inter-service calls."""
+    """Find source files likely to declare runtime calls.
 
-    candidates: list[str] = []
-    for entry in entries:
-        if entry.is_dir:
-            continue
-        if not entry.path.endswith(".java"):
-            continue
-        # Only scan files matching known patterns (Service, Controller, etc.)
-        filename = entry.path.rsplit("/", 1)[-1]
-        if any(pat in filename for pat in _JAVA_SCAN_PATTERNS):
-            candidates.append(entry.path)
-        if len(candidates) >= _MAX_JAVA_FILES_PER_REPO:
-            break
-    return candidates
+    Feign clients, Dubbo consumers and gRPC stubs cluster in the same
+    filename shapes as the old inter-service-call scan used, so the file
+    selection is unchanged — only the parsing (now
+    :func:`call_declarations.parse_call_declarations`) is framework-anchored.
 
-
-def _extract_service_deps(java_content: str) -> list[str]:
-    """Extract ts-* service names referenced in Java source code.
-
-    This catches inter-service dependencies that pom.xml cannot reveal:
-    REST calls via RestTemplate, Feign clients, RabbitMQ routing, etc.
+    Deterministic by construction: every candidate is collected first, then
+    sorted by path and capped, so the same repository always yields the
+    same file set no matter the order the platform API returned the tree in.
     """
 
-    found: list[str] = []
-    for pattern in _JAVA_SERVICE_PATTERNS:
-        found.extend(pattern.findall(java_content))
-    return found
+    candidates = [
+        entry.path
+        for entry in entries
+        if not entry.is_dir
+        and entry.path.endswith(".java")
+        and any(pat in entry.path.rsplit("/", 1)[-1] for pat in _JAVA_SCAN_PATTERNS)
+    ]
+    return sorted(candidates)[:_MAX_JAVA_FILES_PER_REPO]
 
 
 def _compute_remote_low_signal(
@@ -548,9 +907,8 @@ def _compute_remote_low_signal(
     deps: tuple[str, ...],
     recent_commits: tuple[str, ...],
 ) -> bool:
-    """Same scoring as scan.py but without exposed_apis.
+    """Same scoring as scan.py (exposed_apis does not contribute to either).
 
-    Max possible score = 0.9 (missing the 0.2 from exposed_apis).
     Threshold stays at 0.3.
     """
 

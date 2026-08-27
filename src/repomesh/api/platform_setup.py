@@ -44,7 +44,17 @@ async def onboard_organization_repositories(
         github_token=body.github_token,
         gitlab_token=body.gitlab_token,
     )
-    profiles = await scan_org(str(body.org_url), fetcher, max_workers=body.scan_workers)
+    try:
+        profiles = await scan_org(
+            str(body.org_url),
+            fetcher,
+            max_workers=body.scan_workers,
+            include_forks=get_settings().repository_scan_include_forks,
+        )
+    finally:
+        # The fetcher owns a pooled HTTP client; release it once the scan
+        # that drives hundreds of API calls has finished.
+        await fetcher.aclose()
     catalog = request.app.state.container.repository_catalog
     existing = {item.url: item for item in await catalog.list()}
     results = []
