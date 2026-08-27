@@ -148,6 +148,27 @@ class ExternalWorkerView:
     phase: str
     container_managed: bool
 
+    def to_wire(self) -> dict[str, object]:
+        """The provisioning endpoint's body, camelCase spelled once.
+
+        Deliberately four fields and no more. This answers an administrator who
+        has just made an agent external, so the useful facts are which principal
+        it was, which controller resource carries it, how far the controller has
+        got, and the confirmation that the container is not the controller's —
+        and a controller address or a credential would be neither useful nor
+        safe to echo. ``ExternalWorkerBindingView.to_wire`` is the sibling this
+        follows; the Bridge-facing document it produces is versioned and frozen,
+        while this one is an operator's receipt and carries no schema version
+        precisely so that nothing starts treating it as a contract to bind to.
+        """
+
+        return {
+            "workerAgentId": str(self.worker_agent_id),
+            "workerName": self.worker_name,
+            "phase": self.phase,
+            "containerManaged": self.container_managed,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class ExternalWorkerBindingQuery:

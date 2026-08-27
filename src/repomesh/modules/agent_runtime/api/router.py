@@ -5,16 +5,19 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from repomesh.modules.agent_runtime.application import ExecuteCodingRun
 from repomesh.modules.agent_runtime.application.external_worker import (
+    ProvisionExternalWorker,
     ResolveExternalWorkerBinding,
 )
 from repomesh.modules.agent_runtime.contracts import (
     ExternalWorkerBindingQuery,
     ExternalWorkerRefused,
+    ProvisionExternalWorkerCommand,
     StartAssignedWorkerTaskCommand,
     UnknownExternalWorker,
 )
 from repomesh.modules.agent_runtime.ports import CodingRunRequest
 from repomesh.modules.agent_runtime.ports.agent_team import (
+    ExternalWorkerProvisioner,
     WorkerBindingReader,
     WorkerControlPlaneUnavailable,
 )
@@ -23,6 +26,7 @@ from repomesh.settings import get_settings
 from .models import (
     CodingRunCreate,
     CodingRunView,
+    ExternalWorkerProvisionRequest,
     RunEventView,
     WorkerTaskStartCreate,
     WorkerTaskStartView,
@@ -108,6 +112,111 @@ def _authorize_runner(request: Request) -> None:
         raise HTTPException(status_code=503, detail="runner control token is not configured")
     if request.headers.get("Authorization") != f"Bearer {expected}":
         raise HTTPException(status_code=401, detail="invalid runner control token")
+
+
+@router.put("/runtime/external-workers/{worker_agent_id}", response_model=None)
+async def provision_external_worker(
+    worker_agent_id: UUID,
+    request: Request,
+    body: ExternalWorkerProvisionRequest | None = None,
+) -> dict[str, object]:
+    """Make one registered worker principal an external worker (ADR 0004).
+
+    The production caller of ``ProvisionExternalWorker``, and the counterpart of
+    the preflight above: this decides that a worker's body runs outside the
+    cluster, and preflight is what a Bridge later reads back. Five things about
+    its shape, each a decision rather than an accident:
+
+    *A ``PUT`` keyed on the path id, and a body that says nothing.* External-ness
+    is a decision recorded against one principal, so the id is the whole request.
+    A caller may not state the controller resource name, the runtime, or
+    ``containerManaged``: the first belongs to the agent directory, the second to
+    the projection the ordinary project path already uses, and the third is the
+    controller's answer, never the request's claim. A body stating one is a 422
+    rather than a silent drop, because reading 200 after asking for something
+    that was ignored is worse than being told no.
+
+    *An administrator of this RepoMesh, and nothing else.* Not the runner control
+    token that guards the reads above, not the agent-action token, not a Bridge's
+    credential, and not an AgentTeams admin token: provisioning is a human
+    operator's decision about their own installation. The guard is the local
+    human session, mirroring ``delivery.api.router``'s — a module may not reach
+    back into ``repomesh.api.*`` for its private one, and hoisting that guard
+    into a shared contract is a change to two modules, which is its own PR.
+
+    *Idempotent where it counts, at the controller.* The use case derives
+    ``external-worker:{agent}:agentteams`` from the agent alone, so a replay is
+    the same controller side effect rather than a second one; ``PUT`` is how that
+    is spelled on the wire. No ``Idempotency-Key`` header is accepted — a
+    request-level key would be a second, weaker answer to a question this one
+    already settles.
+
+    *200 both times, not 201 then 200.* ``ensure_worker`` answers the same
+    document whether it created the resource or found it, so RepoMesh does not
+    hold the fact a 201 would assert. Reporting it would mean widening the port
+    to carry a "created" flag for the sake of a status code.
+
+    *No CLI this round.* The ``repomesh`` entry point starts uvicorn and nothing
+    else, so a subcommand would bring command parsing, credential storage and a
+    second entry point to test with it. If one is ever wanted it should be a thin
+    client of this route, authenticating as the same logged-in administrator —
+    never reaching the database or the AgentTeams controller directly.
+
+    The status table is the preflight's, on purpose: 404 for a principal RepoMesh
+    does not know, 409 for facts that do not add up to an external worker
+    (including a conflict the controller itself answered — the composition root
+    translates the adapter's own conflict into this module's refusal), 503 for a
+    control plane that is unconfigured or did not answer, and 500, untranslated,
+    for anything else. A fault dressed as a 409 would send an operator to fix a
+    worker that is fine.
+    """
+
+    await _authorize_administrator(request)
+    container = request.app.state.container
+    provisioner: ExternalWorkerProvisioner | None = container.external_worker_provisioner()
+    if provisioner is None:
+        # Fail-closed, as the preflight does: with no controller there is
+        # nothing to provision against, and answering 200 would record a
+        # decision that never left this process.
+        raise HTTPException(status_code=503, detail="AgentTeams control plane is not configured")
+    try:
+        worker = await ProvisionExternalWorker(container.agent_directory, provisioner).execute(
+            ProvisionExternalWorkerCommand(worker_agent_id=worker_agent_id)
+        )
+    except UnknownExternalWorker as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ExternalWorkerRefused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except WorkerControlPlaneUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return worker.to_wire()
+
+
+async def _authorize_administrator(request: Request) -> None:
+    """The local human session guard, mirroring ``delivery.api.router``.
+
+    Copied rather than imported, and copied from the module next door rather
+    than from ``repomesh.api.human_control``: a business module reaching back
+    into the top-level API package inverts the dependency the packages exist to
+    express. The duplication is deliberate and bounded — when a third module
+    needs this, the guard becomes a shared contract, which is a change to all of
+    them and not this endpoint's to make.
+    """
+
+    authorization = request.headers.get("Authorization", "")
+    token = (
+        authorization.removeprefix("Bearer ").strip()
+        if authorization.startswith("Bearer ")
+        else request.cookies.get("repomesh_session")
+    )
+    if not token:
+        raise HTTPException(status_code=401, detail="local authentication is required")
+    try:
+        actor = await request.app.state.container.local_account_service().authenticate(token)
+    except Exception as error:
+        raise HTTPException(status_code=401, detail="invalid local session") from error
+    if not actor.is_admin:
+        raise HTTPException(status_code=403, detail="local administrator permission is required")
 
 
 @router.post(
