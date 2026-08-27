@@ -15,7 +15,9 @@ from uuid import UUID
 
 import pytest
 
+from repomesh_agent_bridge.adapters.coding_session import DriverCodingSession
 from repomesh_agent_bridge.adapters.memory import InMemoryWorkerBindingPort
+from repomesh_agent_bridge.adapters.restricted_process import RestrictedProcessFactory
 from repomesh_agent_bridge.cli import (
     EXIT_ALREADY_RUNNING,
     EXIT_OK,
@@ -28,6 +30,7 @@ from repomesh_agent_bridge.contracts import (
     WorkerBinding,
 )
 from repomesh_agent_bridge.instance_lock import InstanceLock, instance_lock_path
+from repomesh_runner.drivers.app_server import AppServerDriver
 
 from .conftest import (
     REPOMESH_TOKEN_REF,
@@ -263,6 +266,73 @@ def test_run_honours_an_explicit_state_directory(written_enrollment, tmp_path) -
 def test_a_subcommand_is_required() -> None:
     with pytest.raises(SystemExit):
         main([])
+
+
+# -- PR 4: real session assembly (H-6) ------------------------------------
+
+
+def test_run_without_inert_refuses_a_profile_without_a_real_adapter(
+    written_enrollment, capsys, default_state_home
+) -> None:
+    """kimi and claude-code have no real adapter this build; refusing beats a
+    silent downgrade to the inert stand-in, which would look like it can code."""
+
+    payload = enrollment_wire(codingProfile="kimi")
+
+    code = main(
+        ["run", "--enrollment", str(written_enrollment(payload))],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+    )
+
+    assert code == EXIT_STARTUP_REFUSED
+    err = capsys.readouterr().err
+    assert "kimi" in err
+    assert "--inert" in err, "the refusal names the deliberate way to ask for the stand-in"
+
+
+def test_run_with_inert_serves_any_profile(written_enrollment, default_state_home) -> None:
+    """``--inert`` keeps PR 3's behaviour: it assembles the stand-in for any
+    profile, so a run that reaches the instance lock proves assembly did not
+    refuse the profile the way the default path would."""
+
+    payload = enrollment_wire(codingProfile="claude-code")
+    held = InstanceLock(instance_lock_path(_worker_uuid()))
+    held.acquire()
+    try:
+        code = main(
+            ["run", "--inert", "--enrollment", str(written_enrollment(payload))],
+            binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+        )
+    finally:
+        held.release()
+
+    assert code == EXIT_ALREADY_RUNNING, "assembly accepted the profile and reached the lock"
+
+
+def test_run_exits_startup_refused_when_the_cli_is_missing(
+    written_enrollment, capsys, default_state_home, tmp_path
+) -> None:
+    """A codex enrollment whose binary cannot be found is a startup refusal that
+    names the CLI, mapped to exit 2 exactly like every other refusal to serve."""
+
+    def missing_codex(enrollment: ExternalWorkerEnrollment) -> DriverCodingSession:
+        factory = RestrictedProcessFactory()
+        return DriverCodingSession(
+            AppServerDriver(factory),
+            factory,
+            session_dir=tmp_path / "session",
+            worker_name=enrollment.worker_name,
+            resolve_binary=lambda names: None,
+        )
+
+    code = main(
+        ["run", "--enrollment", str(written_enrollment())],
+        binding_port_factory=lambda _: WireBindingPort(binding_wire()),
+        coding_session_factory=missing_codex,
+    )
+
+    assert code == EXIT_STARTUP_REFUSED
+    assert "codex" in capsys.readouterr().err
 
 
 def _worker_uuid() -> UUID:

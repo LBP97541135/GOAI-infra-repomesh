@@ -44,6 +44,7 @@ asyncio_mode = "auto"
 markers = [
   "integration: requires a real PostgreSQL instance",
   "packaging: builds a wheel and installs it into a throwaway virtualenv (slow)",
+  "smoke_codex: spawns the real codex CLI under the restricted factory (needs codex installed)",
 ]
 
 [tool.ruff]

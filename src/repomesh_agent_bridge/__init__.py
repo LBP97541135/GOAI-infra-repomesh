@@ -35,6 +35,7 @@ from .contracts import (
     EnrollmentInvalid,
     ExternalWorkerEnrollment,
     RoomObservation,
+    SessionNotReady,
     WorkerBinding,
 )
 from .instance_lock import InstanceAlreadyRunning
@@ -45,6 +46,9 @@ from .ports import (
     RoomEvent,
     RoomInvite,
     RoomPort,
+    RoomRefused,
+    RoomTransportError,
+    RoomUnavailable,
     TurnOutcome,
     TurnRequest,
     WorkerBindingPort,
@@ -69,6 +73,10 @@ __all__ = [
     "RoomNativeAgent",
     "RoomObservation",
     "RoomPort",
+    "RoomRefused",
+    "RoomTransportError",
+    "RoomUnavailable",
+    "SessionNotReady",
     "StartupOutcome",
     "TurnOutcome",
     "TurnRequest",

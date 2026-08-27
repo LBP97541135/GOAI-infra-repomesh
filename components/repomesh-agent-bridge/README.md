@@ -32,18 +32,21 @@ Implemented now:
 - two-stage startup validation and its refusal taxonomy;
 - the RepoMesh preflight HTTP adapter, with a bounded retry policy;
 - a per-worker instance claim that makes a second Bridge for the same worker fail fast;
-- the process lifecycle: start, stay up, and unwind cleanly on cancellation.
+- the process lifecycle: start, stay up, and unwind cleanly on cancellation;
+- Matrix sync, mention detection, inbound dedup and restart recovery (PR 3);
+- a real `codex` coding session, launched only through the restricted process factory, that resumes
+  the same thread across turns and denies every tool call (PR 4).
 
 Not implemented yet, and not claimed anywhere:
 
-- Matrix sync, mention detection, inbound dedup and restart recovery (PR 3);
-- a real coding CLI session, which may only ever be launched through a restricted `ProcessFactory`
-  (PR 4);
+- a real `claude-code` or `kimi` session — only `codex` has an adapter this build, so an enrollment
+  on another profile refuses to `run` unless `--inert` is passed;
 - governed execution against RepoMesh Tasks (PR 5).
 
-Until PR 3 and PR 4 land, the room and coding-session seams are inert stand-ins: the process
-validates, claims its worker, confirms its binding, and then idles. That is the whole of this
-tier, and the `check` subcommand says so in its own output.
+`run` assembles the enrollment's real coding session by default. `--inert` keeps the earlier
+stand-in — a session that hears a mention, says one honest note, and spawns nothing — for bringing a
+Bridge up in a room before its CLI is installed or logged in. The `check` subcommand still joins no
+room and spawns nothing.
 
 ## Enrollment
 
@@ -87,16 +90,27 @@ subject.
 # Validate everything that can be validated, print what RepoMesh confirmed, and exit.
 repomesh-agent-bridge check --enrollment ./enrollment.json
 
-# Serve the worker. Blocks until interrupted.
+# Serve the worker with its real coding session. Blocks until interrupted.
 repomesh-agent-bridge run --enrollment ./enrollment.json
+
+# Serve the worker with the inert stand-in (no CLI is spawned).
+repomesh-agent-bridge run --inert --enrollment ./enrollment.json
 ```
 
 `python -m repomesh_agent_bridge` is the same entry point.
 
 `check` joins no room and spawns no process, and it deliberately does not take the instance claim,
 so it can be run against a worker that is already being served. Exit codes: `0` success, `2` a
-startup refusal at either stage (and argparse's own usage errors), `3` another instance already
-serves this worker.
+startup refusal at either stage or a coding runtime that cannot serve (and argparse's own usage
+errors), `3` another instance already serves this worker.
+
+A real `codex` `run` gates on the CLI before it takes any message: it locates the binary, proves the
+machine can contain the process (below), starts `codex app-server` under that containment for one
+`initialize` handshake, and checks that codex is logged in for the Bridge's own `CODEX_HOME`. Any of
+those failing is a startup refusal with the one command that fixes it — a missing login prints the
+`CODEX_HOME=<dir> codex login` to run. The session's `CODEX_HOME` lives under the state directory,
+never in the operator's `~/.codex`, so a restart still resumes the thread and the operator's own
+codex install is neither read nor touched.
 
 ## State and the instance claim
 
@@ -116,12 +130,28 @@ The lock lives under a per-user state directory, never in a repository:
 
 ## Isolation
 
-This tier spawns no CLI process at all, so it makes no isolation claim. When PR 4 introduces one,
-a real CLI may only be launched through a restricted `ProcessFactory` (restricted OS identity/ACL,
-an environment-variable allowlist, and a dedicated workspace); the CLI's own permission callback is
-a cooperative second line of defence, not the boundary. On a platform with no verified
-restricted-launch adapter, only fake/scripted sessions are permitted — see ADR 0004 decision 9 and
-the contract's "Isolation" section.
+A real `codex` session is launched only through the restricted process factory, and the factory
+only launches a session after an isolation probe has demonstrated, with a live child, what it
+claims. The boundary is the process, never the flags handed to the agent — the CLI's own permission
+callback is denied every tool as a cooperative second line, not as the containment.
+
+On Windows the factory enforces three things and proves each one:
+
+- **an environment allowlist** — the child receives only `SystemRoot`/`windir`, its own `CODEX_HOME`,
+  and `TMP`/`TEMP`; the operator's environment is never merged in, so SCM credentials and the control
+  token cannot leak through an inherited variable;
+- **write isolation** — the child runs on a Low-integrity copy of the Bridge's own token, so it may
+  read but not write the workspace, a real repository, or the user profile, and may write only the
+  directories the Bridge relabels for it (its `CODEX_HOME` and tmp);
+- **whole-tree termination** — the child and every descendant live in a job object that is killed on
+  close, so a cancelled turn strands nothing.
+
+Read isolation via restricted SIDs is deliberately **not** attempted this cycle and is reported as
+an unsupported capability rather than implied — deny-all already blocks tool-driven reads, and the
+alternative would mean adding ACEs to the operator's real directories. On any non-Windows host the
+factory refuses to spawn and the probe reports every capability unsupported, so a real session
+declines to start there and only `--inert` is available — see ADR 0004 decision 8/9 and the
+contract's "Isolation" section.
 
 ## Liveness
 
