@@ -33,6 +33,7 @@ from repomesh.modules.project.infrastructure import (
     TopologyPolicyDraftRecord,
 )
 from repomesh.modules.repository_intelligence.infrastructure.models import (
+    HandoffDocRecord,
     PlanSnapshotRecord,
     RepositoryRecord,
 )
@@ -71,6 +72,7 @@ _REGISTERED_MODELS = (
     TopologyPolicyDraftRecord,
     RepositoryRecord,
     PlanSnapshotRecord,
+    HandoffDocRecord,
     ValidationSnapshotRecord,
     SCMObservationRecord,
     SCMPollCursorRecord,
