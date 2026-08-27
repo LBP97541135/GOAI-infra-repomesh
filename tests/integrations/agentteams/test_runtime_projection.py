@@ -7,26 +7,34 @@ them is visible from the outside:
 * every agent in the topology is registered — the organization leader as a
   Manager, every repository leader and worker as a Worker — because a Team
   naming a resource the controller has never heard of is not a Team with rooms;
-* the projections match ``scripts/run_pipeline.py``'s field for field, because
-  the controller compares an existing resource against the one being asked for
-  and answers 409 on a mismatch: a repository first staffed by the script and
-  later reached by the console must converge, not conflict;
+* a resource that *already* exists is read and validated rather than re-asked
+  for, because its runtime, model and skills were chosen per agent when the
+  repository was staffed and this pass has only global defaults to offer;
+* the projections match ``scripts/run_pipeline.py``'s field for field for the
+  resources this pass does create, because the controller compares an existing
+  resource against the one being asked for and answers 409 on a mismatch: a
+  repository first staffed by the script and later reached by the console must
+  converge, not conflict;
 * a reconcile that produced teams without rooms is a refusal, not a success —
   that state *is* defect B-11.
 
 Nothing reaches the network: the control plane is a recording double.
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from repomesh.integrations.agentteams.control_plane import AgentTeamsResponseError
+from repomesh.integrations.agentteams.control_plane import (
+    AgentTeamsConflict,
+    AgentTeamsResponseError,
+)
 from repomesh.integrations.agentteams.runtime_projection import (
     AgentTeamsIdentitiesPending,
+    AgentTeamsResourceMismatch,
     AgentTeamsRoomsPending,
     ExternalWorkerProjection,
     ProjectRuntimeProjection,
@@ -69,6 +77,8 @@ from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
 from repomesh.settings import Settings
 
+from .fakes import StubDirectory
+
 MODEL = "deepseek-chat"
 
 #: What the composition root injects, read from the same defaults production
@@ -106,16 +116,33 @@ class RecordingControlPlane:
         #: projection asks about the same worker once its Team exists (A-9).
         self.membership_reads: list[str] = []
         self.worker_reads: list[str] = []
+        self.manager_reads: list[str] = []
         self._rooms = rooms
         self._identities = identities
         self._memberships = dict(memberships or {})
         self._teamed: set[str] = set()
+        #: Resources this double has been made to create. A controller does not
+        #: forget them between passes, and ``_register`` reads before it
+        #: ensures, so a replay has to find them present.
+        self._created: set[str] = set()
+
+    async def get_manager(self, name: str) -> ManagerRuntimeRef | None:
+        self.manager_reads.append(name)
+        if name not in self._created:
+            return None
+        return ManagerRuntimeRef(name, "Ready")
 
     async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
-        self.worker_reads.append(name)
-        if name not in self._teamed:
+        # Two different questions arrive through this one method. ``_register``
+        # reads each resource once, before it decides whether to create it; the
+        # reconcile then reads *one* of them a second time, while no Team of
+        # its own exists yet, to ask which Team already holds it (A-8). The
+        # second read is the membership question, and this is how the double
+        # tells them apart.
+        if name in self.worker_reads and name not in self._teamed:
             self.membership_reads.append(name)
-        if name not in self._memberships:
+        self.worker_reads.append(name)
+        if name not in self._memberships and name not in self._created:
             return None
         # ``matrixUserID`` is absent until the controller's worker reconciler
         # reaches this Worker, which is minutes after the create returns 201
@@ -124,7 +151,7 @@ class RecordingControlPlane:
             name,
             "Ready",
             matrix_user_id=f"@{name}:matrix.local" if self._identities else None,
-            team=self._memberships[name],
+            team=self._memberships.get(name),
         )
 
     async def ensure_manager(
@@ -132,6 +159,7 @@ class RecordingControlPlane:
     ) -> ManagerRuntimeRef:
         self.managers.append(projection)
         self.keys.append(idempotency_key)
+        self._created.add(projection.name)
         return ManagerRuntimeRef(projection.name, "Ready")
 
     async def ensure_worker(
@@ -139,6 +167,7 @@ class RecordingControlPlane:
     ) -> WorkerRuntimeRef:
         self.workers.append(projection)
         self.keys.append(idempotency_key)
+        self._created.add(projection.name)
         return WorkerRuntimeRef(projection.name, "Ready")
 
     async def ensure_team(
@@ -655,6 +684,298 @@ async def test_a_team_whose_members_disagree_is_a_conflict_not_a_wait() -> None:
 
 
 # ---------------------------------------------------------------------------
+# A repository that is already staffed is read, not re-asked for (track P, P2)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingWorker:
+    """A Worker onboarding created, as the controller holds it today.
+
+    ``runtime``, ``model`` and ``skills`` are per-agent facts somebody chose
+    when the repository was staffed — the console offers ``repomesh-runner``
+    per worker while this projection has one global default — so none of them
+    is derivable from RepoMesh settings. That is the whole reason materialize
+    may not replay a global spec over them.
+    """
+
+    runtime: str
+    model: str
+    skills: tuple[str, ...]
+    team: str
+    matrix_user_id: str
+
+
+class ExistingResourcesControlPlane:
+    """A controller that already holds every resource this project names.
+
+    Strict where ``RecordingControlPlane`` is permissive, and deliberately so:
+    it answers ``ensure_worker`` about an existing resource the way the real
+    client does, by comparing the projection against what it holds and raising
+    ``AgentTeamsConflict`` on a mismatch
+    (``AgentTeamsControlPlaneClient._assert_worker_matches`` compares
+    ``runtime`` unconditionally). A pass that re-ensures anything here does not
+    quietly pass — it reproduces the 409 that made materialize unreachable for
+    every already-staffed repository.
+
+    ``ensure_team`` stays ensure-shaped because a Team genuinely is: the
+    reconcile is allowed to ask for it on every pass, and adoption (A-8)
+    depends on it.
+    """
+
+    def __init__(
+        self,
+        *,
+        managers: dict[str, tuple[str, str]],
+        workers: dict[str, ExistingWorker],
+        rooms: bool = True,
+    ) -> None:
+        #: name -> (model, runtime)
+        self._managers = dict(managers)
+        self._workers = dict(workers)
+        self._rooms = rooms
+        #: Every ``ensure_manager``/``ensure_worker`` this double was asked for,
+        #: by resource name. The assertion is that it stays empty: an existing
+        #: resource is somebody else's to define.
+        self.ensure_calls: list[str] = []
+        self.teams: list[TeamProjection] = []
+
+    def snapshot(self) -> tuple[dict[str, tuple[str, str]], dict[str, ExistingWorker]]:
+        """What the controller holds, for a before/after comparison."""
+
+        return dict(self._managers), dict(self._workers)
+
+    async def get_manager(self, name: str) -> ManagerRuntimeRef | None:
+        if name not in self._managers:
+            return None
+        return ManagerRuntimeRef(name, "Ready", matrix_user_id=f"@{name}:matrix.local")
+
+    async def get_worker(self, name: str) -> WorkerRuntimeRef | None:
+        existing = self._workers.get(name)
+        if existing is None:
+            return None
+        return WorkerRuntimeRef(
+            name,
+            "Ready",
+            runtime=existing.runtime,
+            room_id=f"!{name}:matrix.local",
+            matrix_user_id=existing.matrix_user_id,
+            team=existing.team,
+            container_managed=True,
+        )
+
+    async def ensure_manager(
+        self, projection: ManagerProjection, *, idempotency_key: str
+    ) -> ManagerRuntimeRef:
+        self.ensure_calls.append(projection.name)
+        asked = (projection.model, projection.runtime.value)
+        existing = self._managers.get(projection.name)
+        if existing is not None and existing != asked:
+            raise AgentTeamsConflict(
+                "existing AgentTeams manager differs in: "
+                + ", ".join(
+                    sorted(
+                        key
+                        for key, held, want in (
+                            ("model", existing[0], asked[0]),
+                            ("runtime", existing[1], asked[1]),
+                        )
+                        if held != want
+                    )
+                )
+            )
+        self._managers[projection.name] = asked
+        return ManagerRuntimeRef(projection.name, "Ready")
+
+    async def ensure_worker(
+        self, projection: WorkerProjection, *, idempotency_key: str
+    ) -> WorkerRuntimeRef:
+        self.ensure_calls.append(projection.name)
+        existing = self._workers.get(projection.name)
+        if existing is not None:
+            mismatches = sorted(
+                key
+                for key, held, want in (
+                    ("model", existing.model, projection.model),
+                    ("runtime", existing.runtime, projection.runtime.value),
+                    ("skills", existing.skills, tuple(projection.skills)),
+                )
+                if held != want
+            )
+            if mismatches:
+                raise AgentTeamsConflict(
+                    f"existing AgentTeams worker differs in: {', '.join(mismatches)}"
+                )
+            return await self.get_worker(projection.name)
+        self._workers[projection.name] = ExistingWorker(
+            runtime=projection.runtime.value,
+            model=projection.model,
+            skills=tuple(projection.skills),
+            team="",
+            matrix_user_id=f"@{projection.name}:matrix.local",
+        )
+        return WorkerRuntimeRef(projection.name, "Ready")
+
+    async def ensure_team(
+        self, projection: TeamProjection, *, idempotency_key: str
+    ) -> TeamRuntimeRef:
+        self.teams.append(projection)
+        return TeamRuntimeRef(
+            name=projection.name,
+            phase="Ready",
+            team_room_id=f"!{projection.name}:matrix.local" if self._rooms else None,
+            leader_room_id=f"!lead-{projection.name}:matrix.local" if self._rooms else None,
+            leader_name=projection.members[0].name,
+            ready_workers=len(projection.members),
+            total_workers=len(projection.members),
+        )
+
+
+async def _staffed_repository(
+    directory: InMemoryAgentDirectory,
+    store: InMemoryProjectTopologyStore,
+    *,
+    runtimes: tuple[str, str] = ("copaw", "repomesh-runner"),
+) -> tuple[UUID, ExistingResourcesControlPlane, str]:
+    """A project whose principals the controller already holds, with per-agent runtimes.
+
+    The state onboarding leaves and materialize then walks into: the Manager
+    and both Workers exist, the repository leader runs one runtime and the
+    worker another, and neither is this projection's global default for every
+    field.
+    """
+
+    project_id = await _console_project(directory, store, repositories=1)
+    topology = await store.get(project_id)
+    team = topology.repository_teams[0]
+    organization_leader = await directory.get_view(topology.organization_leader_id)
+    leader = await directory.get_view(team.leader_agent_id)
+    worker = await directory.get_view(team.worker_agent_ids[0])
+    team_name = f"repomesh-team-{team.repository_id.hex}"
+
+    def held(runtime: str, model: str, skills: tuple[str, ...]) -> ExistingWorker:
+        return ExistingWorker(
+            runtime=runtime,
+            model=model,
+            skills=skills,
+            team=team_name,
+            matrix_user_id="@held:matrix.local",
+        )
+
+    control_plane = ExistingResourcesControlPlane(
+        managers={organization_leader.agentteams_resource_name: ("qwen3.6-plus", "openclaw")},
+        workers={
+            leader.agentteams_resource_name: held(
+                runtimes[0], "qwen3.6-plus", ("code-review",)
+            ),
+            worker.agentteams_resource_name: held(
+                runtimes[1], "qwen3.6-plus", ("coding", "testing")
+            ),
+        },
+    )
+    return project_id, control_plane, team_name
+
+
+@pytest.mark.asyncio
+async def test_existing_mixed_runtime_workers_are_read_without_reensuring_or_overwriting_them() -> (
+    None
+):
+    """The hard 409 every already-staffed repository hit, in one assertion.
+
+    Onboarding creates each Worker with the runtime chosen for it — the console
+    offers ``repomesh-runner`` while this projection's global default is
+    ``copaw`` — and binds it to a principal. ``_register`` used to re-``ensure``
+    every one of them with that *global* spec, and the controller compares an
+    existing resource against the one being asked for, so it answered
+    ``409 ... differs in: runtime`` and no retry could clear it.
+
+    Reading the resource that already exists is the fix, and it has to be the
+    fix: a different default would only move the 409 to ``model``, then to
+    ``skills``, then to the MCP servers (arch-team T2 §6). Which is why this
+    fixture disagrees on all three at once.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id, control_plane, team_name = await _staffed_repository(directory, store)
+    before = control_plane.snapshot()
+
+    view = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    # Materialize gets its rooms — this is the call that used to raise.
+    assert all(team.room_id for team in view.repository_teams)
+    assert view.repository_teams[0].agentteams_team_name == team_name
+    # Nothing existing was re-asked for, and nothing existing changed: the
+    # per-agent runtime, model and skills survive the pass untouched.
+    assert control_plane.ensure_calls == []
+    assert control_plane.snapshot() == before
+
+    # Materialize is re-entrant, so this is the same pass a retry makes.
+    again = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    assert again.repository_teams[0].agentteams_team_name == team_name
+    assert all(team.room_id for team in again.repository_teams)
+    assert control_plane.ensure_calls == []
+    assert control_plane.snapshot() == before
+
+
+@pytest.mark.asyncio
+async def test_a_repository_the_controller_has_never_seen_is_still_created() -> None:
+    """The other half: read-before-ensure must not turn creation off.
+
+    A repository nobody has staffed has no resources to read, so every one of
+    them is still created from this projection's own spec — the path the
+    console has always taken for a fresh project.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    control_plane = ExistingResourcesControlPlane(managers={}, workers={})
+    view = await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    assert all(team.room_id for team in view.repository_teams)
+    # One Manager and two Workers, each created exactly once.
+    assert len(control_plane.ensure_calls) == 3
+    assert len(set(control_plane.ensure_calls)) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_controller_answering_about_another_resource_is_a_conflict() -> None:
+    """The binding is confirmed, not echoed.
+
+    A read that comes back naming a different resource means RepoMesh and the
+    controller disagree about which Worker this principal *is*. Registering
+    the topology on that answer would put somebody else's identity in this
+    repository's Team, so it is a refusal — and a conflict rather than a wait,
+    because no amount of retrying makes two names agree.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id, control_plane, _ = await _staffed_repository(directory, store)
+
+    async def answers_about_somebody_else(name: str) -> WorkerRuntimeRef | None:
+        return WorkerRuntimeRef("repomesh-worker-somebody-else", "Ready")
+
+    control_plane.get_worker = answers_about_somebody_else  # type: ignore[method-assign]
+
+    with pytest.raises(AgentTeamsResourceMismatch, match="somebody-else"):
+        await ProjectRuntimeProjection(
+            directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+        ).project(project_id)
+
+    assert control_plane.ensure_calls == []
+
+
+# ---------------------------------------------------------------------------
 # External workers are explicit, and the default path stays managed
 # (ADR 0004 decisions 2, 4, 5)
 # ---------------------------------------------------------------------------
@@ -698,24 +1019,6 @@ class ExternalControlPlane:
 
     async def get_team(self, name: str) -> TeamRuntimeRef | None:
         return self.teams.get(name)
-
-
-class StubDirectory:
-    """One principal, read by id — a directory whose row is not creatable.
-
-    ``InMemoryAgentDirectory`` builds active principals through the production
-    path and has no way to retire one, so the disabled case needs a view that
-    was never created.
-    """
-
-    def __init__(self, principal: AgentPrincipalView) -> None:
-        self._principal = principal
-
-    async def get_view(self, agent_id: UUID) -> AgentPrincipalView | None:
-        return self._principal if agent_id == self._principal.id else None
-
-    async def list_views(self) -> tuple[AgentPrincipalView, ...]:
-        return (self._principal,)
 
 
 def _external_projection(
