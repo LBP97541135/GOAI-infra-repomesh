@@ -33,6 +33,7 @@ dev = [
 
 [project.scripts]
 repomesh = "repomesh.main:run"
+repomesh-agent-bridge = "repomesh_agent_bridge.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
