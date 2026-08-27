@@ -6,6 +6,14 @@ coding CLI versus a scripted session. Local state and credential resolution are
 deliberately *not* ports — SQLite is its own test stand-in, and resolution is an
 injected ``resolve(ref) -> secret`` callable.
 
+A fourth arrived with governed execution: :class:`GovernedTaskPort`, the one
+action the Bridge is allowed to take on RepoMesh's behalf. It is a separate
+seam from :class:`WorkerBindingPort` even though both speak to the same control
+plane, because they are separated by everything except their host — one is read
+once at startup and decides whether the process runs at all, the other is a
+write performed mid-session on behalf of somebody in a room, and a double for
+one is never a usable double for the other.
+
 Two failure vocabularies meet in this package and they live in different
 modules for one reason each. The *preflight* one lives in
 :mod:`repomesh_agent_bridge.contracts`, next to the wire models that raise it:
@@ -15,17 +23,25 @@ import both. The *room transport* one — :class:`RoomTransportError` and its tw
 halves — lives here, because the supervisor has to tell a retryable failure
 from a permanent refusal and may not import an adapter to do it; a failure type
 the core branches on is part of the port's contract, not of whoever implements
-it.
+it. :class:`GovernedTaskError` is here for that second reason: the supervisor
+tells a room "RepoMesh said no, and here is what it said" apart from "RepoMesh
+could not be asked", and it may not import an adapter to do it.
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import NewType, Protocol
+from uuid import UUID
 
 from .contracts import ExternalWorkerEnrollment, RoomObservation, WorkerBinding
 
 __all__ = [
     "CodingSessionPort",
+    "GovernedStartReceipt",
+    "GovernedTaskError",
+    "GovernedTaskPort",
+    "GovernedTaskRefused",
+    "GovernedTaskUnavailable",
     "RoomBatch",
     "RoomBody",
     "RoomEvent",
@@ -294,4 +310,86 @@ class CodingSessionPort(Protocol):
 
     async def close(self) -> None:
         """Release the session. Must be safe when no session was ever opened."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedStartReceipt:
+    """What RepoMesh answered when it took a task on: two ids, and nothing else.
+
+    The start action's answer also names the workspace it prepared — an id, an
+    absolute path on the machine that holds it, and the sha it was cut from.
+    None of those is a fact the Bridge acts on and one of them is a path, so
+    this record has no slot to put them in and they stop at the adapter.
+    """
+
+    run_id: UUID
+    task_id: UUID
+
+
+class GovernedTaskError(RuntimeError):
+    """A governed run was not started.
+
+    Its own family rather than a reuse of the preflight one, for the reason the
+    room transport got its own: those refusals mean "this instance never
+    started" and the CLI maps them onto an exit code, while one of these is a
+    single mention that could not be honoured by a process that goes on serving
+    its rooms. Which of the two halves below arrived decides what the room is
+    told, and that decision belongs to the supervisor, so the vocabulary lives
+    on the port rather than in whichever adapter raised it.
+    """
+
+
+class GovernedTaskRefused(GovernedTaskError):
+    """RepoMesh was asked and said no.
+
+    A task that does not exist, a worker that is not its assignee, a credential
+    this installation does not accept. The message is RepoMesh's own words about
+    a decision it made, so it is display-safe: the supervisor puts it in the
+    room behind a canned prefix, because the person who asked for the run is the
+    person who needs to hear which of those it was. Nothing else about the
+    exchange — no path, no status code, no credential — is ever in it.
+    """
+
+
+class GovernedTaskUnavailable(GovernedTaskError):
+    """RepoMesh could not be asked, or could not answer.
+
+    A connection that failed, a request that timed out, a control plane that is
+    down. Split from :class:`GovernedTaskRefused` by "did RepoMesh decide
+    anything", which is the only distinction the room cares about: a refusal has
+    a reason worth repeating and this does not. Nothing retries it — see
+    :meth:`GovernedTaskPort.start_task`.
+    """
+
+
+class GovernedTaskPort(Protocol):
+    """The one action the Bridge may take on RepoMesh's behalf.
+
+    A room message is a *wake-up*, never an authorisation. Whether the task
+    exists, whether this worker is its assignee, whether the run is permitted
+    and when it is over are all RepoMesh's to answer, and none of them is
+    re-decided here from what somebody typed in a room: this port carries an id
+    and an identity to the control plane and brings back either a receipt or a
+    refusal. That is what keeps a Matrix room from becoming a second, weaker
+    permission system.
+    """
+
+    async def start_task(
+        self, *, task_id: UUID, worker_agent_id: UUID
+    ) -> GovernedStartReceipt:
+        """Ask RepoMesh to start ``task_id`` for ``worker_agent_id``.
+
+        One attempt, and deliberately no retry anywhere behind this call. The
+        action is not a read: a retry that RepoMesh did answer — slowly, or after
+        the connection dropped — would be a second request for work that is
+        already under way. RepoMesh's own in-flight reuse makes a *human*
+        re-mention safe, because a start for a task whose run has not finished
+        returns that run's receipt rather than dispatching a second one; that is
+        an answer only the control plane can give, so the recovery the Bridge
+        offers is to tell the room it failed and let a person ask again.
+
+        Raises :class:`GovernedTaskRefused` when RepoMesh decided against it and
+        :class:`GovernedTaskUnavailable` when it never decided at all.
+        """
         ...

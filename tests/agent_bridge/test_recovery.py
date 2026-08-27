@@ -190,8 +190,9 @@ def test_a_state_file_written_by_the_previous_schema_is_refused(bridge: Restarta
 
 
 def test_every_table_is_readable_after_a_close_and_reopen(bridge: Restartable) -> None:
-    """The persistence claim, stated once over all five tables."""
+    """The persistence claim, stated once over all six tables."""
 
+    run_id, task_id = uuid4(), uuid4()
     state = bridge.boot()
     inbox = Inbox(state)
     inbox.record_baseline(_batch(_event("$seen"), next_batch="s-0"))
@@ -205,6 +206,13 @@ def test_every_table_is_readable_after_a_close_and_reopen(bridge: Restartable) -
         observations=(_observation(),),
     )
     state.bind_session(TEAM_ROOM, trigger.thread_id, profile="codex", native_session_id="s-7")
+    state.record_anchor(
+        run_id=run_id,
+        task_id=task_id,
+        room_id=TEAM_ROOM,
+        thread_root_id=None,
+        trigger_event_id=trigger.event_id,
+    )
 
     state = bridge.boot()
 
@@ -215,6 +223,8 @@ def test_every_table_is_readable_after_a_close_and_reopen(bridge: Restartable) -
     assert state.turn_state(TEAM_ROOM, trigger.thread_id, trigger.event_id) == "completed"
     assert [row.txn_id for row in state.pending_sends()] == [send.txn_id]
     assert state.resume_handle(TEAM_ROOM, trigger.thread_id, profile="codex") == "s-7"
+    anchor = state.anchor_for_run(run_id)
+    assert anchor is not None and anchor.trigger_event_id == trigger.event_id
 
 
 # ---------------------------------------------------------------------------

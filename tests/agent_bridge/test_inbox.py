@@ -27,6 +27,7 @@ from repomesh_agent_bridge.outbox import (
     LANES,
     NOTE_LANE,
     ROOM_OBSERVATION_NAMESPACE,
+    RUN_LANE,
     TURN_LANE,
     TXN_PREFIX,
     Outbox,
@@ -649,7 +650,7 @@ def test_an_unknown_lane_is_refused_rather_than_minting_a_third_identity_space(
 
 
 def test_the_lane_vocabulary_is_closed() -> None:
-    assert LANES == (TURN_LANE, NOTE_LANE)
+    assert LANES == (TURN_LANE, NOTE_LANE, RUN_LANE)
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ __all__ = [
     "LANES",
     "NOTE_LANE",
     "ROOM_OBSERVATION_NAMESPACE",
+    "RUN_LANE",
     "TURN_LANE",
     "TXN_PREFIX",
     "Outbox",
@@ -70,7 +71,19 @@ make the two sequences independently idempotent, and the room reads exactly what
 happened: first the timeout, then the answer.
 """
 
-LANES: tuple[str, ...] = (TURN_LANE, NOTE_LANE)
+RUN_LANE = "run"
+"""What a governed run said about itself.
+
+A third sequence for the same reason there is a second one, and the argument is
+sharper here: a governed run's messages arrive over minutes from a source that
+is not the coding session — RepoMesh accepted the task, then the runner started,
+then it finished — while the same thread may be answering ordinary mentions
+throughout. Sharing an ordinal space with either of the other two would make one
+sequence's third message collide with the other's, and ``INSERT OR IGNORE``
+would drop it in silence.
+"""
+
+LANES: tuple[str, ...] = (TURN_LANE, NOTE_LANE, RUN_LANE)
 """Every lane there is.
 
 Closed on purpose. A lane is part of a message's durable name, so inventing one
@@ -170,6 +183,12 @@ def render(observation: RoomObservation) -> RoomBody:
 
 def _detail(observation: RoomObservation) -> str:
     parts: list[str] = []
+    if observation.run_id:
+        # The run id and not the task id, though an observation about a governed
+        # run carries both: the task id is what the person typed to start it,
+        # and the run id is the handle they do not otherwise have — the one
+        # thing that lets somebody in the room ask RepoMesh about this run.
+        parts.append(f"run {observation.run_id}")
     if observation.phase:
         parts.append(f"phase {observation.phase}")
     if observation.tool_name:
@@ -183,6 +202,19 @@ def _detail(observation: RoomObservation) -> str:
     if observation.commit_sha:
         parts.append(observation.commit_sha[:12])
     return ", ".join(parts)
+
+
+def _require_lane(lane: str) -> None:
+    """Refuse a lane nobody declared, at whichever door the caller came in.
+
+    A lane is part of a message's durable name, so a typo would mint a parallel
+    identity space that silently never collides with anything — every replay
+    would post a new message and the deduplication this module exists for would
+    be quietly off for that caller.
+    """
+
+    if lane not in LANES:
+        raise ValueError(f"unknown outbox lane {lane!r}; one of {', '.join(LANES)}")
 
 
 def _bounded(line: str) -> str:
@@ -261,23 +293,17 @@ class Outbox:
         layer, and the outbox is told where to write, never deciding it.
         """
 
-        if lane not in LANES:
-            raise ValueError(f"unknown outbox lane {lane!r}; one of {', '.join(LANES)}")
+        _require_lane(lane)
         emitted_at = self._state.now()
         rows = tuple(
-            OutboxRow(
+            self._row(
                 room_id=room_id,
                 thread_root_id=thread_root_id,
                 trigger_event_id=trigger_event_id,
+                observation=observation,
                 lane=lane,
                 ordinal=ordinal,
-                txn_id=observation_txn_id(trigger_event_id, lane, ordinal),
-                observation_id=observation_id(
-                    self._worker_agent_id, room_id, trigger_event_id, lane, ordinal
-                ),
                 emitted_at=emitted_at,
-                kind=observation.kind,
-                body=str(render(observation)),
             )
             for ordinal, observation in enumerate(observations)
         )
@@ -294,6 +320,83 @@ class Outbox:
             _pending_from_row(row)
             for row in self._state.sends_for_trigger(trigger_event_id)
             if row.sent_event_id is None and row.refused_at is None
+        )
+
+    def enqueue_at(
+        self,
+        *,
+        room_id: str,
+        thread_root_id: str | None,
+        trigger_event_id: str,
+        observation: RoomObservation,
+        lane: str,
+        ordinal: int,
+    ) -> tuple[PendingSend, ...]:
+        """Write one response down at a position the caller already knows.
+
+        :meth:`enqueue` counts ordinals off a list, which is the right shape for
+        a turn: the whole answer exists at once. A governed run's lifecycle does
+        not — accepted, started, finished — so its positions are known in advance
+        and arrive one at a time, minutes apart and possibly either side of a
+        restart. Naming the position is what keeps those messages idempotent
+        without holding the sequence in memory.
+
+        The same position with the same message is a no-op; with a *different*
+        message it raises :class:`~repomesh_agent_bridge.state.StateRefused`,
+        because a caller assigning its own ordinals is the one place the
+        collision this module exists to prevent could be reintroduced.
+        """
+
+        _require_lane(lane)
+        self._state.enqueue_send_at(
+            self._row(
+                room_id=room_id,
+                thread_root_id=thread_root_id,
+                trigger_event_id=trigger_event_id,
+                observation=observation,
+                lane=lane,
+                ordinal=ordinal,
+                emitted_at=self._state.now(),
+            )
+        )
+        return tuple(
+            _pending_from_row(row)
+            for row in self._state.sends_for_trigger(trigger_event_id)
+            if row.sent_event_id is None and row.refused_at is None
+        )
+
+    def _row(
+        self,
+        *,
+        room_id: str,
+        thread_root_id: str | None,
+        trigger_event_id: str,
+        observation: RoomObservation,
+        lane: str,
+        ordinal: int,
+        emitted_at: datetime,
+    ) -> OutboxRow:
+        """One intent, named and rendered. The single place both paths derive from.
+
+        Spelled once so the two enqueues cannot drift: the transaction id, the
+        observation id and the rendered body are the three things a replay has to
+        reproduce exactly, and two copies of that derivation would be two things
+        to keep in step.
+        """
+
+        return OutboxRow(
+            room_id=room_id,
+            thread_root_id=thread_root_id,
+            trigger_event_id=trigger_event_id,
+            lane=lane,
+            ordinal=ordinal,
+            txn_id=observation_txn_id(trigger_event_id, lane, ordinal),
+            observation_id=observation_id(
+                self._worker_agent_id, room_id, trigger_event_id, lane, ordinal
+            ),
+            emitted_at=emitted_at,
+            kind=observation.kind,
+            body=str(render(observation)),
         )
 
     def pending(self) -> tuple[PendingSend, ...]:

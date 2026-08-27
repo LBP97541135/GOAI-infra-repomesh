@@ -1,4 +1,4 @@
-"""In-memory and inert sides of the three seams.
+"""In-memory and inert sides of the seams.
 
 They ship with the package rather than living in the test tree for two reasons.
 The merge gate asks every new HTTP adapter to have an in-memory counterpart, and
@@ -17,13 +17,15 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from ..contracts import ExternalWorkerEnrollment, RoomObservation, WorkerBinding
-from ..ports import RoomBatch, RoomBody, TurnOutcome, TurnRequest
+from ..ports import GovernedStartReceipt, RoomBatch, RoomBody, TurnOutcome, TurnRequest
 
 __all__ = [
+    "GovernedStartCall",
     "InertCodingSession",
+    "InMemoryGovernedTaskPort",
     "InMemoryRoomPort",
     "InMemoryWorkerBindingPort",
     "ScriptedCodingSession",
@@ -73,6 +75,48 @@ class InMemoryWorkerBindingPort:
             raise self._failure
         assert self._binding is not None
         return self._binding
+
+
+@dataclass(frozen=True, slots=True)
+class GovernedStartCall:
+    """One request to start a governed run, exactly as the Bridge made it."""
+
+    task_id: UUID
+    worker_agent_id: UUID
+
+
+class InMemoryGovernedTaskPort:
+    """A control plane whose answers to the start action a caller writes in advance.
+
+    Answers are consumed in order and an exception in the script is raised
+    instead of returned, so "RepoMesh said this worker is not the assignee" is
+    one entry in a list rather than a subclass.
+
+    Once the script is spent the last answer repeats, which is not a convenience:
+    it is what RepoMesh does. A second start for a task whose run has not
+    finished returns that run's own receipt rather than dispatching again, so a
+    double that answered differently the second time would make a replay look
+    recoverable when it is not — or unrecoverable when it is.
+
+    ``calls`` is the record that matters most. "The port was never touched" and
+    "the port was asked exactly once, with the id from the message" are the two
+    claims the wake-up half rests on, and both are read off that list.
+    """
+
+    def __init__(self, *answers: GovernedStartReceipt | BaseException) -> None:
+        if not answers:
+            raise ValueError("give the port at least one receipt to answer or failure to raise")
+        self._answers: list[GovernedStartReceipt | BaseException] = list(answers)
+        self.calls: list[GovernedStartCall] = []
+
+    async def start_task(
+        self, *, task_id: UUID, worker_agent_id: UUID
+    ) -> GovernedStartReceipt:
+        self.calls.append(GovernedStartCall(task_id=task_id, worker_agent_id=worker_agent_id))
+        answer = self._answers.pop(0) if len(self._answers) > 1 else self._answers[0]
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
 
 
 @dataclass(frozen=True, slots=True)

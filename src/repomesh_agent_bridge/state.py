@@ -52,6 +52,7 @@ __all__ = [
     "TERMINAL_TURN_STATES",
     "BridgeState",
     "OutboxRow",
+    "RunAnchor",
     "SessionRef",
     "StateRefused",
     "SyncCursor",
@@ -59,15 +60,19 @@ __all__ = [
     "state_path",
 ]
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 """Bumped when a released schema changes shape. A file that disagrees is
 refused, never migrated silently and never discarded (see :class:`StateRefused`).
 
 ``2`` gave the outbox a ``lane`` (so a synthesised note and a session's own
 answers stop sharing one ordinal space) and a ``refused_at`` (so an intent the
-homeserver will never accept can be put down instead of retried forever). Both
-change what a row *means*, not just what columns it has, so a ``1`` file is
-refused rather than opened with the new code reading old rows.
+homeserver will never accept can be put down instead of retried forever). ``3``
+adds ``run_anchors``, which is what lets a governed run started from one room
+message be narrated back into the thread that asked for it. Each changes what
+the file *holds*, not just what columns it has, so an older file is refused
+rather than opened with the new code reading it — the same policy as ``1``,
+because a migration is a thing to write when there is a shape worth migrating
+and an operator who is told can downgrade, migrate or delete on purpose.
 """
 
 SEEN_EVENT_LIMIT = 4096
@@ -142,6 +147,15 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS outbox_pending
   ON outbox(id) WHERE sent_event_id IS NULL AND refused_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS run_anchors (
+  run_id           TEXT PRIMARY KEY,
+  task_id          TEXT NOT NULL,
+  room_id          TEXT NOT NULL,
+  thread_root_id   TEXT,
+  trigger_event_id TEXT NOT NULL,
+  created_at       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS session_refs (
   room_id           TEXT NOT NULL,
   thread_id         TEXT NOT NULL,
@@ -156,14 +170,21 @@ CREATE TABLE IF NOT EXISTS session_refs (
 
 
 class StateRefused(BridgeStartupError):
-    """This state file cannot be used by this process, and will not be repaired.
+    """This state file cannot be used as asked, and will not be repaired.
 
-    Two cases, one answer. A file whose ``worker_agent_id`` is somebody else's
-    would let one Bridge answer another worker's mentions. A file whose
-    ``schema_version`` is not this build's cannot be read correctly, and the
-    tempting alternative — drop it and start clean — would take the rooms'
-    conversation context with it and say nothing to anyone. Refusing is
+    Two cases at open time, one answer. A file whose ``worker_agent_id`` is
+    somebody else's would let one Bridge answer another worker's mentions. A
+    file whose ``schema_version`` is not this build's cannot be read correctly,
+    and the tempting alternative — drop it and start clean — would take the
+    rooms' conversation context with it and say nothing to anyone. Refusing is
     reversible by the operator; a silent discard is not.
+
+    A third case arrives later, from a write rather than an open: a row whose
+    key is *derived* being rewritten with different values. Every deterministic
+    name in this package exists so that a replay lands on the row it landed on
+    last time, so a second set of values under one name is not a conflict to
+    merge — it says the derivation is not deterministic after all, which is a
+    bug in the caller and not a state an operator can be asked to resolve.
     """
 
 
@@ -233,6 +254,30 @@ class OutboxRow:
     a row with this is neither and never will be. No drain offers it again.
     """
     outbox_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RunAnchor:
+    """Where a governed run came from, so its progress can go back there.
+
+    The room message that started a run is the only thing that ties that run to
+    a conversation: RepoMesh knows the task, the worker and the run, and knows
+    nothing about Matrix. Without this row a Bridge that restarts mid-run has no
+    way to tell which thread asked for it, and the narration would either go to
+    the wrong place or nowhere.
+
+    ``trigger_event_id`` is here for a second reason: it is the outbox's ordinal
+    space, so the lifecycle messages a later consumer appends derive their names
+    from the mention that started the run rather than from anything the runner
+    generates.
+    """
+
+    run_id: UUID
+    task_id: UUID
+    room_id: str
+    thread_root_id: str | None
+    trigger_event_id: str
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,6 +567,67 @@ class BridgeState:
             )
             return connection.total_changes - before
 
+    def enqueue_send_at(self, row: OutboxRow) -> bool:
+        """Persist one intent at the key the caller names. ``False`` if it was there.
+
+        The counterpart of :meth:`enqueue_sends` for a sequence whose positions
+        are *known* rather than counted: a run's lifecycle arrives one message at
+        a time, over minutes, possibly across a restart, so "the ordinal is where
+        this response sat in the list" — which is what makes the batch form
+        idempotent — has no list to be a position in. The caller supplies the
+        ordinal because the caller is the one holding the run's shape.
+
+        That hands the invariant back to the caller, so this method checks it:
+        the same key with the same payload is the no-op a replay must be, and the
+        same key with a *different* payload is a bug being caught at the moment
+        it would otherwise become a silently dropped message. ``INSERT OR
+        IGNORE`` alone would swallow the second case, which is exactly the
+        failure the deterministic naming exists to prevent.
+
+        ``emitted_at`` is not part of the comparison and the stored value wins: a
+        replay legitimately re-derives the row under a later clock, and the whole
+        point of the row already existing is that the room saw *that* message.
+        Delivery state is not compared either — whether the intent has since been
+        sent or dead-lettered says nothing about whether it is the same intent.
+        """
+
+        with self._write() as connection:
+            before = connection.total_changes
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO outbox(
+                  room_id, thread_root_id, trigger_event_id, lane, ordinal, txn_id,
+                  observation_id, emitted_at, kind, body
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row.room_id,
+                    row.thread_root_id,
+                    row.trigger_event_id,
+                    row.lane,
+                    row.ordinal,
+                    row.txn_id,
+                    str(row.observation_id),
+                    _write_time(row.emitted_at),
+                    row.kind,
+                    row.body,
+                ),
+            )
+            written = connection.total_changes > before
+            stored = _read_outbox(
+                connection.execute(
+                    f"SELECT {_OUTBOX_COLUMNS} FROM outbox"
+                    " WHERE trigger_event_id = ? AND lane = ? AND ordinal = ?",
+                    (row.trigger_event_id, row.lane, row.ordinal),
+                ).fetchone()
+            )
+        if _outbox_payload(stored) != _outbox_payload(row):
+            raise StateRefused(
+                f"outbox {row.lane} position {row.ordinal} of {row.trigger_event_id} already "
+                "holds a different message; a derived name must derive the same row twice"
+            )
+        return written
+
     def pending_sends(self) -> tuple[OutboxRow, ...]:
         """Every intent still owed to a room, oldest row first.
 
@@ -592,6 +698,84 @@ class BridgeState:
                 (_write_time(self._now()), txn_id),
             ).rowcount
         return changed > 0
+
+    # -- run anchors --------------------------------------------------------
+
+    def record_anchor(
+        self,
+        *,
+        run_id: UUID,
+        task_id: UUID,
+        room_id: str,
+        thread_root_id: str | None,
+        trigger_event_id: str,
+    ) -> None:
+        """Tie one governed run to the room message that woke it.
+
+        Written before the room is told the run was accepted, for the reason
+        every other write in this package comes before its send: a crash in
+        between leaves a run that can still be narrated into the right thread,
+        while the other order leaves a room holding a receipt for a run nothing
+        on disk can place.
+
+        Recording the same run twice with the same values is the no-op a replay
+        must be — RepoMesh answers a repeated start for a live run with that
+        run's own receipt, so a re-mention after a crash arrives here with
+        exactly what the first attempt wrote. Different values under one run id
+        are refused rather than merged: a run belongs to one conversation, and
+        two answers to "which one" is a bug rather than a change of mind.
+        """
+
+        anchor = self.anchor_for_run(run_id)
+        if anchor is not None:
+            if (anchor.task_id, anchor.room_id, anchor.thread_root_id, anchor.trigger_event_id) != (
+                task_id,
+                room_id,
+                thread_root_id,
+                trigger_event_id,
+            ):
+                raise StateRefused(
+                    f"run {run_id} is already anchored to a different room message; "
+                    "one run belongs to one conversation"
+                )
+            return
+        with self._write() as connection:
+            connection.execute(
+                """
+                INSERT INTO run_anchors(
+                  run_id, task_id, room_id, thread_root_id, trigger_event_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(run_id),
+                    str(task_id),
+                    room_id,
+                    thread_root_id,
+                    trigger_event_id,
+                    _write_time(self._now()),
+                ),
+            )
+
+    def anchor_for_run(self, run_id: UUID) -> RunAnchor | None:
+        """Where this run's narration belongs, or ``None`` if nothing started it here."""
+
+        row = self._connection.execute(
+            """
+            SELECT run_id, task_id, room_id, thread_root_id, trigger_event_id, created_at
+              FROM run_anchors WHERE run_id = ?
+            """,
+            (str(run_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        return RunAnchor(
+            run_id=UUID(row["run_id"]),
+            task_id=UUID(row["task_id"]),
+            room_id=row["room_id"],
+            thread_root_id=row["thread_root_id"],
+            trigger_event_id=row["trigger_event_id"],
+            created_at=_require_time(row["created_at"]),
+        )
 
     # -- session references -----------------------------------------------
 
@@ -738,6 +922,25 @@ def _read_outbox(row: sqlite3.Row) -> OutboxRow:
         sent_at=_read_time(row["sent_at"]),
         refused_at=_read_time(row["refused_at"]),
         outbox_id=row["id"],
+    )
+
+
+def _outbox_payload(row: OutboxRow) -> tuple[object, ...]:
+    """What makes two intents at one key the same intent.
+
+    The destination, the two derived names and the text — everything a room
+    would see or the homeserver would deduplicate on. Position is absent because
+    it is the key being compared *at*, and the emission time is absent because
+    the stored one is authoritative; see :meth:`BridgeState.enqueue_send_at`.
+    """
+
+    return (
+        row.room_id,
+        row.thread_root_id,
+        row.txn_id,
+        row.observation_id,
+        row.kind,
+        row.body,
     )
 
 

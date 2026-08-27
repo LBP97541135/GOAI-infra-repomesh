@@ -15,7 +15,15 @@ so the batch arrives again and the turn ledger — written before the commit tha
 did not happen — is what stops a finished turn from running twice. That is the
 whole recovery story, and it is a property of this file.
 
-Three further shapes are deliberate:
+Four further shapes are deliberate:
+
+**A room message wakes work up and never authorises it.** One mention shape —
+``start task <uuid>`` — goes to RepoMesh instead of to the coding session, and
+what it carries is an id and this worker's identity. Whether the task exists,
+who may run it, and when it is finished are answered by the control plane and
+are never re-decided from what somebody typed in a room; the room gets a receipt
+or a refusal. Nothing retries the start action either, which is why the refusal
+line asks a *person* to try again.
 
 **One turn at a time, in arrival order.** An operator has one laptop and one
 workspace, so concurrent turns are contamination rather than throughput. PR 4's
@@ -44,22 +52,39 @@ an adapter to learn the type it branches on.
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+from uuid import UUID
 
 from .contracts import ExternalWorkerEnrollment, RoomObservation
 from .inbox import Inbox, Trigger
-from .outbox import NOTE_LANE, TURN_LANE, Outbox, observation_id
-from .ports import CodingSessionPort, RoomBatch, RoomPort, RoomRefused, TurnRequest
+from .outbox import NOTE_LANE, RUN_LANE, TURN_LANE, Outbox, observation_id
+from .ports import (
+    CodingSessionPort,
+    GovernedStartReceipt,
+    GovernedTaskPort,
+    GovernedTaskRefused,
+    GovernedTaskUnavailable,
+    RoomBatch,
+    RoomPort,
+    RoomRefused,
+    TurnRequest,
+)
 from .state import TERMINAL_TURN_STATES, BridgeState
 
 __all__ = [
     "BACKOFF_CEILING_SECONDS",
     "FAILURE_NOTE",
+    "GOVERNANCE_DISABLED_NOTE",
+    "GOVERNANCE_REFUSED_PREFIX",
+    "GOVERNANCE_UNAVAILABLE_NOTE",
+    "RUN_ACCEPTED_BODY",
     "SYNC_TIMEOUT_MS",
     "TIMEOUT_NOTE",
     "TURN_TIMEOUT_SECONDS",
     "RoomSupervisor",
+    "governed_task_id",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -96,6 +121,61 @@ No exception text, no path, no command line. Whoever is in the room did not ask
 for this worker's stack trace and may not be entitled to it; the operator who
 owns the machine has the log.
 """
+
+GOVERNANCE_DISABLED_NOTE = (
+    "This bridge instance cannot start governed runs; it was launched conversation-only."
+)
+GOVERNANCE_UNAVAILABLE_NOTE = (
+    "I could not reach RepoMesh, so nothing was started. Ask me again and I will retry."
+)
+GOVERNANCE_REFUSED_PREFIX = "RepoMesh will not start that task: "
+RUN_ACCEPTED_BODY = "Task accepted; governed run is queued."
+"""What a room hears about a governed wake-up, in the four cases that needed
+their own words. A start that hangs is told with :data:`TIMEOUT_NOTE`, because
+running out of time means the same thing whoever was being waited for.
+
+The refusal is the one that carries RepoMesh's own words, and it is the one that
+has to: "you are not the assignee" and "there is no such task" are different
+problems for the person who asked, and a canned line would send them to read a
+log they do not have. The other three say nothing a stranger could learn from.
+
+The unavailable line invites a retry *by a person*, which is the only retry
+there is — nothing behind this module re-sends a start action, because a start
+that RepoMesh may have received is not safe to repeat automatically.
+"""
+
+_GOVERNED_COMMAND = re.compile(
+    r"\bstart\s+task\s+"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+    re.IGNORECASE,
+)
+"""The whole command grammar, and deliberately the whole of it.
+
+Two words and a strict uuid, matched anywhere in the mention so the ``@worker``
+a Matrix client puts in front does not have to be described here. Nothing is
+fuzzy, nothing is inferred, and a message that is *nearly* this — a mistyped id,
+"start the task", the word "start" on its own — is not a command but an ordinary
+sentence, which is exactly what it will be treated as. The cost of guessing wrong
+in the other direction is a workspace and a run somebody did not ask for, so the
+parser refuses to guess at all.
+
+``\\b`` is there for one real message: "restart task <id>". Without it that ends
+in ``start task <id>`` and would silently be read as a plain start — which is not
+what the person asked for and not what they would be told happened. A word
+boundary is the difference between matching a phrase and matching a substring;
+it is not a heuristic.
+"""
+
+
+def governed_task_id(prompt: str) -> UUID | None:
+    """The task a mention asks to start, or ``None`` if it asks for anything else.
+
+    First match wins: a message naming two tasks is a person being unclear, and
+    starting both would be the reading least likely to be what they meant.
+    """
+
+    match = _GOVERNED_COMMAND.search(prompt)
+    return None if match is None else UUID(match.group(1))
 
 
 class _RoomTrouble(Exception):
@@ -148,6 +228,7 @@ class RoomSupervisor:
         room_port: RoomPort,
         coding_session: CodingSessionPort,
         state: BridgeState,
+        governed_task: GovernedTaskPort | None = None,
         sync_timeout_ms: int = SYNC_TIMEOUT_MS,
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -156,6 +237,16 @@ class RoomSupervisor:
         self._rooms = tuple(confirmed_room_ids)
         self._room_port = room_port
         self._coding_session = coding_session
+        self._governed_task = governed_task
+        """The control plane, or ``None`` for an instance launched without one.
+
+        Optional rather than required because the two arrangements are both
+        legitimate deployments and neither is a degraded version of the other: a
+        Bridge wired only to a room and a CLI is a conversational teammate, and
+        one that is also given this can be asked to start work RepoMesh
+        governs. What is not legitimate is silence — an instance without it says
+        so in the room the first time somebody asks.
+        """
         self._state = state
         self._inbox = Inbox(state)
         self._outbox = Outbox(state, worker_agent_id=enrollment.worker_agent_id)
@@ -408,8 +499,16 @@ class RoomSupervisor:
         text this module wrote, the success path forwards text the session
         wrote, and those are exactly the two sequences that must stay
         independently idempotent when a turn is replayed.
+
+        A governed wake-up is answered before any of that and never reaches the
+        session at all. The two are alternatives rather than stages: "start task
+        <id>" is a request to the control plane, and handing it to a coding CLI
+        as well would run the same work twice, once under RepoMesh's governance
+        and once outside it.
         """
 
+        if (task_id := governed_task_id(trigger.prompt)) is not None:
+            return await self._start_governed(trigger, task_id)
         request = TurnRequest(
             room_id=trigger.room_id,
             thread_id=trigger.thread_id,
@@ -449,6 +548,104 @@ class RoomSupervisor:
         )
         return _Answer(
             self._terminal(outcome.status, trigger), TURN_LANE, outcome.observations
+        )
+
+    async def _start_governed(self, trigger: Trigger, task_id: UUID) -> _Answer:
+        """Ask RepoMesh to start a task, and tell the room what it said.
+
+        Everything this branch decides is about *reporting*. It does not check
+        that the task exists, that the sender may ask for it, or that this
+        worker is its assignee, because a room is not a permission system and
+        re-deciding any of that here would create a second, weaker answer to a
+        question RepoMesh already answers authoritatively. The mention is a
+        wake-up; the control plane is the authority.
+
+        The exception discipline is the session path's, for the same reasons: a
+        start that hangs is a timeout and stays answerable, and anything the port
+        raises outside its own vocabulary is this machine's problem and gets the
+        canned failure line rather than escaping into the round.
+
+        The anchor is written before the answer is returned, which puts it
+        before the enqueue and the send. A crash in the other order would leave a
+        room holding a receipt for a run that nothing on disk can place back into
+        the thread that asked for it.
+        """
+
+        if self._governed_task is None:
+            _logger.warning(
+                "mention %s asked to start task %s, but this instance has no control plane",
+                trigger.event_id,
+                task_id,
+            )
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, GOVERNANCE_DISABLED_NOTE),))
+        try:
+            async with asyncio.timeout(self._turn_timeout):
+                receipt = await self._governed_task.start_task(
+                    task_id=task_id, worker_agent_id=self._enrollment.worker_agent_id
+                )
+        except TimeoutError:
+            _logger.warning(
+                "the start action for task %s ran past %.0fs and was abandoned",
+                task_id,
+                self._turn_timeout,
+            )
+            return _Answer("timeout", NOTE_LANE, (self._note(trigger, TIMEOUT_NOTE),))
+        except GovernedTaskRefused as refusal:
+            _logger.info("RepoMesh refused to start task %s: %s", task_id, refusal)
+            return _Answer(
+                "failed",
+                NOTE_LANE,
+                (self._note(trigger, f"{GOVERNANCE_REFUSED_PREFIX}{refusal}"),),
+            )
+        except GovernedTaskUnavailable as trouble:
+            _logger.warning("RepoMesh could not be asked to start task %s: %s", task_id, trouble)
+            return _Answer(
+                "failed", NOTE_LANE, (self._note(trigger, GOVERNANCE_UNAVAILABLE_NOTE),)
+            )
+        except Exception:
+            _logger.exception("the start action for task %s failed", task_id)
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, FAILURE_NOTE),))
+        self._state.record_anchor(
+            run_id=receipt.run_id,
+            task_id=receipt.task_id,
+            room_id=trigger.room_id,
+            thread_root_id=trigger.thread_root_id,
+            trigger_event_id=trigger.event_id,
+        )
+        _logger.info(
+            "RepoMesh accepted task %s as run %s, anchored to %s",
+            receipt.task_id,
+            receipt.run_id,
+            trigger.event_id,
+        )
+        return _Answer("completed", RUN_LANE, (self._accepted(trigger, receipt),))
+
+    def _accepted(self, trigger: Trigger, receipt: GovernedStartReceipt) -> RoomObservation:
+        """The receipt, as the one message a room gets for it.
+
+        Position zero of the run lane, so the lifecycle a later consumer appends
+        continues the sequence this message opens rather than starting a second
+        one. Both ids travel in the observation's own fields rather than in the
+        sentence, because the schema has somewhere to put them and the room only
+        needs to read one: the renderer shows the run id, which is the handle
+        nobody in the room otherwise has.
+        """
+
+        return RoomObservation(
+            observation_id=observation_id(
+                self._enrollment.worker_agent_id,
+                trigger.room_id,
+                trigger.event_id,
+                RUN_LANE,
+                0,
+            ),
+            emitted_at=self._state.now(),
+            worker_name=self._enrollment.worker_name,
+            room_id=trigger.room_id,
+            kind="run_accepted",
+            body=RUN_ACCEPTED_BODY,
+            task_id=receipt.task_id,
+            run_id=receipt.run_id,
         )
 
     def _terminal(self, status: str, trigger: Trigger) -> str:
