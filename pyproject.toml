@@ -43,6 +43,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
   "integration: requires a real PostgreSQL instance",
+  "packaging: builds a wheel and installs it into a throwaway virtualenv (slow)",
 ]
 
 [tool.ruff]
