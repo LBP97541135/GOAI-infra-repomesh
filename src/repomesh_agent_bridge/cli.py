@@ -21,7 +21,8 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from .adapters.memory import InertCodingSession, InertRoomPort
+from .adapters.matrix import MatrixRoomAdapter, RoomTransportError
+from .adapters.memory import InertCodingSession
 from .adapters.repomesh_binding import RepoMeshBindingAdapter
 from .application import RoomNativeAgent, StartupOutcome, _startup
 from .contracts import BridgeStartupError, EnrollmentInvalid, ExternalWorkerEnrollment
@@ -48,7 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Serve one AgentTeams external worker from this machine.",
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
-    run = subcommands.add_parser("run", help="validate, join, and stay up until cancelled")
+    run = subcommands.add_parser(
+        "run", help="validate, join the confirmed rooms, and answer mentions until cancelled"
+    )
     run.add_argument("--enrollment", required=True, type=Path)
     run.add_argument(
         "--state-dir",
@@ -88,8 +91,8 @@ def main(
             return EXIT_OK
         agent = RoomNativeAgent(
             binding_port=binding_port,
-            room_port=InertRoomPort(),
-            coding_session=InertCodingSession(),
+            room_port=MatrixRoomAdapter(),
+            coding_session=InertCodingSession(worker_name=enrollment.worker_name),
             state_dir=arguments.state_dir,
         )
         # Ctrl-C is how an operator stops this process, so it is a normal
@@ -103,6 +106,15 @@ def main(
         return EXIT_ALREADY_RUNNING
     except BridgeStartupError as refused:
         print(f"error: {refused}", file=sys.stderr)
+        return EXIT_STARTUP_REFUSED
+    except RoomTransportError as unreachable:
+        # The two failure vocabularies meet here and nowhere else. A Matrix
+        # failure in steady state is the supervisor's business and is absorbed
+        # into its backoff, so the only way one reaches this frame is out of
+        # ``start`` — which means this instance never came up, which is what
+        # exit 2 says. An operator gets one line; a traceback would say the same
+        # thing in a form nothing can act on.
+        print(f"error: {unreachable}", file=sys.stderr)
         return EXIT_STARTUP_REFUSED
 
 

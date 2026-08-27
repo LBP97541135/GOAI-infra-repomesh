@@ -8,7 +8,6 @@ diagnosing the wrong program. Nothing outside this package may import
 :func:`_startup`.
 """
 
-import asyncio
 import contextlib
 import logging
 import os
@@ -25,6 +24,8 @@ from .contracts import (
 )
 from .instance_lock import InstanceLock, instance_lock_path
 from .ports import CodingSessionPort, RoomPort, WorkerBindingPort
+from .state import open_state, state_path
+from .supervisor import RoomSupervisor
 
 __all__ = ["CredentialResolver", "RoomNativeAgent", "StartupOutcome", "resolve_env_credential"]
 
@@ -192,19 +193,27 @@ class RoomNativeAgent:
         self._resolve_credential = resolve_credential
 
     async def run(self, enrollment: ExternalWorkerEnrollment) -> None:
-        """Validate, claim the worker, preflight, join, and block until cancelled.
+        """Validate, claim the worker, preflight, join, and serve until cancelled.
 
         The order is the contract: local validation, then the instance lock,
-        then RepoMesh preflight, then Matrix — and only then does the process
-        stay up. Nothing after ``await`` here is reachable without every earlier
-        step having succeeded, which is what makes "no CLI is spawned before
-        preflight" a structural property rather than a promise.
+        then RepoMesh preflight, then local state, then Matrix — and only then
+        does the process serve anything. Nothing after ``await`` here is
+        reachable without every earlier step having succeeded, which is what
+        makes "no CLI is spawned before preflight" a structural property rather
+        than a promise.
 
-        Cancellation unwinds the stack in reverse: the coding session closes,
-        the room port closes, the lock is released, and ``CancelledError``
-        propagates so the caller learns the loop ended. PR 2 starts no
-        background tasks, so there is nothing else to wait for; PR 3's
-        supervisor owns cancellation *during* shutdown.
+        The state file is opened between preflight and Matrix, and both
+        neighbours matter. Opening it earlier would have a refused preflight
+        leave a database behind for a worker that never started; opening it
+        later would have the supervisor's first act — draining intents a crash
+        stranded — happen after new messages had already been taken on.
+
+        Cancellation unwinds the stack in reverse: the supervisor stops without
+        committing the batch it was holding, the coding session closes, the room
+        port closes, the state file closes, the lock is released, and
+        ``CancelledError`` propagates so the caller learns the loop ended. The
+        supervisor starts no background tasks, so there is nothing else to wait
+        for.
         """
 
         lock = InstanceLock(instance_lock_path(enrollment.worker_agent_id, self._state_dir))
@@ -219,12 +228,26 @@ class RoomNativeAgent:
                 resolve_credential=self._resolve_credential,
                 after_local_validation=lock.acquire,
             )
+            state = open_state(
+                state_path(enrollment.worker_agent_id, self._state_dir),
+                worker_agent_id=enrollment.worker_agent_id,
+            )
+            # Registered first of the three, so it is closed last: the ports
+            # write through this file, and a file closed out from under them
+            # would turn a clean shutdown into a broken one.
+            stack.callback(state.close)
             stack.push_async_callback(self._room_port.close)
             stack.push_async_callback(self._coding_session.close)
             await self._room_port.start(
                 homeserver_url=enrollment.matrix_homeserver_url,
                 user_id=enrollment.matrix_user_id,
                 room_ids=outcome.confirmed_room_ids,
+                # Resolved here and handed over per call: the secret's lifetime
+                # is this call's, not the process's, exactly as with preflight's
+                # credential. Resolution is deliberately not part of stage 1 —
+                # requiring a Matrix token would make ``check`` useless as the
+                # thing an operator runs *before* the credentials are in place.
+                access_token=self._resolve_credential(enrollment.credential_refs.matrix),
             )
             _logger.info(
                 "bridge ready: worker=%s profile=%s rooms=%d",
@@ -232,4 +255,10 @@ class RoomNativeAgent:
                 enrollment.coding_profile,
                 len(outcome.confirmed_room_ids),
             )
-            await asyncio.Event().wait()
+            await RoomSupervisor(
+                enrollment=enrollment,
+                confirmed_room_ids=outcome.confirmed_room_ids,
+                room_port=self._room_port,
+                coding_session=self._coding_session,
+                state=state,
+            ).serve()

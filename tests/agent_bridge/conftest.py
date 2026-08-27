@@ -29,6 +29,13 @@ REPOMESH_TOKEN_VAR = "REPOMESH_BRIDGE_TOKEN"
 REPOMESH_TOKEN_REF = f"env:{REPOMESH_TOKEN_VAR}"
 REPOMESH_TOKEN_VALUE = "s3cret-runner-control-token"
 
+MATRIX_TOKEN_VAR = "REPOMESH_BRIDGE_MATRIX_TOKEN"
+MATRIX_TOKEN_REF = f"env:{MATRIX_TOKEN_VAR}"
+MATRIX_TOKEN_VALUE = "s3cret-matrix-access-token"
+"""Distinctive on purpose: the log-scan tests assert this exact string appears
+in nothing the Bridge writes, which only means something if the string could not
+plausibly have been produced by anything else."""
+
 
 def enrollment_wire(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -43,7 +50,7 @@ def enrollment_wire(**overrides: object) -> dict[str, object]:
         "repomeshEndpoint": REPOMESH_ENDPOINT,
         "codingProfile": "codex",
         "credentialRefs": {
-            "matrix": "env:REPOMESH_BRIDGE_MATRIX_TOKEN",
+            "matrix": MATRIX_TOKEN_REF,
             "repomesh": REPOMESH_TOKEN_REF,
         },
     }
@@ -101,6 +108,20 @@ def binding() -> WorkerBinding:
 @pytest.fixture
 def binding_port(binding: WorkerBinding) -> InMemoryWorkerBindingPort:
     return InMemoryWorkerBindingPort(binding)
+
+
+@pytest.fixture
+def matrix_token(monkeypatch) -> str:
+    """Put the enrollment's Matrix credential where its locator says it is.
+
+    Requested explicitly rather than made autouse: ``run`` resolves this
+    reference just before it opens the Matrix connection, and a test that starts
+    a Bridge has to say so. ``check`` deliberately never resolves it, which is
+    what lets an operator validate an enrollment before the credentials exist.
+    """
+
+    monkeypatch.setenv(MATRIX_TOKEN_VAR, MATRIX_TOKEN_VALUE)
+    return MATRIX_TOKEN_VALUE
 
 
 @pytest.fixture

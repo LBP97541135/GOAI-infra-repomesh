@@ -22,7 +22,7 @@ import pytest
 
 from repomesh_agent_bridge.adapters.memory import (
     InertCodingSession,
-    InertRoomPort,
+    InMemoryRoomPort,
     InMemoryWorkerBindingPort,
 )
 from repomesh_agent_bridge.application import RoomNativeAgent
@@ -53,14 +53,14 @@ def _agent(
     binding_port: object,
     *,
     tmp_path: object,
-    room: InertRoomPort | None = None,
+    room: InMemoryRoomPort | None = None,
     session: InertCodingSession | None = None,
     resolve_credential: object | None = None,
 ) -> RoomNativeAgent:
     extra = {} if resolve_credential is None else {"resolve_credential": resolve_credential}
     return RoomNativeAgent(
         binding_port=binding_port,
-        room_port=room or InertRoomPort(),
+        room_port=room or InMemoryRoomPort(),
         coding_session=session or InertCodingSession(),
         state_dir=tmp_path,
         **extra,
@@ -178,7 +178,7 @@ async def test_preflight_refuses_a_binding_that_disagrees_with_the_enrollment(
     """
 
     port = WireBindingPort(binding_wire(**disagreement))
-    room = InertRoomPort()
+    room = InMemoryRoomPort()
 
     with pytest.raises(BindingRefused):
         await _agent(port, tmp_path=tmp_path, room=room).run(enrollment)
@@ -188,7 +188,7 @@ async def test_preflight_refuses_a_binding_that_disagrees_with_the_enrollment(
 
 
 async def test_a_refused_preflight_leaves_the_worker_claimable(
-    enrollment: ExternalWorkerEnrollment, binding: WorkerBinding, tmp_path
+    enrollment: ExternalWorkerEnrollment, binding: WorkerBinding, tmp_path, matrix_token: str
 ) -> None:
     """A failed start must not hold the worker's lock for the process lifetime."""
 
@@ -197,7 +197,7 @@ async def test_a_refused_preflight_leaves_the_worker_claimable(
             WireBindingPort(binding_wire(workerName="other")), tmp_path=tmp_path
         ).run(enrollment)
 
-    room = InertRoomPort()
+    room = InMemoryRoomPort()
     task = asyncio.create_task(
         _agent(InMemoryWorkerBindingPort(binding), tmp_path=tmp_path, room=room).run(enrollment)
     )
@@ -208,12 +208,12 @@ async def test_a_refused_preflight_leaves_the_worker_claimable(
 
 
 async def test_only_rooms_both_sides_confirm_are_joined(
-    enrollment: ExternalWorkerEnrollment, tmp_path
+    enrollment: ExternalWorkerEnrollment, tmp_path, matrix_token: str
 ) -> None:
     """RepoMesh owns room authority; the enrollment can only narrow it."""
 
     port = WireBindingPort(binding_wire(allowedRoomIds=[WORKER_ROOM, OTHER_ROOM]))
-    room = InertRoomPort()
+    room = InMemoryRoomPort()
     task = asyncio.create_task(_agent(port, tmp_path=tmp_path, room=room).run(enrollment))
     await asyncio.wait_for(room.ready.wait(), timeout=2)
 
@@ -231,12 +231,12 @@ async def test_only_rooms_both_sides_confirm_are_joined(
 
 
 async def test_run_blocks_until_cancelled_and_then_unwinds_cleanly(
-    enrollment: ExternalWorkerEnrollment, binding: WorkerBinding, tmp_path
+    enrollment: ExternalWorkerEnrollment, binding: WorkerBinding, tmp_path, matrix_token: str
 ) -> None:
     """Start, stay up, and on cancellation close every seam and leave nothing behind."""
 
     before = asyncio.all_tasks()
-    room = InertRoomPort()
+    room = InMemoryRoomPort()
     session = InertCodingSession()
     task = asyncio.create_task(
         _agent(
@@ -256,11 +256,11 @@ async def test_run_blocks_until_cancelled_and_then_unwinds_cleanly(
 
     assert room.closed
     assert session.closed
-    assert not (asyncio.all_tasks() - before), "PR 2 starts no background task"
+    assert not (asyncio.all_tasks() - before), "the supervisor starts no background task"
 
 
 async def test_a_second_instance_for_the_same_worker_fails_before_preflight(
-    enrollment: ExternalWorkerEnrollment, binding: WorkerBinding, tmp_path
+    enrollment: ExternalWorkerEnrollment, binding: WorkerBinding, tmp_path, matrix_token: str
 ) -> None:
     """Two real lock handles, no patched lock function.
 
@@ -269,7 +269,7 @@ async def test_a_second_instance_for_the_same_worker_fails_before_preflight(
     asking the control plane anything.
     """
 
-    room = InertRoomPort()
+    room = InMemoryRoomPort()
     first = asyncio.create_task(
         _agent(InMemoryWorkerBindingPort(binding), tmp_path=tmp_path, room=room).run(enrollment)
     )
@@ -290,7 +290,7 @@ async def test_a_second_instance_for_the_same_worker_fails_before_preflight(
 
 
 async def test_a_different_worker_may_run_alongside(
-    enrollment: ExternalWorkerEnrollment, tmp_path
+    enrollment: ExternalWorkerEnrollment, tmp_path, matrix_token: str
 ) -> None:
     """The claim is per worker identity, not per machine or per state directory."""
 
@@ -298,7 +298,7 @@ async def test_a_different_worker_may_run_alongside(
     other = ExternalWorkerEnrollment.from_wire(
         {**enrollment.to_wire(), "workerAgentId": other_id, "workerName": "other-worker"}
     )
-    first_room, second_room = InertRoomPort(), InertRoomPort()
+    first_room, second_room = InMemoryRoomPort(), InMemoryRoomPort()
     first = asyncio.create_task(
         _agent(
             WireBindingPort(binding_wire()), tmp_path=tmp_path, room=first_room
