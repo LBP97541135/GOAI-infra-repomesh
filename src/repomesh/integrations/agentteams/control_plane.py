@@ -48,6 +48,11 @@ class AgentTeamsVersion:
 class AgentTeamsControlPlaneClient:
     """Typed client for the AgentTeams v1.2 controller API."""
 
+    #: Worker-document fields confirmed as JSON booleans rather than by
+    #: equality. See ``_matches``; the set has one member because
+    #: ``containerManaged`` is the one boolean anything turns on.
+    _STRICT_BOOLEAN_FIELDS = frozenset({"containerManaged"})
+
     def __init__(
         self,
         base_url: str,
@@ -382,8 +387,35 @@ class AgentTeamsControlPlaneClient:
         AgentTeamsControlPlaneClient._assert_fields("team", body, fields)
 
     @staticmethod
+    def _matches(key: str, observed: Any, expected: Any) -> bool:
+        """Whether the controller's value confirms the one being asked for.
+
+        Equality, except for the fields in ``_STRICT_BOOLEAN_FIELDS``, which are
+        compared against the JSON boolean itself. Python's ``0 == False`` is
+        true, so a controller answering ``"containerManaged": 0`` used to
+        *confirm* an external projection — and that confirmation is the single
+        fact the bridge preflight is built on (ADR 0004 decision 5). Identity
+        against ``True``/``False`` accepts the JSON literal and nothing that
+        merely compares equal to it, which puts ``0``, ``"false"`` and ``null``
+        in the same place absence already is: unable to confirm anything.
+
+        Deliberately not applied to the rest. ``model``, ``runtime``,
+        ``skills`` and the projections below are strings and lists, where
+        equality says exactly what the operator means, and tightening them
+        would refuse pairs that agree.
+        """
+
+        if key in AgentTeamsControlPlaneClient._STRICT_BOOLEAN_FIELDS:
+            return observed is expected
+        return observed == expected
+
+    @staticmethod
     def _assert_fields(kind: str, body: dict[str, Any], fields: dict[str, Any]) -> None:
-        mismatches = [key for key, value in fields.items() if body.get(key) != value]
+        mismatches = [
+            key
+            for key, value in fields.items()
+            if not AgentTeamsControlPlaneClient._matches(key, body.get(key), value)
+        ]
         if mismatches:
             joined = ", ".join(sorted(mismatches))
             raise AgentTeamsConflict(f"existing AgentTeams {kind} differs in: {joined}")
