@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>终局验收执行计划 · Room-Native Bridge</title>
+<style>
+  :root{
+    --bg:#f7f6f2; --panel:#ffffff; --ink:#1f2937; --sub:#6b7280; --line:#e5e1d8;
+    --new:#4f46e5; --new-soft:#eef0ff; --warn:#b45309; --warn-soft:#fdf3e3;
+    --ok:#15803d; --ok-soft:#e9f6ec; --muted:#9ca3af; --muted-soft:#f1f0ec;
+    --risk:#b91c1c; --risk-soft:#fdecec; --code:#eceff5;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14161c; --panel:#1c1f27; --ink:#e5e7eb; --sub:#9ca3af; --line:#2c303b;
+      --new:#818cf8; --new-soft:#23264a; --warn:#f0a94b; --warn-soft:#33280f;
+      --ok:#4ade80; --ok-soft:#12301c; --muted:#6b7280; --muted-soft:#242832;
+      --risk:#f87171; --risk-soft:#3a1717; --code:#252a35;
+    }
+  }
+  [data-theme="dark"]{
+    --bg:#14161c; --panel:#1c1f27; --ink:#e5e7eb; --sub:#9ca3af; --line:#2c303b;
+    --new:#818cf8; --new-soft:#23264a; --warn:#f0a94b; --warn-soft:#33280f;
+    --ok:#4ade80; --ok-soft:#12301c; --muted:#6b7280; --muted-soft:#242832;
+    --risk:#f87171; --risk-soft:#3a1717; --code:#252a35;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.65 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 20px 80px}
+  header h1{font-size:26px;margin:0 0 6px}
+  header .meta{color:var(--sub);font-size:13px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 0}
+  .chip{font-size:12.5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel)}
+  .chip.n{border-color:var(--new);color:var(--new);background:var(--new-soft)}
+  .chip.w{border-color:var(--warn);color:var(--warn);background:var(--warn-soft)}
+  .chip.g{border-color:var(--ok);color:var(--ok);background:var(--ok-soft)}
+  section{margin-top:40px}
+  h2{font-size:19px;border-bottom:1px solid var(--line);padding-bottom:8px;margin:0 0 16px}
+  h2 .no{color:var(--new);margin-right:8px}
+  .grid{display:grid;gap:14px}
+  .g4{grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h3{margin:0 0 8px;font-size:14.5px;display:flex;align-items:center;gap:8px}
+  .tag{font-size:11px;padding:1px 8px;border-radius:999px;font-weight:600}
+  .tag.a{background:var(--ok-soft);color:var(--ok)}
+  .tag.b{background:var(--warn-soft);color:var(--warn)}
+  .tag.c{background:var(--new-soft);color:var(--new)}
+  .tag.d{background:var(--risk-soft);color:var(--risk)}
+  .card ul{margin:0;padding-left:18px;color:var(--sub);font-size:13px}
+  .card ul li{margin:3px 0}
+  .card ul li b{color:var(--ink);font-weight:600}
+  .scroll{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+  svg{display:block}
+  svg text{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;overflow:hidden;font-size:13.5px}
+  th,td{padding:8px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{background:var(--muted-soft);font-size:12.5px;color:var(--sub);font-weight:600}
+  tr:last-child td{border-bottom:none}
+  code{background:var(--code);border-radius:4px;padding:1px 5px;font-size:12.5px;
+    font-family:Consolas,"Courier New",monospace}
+  .pill{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px}
+  .pill.pr{background:var(--new-soft);color:var(--new)}
+  .pill.tr{background:var(--muted-soft);color:var(--sub)}
+  .pill.vv{background:var(--ok-soft);color:var(--ok)}
+  .pill.fail{background:var(--risk-soft);color:var(--risk)}
+  .note{color:var(--sub);font-size:13px;margin-top:10px}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;font-size:12.5px;color:var(--sub);margin-top:8px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:3px;display:inline-block}
+  footer{margin-top:56px;color:var(--sub);font-size:12.5px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Room-Native Bridge · 终局验收 Spec 与执行计划</h1>
+  <div class="meta">2026-08-28 · 已按代码评审校正 · 对照冻结验收标准(20260827)与 PR 0–5 基线 · file:line 见同名 .md</div>
+  <div class="chips">
+    <span class="chip g">已收口:PR 0–5 + 平行轨 P(1777/21)</span>
+    <span class="chip n">先行:PR 5.5 External Leader 契约校正</span>
+    <span class="chip n">新增:3 个既有模块能力切片 + Bridge 两处增量</span>
+    <span class="chip w">FAIL 红线接线:自动接单 / Q5 收窄</span>
+    <span class="chip">12 条裁决 D-1…D-12</span>
+    <span class="chip">估算 30–45 人日</span>
+  </div>
+</header>
+
+<!-- ══════════════ 1. 差距四分类 ══════════════ -->
+<section>
+  <h2><span class="no">1</span>现状实态:四类差距地图</h2>
+  <div class="grid g4">
+    <div class="card">
+      <h3><span class="tag a">A 已达成</span>只需取证</h3>
+      <ul>
+        <li>发现链前半段全链(前端 Issue→分析→评分→三档→<b>范围确认硬门</b>→计划→materialize→自动建团建房)</li>
+        <li>角色边界:<b>四道 WORKER 硬校验</b></li>
+        <li>Bridge Worker 形态(在场/对话/隔离,活体过)</li>
+        <li>治理执行本体(八条自动化验收)</li>
+        <li>前端「无数据不显故障 / 不伪造 uptime / Room 只读」</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag b">B 有码无活体</span>开关未配</h3>
+      <ul>
+        <li>治理链(Bridge 自带 consumer)<b>活体零次</b></li>
+        <li>ChangeSet→推分支→Draft PR:被 <b>delivery_auto_enabled</b> 门控,凭据/必检项全未配</li>
+        <li>分析/分类/计划三步硬依赖 LLM,<b>本机无 key 必 503</b></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag c">C 缺失</span>真实工程量</h3>
+      <ul>
+        <li><b>Leader 工作流</b>:服务端不等 leader 同步直拆;无任何 leader 写入面</li>
+        <li><b>External Leader 接入</b>:server preflight 只接受 WORKER,Leader 必 409;leader-mode 无激活路径</li>
+        <li><b>Matrix 消息摄取</b>:sync 只认 report JSON,其余全丢,Room 页只见自己发的话</li>
+        <li><b>External 展示</b>:containerManaged 读侧被丢,前端显示容器词汇 Pending</li>
+        <li><b>自动接单</b>:Bridge 认不出派活正文(FAIL 红线)</li>
+        <li>六实例编排 / 共享 Codex 登录无机制</li>
+        <li>PR 正文追溯只带 plan id</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="tag d">D 未决裁决</span>不裁有险</h3>
+      <ul>
+        <li><b>Q5</b>:房间 JSON 可把 task 写成 SUCCEEDED —— 一条伪汇报可致终局 FAIL</li>
+        <li><b>mock 工厂</b>:容器 coding agent 默认 mock,须证明验收路径零触达</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ 2. 目标架构 ══════════════ -->
+<section>
+  <h2><span class="no">2</span>目标架构:新增 seam 落在哪</h2>
+  <div class="scroll">
+    <svg viewBox="0 0 1150 560" width="1150" height="560" style="min-width:980px" role="img"
+         aria-label="目标架构:PR 5.5 契约校正、三个既有模块能力切片与两处 Bridge 增量的位置">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--sub)"/>
+        </marker>
+        <marker id="arrN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--new)"/>
+        </marker>
+      </defs>
+
+      <!-- 前端 -->
+      <rect x="20" y="40" width="200" height="220" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+      <text x="120" y="66" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">RepoMesh Console</text>
+      <rect x="36" y="82" width="168" height="34" rx="6" fill="var(--muted-soft)"/>
+      <text x="120" y="104" text-anchor="middle" font-size="12" fill="var(--ink)">发现链 / 计划 / Materialize</text>
+      <rect x="36" y="124" width="168" height="34" rx="6" fill="var(--new-soft)" stroke="var(--new)"/>
+      <text x="120" y="146" text-anchor="middle" font-size="12" fill="var(--new)">Room 页:真实消息气泡 ①</text>
+      <rect x="36" y="166" width="168" height="34" rx="6" fill="var(--new-soft)" stroke="var(--new)"/>
+      <text x="120" y="188" text-anchor="middle" font-size="12" fill="var(--new)">Agents:External · Codex ②</text>
+      <rect x="36" y="208" width="168" height="34" rx="6" fill="var(--muted-soft)"/>
+      <text x="120" y="230" text-anchor="middle" font-size="12" fill="var(--ink)">DAG / 审核台(已有)</text>
+
+      <!-- 服务端 -->
+      <rect x="290" y="20" width="360" height="520" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+      <text x="470" y="46" text-anchor="middle" font-size="14" font-weight="600" fill="var(--ink)">RepoMesh 服务端</text>
+
+      <rect x="310" y="62" width="320" height="40" rx="6" fill="var(--muted-soft)"/>
+      <text x="470" y="80" text-anchor="middle" font-size="12" fill="var(--ink)">repository_intelligence:发现链 → 计划 → materialize</text>
+      <text x="470" y="95" text-anchor="middle" font-size="10.5" fill="var(--sub)">(已有;LLM key = 环境轨 E0a)</text>
+
+      <rect x="310" y="112" width="320" height="66" rx="6" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.5"/>
+      <text x="470" y="132" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--new)">LeaderDecision(PR 7)· task_orchestration 切片</text>
+      <text x="470" y="149" text-anchor="middle" font-size="11" fill="var(--sub)">取阶段工作包 / 提交 Spec+DAG+Worker plan / 提交审查</text>
+      <text x="470" y="164" text-anchor="middle" font-size="11" fill="var(--sub)">leader 产物 provenance·clamp·证据包·幂等藏进 implementation</text>
+
+      <rect x="310" y="188" width="320" height="52" rx="6" fill="var(--muted-soft)"/>
+      <text x="470" y="207" text-anchor="middle" font-size="12" fill="var(--ink)">task_orchestration:_assign_batch 按拆解模式分叉</text>
+      <text x="470" y="224" text-anchor="middle" font-size="10.5" fill="var(--sub)">server(默认,存量不变)| leader(等拆解提交;roll-up→review-due)</text>
+
+      <rect x="310" y="250" width="320" height="52" rx="6" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.5"/>
+      <text x="470" y="269" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--new)">RoomTimelineIngest(PR 9)· collaboration 切片</text>
+      <text x="470" y="286" text-anchor="middle" font-size="11" fill="var(--sub)">record/list contracts · 原始时间戳 · reverse identity resolver</text>
+
+      <rect x="310" y="312" width="320" height="52" rx="6" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.5"/>
+      <text x="470" y="331" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--new)">ExternalRuntimePresentation(PR 10)</text>
+      <text x="470" y="348" text-anchor="middle" font-size="11" fill="var(--sub)">修断流:containerManaged → RuntimeSnapshot → 读模型 → 前端</text>
+
+      <rect x="310" y="374" width="320" height="40" rx="6" fill="var(--muted-soft)"/>
+      <text x="470" y="392" text-anchor="middle" font-size="12" fill="var(--ink)">Runner 网关 + worker-scoped tokens(PR 5 已有)</text>
+      <text x="470" y="407" text-anchor="middle" font-size="10.5" fill="var(--sub)">token map 语义推广为 external 成员(D-6)</text>
+
+      <rect x="310" y="424" width="320" height="52" rx="6" fill="var(--warn-soft)" stroke="var(--warn)"/>
+      <text x="470" y="443" text-anchor="middle" font-size="12" font-weight="600" fill="var(--warn)">交付段:ChangeSet → 分支 → Draft PR</text>
+      <text x="470" y="460" text-anchor="middle" font-size="10.5" fill="var(--sub)">代码全,从未活体;仅 V2 前 E0b 短时开交付 + Q1 完整追溯</text>
+
+      <rect x="310" y="486" width="320" height="40" rx="6" fill="var(--warn-soft)" stroke="var(--warn)"/>
+      <text x="470" y="504" text-anchor="middle" font-size="12" font-weight="600" fill="var(--warn)">Q5 收窄(轨 Q):coding task 的房间汇报 IGNORED</text>
+      <text x="470" y="519" text-anchor="middle" font-size="10.5" fill="var(--sub)">真相只走 Runner events(D-7)</text>
+
+      <!-- Matrix / AgentTeams -->
+      <rect x="730" y="20" width="180" height="130" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+      <text x="820" y="46" text-anchor="middle" font-size="13.5" font-weight="600" fill="var(--ink)">Matrix / AgentTeams</text>
+      <text x="820" y="70" text-anchor="middle" font-size="11.5" fill="var(--sub)">conduit @18080</text>
+      <text x="820" y="88" text-anchor="middle" font-size="11.5" fill="var(--sub)">controller(六成员皆</text>
+      <text x="820" y="104" text-anchor="middle" font-size="11.5" fill="var(--sub)">containerManaged:false)</text>
+      <text x="820" y="128" text-anchor="middle" font-size="11.5" fill="var(--sub)">团队房 ×3 · leader DM ×3</text>
+
+      <!-- Bridges -->
+      <rect x="730" y="180" width="400" height="180" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+      <text x="930" y="206" text-anchor="middle" font-size="13.5" font-weight="600" fill="var(--ink)">六个 Bridge 实例(Windows 宿主,真 Codex)</text>
+      <rect x="748" y="222" width="176" height="118" rx="8" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.5"/>
+      <text x="836" y="244" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--new)">Leader Bridge ×3(PR 8)</text>
+      <text x="836" y="264" text-anchor="middle" font-size="11" fill="var(--sub)">消费 PR 5.5A role-aware v2</text>
+      <text x="836" y="281" text-anchor="middle" font-size="11" fill="var(--sub)">LeaderActionPort(新 seam,</text>
+      <text x="836" y="296" text-anchor="middle" font-size="11" fill="var(--sub)">HTTP + memory 双 adapter)</text>
+      <text x="836" y="315" text-anchor="middle" font-size="11" fill="var(--sub)">纯文本工作包,无 workspace,</text>
+      <text x="836" y="330" text-anchor="middle" font-size="11" fill="var(--sub)">拒 --workspace-root(D-8)</text>
+      <rect x="936" y="222" width="176" height="118" rx="8" fill="var(--panel)" stroke="var(--line)"/>
+      <text x="1024" y="244" text-anchor="middle" font-size="12.5" font-weight="600" fill="var(--ink)">Worker Bridge ×3</text>
+      <text x="1024" y="264" text-anchor="middle" font-size="11" fill="var(--sub)">形态已收口(PR 0–5)</text>
+      <text x="1024" y="284" text-anchor="middle" font-size="11" fill="var(--new)">+ 自动接单(PR 6):派活正文</text>
+      <text x="1024" y="300" text-anchor="middle" font-size="11" fill="var(--new)">JSON → 同一 _start_governed</text>
+      <text x="1024" y="320" text-anchor="middle" font-size="11" fill="var(--sub)">start task &lt;uuid&gt; 保留为</text>
+      <text x="1024" y="335" text-anchor="middle" font-size="11" fill="var(--sub)">人工触发口</text>
+
+      <!-- GitHub -->
+      <rect x="730" y="410" width="400" height="90" rx="10" fill="var(--panel)" stroke="var(--line)"/>
+      <text x="930" y="436" text-anchor="middle" font-size="13.5" font-weight="600" fill="var(--ink)">GitHub 三仓(catbobyman/repomesh-e2e-*)</text>
+      <text x="930" y="458" text-anchor="middle" font-size="11.5" fill="var(--sub)">pricing-core(上游契约)→ billing / checkout</text>
+      <text x="930" y="480" text-anchor="middle" font-size="11.5" fill="var(--sub)">终局产物:三个可追溯的真实 Draft PR,每仓恰好一个</text>
+
+      <!-- 连线 -->
+      <line x1="220" y1="100" x2="290" y2="82" stroke="var(--sub)" stroke-width="1.3" marker-end="url(#arr)"/>
+      <line x1="290" y1="276" x2="220" y2="141" stroke="var(--new)" stroke-width="1.6" marker-end="url(#arrN)"/>
+      <line x1="290" y1="338" x2="220" y2="183" stroke="var(--new)" stroke-width="1.6" marker-end="url(#arrN)"/>
+      <line x1="650" y1="276" x2="730" y2="120" stroke="var(--new)" stroke-width="1.6" marker-end="url(#arrN)"/>
+      <text x="690" y="185" text-anchor="middle" font-size="10.5" fill="var(--new)">/sync 摄取</text>
+      <line x1="650" y1="82" x2="730" y2="70" stroke="var(--sub)" stroke-width="1.3" marker-end="url(#arr)"/>
+      <text x="690" y="62" text-anchor="middle" font-size="10.5" fill="var(--sub)">派活通知</text>
+      <line x1="820" y1="150" x2="880" y2="180" stroke="var(--sub)" stroke-width="1.3" marker-end="url(#arr)"/>
+      <text x="890" y="168" font-size="10.5" fill="var(--sub)">@提及/通知</text>
+      <line x1="748" y1="281" x2="650" y2="145" stroke="var(--new)" stroke-width="1.6" marker-end="url(#arrN)"/>
+      <text x="672" y="230" text-anchor="middle" font-size="10.5" fill="var(--new)">HTTP 决策面</text>
+      <line x1="936" y1="330" x2="650" y2="394" stroke="var(--sub)" stroke-width="1.3" marker-end="url(#arr)"/>
+      <text x="800" y="378" text-anchor="middle" font-size="10.5" fill="var(--sub)">lease / events(worker-scoped)</text>
+      <line x1="650" y1="450" x2="730" y2="450" stroke="var(--warn)" stroke-width="1.6" marker-end="url(#arr)"/>
+      <text x="690" y="442" text-anchor="middle" font-size="10.5" fill="var(--warn)">推分支/PR</text>
+    </svg>
+  </div>
+  <div class="legend">
+    <span><span class="sw" style="background:var(--new-soft);border:1.5px solid var(--new)"></span>新建(PR 5.5–10)</span>
+    <span><span class="sw" style="background:var(--warn-soft);border:1px solid var(--warn)"></span>有码无活体 / 待收窄(轨 E·Q)</span>
+    <span><span class="sw" style="background:var(--muted-soft)"></span>已有,零改动或小改</span>
+  </div>
+  <p class="note">不变式:Matrix 房间 = 唤醒 + 展示;RepoMesh = 唯一真相源。Leader Codex 生成 Spec/DAG/审查决定,服务端负责事实包、clamp 与状态机;房间文本永不直接推进 Task,执行终态只走 Runner events。PR 5.5 先打通 Repository Leader 的 server provision/binding/preflight 与 leader-mode adoption。红线延续:<code>src/repomesh_runner/**</code> 零改动;契约 v1 不动,新字段走 v2。</p>
+</section>
+
+<!-- ══════════════ 3. PR 依赖图 ══════════════ -->
+<section>
+  <h2><span class="no">3</span>施工顺序与依赖(关键路径加粗)</h2>
+  <div class="scroll">
+    <svg viewBox="0 0 1120 300" width="1120" height="300" style="min-width:960px" role="img"
+         aria-label="PR 依赖图:PR5.5→E0a和V1→PR6→PR7→PR8和M7 为功能关键路径;V2 必须同时等待 M7、PR9、PR10、Q、E1、E0b">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" fill="var(--sub)"/>
+        </marker>
+      </defs>
+      <!-- 关键路径连线 -->
+      <line x1="150" y1="80" x2="188" y2="80" stroke="var(--ink)" stroke-width="2.4" marker-end="url(#a2)"/>
+      <line x1="316" y1="80" x2="354" y2="80" stroke="var(--ink)" stroke-width="2.4" marker-end="url(#a2)"/>
+      <line x1="482" y1="80" x2="520" y2="80" stroke="var(--ink)" stroke-width="2.4" marker-end="url(#a2)"/>
+      <line x1="648" y1="80" x2="686" y2="80" stroke="var(--ink)" stroke-width="2.4" marker-end="url(#a2)"/>
+      <line x1="814" y1="80" x2="940" y2="80" stroke="var(--ink)" stroke-width="2.4" marker-end="url(#a2)"/>
+      <!-- 并行汇入 V2 -->
+      <line x1="486" y1="180" x2="948" y2="95" stroke="var(--sub)" stroke-width="1.4" marker-end="url(#a2)"/>
+      <line x1="648" y1="180" x2="950" y2="100" stroke="var(--sub)" stroke-width="1.4" marker-end="url(#a2)"/>
+      <line x1="648" y1="240" x2="958" y2="108" stroke="var(--sub)" stroke-width="1.4" marker-end="url(#a2)"/>
+      <line x1="910" y1="256" x2="1000" y2="120" stroke="var(--sub)" stroke-width="1.4" marker-end="url(#a2)"/>
+
+      <!-- 关键路径节点 -->
+      <g>
+        <rect x="30" y="48" width="120" height="64" rx="9" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="1.5"/>
+        <text x="90" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="var(--ok)">PR 5.5 契约</text>
+        <text x="90" y="94" text-anchor="middle" font-size="10.5" fill="var(--sub)">External Leader · 3–5d</text>
+
+        <rect x="196" y="48" width="120" height="64" rx="9" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="1.5"/>
+        <text x="256" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="var(--ok)">E0a → V1</text>
+        <text x="256" y="94" text-anchor="middle" font-size="10.5" fill="var(--sub)">单 Worker E2E · delivery 关闭</text>
+
+        <rect x="362" y="48" width="120" height="64" rx="9" fill="var(--risk-soft)" stroke="var(--risk)" stroke-width="1.5"/>
+        <text x="422" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="var(--risk)">PR 6 自动接单</text>
+        <text x="422" y="94" text-anchor="middle" font-size="10.5" fill="var(--sub)">FAIL 红线 · 1–2d</text>
+
+        <rect x="528" y="48" width="120" height="64" rx="9" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.5"/>
+        <text x="588" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="var(--new)">PR 7 LeaderDecision</text>
+        <text x="588" y="94" text-anchor="middle" font-size="10.5" fill="var(--sub)">服务端 · 7–10d</text>
+
+        <rect x="694" y="48" width="120" height="64" rx="9" fill="var(--new-soft)" stroke="var(--new)" stroke-width="1.5"/>
+        <text x="754" y="74" text-anchor="middle" font-size="13" font-weight="700" fill="var(--new)">PR 8 + M7</text>
+        <text x="754" y="94" text-anchor="middle" font-size="10.5" fill="var(--sub)">Leader Bridge + 双实例 smoke</text>
+
+        <rect x="948" y="42" width="140" height="76" rx="9" fill="var(--ok-soft)" stroke="var(--ok)" stroke-width="2"/>
+        <text x="1018" y="70" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ok)">V2 终局验收</text>
+        <text x="1018" y="90" text-anchor="middle" font-size="10.5" fill="var(--sub)">六实例 · 三仓 · 3 Draft PR</text>
+        <text x="1018" y="106" text-anchor="middle" font-size="10.5" fill="var(--sub)">六类 join 全齐 · 3–5d+</text>
+      </g>
+
+      <!-- 并行节点 -->
+      <g>
+        <rect x="366" y="152" width="120" height="56" rx="9" fill="var(--panel)" stroke="var(--line)"/>
+        <text x="426" y="176" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink)">轨 Q(随时)</text>
+        <text x="426" y="194" text-anchor="middle" font-size="10" fill="var(--sub)">Q5/追溯/mock 证明 · 2–3d</text>
+
+        <rect x="528" y="152" width="120" height="56" rx="9" fill="var(--new-soft)" stroke="var(--new)"/>
+        <text x="588" y="176" text-anchor="middle" font-size="12" font-weight="600" fill="var(--new)">PR 9 消息摄取</text>
+        <text x="588" y="194" text-anchor="middle" font-size="10" fill="var(--sub)">4–6d(并行)</text>
+
+        <rect x="528" y="212" width="120" height="56" rx="9" fill="var(--new-soft)" stroke="var(--new)"/>
+        <text x="588" y="236" text-anchor="middle" font-size="12" font-weight="600" fill="var(--new)">PR 10 前端 External</text>
+        <text x="588" y="254" text-anchor="middle" font-size="10" fill="var(--sub)">2–4d(并行)</text>
+
+        <rect x="790" y="228" width="120" height="56" rx="9" fill="var(--ok-soft)" stroke="var(--ok)"/>
+        <text x="850" y="252" text-anchor="middle" font-size="12" font-weight="600" fill="var(--ok)">E1 + E0b</text>
+        <text x="850" y="270" text-anchor="middle" font-size="10" fill="var(--sub)">六实例 + 隔离 GitHub cutover</text>
+      </g>
+      <text x="30" y="286" font-size="11.5" fill="var(--sub)">M4.5=PR5.5 · M5=E0a+V1 · M6=PR6+Q · M7=PR7+PR8+双实例 smoke · M8=PR9+PR10 · M9=六类 join+V2</text>
+    </svg>
+  </div>
+</section>
+
+<!-- ══════════════ 4. 三个能力切片的深度论证 ══════════════ -->
+<section>
+  <h2><span class="no">4</span>三个既有模块能力切片:interface 有多小,implementation 藏多少</h2>
+  <table>
+    <thead><tr><th style="width:22%">Module(seam 位置)</th><th style="width:33%">外部 interface(caller 要学的全部)</th><th>藏进 implementation 的复杂度</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>LeaderDecision</b><br><span class="pill pr">PR 7</span> agent-actions HTTP(与 <code>start-worker-task</code> 同面同鉴权;不建 MCP,D-1)</td>
+        <td>三个操作:<code>GET assignments/{id}</code> 阶段工作/证据包 · <code>POST …/plan</code> 提交 Spec+DAG+Worker plan · <code>POST …/review</code> approve/rework/escalate</td>
+        <td>leader 产物 provenance · DAG/assignee/path/test clamp · roll-up→review-due · Worker Task/Run/commit/diff/tests 证据包 · rework revision 幂等 · token 派生主体 + role 校验</td>
+      </tr>
+      <tr>
+        <td><b>RoomTimelineIngest</b><br><span class="pill pr">PR 9</span> 既有 inbound poller 的第二 consumer(不开新连接)</td>
+        <td><code>record(command,event_id)</code> + <code>list_room(room,after,limit)</code>;生产 PostgreSQL adapter + 测试 memory adapter</td>
+        <td>origin_server_ts 稳定排序 · reverse identity resolver(映射不到存 raw,D-4)· 复用既有出站 event_id 去重(D-3)· 授权房间白名单 · API 不直查 collaboration schema</td>
+      </tr>
+      <tr>
+        <td><b>ExternalRuntimePresentation</b><br><span class="pill pr">PR 10</span> 非新 seam——修一条被打断的数据流</td>
+        <td><code>RuntimeSnapshot</code> 增两字段;前端一个 display 分支</td>
+        <td>external 时<b>不透传</b> controller phase(Pending 是容器词汇=对 external 说谎)· 「未接入/—」语义保持现状(已合格)</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note"><b>PR 5.5 必须先行</b>:server provision/binding/preflight 与 Bridge 共同理解 role-aware v2,Materialize adoption 正式激活 leader mode。Bridge 侧两处增量不成新 module:<b>自动接单(PR 6)</b>复用同一 <code>_start_governed</code>;<b>Leader 轨(PR 8)</b>消费已冻结的 v2 与 <code>LeaderActionPort</code>(HTTP + memory 双 adapter)。</p>
+</section>
+
+<!-- ══════════════ 5. AC 覆盖矩阵 ══════════════ -->
+<section>
+  <h2><span class="no">5</span>验收条款 → 落点(收口对账单)</h2>
+  <table>
+    <thead><tr><th style="width:40%">条款</th><th>落点</th><th style="width:32%">备注</th></tr></thead>
+    <tbody>
+      <tr><td>AC-01 六个真实 External 身份</td><td><span class="pill pr">PR 5.5A</span> <span class="pill tr">E1</span> <span class="pill vv">V2</span></td><td>先修 Leader binding/preflight,再开通/编排/取证</td></tr>
+      <tr><td>AC-02 Leader 角色边界与真实决策</td><td><span class="pill pr">PR 5.5B</span> <span class="pill pr">PR 7</span> <span class="pill pr">PR 8</span></td><td>mode 激活 + Leader 产出 Spec/DAG + evidence review</td></tr>
+      <tr><td>AC-03 自动接单 <span class="pill fail">FAIL 红线</span></td><td><span class="pill pr">PR 6</span></td><td>用逐字派活正文做 fixture 防措辞漂移</td></tr>
+      <tr><td>AC-04 受治理执行</td><td><span class="pill vv">V1</span> <span class="pill tr">Q2</span></td><td>已实现;转活体 + 关房间伪汇报口子</td></tr>
+      <tr><td>AC-05 房间成员与通信层级</td><td><span class="pill pr">PR 5.5A</span> <span class="pill pr">PR 8</span> <span class="pill vv">V2</span></td><td>role-aware rooms + Bridge;层级由 _route + allowlist 保证</td></tr>
+      <tr><td>AC-06 前端匹配</td><td><span class="pill pr">PR 9</span> <span class="pill pr">PR 10</span></td><td>其余子项现状已合格</td></tr>
+      <tr><td>AC-07 异常最小底线</td><td><span class="pill vv">V2</span></td><td>机制已有,触发则取证</td></tr>
+      <tr><td>§7 三个可追溯 Draft PR</td><td><span class="pill tr">E0b</span> <span class="pill tr">Q1</span> <span class="pill vv">V2</span></td><td>隔离环境短时激活 + 完整 traceability + 实走后关闭</td></tr>
+      <tr><td>FAIL:fake/mock 代替真 Codex</td><td><span class="pill tr">Q3</span> <span class="pill vv">V2</span></td><td>证明 mock 工厂在验收路径零触达</td></tr>
+      <tr><td>FAIL:脚本/curl 代业务步骤</td><td><span class="pill vv">V2</span></td><td>操作纪律:脚本只起进程 + 收只读证据</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 6. 裁决 ══════════════ -->
+<section>
+  <h2><span class="no">6</span>十二条裁决(评审通过即冻结)</h2>
+  <table>
+    <thead><tr><th style="width:8%">#</th><th>裁决</th></tr></thead>
+    <tbody>
+      <tr><td>D-1</td><td>Leader 决策面走 HTTP agent-actions,<b>不建 MCP server</b>——六成员皆 external,一个 adapter 的 seam 是假 seam</td></tr>
+      <tr><td>D-2</td><td>拆解模式 per-team <code>server|leader</code>,默认 server;Materialize adoption external leader 时正式持久化 leader mode,并在前端只读展示</td></tr>
+      <tr><td>D-3</td><td>复用现有出站 Matrix event_id,<code>room_stream</code> 按 event_id 去重;不重复改发送契约</td></tr>
+      <tr><td>D-4</td><td>身份映射不到的消息如实存 raw matrix_user_id——如实的未知不是错误身份</td></tr>
+      <tr><td>D-5</td><td>enrollment/binding 升 <b>v2 新文件</b>增 role;server provision/preflight 与 Bridge 同步理解 v2;v1 原文不动</td></tr>
+      <tr><td>D-6</td><td><code>REPOMESH_RUNNER_WORKER_TOKENS</code> 语义推广为 external 成员 token map,变量名不改(历史名+文档注记)</td></tr>
+      <tr><td>D-7</td><td><b>Q5 收窄</b>:带任务包的 WORKER 任务,房间 agent-report 一律 IGNORED(落审计)——coding 真相只走 Runner events</td></tr>
+      <tr><td>D-8</td><td>Leader 协调会话只给纯文本工作包,不给 repo workspace——AC-02 纵深防御,最小知情面</td></tr>
+      <tr><td>D-9</td><td>owning application 组装 <code>DeliveryTraceability</code>(issue/changeSet/plan/repo/task/run/worker/commit),SCM adapter 不跨模块反查</td></tr>
+      <tr><td>D-10</td><td>共享 Codex 登录 = 开通脚本复制 auth.json 进六个 codex-home,不改产品代码</td></tr>
+      <tr><td>D-11</td><td><code>ExternalWorker</code> 泛化为 <code>ExternalMember</code>:只允许 Worker/Repository Leader,拒绝 Organization Leader;房间按角色生成</td></tr>
+      <tr><td>D-12</td><td>GitHub delivery 仅在隔离 V2 环境对白名单三仓短时开启;V1 不开,V2 后关闭</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ══════════════ 7. 风险 ══════════════ -->
+<section>
+  <h2><span class="no">7</span>风险与缓解</h2>
+  <div class="grid g4">
+    <div class="card"><h3>R0 Leader preflight 409</h3><ul><li>PR 5.5A 先统一 server/Bridge role 契约;Repository Leader 200、Organization Leader 409 测试钉死</li></ul></div>
+    <div class="card"><h3>R1 拆解质量</h3><ul><li>clamp 全在服务端;Bridge 先 schema 校验再 POST;畸形=拒绝并叙事,不静默修正</li></ul></div>
+    <div class="card"><h3>R2 leader 卡死</h3><ul><li>超时<b>不</b>自动跳过(那是伪造 leader 角色);操作者走既有 redispatch;AC-07 底线兜住</li></ul></div>
+    <div class="card"><h3>R4 六 Codex 并发</h3><ul><li>V2 前六实例空转 soak;批次天然错峰</li></ul></div>
+    <div class="card"><h3>R5 交付误发布</h3><ul><li>E0b 使用隔离环境、三仓白名单、active plan 空集预检;V2 后立即关闭</li></ul></div>
+    <div class="card"><h3>R3 摄取乱序/身份错</h3><ul><li>只收授权房间;event_id 唯一;保存 origin_server_ts;独立 reverse identity resolver</li></ul></div>
+    <div class="card"><h3>R6 v1/v2 契约混淆</h3><ul><li>v2 只加 role;README 写明 v1 继续有效;双版本各自 round-trip 测试</li></ul></div>
+    <div class="card"><h3>R7 他线文件混入</h3><ul><li>提交一律按路径 stage;工作区 M/?? 他线文件不读不动(本线历史教训)</li></ul></div>
+    <div class="card"><h3>R8 adoption 错位</h3><ul><li>Materialize 前六 binding 只读预检;前端同屏核对 role/runtime/mode,避免新建 managed 替身</li></ul></div>
+    <div class="card"><h3>环境坑(沿用)</h3><ul><li><code>MSYS_NO_PATHCONV=1</code>;控制面与 Bridge 同跑 Windows 宿主;按 PID 收尾进程</li></ul></div>
+  </div>
+</section>
+
+<footer>
+  同名 .md 是本文的权威版本(含全部 file:line 证据与 PR 级改动范围表)· 验收口径以
+  room-native-bridge-final-acceptance-standard-20260827.md 为准 · 分支 feat/room-native-agent-bridge
+</footer>
+
+</div>
+</body>
+</html>

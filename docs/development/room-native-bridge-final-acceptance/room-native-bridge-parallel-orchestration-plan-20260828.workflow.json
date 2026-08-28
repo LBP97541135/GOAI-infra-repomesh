@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Room-Native Bridge 终局验收并行编排",
+    "locale": "zh-CN",
+    "output": "room-native-bridge-parallel-orchestration-plan-20260828.html",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "governance", "label": "主脑 · 契约与切换" },
+    { "id": "track_a", "label": "A 线 · External Leader / 服务端" },
+    { "id": "track_b", "label": "B 线 · LeaderDecision / Bridge" },
+    { "id": "live", "label": "集成与唯一活体环境" },
+    { "id": "track_c", "label": "C 线 · Worker / Room / 前端" }
+  ],
+  "phases": [
+    { "id": "baseline", "label": "波次 0 · 基线", "fromCol": 0, "toCol": 0, "variant": "security" },
+    { "id": "parallel_start", "label": "波次 1 · 三线开工", "fromCol": 1, "toCol": 1, "variant": "emphasis" },
+    { "id": "implementation", "label": "波次 2 · 纵向实现", "fromCol": 2, "toCol": 3 },
+    { "id": "integration", "label": "波次 3 · 双 smoke", "fromCol": 4, "toCol": 4, "variant": "emphasis" },
+    { "id": "acceptance", "label": "切换与终局验收", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["wave0", "pr55", "pr7int", "smoke_join", "final_v2"],
+  "nodes": [
+    {
+      "id": "wave0",
+      "lane": "governance",
+      "col": 0,
+      "type": "security",
+      "label": "基线与契约",
+      "sublabel": "tracked · fixture · E0a",
+      "tag": "GO 前硬门"
+    },
+    {
+      "id": "pr55",
+      "lane": "track_a",
+      "col": 1,
+      "type": "backend",
+      "label": "PR 5.5A/B",
+      "sublabel": "External Leader + mode",
+      "tag": "关键路径"
+    },
+    {
+      "id": "pr7core",
+      "lane": "track_b",
+      "col": 1,
+      "type": "backend",
+      "label": "PR 7 核心纵切",
+      "sublabel": "planning GET + adapters",
+      "tag": "对冻结 contract"
+    },
+    {
+      "id": "v1_pr6",
+      "lane": "track_c",
+      "col": 1,
+      "type": "backend",
+      "label": "V1 → PR 6",
+      "sublabel": "Worker live + auto wake",
+      "tag": "环境队列 1–2"
+    },
+    {
+      "id": "pr7int",
+      "lane": "track_a",
+      "col": 3,
+      "type": "backend",
+      "label": "PR 7 状态机",
+      "sublabel": "plan · review · rework",
+      "tag": "行为切片"
+    },
+    {
+      "id": "pr8fake",
+      "lane": "track_b",
+      "col": 3,
+      "type": "backend",
+      "label": "PR 8 fake 开发",
+      "sublabel": "port · HTTP · session",
+      "tag": "supervisor 等 PR6"
+    },
+    {
+      "id": "c_follow",
+      "lane": "track_c",
+      "col": 3,
+      "type": "frontend",
+      "label": "PR 9/10 + Q",
+      "sublabel": "timeline · UI · Q1/Q3a",
+      "tag": "C 线顺序"
+    },
+    {
+      "id": "smoke_join",
+      "lane": "live",
+      "col": 4,
+      "type": "security",
+      "label": "M8 → M7",
+      "sublabel": "Room/UI → Leader flow",
+      "tag": "唯一活体队列"
+    },
+    {
+      "id": "final_v2",
+      "lane": "live",
+      "col": 5,
+      "type": "external",
+      "label": "E1/E0b → V2",
+      "sublabel": "6 agents · 3 PR · Q3b",
+      "tag": "最终 PASS/FAIL"
+    }
+  ],
+  "edges": [
+    { "from": "wave0", "to": "pr55", "variant": "emphasis", "role": "main" },
+    { "from": "wave0", "to": "pr7core", "role": "branch" },
+    { "from": "wave0", "to": "v1_pr6", "role": "branch" },
+    { "from": "pr55", "to": "pr7int", "variant": "emphasis", "role": "main", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "pr7core", "to": "pr7int", "role": "branch", "via": [[345, 367], [345, 243]] },
+    { "from": "pr7core", "to": "pr8fake", "role": "branch", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "v1_pr6", "to": "c_follow", "role": "branch" },
+    { "from": "pr7int", "to": "smoke_join", "variant": "emphasis", "role": "main" },
+    { "from": "pr8fake", "to": "smoke_join", "role": "branch" },
+    { "from": "c_follow", "to": "smoke_join", "role": "branch" },
+    { "from": "smoke_join", "to": "final_v2", "variant": "security", "role": "main" }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "WIP 与评审节流",
+      "items": [
+        "双线最多 2 张、三线最多 3 张 IN_PROGRESS",
+        "同时最多 1 张进入主脑 diff 评审与合并",
+        "后续工单等待前一张合入后再领取"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "热点合并顺序",
+      "items": [
+        "supervisor: PR 6 → PR 8",
+        "read model / Teams: PR 5.5B → PR 9 → PR 10",
+        "migration: 预留唯一 revision，合并时重写 down_revision"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "唯一活体队列",
+      "items": [
+        "V1 → PR6 smoke → M8 → M7 → E1 soak → V2",
+        "Q3a 只做静态审计，Q3b 在 V2 取最终证据",
+        "V2 后立即关闭 GitHub delivery"
+      ]
+    }
+  ]
+}
