@@ -109,7 +109,20 @@ W-S1  S-1 派发/宣告拆分 [插单·主脑裁决 08-28] 状态: **已关闭(0
       新记账(不阻塞,缺口 P 同族): run 终态记录里 codex 自述「PATH 无 python 验证被阻断」
       与权威 testResults exit 0 并存——受限子进程 6 键 PATH 与 Runner 验证是两个主体,
       房间转述权威侧,但 agent 反话随同一条记录保留;待 P 立项时一并处理
-W-B2  PR 8         [波次2·B线]  状态: 排队
+W-B2  PR 8 底座     [波次2·B线]  状态: **底座段已验收合入(08-28)**;第二段(supervisor 集成)待开单
+      从停车现场恢复: 快照保全在原分支 worktree-agent-a38e6b03ce68112fc(两 WIP 提交,
+      审计凭据勿动),迁基线 cb58449b 后收成两个逻辑提交 ff 合入:
+      `52577d76`(v2 enrollment/binding 消费 + BINDING_PATH v1→v2 兄弟路由切换——
+      W-A1 记账项就此闭环 + test_member_v2 六 fixture 直接消费)、
+      `64f36e3a`(LeaderActionPort 三方法无重试 + HTTP/memory 双 adapter + 协调会话
+      D-8 零工作区 + cli role 门「leader 拒 --workspace-root」+ leader_lane +
+      test_leader_lane 逐字消费 leader-actions v1 fixtures)。
+      cli.py 与 PR 6 obs 批的 7 行冲突=两边保留,语义合并正确。
+      施工插曲: 子代理死于 API 中断(最后一步验证前),主脑接手完成独立验证与合入;
+      其停车快照之外的新写仅 2 处(HTTP adapter 补 close() 资源释放 + 双关安全测试)。
+      门禁: bridge 分项 484(PR 6 时 390,+94)、contracts 260 零漂移、
+      全量 **2147/23 exit 0**(前基线 2053/23)。四禁区(supervisor.py/服务端/冻结契约/
+      迁移)零触碰已核
 W-C2  PR 9+Q2      [波次2·C线]  状态: 排队
 W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: 排队
 W-E1  E1 脚本       [空闲槽]      状态: 排队(等 W-A1 部署)
