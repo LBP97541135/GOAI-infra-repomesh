@@ -190,6 +190,10 @@ _MAX_TARGET_CHARS = 300
 """How much of a tool's target one log line carries. Bounded because a patch body
 is unbounded and a log that swallowed one would bury the decision beside it."""
 
+_MAX_LOGGED_PATHS = 8
+"""How many in-workspace paths one decision line names. A handful is a diagnosis;
+a list is another way of burying one."""
+
 WorkspacePreparer = Callable[[Path], object]
 """``prepare(path)`` — make the platform's worktree writable by the restricted
 child, reporting whether it worked. Production passes
@@ -342,13 +346,43 @@ class _GovernedApprovalPolicy:
         judged, dropped = self._without_echoed_root(tool_input)
         decision = self._policy.decide(tool_name, judged)
         _logger.info(
-            "permission %s: %s on %s%s",
+            "permission %s: %s in-workspace=%s%s on %s",
             decision.value,
             tool_name,
-            _target_summary(tool_input),
+            # The paths the allowlist is actually about. A denial is almost
+            # always one of these and almost never the prose beside them, and
+            # the prose is what a plain dump of the item spends its budget on:
+            # the first diagnosis of this wrapper's own output ran out of
+            # characters before reaching the path that caused the refusal.
+            self._in_workspace(judged),
             " [workspace-root cwd dropped]" if dropped else "",
+            _target_summary(tool_input),
         )
         return decision
+
+    def _in_workspace(self, tool_input: Mapping[str, object]) -> list[str]:
+        """Every absolute leaf under the worktree, workspace-relative and bounded.
+
+        The same reading ``AllowlistPermissionPolicy`` does — absolute paths
+        inside the workspace are the only candidates it judges — reported in the
+        form the allowlist is written in, so a log line and a grant can be read
+        against each other.
+        """
+
+        if self._workspace_root is None:
+            return []
+        found: list[str] = []
+        for leaf in _string_leaves(tool_input):
+            normalized = _normalized(Path(leaf)) if leaf else ""
+            if not normalized.startswith(self._workspace_root):
+                continue
+            relative = normalized[len(self._workspace_root) :].lstrip("\\/")
+            entry = (relative or ".").replace("\\", "/")
+            if entry not in found:
+                found.append(entry)
+            if len(found) >= _MAX_LOGGED_PATHS:
+                break
+        return found
 
     def _without_echoed_root(
         self, tool_input: Mapping[str, object]
