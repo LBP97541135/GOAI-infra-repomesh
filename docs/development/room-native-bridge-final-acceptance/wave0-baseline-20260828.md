@@ -142,10 +142,25 @@ W-B2b supervisor 集成 [波次2·B线] 状态: **已验收合入(08-28)——PR
       ⑤M7 必须一 leader+一能真执行的 worker(review_due 要 worker 全终态);
       ⑥真 codex 不肯只吐 JSON 时走拒绝草稿路径,房间一条 note、人再 @ 重试(设计预期)。
       残余记账: 900s 超时覆盖整轮;RepoMeshGovernedTaskAdapter 至今无组合根关闭(既有小缺口)
-W-C2  PR 9+Q2      [波次2·C线]  状态: 施工中(08-28,opus 子代理,分支 feat/w-c2-room-timeline,
-      baseline 6544872e)。⚠ 迁移 0039 down_revision=0040(链尾已变,旧交接「down 写 0037」作废);
-      Q2 经 task_orchestration.contracts 窄 reader;D-3 出站优先去重/D-4 如实未知/白名单三裁决。
-      与 W-B2b 文件面零交集(Bridge vs 服务端),container.py 本轮只有 W-C2 动
+W-C2  PR 9+Q2      [波次2·C线]  状态: **已验收合入(08-28)**
+      合入 `d83700dc`/`bb0d57f2`/`483e30dc`/`371f582e`/`793b0bf9`(cherry-pick 自
+      feat/w-c2-room-timeline 五提交,零冲突)。迁移 0039 down=0040,合并头上一次性 PG
+      实证 upgrade head 单链 + PG store 测试 3 passed(开关=REPOMESH_TEST_POSTGRES_URL)。
+      门禁: 分项 898、全量 **2209/26 exit 0**(前 2178/23;+3 skip 即无库时的 PG 时间线测试)。
+      六项已裁取舍: 幂等键单一来源(event_id 即键,不设第二形参)/回放不重解析身份
+      (如实未知不得事后改口)/D-7 检查前置于身份校验(路对谁都关,且防伪造上报 raise
+      致整批无限重试)/审计复用 platform.audit_events+processed_matrix_events 去重
+      (审计行记 raw matrix id,未经验证的自称不得记为行为人)/origin_server_ts 必填
+      非法丢弃/自删无调用者的组合根 recorder。
+      残余记账: ①room_stream 单房间录制侧 1000 条隐性截断(真解=跨源游标合并,未做);
+      ②控制面不可达时 timeline 停摆刷错(与 verifier 依赖形态一致,刻意);
+      ③前端 CollaborationMessageView.sender_agent_id TS 类型应收窄 string|null→**归 W-C3**;
+      ④出站 direction 硬编码 leader_to_worker(既有,未动)。
+      M8 活体预检清单(子代理产出,主脑确认): ①先 alembic upgrade head(0039 未应用则
+      ingest 全 500);②**RepoMesh 服务端 Matrix 账号必须已 join 目标房间**(/sync 只回
+      rooms.join,最可能挡 M8 的一条);③拓扑 room_id/leader_room_id 必须已回写(白名单
+      全来自拓扑);④人类发送者按 raw matrix id 显示是 D-4 设计而非 bug;
+      ⑤REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN 有效否则静默只显出站
 W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: 排队
 W-E1  E1 脚本       [空闲槽]      状态: 排队(等 W-A1 部署)
 ```
