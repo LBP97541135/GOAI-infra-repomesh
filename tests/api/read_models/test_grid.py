@@ -21,6 +21,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.delivery.contracts import ChangeSetStatus
+from repomesh.modules.project.contracts import TeamDecompositionMode
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
 
 from .test_issues import StubTopology, _snapshot, _topology
@@ -228,6 +229,51 @@ async def test_team_list_keeps_formation_status_and_live_phase_apart() -> None:
     assert item["leader"]["role"] == "repository_leader"
     assert [worker["role"] for worker in item["workers"]] == ["worker"]
     assert item["repository_name"] == "repomesh-e2e-api"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [(TeamDecompositionMode.SERVER, "server"), (TeamDecompositionMode.LEADER, "leader")],
+)
+async def test_team_list_reports_who_decomposes_without_asking_the_controller(
+    mode: TeamDecompositionMode, expected: str
+) -> None:
+    """The adoption result is a third persisted fact, beside formation status.
+
+    Deliberately asserted with the runtime probe answering nothing: an operator
+    confirming that materialize really adopted an external Repository Leader
+    (adjudication D-2) must get a truthful answer from a row, not from a
+    controller that is offline as often as not. The default is ``server``,
+    which is what every team in an installation that has adopted nobody says.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    topology_view = _topology(project_id, repository_id)
+    topology_view = replace(
+        topology_view,
+        repository_teams=(
+            replace(topology_view.repository_teams[0], decomposition_mode=mode),
+        ),
+    )
+    service = _service(
+        StubPlans(_plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        topology=StubTopology({project_id: topology_view}),
+        runtime=StubRuntime({}),
+    )
+
+    payload = await service.list_teams(with_runtime=False)
+
+    item = payload["teams"][0]
+    assert item["decomposition_mode"] == expected
+    # The role fact an operator checks beside it, on the same row.
+    assert item["leader"]["role"] == "repository_leader"
+    assert item["runtime"] is None
 
 
 @pytest.mark.asyncio

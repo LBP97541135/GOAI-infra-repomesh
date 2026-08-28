@@ -1512,6 +1512,14 @@ class DeliveryReadModelService:
                             else None
                         ),
                         "runtime_status": team.runtime_status.value,
+                        # Who decomposes this team's tasks (adjudication D-2).
+                        # A persisted fact like ``runtime_status`` beside it,
+                        # and a third one again from the controller's live
+                        # ``runtime`` block below: an operator confirming that
+                        # an external Repository Leader was really adopted is
+                        # reading a row, not a probe, so it stays truthful with
+                        # the controller unreachable.
+                        "decomposition_mode": team.decomposition_mode.value,
                         "team_room_id": team.room_id,
                         "leader_room_id": team.leader_room_id,
                         "leader": await self._member(team.leader_agent_id, "repository_leader"),
