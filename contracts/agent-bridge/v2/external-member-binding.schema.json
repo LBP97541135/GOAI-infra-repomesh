@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agent-bridge/v2/external-member-binding.schema.json",
+  "title": "RepoMesh External Member Binding v2",
+  "description": "Versioned response RepoMesh preflight returns to a Bridge instance during startup, after local schema/profile/credential-ref validation and before Matrix sync or any CLI process is spawned. v2 is v1 plus exactly one new required field, `role`, confirmed from RepoMesh's own agent directory rather than echoed back from the enrollment document: an enrollment/binding role mismatch is a preflight failure, not a value the Bridge may resolve locally. It binds the RepoMesh principal id to the AgentTeams resource name, the Matrix user id, and the authoritative role-aware allowed room ids, and confirms containerManaged: false plus the organization/team. Contains no secrets and no Go Controller addresses; the Bridge talks only to RepoMesh, never to the AgentTeams Go Controller directly.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "role",
+    "organizationId",
+    "teamName",
+    "workerAgentId",
+    "workerName",
+    "matrixUserId",
+    "allowedRoomIds",
+    "containerManaged"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.agent-bridge.binding.v2"},
+    "role": {
+      "type": "string",
+      "enum": ["worker", "repository_leader"],
+      "description": "RepoMesh role on file for this member, as confirmed by RepoMesh's own agent directory. Must equal the enrollment's role; a mismatch is a preflight failure. organization_leader is not representable and is rejected at provision time."
+    },
+    "organizationId": {"type": "string", "format": "uuid"},
+    "teamName": {"type": "string", "minLength": 1, "maxLength": 100},
+    "workerAgentId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "RepoMesh AgentPrincipal id RepoMesh has on file for this member. Historical field name kept from v1. Must equal the enrollment's workerAgentId; a mismatch is a preflight failure, not a value the Bridge may override."
+    },
+    "workerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "AgentTeams Worker resource name, as confirmed by RepoMesh's own AgentTeams projection, not merely echoed back from the enrollment document. Historical field name kept from v1."
+    },
+    "matrixUserId": {
+      "type": "string",
+      "pattern": "^@[^:]+:.+$",
+      "maxLength": 255,
+      "description": "Matrix user id RepoMesh has on file for this member identity."
+    },
+    "allowedRoomIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^![^:]+:.+$", "maxLength": 255},
+      "description": "Authoritative role-aware room allowlist as known to RepoMesh/AgentTeams team membership: team room plus worker DM for a worker, team room plus leader DM for a repository_leader. The Bridge must use the intersection of this list and its enrollment allowedRoomIds; RepoMesh is the source of truth for room ownership, not the enrollment document."
+    },
+    "containerManaged": {
+      "const": false,
+      "description": "Confirms the member is provisioned as an external member. A preflight response for a containerManaged: true resource is a validation failure, not a valid binding; this field is always false when the response is well-formed."
+    }
+  }
+}

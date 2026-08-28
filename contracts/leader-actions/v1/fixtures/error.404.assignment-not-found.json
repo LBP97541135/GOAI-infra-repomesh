@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "assignment_not_found",
+    "message": "no leader assignment exists for this task id"
+  }
+}

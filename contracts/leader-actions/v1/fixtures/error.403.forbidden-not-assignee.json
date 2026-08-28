@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "forbidden_not_assignee",
+    "message": "the authenticated principal is not the assignee of this leader task"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "repomesh.leader-actions.review-receipt.v1",
+  "leaderTaskId": "00000000-0000-0000-0000-0000000000a1",
+  "verdict": "approve",
+  "reviewRevision": 1,
+  "leaderTaskStatus": "succeeded",
+  "reworkTaskIds": []
+}

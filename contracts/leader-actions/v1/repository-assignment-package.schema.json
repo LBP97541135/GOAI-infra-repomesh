@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/leader-actions/v1/repository-assignment-package.schema.json",
+  "title": "RepoMesh Repository Assignment Package v1",
+  "description": "Response of GET /api/v1/agent-actions/leader/assignments/{taskId}. The server-provided fact package a Repository Leader plans and reviews from. The server supplies facts, the safety envelope, and non-authoritative hints; it never authors the leader's Engineering Spec, DAG, or worker tasks. Phase invariants (enforced by the producer, pinned by contract tests): reviewEvidence is null while phase is planning or executing, and non-null when phase is review_due or closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "leaderTaskId",
+    "phase",
+    "organizationId",
+    "projectId",
+    "repositoryId",
+    "repositoryTask",
+    "workerRoster",
+    "safetyEnvelope",
+    "advisoryContext",
+    "reviewEvidence"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.leader-actions.assignment-package.v1"},
+    "leaderTaskId": {"type": "string", "format": "uuid"},
+    "phase": {
+      "type": "string",
+      "enum": ["planning", "executing", "review_due", "closed"],
+      "description": "planning: no plan accepted yet, POST /plan is open. executing: plan accepted, worker tasks in flight. review_due: all worker tasks terminal, POST /review is open. closed: leader task reached a terminal status."
+    },
+    "organizationId": {"type": "string", "format": "uuid"},
+    "projectId": {"type": "string", "format": "uuid"},
+    "repositoryId": {"type": "string", "format": "uuid"},
+    "repositoryTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "instruction", "acceptance"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "instruction": {"type": "string", "minLength": 1},
+        "acceptance": {"type": "string"}
+      },
+      "description": "The repository-level task as assigned by the Organization Manager. Facts, not hints."
+    },
+    "workerRoster": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workerAgentId", "workerName", "responsibilityPaths"],
+        "properties": {
+          "workerAgentId": {"type": "string", "format": "uuid"},
+          "workerName": {"type": "string", "minLength": 1, "maxLength": 100},
+          "responsibilityPaths": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      },
+      "description": "The team's workers. Plan assignees must be drawn from this roster; anything else is plan_invalid_assignee."
+    },
+    "safetyEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedPathRoots", "testPaths", "testCommands"],
+      "properties": {
+        "allowedPathRoots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1},
+          "description": "Clamp bound: every allowedPaths entry of every worker task in the plan must fall under one of these roots."
+        },
+        "testPaths": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "testCommands": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "description": "Clamp bound: every worker task's tests must include every command listed here; dropping one is plan_invalid_tests_removed."
+        }
+      },
+      "description": "Server-derived hard bounds the plan is validated against. The envelope constrains the plan; it does not write it."
+    },
+    "advisoryContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authoritative"],
+      "properties": {
+        "authoritative": {
+          "const": false,
+          "description": "Always false. Everything in this object is a hint the leader may ignore; nothing in it is validated against or clamped to."
+        },
+        "discoveryEvidence": {"type": "string"},
+        "dependencyEdges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["upstreamRepositoryId", "downstreamRepositoryId"],
+            "properties": {
+              "upstreamRepositoryId": {"type": "string", "format": "uuid"},
+              "downstreamRepositoryId": {"type": "string", "format": "uuid"}
+            }
+          },
+          "description": "Cross-repository dependency facts from discovery: downstream depends on upstream."
+        },
+        "decompositionHint": {"type": "string"}
+      }
+    },
+    "reviewEvidence": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/reviewEvidence"}],
+      "description": "null until review_due. In review_due/closed: the immutable evidence package the review verdict must be based on."
+    }
+  },
+  "$defs": {
+    "reviewEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewRevision", "workerEvidence"],
+      "properties": {
+        "reviewRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 for the first review round; incremented each time request_rework produces a new round. The revision a review decision is accepted against is part of its idempotent identity."
+        },
+        "workerEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/workerEvidence"}
+        }
+      }
+    },
+    "workerEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "workerTaskId",
+        "workerAgentId",
+        "status",
+        "runId",
+        "commitSha",
+        "changedFiles",
+        "testResults"
+      ],
+      "properties": {
+        "workerTaskId": {"type": "string", "format": "uuid"},
+        "workerAgentId": {"type": "string", "format": "uuid"},
+        "status": {
+          "type": "string",
+          "enum": ["succeeded", "failed", "blocked", "cancelled", "superseded"],
+          "description": "Terminal-or-resting statuses only; review_due fires when no worker task is still assigned/in_progress."
+        },
+        "runId": {
+          "oneOf": [{"type": "null"}, {"type": "string", "format": "uuid"}],
+          "description": "null when the task never produced a run."
+        },
+        "commitSha": {
+          "oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}],
+          "description": "null when the run produced no commit."
+        },
+        "changedFiles": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "diffStat": {"type": "string"},
+        "testResults": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "exitCode"],
+            "properties": {
+              "command": {"type": "string", "minLength": 1},
+              "exitCode": {"type": "integer"}
+            }
+          }
+        },
+        "summary": {"type": "string"}
+      }
+    }
+  }
+}

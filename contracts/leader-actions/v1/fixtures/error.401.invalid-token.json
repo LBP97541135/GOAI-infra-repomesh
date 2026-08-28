@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "invalid_token",
+    "message": "invalid agent action token"
+  }
+}

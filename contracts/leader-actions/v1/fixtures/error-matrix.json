@@ -1,0 +1,16 @@
+{
+  "401": ["invalid_token"],
+  "403": ["forbidden_not_assignee", "forbidden_role"],
+  "404": ["assignment_not_found"],
+  "409": [
+    "phase_conflict",
+    "decomposition_mode_conflict",
+    "plan_invalid_dag_cycle",
+    "plan_invalid_dag_coverage",
+    "plan_invalid_assignee",
+    "plan_invalid_allowed_paths",
+    "plan_invalid_tests_removed",
+    "plan_invalid_provenance",
+    "review_invalid_findings"
+  ]
+}

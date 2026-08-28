@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "repomesh.leader-actions.plan-decision.v1",
+  "engineeringSpec": {
+    "summary": "A plan that assigns work to an agent outside the team roster.",
+    "markdown": "# Invalid: foreign assignee\nSchema-valid, but the assignee is not in the assignment package's workerRoster."
+  },
+  "taskDag": {
+    "nodes": [
+      {"nodeId": "contract"}
+    ],
+    "edges": []
+  },
+  "workerTasks": [
+    {
+      "nodeId": "contract",
+      "assigneeWorkerAgentId": "00000000-0000-0000-0000-000000000099",
+      "title": "Extend the quote contract with currency and rounding rules",
+      "instruction": "Add a currency field to the Quote contract.",
+      "allowedPaths": ["src/pricing_core/contracts/", "tests/"],
+      "tests": ["python scripts/run_tests.py"]
+    }
+  ],
+  "provenance": {
+    "source": "leader-codex-session",
+    "sessionThreadId": "thread-0192f3a1-planning",
+    "turnId": "turn-0006"
+  }
+}

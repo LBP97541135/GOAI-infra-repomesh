@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "repomesh.agent-bridge.binding.v2",
+  "role": "repository_leader",
+  "organizationId": "00000000-0000-0000-0000-000000000001",
+  "teamName": "pricing-repo-team",
+  "workerAgentId": "00000000-0000-0000-0000-000000000003",
+  "workerName": "pricing-codex-leader",
+  "matrixUserId": "@pricing-codex-leader:matrix.example.org",
+  "allowedRoomIds": [
+    "!team-pricing:matrix.example.org",
+    "!dm-pricing-leader:matrix.example.org"
+  ],
+  "containerManaged": false
+}
