@@ -73,7 +73,18 @@ W-C1  V1→PR6       [波次1·C线]  V1 段 **PASS**(08-28,run 2c00225e:三处�
       回退 shell 不阻断;C-9 候选=Bridge 词表翻译追加该 method 名,路径钳制由叶子行走保留);
       ②runner 通用策略把 cwd 当写目标(runner 线真缺陷,Bridge 已 C-7 绕过);③obs-1 坏 config
       锁死启动序/obs-2 config.toml 整写抹 codex 自写键/obs-3 房间指路日志无日志 → PR 6 候选;
-      ④D-2 实测已非阻断(相对路径 shell 读 context 被 allow)。PR 6 段接续开工
+      ④D-2 实测已非阻断(相对路径 shell 读 context 被 allow)。
+      **PR 6 段已验收(08-28,合入 91c92080+314db5cf):AC-03 四条全过**(run 215216df:
+      无人输 UUID、标准通知触发、平台复核双向实拍、真相走事件通道;三处对账 A/B/C 全 PASS、
+      8 审批全评估;state 证据证明不双跑)。附属批 C-9/obs-1/obs-2/obs-3 全落。
+      **活体新揪缺陷 S-1(服务端,未修待裁)**:平台先投派活通知后写执行许可
+      (application.py:728 assign 先于 :746 _ensure_specification),Bridge 在线时自动接单
+      必落窗口内 → SpecificationNotFound 拒绝且按设计不重试,该派活即丢;两轮独立复现,
+      两 task 停 blocked 而 spec 事后均 frozen。本轮 AC-03 经真实运维场景(Bridge 重启期间
+      派活、cursor 续读)取证;**稳态路径(Bridge 在线)在 S-1 修复前 FAIL**。
+      修法方向:拆开「派发」与「宣告」(spec 以 task 为键,非简单换序)。
+      另两条小观察:夹具无 .gitignore 时 __pycache__ 入 commit(门禁行为正确);
+      materialize 幂等重放不重发房间消息(与 A-10 注释描述层次不同,知情即可)
 W-A2  PR 7 完整集成 [波次2·A线]  状态: 排队
 W-B2  PR 8         [波次2·B线]  状态: 排队
 W-C2  PR 9+Q2      [波次2·C线]  状态: 排队
