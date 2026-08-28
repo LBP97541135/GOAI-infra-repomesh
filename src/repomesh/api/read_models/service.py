@@ -13,7 +13,10 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import AgentRole
-from repomesh.modules.collaboration.contracts import CollaborationMessageView
+from repomesh.modules.collaboration.contracts import (
+    CollaborationMessageView,
+    RoomTimelineEntryView,
+)
 from repomesh.modules.delivery.contracts import (
     MERGE_GATE_GOVERNANCE_MISSING_REASON,
     ChangeSetView,
@@ -59,6 +62,7 @@ from .sources import (
     PlanSnapshotData,
     PlanSnapshotSource,
     RepositorySource,
+    RoomTimelineSource,
     RunnerEventSource,
     RuntimeProbe,
     RuntimeSnapshot,
@@ -179,6 +183,7 @@ class DeliveryReadModelService:
         runner_events: RunnerEventSource,
         messages: MessageSource,
         observations: ObservationSource,
+        room_timeline: RoomTimelineSource | None = None,
         runtime: RuntimeProbe | None = None,
         discovery_tasks: DiscoveryTaskProbe | None = None,
         probe_timeout: float | None = None,
@@ -197,6 +202,11 @@ class DeliveryReadModelService:
         self._runner_events = runner_events
         self._messages = messages
         self._observations = observations
+        # None where no room-timeline store is composed. The stream then shows
+        # RepoMesh's outbound messages and nothing else — which is what it
+        # showed before the ingest lane existed, and an honest "we recorded
+        # nothing" rather than a claim that the rooms were silent.
+        self._room_timeline = room_timeline
         # None when AgentTeams is not configured: the roster still answers, with
         # runtime null rather than a fabricated "unreachable".
         self._runtime = runtime
@@ -972,6 +982,56 @@ class DeliveryReadModelService:
             "direction": "leader_to_worker",
         }
 
+    async def _timeline_message_item(self, entry: RoomTimelineEntryView) -> dict:
+        """A message the room itself carried, projected as a chat bubble.
+
+        Shaped like ``_message_item`` because it renders through the same
+        component — the frontend's one branch is ``message !== null`` — but
+        built here rather than there because almost every business field of an
+        outbound message is a fact this one does not have. A recorded room
+        message has no kind, no subject, no recipient, no correlation and no
+        task: it is a person or an external agent typing. Those come out null
+        rather than filled with plausible defaults, because a defaulted
+        ``kind`` would render a chip asserting something nobody said.
+
+        ``sender_name`` is the exception that must never be null. It is the
+        resolved principal's name when the ingest could map the Matrix user
+        onto one, and otherwise the raw Matrix id (adjudication D-4) — the
+        honest unknown, rendered as itself. It is also the only field the
+        bubble falls back *from*: with a name present the frontend never
+        dereferences ``sender_agent_id``, which is null for exactly these
+        unresolved senders.
+        """
+
+        return {
+            # The Matrix event id is this message's whole identity; there is no
+            # ``collaboration.messages`` row behind it to borrow a UUID from.
+            "id": entry.event_id,
+            "kind": None,
+            "subject": None,
+            "body": entry.body,
+            "sender_agent_id": entry.sender_agent_id,
+            "sender_name": (
+                await self._agent_name(entry.sender_agent_id) or entry.sender_matrix_user_id
+                if entry.sender_agent_id is not None
+                else entry.sender_matrix_user_id
+            ),
+            "sender_matrix_user_id": entry.sender_matrix_user_id,
+            "recipient_agent_id": None,
+            "recipient_name": None,
+            "repository_id": entry.repository_id,
+            "task_id": None,
+            "room_id": entry.room_id,
+            # Not "delivered": that column tracks whether *our* send reached
+            # Matrix, and an inbound message has no such lifecycle. Reusing the
+            # word would assert a delivery nobody performed.
+            "status": None,
+            "event_id": entry.event_id,
+            "correlation_id": None,
+            "created_at": entry.occurred_at,
+            "direction": None,
+        }
+
     # ----------------------------------------------------------------- rooms
 
     async def list_rooms(self, issue_id: UUID) -> dict | None:
@@ -1056,12 +1116,22 @@ class DeliveryReadModelService:
     async def room_stream(self, room_id: str, *, offset: int = 0, limit: int = 100) -> dict | None:
         """Contract v0.2 §5.2: one room's real messages plus console projections.
 
-        Only `source == "message"` happened inside the room. Governance
-        decisions project into the owning repository's leaderDM (Q4 ruling A);
-        gate and runner facts project into its teamRoom, because that is where
-        the work they describe was carried out. Every non-message item carries a
-        payload_ref so the frontend can link back to the underlying fact — and
-        so ordering stays stable, as in v0.1 §4.1.
+        Two sources *did* happen inside the room and render as chat bubbles:
+        `source == "message"` (RepoMesh's outbound rows) and `source ==
+        "matrix"` (what the ingest recorded from the room's own timeline).
+        Governance decisions project into the owning repository's leaderDM (Q4
+        ruling A); gate and runner facts project into its teamRoom, because
+        that is where the work they describe was carried out. Every non-message
+        item carries a payload_ref so the frontend can link back to the
+        underlying fact — and so ordering stays stable, as in v0.1 §4.1.
+
+        **Every message RepoMesh sends comes back through the room's own
+        timeline**, so the two bubble sources overlap exactly on RepoMesh's own
+        traffic. They are de-duplicated by Matrix event id and the outbound row
+        wins (adjudication D-3): both describe the same event, but the outbound
+        row knows what the message *was for* — its kind, its task, its
+        recipient — while the timeline copy is only an echo. Dropping the echo
+        rather than the record is what keeps a dispatch from appearing twice.
         """
 
         topology = await self._topology.find_by_room(room_id)
@@ -1080,7 +1150,10 @@ class DeliveryReadModelService:
         is_leader_dm = room_id == team.leader_room_id
 
         items: list[dict] = []
+        outbound_event_ids: set[str] = set()
         for message in await self._messages.for_room(room_id):
+            if message.event_id:
+                outbound_event_ids.add(message.event_id)
             items.append(
                 {
                     "at": message.created_at,
@@ -1093,6 +1166,25 @@ class DeliveryReadModelService:
                     "payload_ref": f"collaboration-message:{message.id}",
                 }
             )
+        if self._room_timeline is not None:
+            for entry in await self._room_timeline.for_room(room_id):
+                if entry.event_id in outbound_event_ids:
+                    continue
+                items.append(
+                    {
+                        "at": entry.occurred_at,
+                        "source": "matrix",
+                        "room_id": room_id,
+                        "message": await self._timeline_message_item(entry),
+                        # The body doubles as the summary: a recorded message
+                        # has no subject to put here, and repeating the body is
+                        # honest where inventing a title would not be.
+                        "text": entry.body,
+                        "repository_id": entry.repository_id,
+                        "task_id": None,
+                        "payload_ref": f"matrix-event:{entry.event_id}",
+                    }
+                )
 
         project_id = topology.project_id
         plans = (await self._plans_by_project()).get(project_id, ())

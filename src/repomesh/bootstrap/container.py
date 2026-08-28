@@ -114,6 +114,18 @@ class BackgroundService(Protocol):
     async def close(self) -> None: ...
 
 
+#: How many recorded room messages one stream read pulls from the timeline.
+#:
+#: The room stream merges every source and *then* pages, so this is a ceiling
+#: on what one room's transcript contributes to that merge, not the page the
+#: console sees. A room with more recorded messages than this shows its oldest
+#: ones; the outbound side has no equivalent ceiling because that table is
+#: written only by this server and stays small. Raising the number is a
+#: one-line change; making the merge itself cursor-based across sources is the
+#: real fix, and is not what a repository team's room volume calls for.
+_ROOM_TIMELINE_PAGE = 1000
+
+
 def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReader:
     """Adapt the topology store to the read port modules depend on."""
 
@@ -1081,6 +1093,22 @@ class ApplicationContainer:
             async def last_assignment_at(self, project_id: UUID):
                 return await message_store.last_assignment_at(project_id)
 
+        class _RoomTimeline:
+            """Read through ``collaboration``'s own read use case (gate #9).
+
+            Not a query against ``collaboration.room_timeline_messages``: the
+            API layer holds a Database handle and could join that table
+            directly, and doing so would make the ordering rule and the
+            whitelist two independent opinions the moment either changed. The
+            use case is one line thick on purpose — the point is which module
+            owns the answer, not how much code stands between.
+            """
+
+            async def for_room(self, room_id: str):
+                return await container.room_timeline_reader().list_room(
+                    room_id, limit=_ROOM_TIMELINE_PAGE
+                )
+
         class _Observations:
             async def for_change_set(self, change_set_id: UUID):
                 return tuple(
@@ -1164,6 +1192,7 @@ class ApplicationContainer:
             runner_events=_RunnerEvents(),
             messages=_Messages(),
             observations=_Observations(),
+            room_timeline=_RoomTimeline(),
             runtime=(
                 _Runtime(self.agent_team_control_plane)
                 if self.agent_team_control_plane is not None
@@ -1788,6 +1817,49 @@ class ApplicationContainer:
             PolicyAuthorizationGateway(),
             self.collaboration_message_store,
             self.agent_team_messenger,
+        )
+
+    @cached_service
+    def room_timeline_store(self):
+        from repomesh.modules.collaboration import PostgresRoomTimelineStore
+
+        return PostgresRoomTimelineStore(self.database)
+
+    @cached_service
+    def room_timeline_reader(self):
+        """The read use case the console's room stream goes through.
+
+        Cached like the other process-level services: it holds a store and no
+        request state, and a fresh one per request would buy nothing.
+        """
+
+        from repomesh.modules.collaboration import ReadRoomTimeline
+
+        return ReadRoomTimeline(self.room_timeline_store())
+
+    @cached_service
+    def room_timeline_recorder(self):
+        """The ingest use case the Matrix poller writes through, or None.
+
+        None without a control plane, for the same reason
+        ``collaboration_gateway`` is None without a messenger: identity
+        resolution has nowhere to ask, and a recorder that attributes every
+        message to nobody is worse than one that was never wired — the first
+        write would freeze "unknown" onto messages whose sender is perfectly
+        knowable.
+        """
+
+        if self.agent_team_control_plane is None:
+            return None
+        from repomesh.integrations.agentteams import AgentTeamsMatrixIdentityResolver
+        from repomesh.modules.collaboration import RecordRoomTimeline
+
+        return RecordRoomTimeline(
+            authorized_room_reader(self.project_topology_store),
+            AgentTeamsMatrixIdentityResolver(
+                self.agent_directory, self.agent_team_control_plane
+            ),
+            self.room_timeline_store(),
         )
 
     @cached_service

@@ -101,6 +101,57 @@ def test_cross_module_imports_target_contracts_only() -> None:
     assert violations == []
 
 
+def test_the_api_layer_reads_collaboration_only_through_its_contracts() -> None:
+    """Gate #9: the room stream is a read model, not a second query planner.
+
+    The API layer holds a Database handle and could join
+    ``collaboration.messages`` or ``collaboration.room_timeline_messages``
+    directly. Doing so would make the ordering rule, the dedupe rule and the
+    ingest whitelist two independent opinions the moment either changed — and
+    the console's would be the one nobody updated.
+
+    Scoped to ``collaboration`` rather than declared over every module: some
+    API modules legitimately mount another module's own API or application
+    surface, and a blanket rule here would either fail on those or be widened
+    until it asserted nothing.
+    """
+
+    api_root = SOURCE_ROOT / "api"
+    violations = [
+        f"{path.relative_to(SOURCE_ROOT)} -> {dependency}"
+        for path in api_root.rglob("*.py")
+        for dependency in imported_modules(path)
+        if dependency.startswith("repomesh.modules.collaboration")
+        and dependency != "repomesh.modules.collaboration.contracts"
+        and not dependency.startswith("repomesh.modules.collaboration.contracts.")
+    ]
+    assert violations == []
+
+
+def test_the_read_model_names_no_collaboration_table() -> None:
+    """The stronger half of the same rule, because an import is not the only
+    way in: a raw ``text("select ... from collaboration.…")`` would pass the
+    import check above while doing exactly what it forbids."""
+
+    # The two table names, plus the SQL shape that would reach any of the
+    # schema's tables. Prose may name ``collaboration.messages`` — the room
+    # stream's docstring does, explaining what it merges — so the marker is the
+    # ``FROM`` that would make it a query rather than a sentence.
+    forbidden = (
+        "room_timeline_messages",
+        "processed_matrix_events",
+        "from collaboration.",
+        "FROM collaboration.",
+    )
+    offenders = [
+        f"{path.relative_to(SOURCE_ROOT)}: {name}"
+        for path in (SOURCE_ROOT / "api").rglob("*.py")
+        for name in forbidden
+        if name in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
 class TopologyReader:
     def __init__(self, topology) -> None:
         self.topology = topology

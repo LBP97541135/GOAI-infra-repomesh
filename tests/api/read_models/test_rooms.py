@@ -1,8 +1,12 @@
 """Contract v0.2 §5: room list, room stream and the per-repository plan sheet.
 
-The load-bearing rule here is §5.2: only `source == "message"` happened inside
-the room. Everything else is a console projection and must be renderable as a
-system entry, so those items carry no `message` payload at all.
+The load-bearing rule here is §5.2, restated for PR 9: two sources *happened
+inside the room* and carry a `message` payload — `message` (RepoMesh's outbound
+rows) and `matrix` (what the ingest recorded from the room's own timeline).
+Everything else is a console projection and must be renderable as a system
+entry, so those items carry no `message` payload at all. The frontend's single
+branch is `message !== null`, so which side of that line an item falls on is
+the whole of whether a reader sees words attributed to a speaker.
 """
 
 from dataclasses import replace
@@ -16,6 +20,7 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationDeliveryStatus,
     CollaborationMessageKind,
     CollaborationMessageView,
+    RoomTimelineEntryView,
 )
 from repomesh.modules.delivery.contracts import (
     ChangeSetStatus,
@@ -35,6 +40,7 @@ from .test_service_stubs import (
     StubMessages,
     StubObservations,
     StubPlans,
+    StubRoomTimeline,
     StubRunnerEvents,
     StubSnapshots,
     StubTasks,
@@ -95,6 +101,29 @@ def _message(
         event_id="$evt",
         correlation_id=uuid4(),
         created_at=at,
+    )
+
+
+def _timeline(
+    *,
+    event_id: str,
+    room_id: str,
+    project_id: UUID,
+    repository_id: UUID,
+    at: datetime,
+    sender_agent_id: UUID | None = None,
+    sender: str = "@bohan:matrix.local",
+    body: str = "定价这块先别动 legacy 目录",
+) -> RoomTimelineEntryView:
+    return RoomTimelineEntryView(
+        event_id=event_id,
+        room_id=room_id,
+        project_id=project_id,
+        repository_id=repository_id,
+        sender_matrix_user_id=sender,
+        sender_agent_id=sender_agent_id,
+        body=body,
+        occurred_at=at,
     )
 
 
@@ -314,6 +343,221 @@ async def test_stream_separates_real_messages_from_console_projections() -> None
                 assert item["payload_ref"]
 
     assert await service.room_stream("!nobody:matrix.local") is None
+
+
+@pytest.mark.asyncio
+async def test_the_room_stream_carries_what_the_room_itself_said() -> None:
+    """PR 9: a person typing in the team room reaches the page as a bubble.
+
+    Two sources now happened *inside* the room — RepoMesh's outbound rows and
+    the recorded timeline — and both must carry a `message` payload, because
+    the frontend's single branch is `message !== null`. A recorded message
+    rendered as a system entry would be a person's words shown as a console
+    projection; the reverse would be worse.
+
+    Ordering is by the room's clock, so a recorded message sorts among the
+    outbound ones rather than after them.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+    worker = _worker(project_id, repository_id, uuid4())
+    topology = StubTopology({project_id: _topology(project_id, repository_id)})
+    team = topology.mapping[project_id].repository_teams[0]
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({}),
+        StubArchives(),
+        messages=StubMessages(
+            _message(
+                project_id=project_id,
+                repository_id=repository_id,
+                room_id=team.room_id,
+                task_id=worker.id,
+                at=T0.replace(hour=10),
+            )
+        ),
+        room_timeline=StubRoomTimeline(
+            _timeline(
+                event_id="$human-said-this",
+                room_id=team.room_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                at=T0.replace(hour=9),
+            )
+        ),
+        topology=topology,
+    )
+
+    stream = await service.room_stream(team.room_id)
+
+    assert [item["source"] for item in stream["items"]] == ["matrix", "message"]
+    recorded = stream["items"][0]
+    assert recorded["at"] == T0.replace(hour=9)
+    assert recorded["message"] is not None
+    assert recorded["message"]["body"] == "定价这块先别动 legacy 目录"
+    assert recorded["repository_id"] == repository_id
+    assert recorded["payload_ref"] == "matrix-event:$human-said-this"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_sender_is_shown_as_itself_not_as_an_agent() -> None:
+    """AC-06 + D-4: the honest unknown, and never a fabricated name.
+
+    `sender_name` is the only field the bubble falls back *from*, so it must
+    never be null for a recorded message — the raw Matrix handle goes there
+    when nothing resolved. `sender_agent_id` stays null, which is the fact
+    that says "we do not know who this is" rather than "this is agent zero".
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    known_agent = uuid4()
+    plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+    topology = StubTopology({project_id: _topology(project_id, repository_id)})
+    team = topology.mapping[project_id].repository_teams[0]
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        room_timeline=StubRoomTimeline(
+            _timeline(
+                event_id="$from-a-stranger",
+                room_id=team.room_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                at=T0,
+                sender="@bohan:matrix.local",
+            ),
+            _timeline(
+                event_id="$from-a-worker",
+                room_id=team.room_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                at=T0.replace(minute=5),
+                sender="@worker-01:matrix.local",
+                sender_agent_id=known_agent,
+            ),
+        ),
+        topology=topology,
+    )
+
+    stranger, agent = (await service.room_stream(team.room_id))["items"]
+
+    assert stranger["message"]["sender_agent_id"] is None
+    assert stranger["message"]["sender_name"] == "@bohan:matrix.local"
+    assert agent["message"]["sender_agent_id"] == known_agent
+    assert agent["message"]["sender_name"] == "worker-01"  # the resolved name wins
+    # Neither carries a business kind, subject, recipient or task: a recorded
+    # message has none of those, and defaulting them would render a chip
+    # asserting something nobody said.
+    for item in (stranger, agent):
+        assert item["message"]["kind"] is None
+        assert item["message"]["subject"] is None
+        assert item["message"]["recipient_agent_id"] is None
+        assert item["message"]["task_id"] is None
+        assert item["message"]["status"] is None
+
+
+@pytest.mark.asyncio
+async def test_repomeshs_own_message_does_not_come_back_as_a_second_bubble() -> None:
+    """D-3: every outbound message echoes through the room's own timeline.
+
+    De-duplicated by Matrix event id, and the outbound row wins — it knows what
+    the message was *for* (kind, task, recipient), while the timeline copy is
+    only an echo. Keeping the echo instead would show every dispatch twice, the
+    second one stripped of its meaning.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+    worker = _worker(project_id, repository_id, uuid4())
+    topology = StubTopology({project_id: _topology(project_id, repository_id)})
+    team = topology.mapping[project_id].repository_teams[0]
+    outbound = _message(
+        project_id=project_id,
+        repository_id=repository_id,
+        room_id=team.room_id,
+        task_id=worker.id,
+        at=T0,
+    )
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({}),
+        StubArchives(),
+        messages=StubMessages(outbound),
+        room_timeline=StubRoomTimeline(
+            # The echo: same event id, recorded a moment later by the poller.
+            _timeline(
+                event_id=outbound.event_id,
+                room_id=team.room_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                at=T0.replace(minute=1),
+                body="任务指派正文",
+            ),
+            _timeline(
+                event_id="$a-reply",
+                room_id=team.room_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                at=T0.replace(minute=2),
+            ),
+        ),
+        topology=topology,
+    )
+
+    stream = await service.room_stream(team.room_id)
+
+    assert [item["source"] for item in stream["items"]] == ["message", "matrix"]
+    assert stream["items"][0]["payload_ref"] == f"collaboration-message:{outbound.id}"
+    # The surviving row is the one with business meaning.
+    assert stream["items"][0]["message"]["kind"] == "task_assignment"
+    assert stream["items"][0]["message"]["task_id"] == worker.id
+    assert stream["items"][1]["payload_ref"] == "matrix-event:$a-reply"
+
+
+@pytest.mark.asyncio
+async def test_without_an_ingest_the_stream_shows_outbound_messages_only() -> None:
+    """No timeline source composed is "we recorded nothing", not "the room was
+    silent" — and it must not be a crash either, because that is the shape a
+    deployment without AgentTeams runs in."""
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.IN_PROGRESS)
+    worker = _worker(project_id, repository_id, uuid4())
+    topology = StubTopology({project_id: _topology(project_id, repository_id)})
+    team = topology.mapping[project_id].repository_teams[0]
+    service = _service(
+        StubPlans(plan),
+        StubSnapshots(),
+        StubTasks(worker),
+        StubChangeSets({}),
+        StubArchives(),
+        messages=StubMessages(
+            _message(
+                project_id=project_id,
+                repository_id=repository_id,
+                room_id=team.room_id,
+                task_id=worker.id,
+                at=T0,
+            )
+        ),
+        topology=topology,
+    )
+
+    stream = await service.room_stream(team.room_id)
+
+    assert [item["source"] for item in stream["items"]] == ["message"]
 
 
 @pytest.mark.asyncio
