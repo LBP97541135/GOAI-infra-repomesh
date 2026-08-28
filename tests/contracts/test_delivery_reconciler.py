@@ -317,10 +317,20 @@ async def test_sweep_opens_the_pull_request_a_failed_publish_left_behind() -> No
     assert command.head_branch == "repomesh/a762abba/9dfa78f2"
     assert command.base_branch == "main"
     assert command.expected_head_sha == "a" * 40
-    # Honest minimal body: only facts, no plan narrative it could not verify.
-    assert str(change_set_id) in command.body
-    assert str(repository_id) in command.body
-    assert "a" * 40 in command.body
+    # Honest minimal body: the six ids a ChangeSet actually persists, under the
+    # same labels the finalizer uses, and nothing it could not verify. Plan,
+    # run and worker are unreachable from here (D-9 forbids going to look), so
+    # they are absent rather than guessed.
+    change_set = await service.get(change_set_id)
+    assert f"- issue: `{change_set.project_id}`" in command.body
+    assert f"- change_set: `{change_set_id}`" in command.body
+    assert f"- repository: `{repository_id}`" in command.body
+    assert f"- task: `{change_set.repositories[0].task_id}`" in command.body
+    assert "- branch: `repomesh/a762abba/9dfa78f2`" in command.body
+    assert f"- commit: `{'a' * 40}`" in command.body
+    assert "- plan:" not in command.body
+    assert "- run:" not in command.body
+    assert "- worker_agent:" not in command.body
     assert "completed by reconciliation" in command.body.lower()
 
 

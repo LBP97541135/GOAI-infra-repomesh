@@ -8,14 +8,17 @@ from repomesh.modules.delivery import DeliveryNotFound, DeliveryService, SCMComm
 from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     CIObservationCommand,
+    DeliveryTraceability,
     EnqueueSCMCommand,
     MergeObservationCommand,
     PullRequestObservationCommand,
     RecordMergeRequestedCommand,
     RepositoryDeliveryStatus,
+    RepositoryDeliveryView,
     ReviewObservationCommand,
     ReviewState,
     SCMCommandKind,
+    render_delivery_pull_request_body,
 )
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 
@@ -644,35 +647,41 @@ class ChangeSetSCMCoordinator:
         return current
 
     @staticmethod
-    def _reconciled_pull_request_body(change_set: ChangeSetView, candidate) -> str:
-        """An honest minimal body for a pull request completed by reconciliation.
+    def _reconciled_pull_request_body(
+        change_set: ChangeSetView, candidate: RepositoryDeliveryView
+    ) -> str:
+        """The same traceability section as the finalizer, over a shorter chain.
 
-        ``PlanDeliveryFinalizer._pull_request_body`` writes the plan narrative
-        -- change_id, batch position, repository list -- because it is holding
-        the ``ExecutionPlanView``. This path is not, and cannot get one: the
-        reconciler starts from ``DeliveryService.list_active()``, and a
-        ``ChangeSetView`` carries no route back to its plan. The only link is
-        the ChangeSet's idempotency key (``execution-plan:<plan>:delivery``),
-        which the store writes but no port reads back for a change set id.
-        So this body states the facts the reconciler actually verified against
-        the remote, and says who wrote it, instead of reconstructing a
-        narrative it cannot check.
+        Both paths render through ``render_delivery_pull_request_body``, so a
+        reviewer finds the ids under the same labels wherever the pull request
+        came from. What differs is how much of the chain exists here: the
+        reconciler starts from ``DeliveryService.list_active()`` and a
+        ``ChangeSetView`` carries no route back to its execution plan. The only
+        link is the ChangeSet's idempotency key
+        (``execution-plan:<plan>:delivery``), which the store writes but no port
+        reads back for a change set id -- and the run and worker ids hang off
+        the plan's tasks, which this side must not go query (ruling D-9).
+
+        So plan, run and worker are simply absent rather than guessed, and the
+        notes say why.
         """
 
-        return "\n".join(
-            [
-                "Automated RepoMesh delivery, completed by reconciliation.",
-                "",
-                f"- change_set: `{change_set.id}`",
-                f"- repository: `{candidate.repository_id}`",
-                f"- branch: `{candidate.branch_name}`",
-                f"- commit: `{candidate.commit_sha}`",
-                "",
+        return render_delivery_pull_request_body(
+            DeliveryTraceability(
+                issue_id=change_set.project_id,
+                change_set_id=change_set.id,
+                repository_id=candidate.repository_id,
+                task_id=candidate.task_id,
+                branch_name=candidate.branch_name,
+                commit_sha=candidate.commit_sha,
+            ),
+            headline="Automated RepoMesh delivery, completed by reconciliation.",
+            notes=(
                 "The candidate branch was published but its pull request never opened.",
                 "The delivery reconciler finished the publish; the originating execution",
-                "plan is not reachable from a ChangeSet, so this description carries only",
-                "what was verified against the remote.",
-            ]
+                "plan is not reachable from a ChangeSet, so the plan, run and worker ids",
+                "are omitted and this description carries only verified facts.",
+            ),
         )
 
     async def _repository_ref(self, repository_id: UUID) -> RepositoryRef:
