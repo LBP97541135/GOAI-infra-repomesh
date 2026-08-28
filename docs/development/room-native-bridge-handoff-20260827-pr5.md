@@ -111,11 +111,40 @@ $ .venv/Scripts/python.exe -m pytest -q
 | Q5 | `ProcessMatrixTaskReport`(collaboration)仍是「房间纯 JSON 上报可推进 Task」的既有产品路径,身份校验齐全、与 Bridge 渲染结构性不相交(J-17 钉死);要不要对 external worker 关闭它=产品裁决,不在本线 |
 | Q6 | PR 4 记账 D~O 项继续有效(backfill、POSIX、claude-code/kimi 无 adapter 等);其中 **P 项已了结**(本 PR 主题) |
 
+## 6.5 平行轨 P 已完成(2026-08-27,活体)
+
+**WO-P3 — mock Runner 镜像与执行面诊断:通过,并修掉两个此前无人发现的缺陷**(提交
+`5e4fa2bf`,只改 `components/repomesh-runner/Dockerfile`,`src/repomesh_runner/**` 仍零改动)。
+
+| # | 缺陷 | 证据与修法 |
+|---|---|---|
+| 1 | **镜像根本起不来**:`ModuleNotFoundError: opentelemetry` | 08-07 可观测性线让 `executor→observer` 有了模块级 OTel 导入(`telemetry.py` 刻意让追踪只在**运行期** opt-in,故导入期恒需),而 Dockerfile 仍按「只依赖 httpx」安装。**本机镜像二分**:08-05 构建正确拒绝、08-15 及之后全部导入即死 ⇒ **20 天假绿,因为镜像只被构建、从未被运行**。修法=按 pyproject 的 pin 装上 OTel 两件套 |
+| 2 | **执行完才崩**:`PermissionError: /runner-workspaces/.runner-state` | ledger 默认落在 `<workspace_root>/.runner-state`,而 workspace root 按契约由平台挂载;root 属主的卷让非 root 的 runner(uid 10001)写不进去——且是在**任务已执行、事件已投递之后**才发现,run 落了地而「重投即 no-op」的键没留下。修法=ledger 是进程自己的记忆,改落 `/home/runner/.runner-state` |
+
+**执行面全链路活体证据**(真控制面 + 真 worktree):`start-worker-task` 202 → 从夹具真实
+clone(base_sha 一致)→ runner 领取 `accepted task run=… attempt=1` → mock agent 经
+stream-json 驱动执行 → **仓库自己的测试命令 `python scripts/run_tests.py` 在 worktree 里
+exit 0** → `runner.accepted`+`runner.completed` 双 202 → 控制面写回 task=**succeeded**、
+dispatch=**completed** → ledger 落盘 → 循环继续长轮询(204)。`changedFiles=[]`/`commitSha=null`
+与「mock 不写盘」契约一致。compose **未新增 Runner 消费者**(R8:Bridge 自己兼任)。
+
+**materialize 活体验收:通过**。`POST /api/v1/bridge/materialize` → **200**,
+`handoff_doc_ids` **非空**(0036 建的表真实落行,`GET /api/v1/handoff-docs` 可读回)、
+`skipped_repos: []`、`plan_id` 非空、**日志零 warning/error**(W1「Failed to generate handoff
+documents」等降级信号均未出现),且计划批次**真的投进了 Matrix 团队房**(房间里可见发给
+worker 的任务包通知)。**关于「需要 LLM」的记录是过度保守**:materialize 本身不调模型,
+手写 plan 直接 POST 即可;只有其上游的 requirement/confirmation/integration 才需要 LLM。
+
+**环境坑(必记)**:Git Bash 的 **MSYS 路径转换**会把 `docker run -e VAR=/abs/path` 与脚本
+里的 `/abs/path` 一起改写成 `D:/Git/...`,本轮曾因此让 clone 走 ssh 并让 workspace root
+变成 `/app/D:/Git/...`。**凡传 Linux 绝对路径给 docker 或种子脚本,一律加 `MSYS_NO_PATHCONV=1`**。
+另:Windows 宿主跑 API + Linux 容器跑 runner **无法**靠 `WORKSPACE_PATH_FROM/TO` 打通——
+worktree 路径有三层(`w/<run_key>/<repo_key>`),重映射按字符串前缀切分后保留反斜杠,
+在 Linux 侧会变成单个畸形目录名。执行面诊断必须两侧同为 Linux。
+
 ## 7. 下一步
 
-1. **平行轨 P 剩余**(活体 E2E 前置):WO-P3 构建 mock Runner 镜像做执行面诊断(compose
-   不加第二消费者——Bridge 就是 consumer,R8);materialize 活体验收(`handoff_doc_ids`
-   非空,需全栈)。
+1. ~~平行轨 P 剩余~~ —— **已完成,见 §6.5**。
 2. **治理路径活体 E2E**(PR 4 交接 §7.5 配方基础上):服务端配 `REPOMESH_RUNNER_WORKER_TOKENS`
    → Bridge enrollment 换 worker token → `run --workspace-root <控制面 runner_workspace_root>`
    → 建 Task 指派该 worker → 房间 `start task <uuid>` → 验证:worktree 里真实改码、测试、
