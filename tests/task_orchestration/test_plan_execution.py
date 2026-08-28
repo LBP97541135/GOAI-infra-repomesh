@@ -8,15 +8,20 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalView,
     AgentRole,
 )
-from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
+from repomesh.modules.collaboration.contracts import (
+    CollaborationRouteUnavailable,
+    SendCollaborationMessageCommand,
+)
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTeamRuntimeStatus,
     RepositoryTeamView,
+    TeamDecompositionMode,
 )
 from repomesh.modules.task_orchestration.application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    LeaderDecisionLane,
     ObserveExecutionPlan,
 )
 from repomesh.modules.task_orchestration.contracts import (
@@ -39,6 +44,7 @@ from repomesh.modules.task_orchestration.domain import (
 )
 from repomesh.modules.task_orchestration.infrastructure import (
     InMemoryExecutionPlanStore,
+    InMemoryLeaderAssignmentStore,
     InMemoryTaskStore,
 )
 
@@ -169,6 +175,34 @@ class FakeDeliveryState:
         )
 
 
+class RecordingCollaboration:
+    """Records what would have been sent to a room, and to whom."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[SendCollaborationMessageCommand, str]] = []
+
+    async def send(
+        self, command: SendCollaborationMessageCommand, *, idempotency_key: str
+    ) -> None:
+        self.sent.append((command, idempotency_key))
+
+
+class FakeDecompositionModes:
+    """Per-team decomposition modes, defaulting to today's server-side mode."""
+
+    def __init__(self, leader_repository_ids: frozenset[UUID] = frozenset()) -> None:
+        self._leader_repository_ids = leader_repository_ids
+
+    async def decomposition_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> TeamDecompositionMode:
+        return (
+            TeamDecompositionMode.LEADER
+            if repository_id in self._leader_repository_ids
+            else TeamDecompositionMode.SERVER
+        )
+
+
 class Environment:
     def __init__(
         self,
@@ -178,6 +212,7 @@ class Environment:
         worker_paths: tuple[str, ...] = ("src/**",),
         delivery_state: DeliveryStatePort | None = None,
         on_batch_deliver=None,
+        leader_mode_repositories: tuple[int, ...] = (),
     ) -> None:
         self.organization_id = uuid4()
         self.project_id = uuid4()
@@ -259,6 +294,23 @@ class Environment:
         self.decomposer = DecomposeRepositoryTask(
             self.directory, self.topologies, self.tasks, self.assigner, self.spec_author
         )
+        # No lane unless a test names a leader-mode repository: the historical
+        # behaviour is what every other test in this module is about, and it is
+        # reached by the same absent-lane path a deployment without a
+        # collaboration messenger takes.
+        self.leader_assignments = InMemoryLeaderAssignmentStore()
+        self.collaboration = RecordingCollaboration()
+        self.leader_lane = (
+            LeaderDecisionLane(
+                modes=FakeDecompositionModes(
+                    frozenset(self.repository_ids[index] for index in leader_mode_repositories)
+                ),
+                assignments=self.leader_assignments,
+                collaboration=self.collaboration,
+            )
+            if leader_mode_repositories
+            else None
+        )
         self.advancer = AdvanceExecutionPlan(
             self.plans,
             self.tasks,
@@ -266,6 +318,7 @@ class Environment:
             self.decomposer,
             delivery_state=delivery_state,
             on_batch_deliver=on_batch_deliver,
+            leader_lane=self.leader_lane,
         )
 
     @property

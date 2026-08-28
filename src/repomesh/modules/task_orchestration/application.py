@@ -1,6 +1,7 @@
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -19,6 +20,8 @@ from repomesh.modules.project.contracts import (
     ProjectCheckpointGateway,
     ProjectTopologyReader,
     RepositoryTeamView,
+    TeamDecompositionMode,
+    TeamDecompositionModeReader,
     TopologyAwareCheckpointFallback,
 )
 from repomesh.modules.task_orchestration.contracts import (
@@ -28,11 +31,18 @@ from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
     ExecutionPlanStatusSnapshot,
     ExecutionPlanView,
+    LeaderActionErrorCode,
+    LeaderActionRefused,
+    LeaderAssignmentPhase,
+    LeaderAssignmentView,
+    LeaderSafetyEnvelopeView,
     PlannedTaskExecutionStatus,
     ProjectTaskProgress,
     PublishedTaskPackage,
     RedispatchScope,
     ReportTaskCommand,
+    RepositoryAssignmentPackage,
+    RepositoryTaskFactsView,
     RoundRedispatch,
     SupersedeTaskCommand,
     TaskAssignmentGateway,
@@ -42,12 +52,14 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
+    WorkerRosterEntryView,
     WorkerTaskExecutionStatus,
 )
 from repomesh.modules.task_orchestration.domain import (
     _REDOABLE_TASK_STATUSES,
     FINAL_TASK_STATUSES,
     ExecutionPlan,
+    PlannedRepositoryTask,
     RoundNotDispatchable,
     Task,
     TaskBlocked,
@@ -55,7 +67,11 @@ from repomesh.modules.task_orchestration.domain import (
     TaskDenied,
     TaskNotFound,
 )
-from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
+from repomesh.modules.task_orchestration.ports import (
+    ExecutionPlanStore,
+    LeaderAssignmentStore,
+    TaskStore,
+)
 from repomesh.shared.idempotency import command_fingerprint
 
 _logger = logging.getLogger(__name__)
@@ -75,6 +91,37 @@ IDEMPOTENCY_KEY_LIMIT = 200
 #: pair of presses collided, and a collision costs one swallowed re-send rather
 #: than anything durable.
 _ATTEMPT_TOKEN_CHARS = 12
+
+
+def derive_allowed_paths(
+    responsibility_paths: tuple[str, ...], test_paths: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Where work may be written, given who owns what and where the tests are.
+
+    The one derivation, with two callers that must not disagree.
+
+    *Server-side decomposition* calls it per worker to write that worker's
+    execution permit (defect A-21: responsibility paths say which product code
+    a worker owns and have nothing to say about where the repository keeps its
+    tests, so the two disagreed silently until a run died on it — test paths
+    only ever widen the permit).
+
+    *Leader-mode assignment* calls it once per team, over the union of the
+    team's responsibility paths, to derive the ``safetyEnvelope
+    .allowedPathRoots`` a leader plans inside and the server later clamps
+    submitted worker tasks against. If these two were separate expressions the
+    envelope handed out could bound work the permit would then refuse, or the
+    reverse — a leader planning honestly inside its stated bounds and being
+    rejected for it.
+
+    A subject with no responsibility paths already gets ``**``, and appending
+    test paths to that would only make the rendered permit read as though
+    something had been carved out.
+    """
+
+    if not responsibility_paths:
+        return ("**",)
+    return tuple(dict.fromkeys((*responsibility_paths, *test_paths)))
 
 
 def _dispatch_message_key(key: str, attempt: str | None) -> str:
@@ -709,18 +756,12 @@ class DecomposeRepositoryTask:
     ) -> None:
         """Produce the execution permit in the same motion as the executable task.
 
-        ``test_paths`` widen the permit, and only ever widen it (defect A-21).
-        A Worker's responsibility paths say which product code it owns; they
-        have nothing to say about where that repository keeps its tests, and
-        the two disagreed silently until a run died on it. The permit is also
-        the document the agent reads — ``current-task.md`` renders "Allowed
-        paths" verbatim — so this is what stops a compliant agent from
-        concluding, correctly, that it may not write the test its own
-        verification command will look for.
-
-        A Worker with no responsibility paths already gets ``**`` and is left
-        alone: everything is permitted, and appending to that would only make
-        the rendered permit read as though something had been carved out.
+        The permit is the document the agent reads — ``current-task.md``
+        renders "Allowed paths" verbatim — so ``derive_allowed_paths`` is what
+        stops a compliant agent from concluding, correctly, that it may not
+        write the test its own verification command will look for. The same
+        function derives the leader-mode safety envelope; see its docstring
+        for why the two must be one expression.
         """
 
         if self._spec_author is None:
@@ -728,15 +769,65 @@ class DecomposeRepositoryTask:
         worker = await self._directory.get_view(worker_task.assignee_agent_id)
         if worker is None or worker.status is not AgentPrincipalStatus.ACTIVE:
             raise TaskDenied("worker agent is missing or disabled")
-        responsibility = tuple(worker.responsibility_paths)
-        allowed_paths = (
-            tuple(dict.fromkeys((*responsibility, *test_paths))) if responsibility else ("**",)
-        )
+        allowed_paths = derive_allowed_paths(tuple(worker.responsibility_paths), test_paths)
         await self._spec_author.ensure_approved(
             worker_task,
             allowed_paths=allowed_paths,
             tests=tests,
             idempotency_key=f"{key}:spec:{worker_task.assignee_agent_id}",
+        )
+
+    async def worker_roster(self, team: RepositoryTeamView) -> tuple[WorkerRosterEntryView, ...]:
+        """The team's workers, as an external leader is allowed to see them.
+
+        Refuses the same two conditions ``execute`` refuses, with the same
+        sentences: a team with no worker cannot execute a repository task
+        whoever decomposes it, and a roster that quietly omitted a disabled
+        worker would hand a leader a plan target that cannot be assigned. The
+        contract's roster is ``minItems: 1``, so an empty answer is not a
+        thinner package — it is one that fails its own schema.
+        """
+
+        if not team.worker_agent_ids:
+            raise TaskDenied("repository team has no worker to execute the task")
+        roster: list[WorkerRosterEntryView] = []
+        for worker_agent_id in team.worker_agent_ids:
+            worker = await self._directory.get_view(worker_agent_id)
+            if worker is None or worker.status is not AgentPrincipalStatus.ACTIVE:
+                raise TaskDenied("worker agent is missing or disabled")
+            roster.append(
+                WorkerRosterEntryView(
+                    worker_agent_id=worker.id,
+                    worker_name=worker.agentteams_resource_name,
+                    responsibility_paths=tuple(worker.responsibility_paths),
+                )
+            )
+        return tuple(roster)
+
+    @staticmethod
+    def safety_envelope(
+        roster: tuple[WorkerRosterEntryView, ...],
+        *,
+        tests: tuple[str, ...],
+        test_paths: tuple[str, ...],
+    ) -> LeaderSafetyEnvelopeView:
+        """The hard bounds handed to a leader, derived from the same facts a permit is.
+
+        ``allowedPathRoots`` is ``derive_allowed_paths`` over the *union* of
+        the roster's responsibility paths: a leader may hand any of its
+        workers any part of the team's ground, and the per-worker permit each
+        task later gets is narrower still. ``testCommands`` and ``testPaths``
+        are the batch item's own, unmodified — the envelope reports the
+        verification the round already requires, it does not invent any.
+        """
+
+        responsibility = tuple(
+            dict.fromkeys(path for entry in roster for path in entry.responsibility_paths)
+        )
+        return LeaderSafetyEnvelopeView(
+            allowed_path_roots=derive_allowed_paths(responsibility, test_paths),
+            test_paths=test_paths,
+            test_commands=tests,
         )
 
     async def repository_team(self, project_id: UUID, repository_id: UUID) -> RepositoryTeamView:
@@ -754,6 +845,28 @@ class DecomposeRepositoryTask:
         return team
 
 
+@dataclass(frozen=True, slots=True)
+class LeaderDecisionLane:
+    """Everything batch assignment needs to park a batch for an external leader.
+
+    One optional parameter rather than three, because the three are only
+    useful together: reading a team's decomposition mode is pointless without
+    somewhere to record the parked assignment, and recording one nobody is
+    told about strands the round. Bundling them makes the half-wired state
+    unrepresentable instead of a runtime check.
+
+    Absent, ``AdvanceExecutionPlan`` behaves exactly as it did before this
+    lane existed — every team decomposes server-side. Present, the composition
+    root supplies a mode reader that answers ``SERVER`` for every team until
+    the project module persists real per-team modes (adjudication D-2), so
+    wiring the lane is not the same as switching any team into leader mode.
+    """
+
+    modes: TeamDecompositionModeReader
+    assignments: LeaderAssignmentStore
+    collaboration: CollaborationGateway
+
+
 class AdvanceExecutionPlan:
     """Drive an execution plan batch by batch as repository tasks reach a result."""
 
@@ -766,6 +879,7 @@ class AdvanceExecutionPlan:
         on_plan_completed: Callable[[ExecutionPlanView], Awaitable[None]] | None = None,
         delivery_state: DeliveryStatePort | None = None,
         on_batch_deliver: Callable[[ExecutionPlanView], Awaitable[None]] | None = None,
+        leader_lane: LeaderDecisionLane | None = None,
     ) -> None:
         self._plans = plans
         self._tasks = tasks
@@ -776,6 +890,7 @@ class AdvanceExecutionPlan:
         # current batch's delivery pull requests (delivery-gated mode).
         self._delivery_state = delivery_state
         self._on_batch_deliver = on_batch_deliver
+        self._leader_lane = leader_lane
 
     async def start(self, plan: ExecutionPlan, *, idempotency_key: str) -> ExecutionPlanView:
         key = idempotency_key.strip()
@@ -1014,9 +1129,26 @@ class AdvanceExecutionPlan:
     async def _assign_batch(
         self, plan: ExecutionPlan, batch_index: int, *, key_prefix: str
     ) -> ExecutionPlan:
+        """Assign the batch's leader tasks, then expand each into executable work.
+
+        The expansion forks on the team's decomposition mode (adjudication
+        D-2). ``SERVER`` is today's path, unchanged to the byte: the leader
+        task is decomposed in the same breath as it is assigned. ``LEADER``
+        **stops** after the leader task — no worker task, no decomposer call —
+        records the assignment for the leader-actions surface and tells the
+        leader where to plan. The batch is then genuinely parked: nothing
+        moves it until the leader submits a plan.
+
+        The fork is in the second loop, not the first, because a leader task
+        is assigned identically either way; what differs is only what happens
+        to it afterwards.
+        """
+
         leader_task_ids: list[UUID] = []
+        teams: list[RepositoryTeamView] = []
         for planned in plan.batches[batch_index]:
             team = await self._decomposer.repository_team(plan.project_id, planned.repository_id)
+            teams.append(team)
             leader_task = await self._assigner.assign(
                 AssignTaskCommand(
                     organization_id=plan.organization_id,
@@ -1033,16 +1165,101 @@ class AdvanceExecutionPlan:
             leader_task_ids.append(leader_task.id)
         assigned = plan.with_leader_tasks(batch_index, tuple(leader_task_ids))
         await self._plans.update(assigned, expected_version=plan.version)
-        for planned, leader_task_id in zip(
-            assigned.batches[batch_index], leader_task_ids, strict=True
+        for planned, leader_task_id, team in zip(
+            assigned.batches[batch_index], leader_task_ids, teams, strict=True
         ):
+            key = f"{key_prefix}:b{batch_index}:{planned.repository_id}"
+            if await self._decomposes_leader_side(plan.project_id, planned.repository_id):
+                await self._park_for_leader(plan, planned, leader_task_id, team, key=key)
+                continue
             await self._decomposer.execute(
                 leader_task_id,
-                idempotency_key=(f"{key_prefix}:b{batch_index}:{planned.repository_id}:decompose"),
+                idempotency_key=f"{key}:decompose",
                 tests=planned.tests,
                 test_paths=planned.test_paths,
             )
         return assigned
+
+    async def _decomposes_leader_side(self, project_id: UUID, repository_id: UUID) -> bool:
+        """Does this team's own leader decompose, or does the platform?
+
+        With no lane wired there is no leader-actions surface to park a batch
+        for, so the answer is the historical one and no read is made at all.
+        """
+
+        if self._leader_lane is None:
+            return False
+        mode = await self._leader_lane.modes.decomposition_mode(project_id, repository_id)
+        return mode is TeamDecompositionMode.LEADER
+
+    async def _park_for_leader(
+        self,
+        plan: ExecutionPlan,
+        planned: PlannedRepositoryTask,
+        leader_task_id: UUID,
+        team: RepositoryTeamView,
+        *,
+        key: str,
+    ) -> None:
+        """Record the parked assignment and tell the leader it is waiting.
+
+        The roster and the envelope are derived here, once, and stored: they
+        are the bounds the leader plans inside and the ones the server will
+        clamp its submission against, so re-deriving them later is how the two
+        drift apart. ``ensure`` keeps the first write, which is what makes a
+        re-run of this batch (``_resume``) a read rather than a new envelope.
+
+        The notification is a second message beside the assignment the
+        assigner already delivered, and it is the one that carries the *route*:
+        the leader task alone does not say that this team plans leader-side or
+        where the decision surface is. It is sent through the ordinary
+        collaboration path, so the org-leader → repository-leader pair routes
+        it to the team's leader DM room, and it is keyed off the same prefix as
+        every other write of this batch — a replay finds the delivered message
+        and does not post it twice.
+        """
+
+        assert self._leader_lane is not None  # noqa: S101 - guarded by the caller
+        roster = await self._decomposer.worker_roster(team)
+        await self._leader_lane.assignments.ensure(
+            LeaderAssignmentView(
+                leader_task_id=leader_task_id,
+                organization_id=plan.organization_id,
+                project_id=plan.project_id,
+                repository_id=planned.repository_id,
+                leader_agent_id=team.leader_agent_id,
+                phase=LeaderAssignmentPhase.PLANNING,
+                safety_envelope=self._decomposer.safety_envelope(
+                    roster, tests=planned.tests, test_paths=planned.test_paths
+                ),
+                worker_roster=roster,
+            )
+        )
+        await self._leader_lane.collaboration.send(
+            SendCollaborationMessageCommand(
+                organization_id=plan.organization_id,
+                project_id=plan.project_id,
+                repository_id=planned.repository_id,
+                task_id=leader_task_id,
+                sender_agent_id=plan.created_by_agent_id,
+                recipient_agent_id=team.leader_agent_id,
+                kind=CollaborationMessageKind.DECISION,
+                subject=f"{planned.title}: awaiting your repository plan",
+                body=(
+                    "This repository team plans leader-side, so no worker task has been "
+                    "created for this round.\n\n"
+                    "Read your assignment package, then submit your Engineering Spec, "
+                    "task DAG and worker tasks:\n"
+                    f"  GET  /api/v1/agent-actions/leader/assignments/{leader_task_id}\n"
+                    f"  POST /api/v1/agent-actions/leader/assignments/{leader_task_id}/plan\n\n"
+                    "Authenticate with your own external member token. The package names "
+                    "your worker roster and the safety envelope your plan is validated "
+                    "against; nothing is dispatched until the plan is accepted."
+                ),
+                correlation_id=leader_task_id,
+            ),
+            idempotency_key=f"{key}:leader-plan",
+        )
 
     async def _roll_up(self, parent: Task) -> Task:
         if parent.status in FINAL_TASK_STATUSES:
@@ -1091,6 +1308,96 @@ class AdvanceExecutionPlan:
     async def _notify_plan_completed(self, plan: ExecutionPlanView) -> None:
         if self._on_plan_completed is not None:
             await self._on_plan_completed(plan)
+
+
+class ReadLeaderAssignment:
+    """Hand an external Repository Leader the facts it plans and reviews from.
+
+    The read behind ``GET /agent-actions/leader/assignments/{taskId}``, and
+    the whole of the leader-actions surface this slice implements. Every
+    refusal it raises carries a frozen code
+    (``contracts/leader-actions/v1/fixtures/error-matrix.json``); the HTTP
+    layer only maps code to status, so the *judgement* about who may read an
+    assignment lives here rather than in a router.
+
+    ``caller_agent_id`` is derived by the caller from the presented token and
+    is never taken from a path or a body — the token names the subject
+    (adjudication D-6). This use case therefore treats it as established
+    identity and answers only the authorization questions: is this principal a
+    Repository Leader, does this assignment exist, is this principal *its*
+    assignee, and is this team actually planning leader-side.
+
+    The order of those four is deliberate. Role comes first because it is
+    decidable without touching any row, so a worker's token learns nothing
+    about which task ids exist. Existence comes before assignee because there
+    is no way to know who the assignee is without the row. Mode comes last
+    because it is a statement about a real assignment the caller really owns —
+    ``decomposition_mode_conflict`` tells a leader that this team's planning is
+    done server-side, which would be a fact worth leaking if it were said to
+    anyone else.
+    """
+
+    def __init__(
+        self,
+        assignments: LeaderAssignmentStore,
+        tasks: TaskStore,
+        directory: AgentPrincipalReader,
+        modes: TeamDecompositionModeReader,
+    ) -> None:
+        self._assignments = assignments
+        self._tasks = tasks
+        self._directory = directory
+        self._modes = modes
+
+    async def execute(
+        self, leader_task_id: UUID, *, caller_agent_id: UUID
+    ) -> RepositoryAssignmentPackage:
+        caller = await self._directory.get_view(caller_agent_id)
+        if (
+            caller is None
+            or caller.status is not AgentPrincipalStatus.ACTIVE
+            or caller.role is not AgentRole.REPOSITORY_LEADER
+        ):
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.FORBIDDEN_ROLE,
+                "this credential does not belong to an active repository leader",
+            )
+        assignment = await self._assignments.get(leader_task_id)
+        task = await self._tasks.get(leader_task_id)
+        if assignment is None or task is None:
+            # A task with no assignment is the ordinary case — every
+            # server-mode task in the installation is one — and an assignment
+            # with no task is a broken invariant. Neither is an assignment
+            # this surface can answer for, and saying which is which would
+            # turn the endpoint into a task-existence oracle.
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.ASSIGNMENT_NOT_FOUND,
+                "no leader assignment exists for this task id",
+            )
+        if task.assignee_agent_id != caller_agent_id:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.FORBIDDEN_NOT_ASSIGNEE,
+                "this leader assignment belongs to another repository leader",
+            )
+        mode = await self._modes.decomposition_mode(
+            assignment.project_id, assignment.repository_id
+        )
+        if mode is not TeamDecompositionMode.LEADER:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.DECOMPOSITION_MODE_CONFLICT,
+                "this team's planning is done server-side, so leader submissions are refused",
+            )
+        return RepositoryAssignmentPackage(
+            assignment=assignment,
+            repository_task=RepositoryTaskFactsView(
+                title=task.title,
+                instruction=task.instruction,
+                # The wire carries one text; the row carries the criteria as
+                # separate lines and joining them is the only lossless way to
+                # spend a single string on them.
+                acceptance="\n".join(task.acceptance),
+            ),
+        )
 
 
 class RedispatchRound:
