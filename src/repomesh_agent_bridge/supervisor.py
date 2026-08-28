@@ -83,7 +83,9 @@ __all__ = [
     "SYNC_TIMEOUT_MS",
     "TIMEOUT_NOTE",
     "TURN_TIMEOUT_SECONDS",
+    "AssignmentDirective",
     "RoomSupervisor",
+    "assignment_directive",
     "governed_task_id",
 ]
 
@@ -176,6 +178,63 @@ def governed_task_id(prompt: str) -> UUID | None:
 
     match = _GOVERNED_COMMAND.search(prompt)
     return None if match is None else UUID(match.group(1))
+
+
+_UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+_ASSIGNMENT_DIRECTIVE = re.compile(
+    r"\{\s*"
+    rf'\\?"task_id\\?"\s*:\s*\\?"({_UUID_PATTERN})\\?"\s*,\s*'
+    rf'\\?"worker_agent_id\\?"\s*:\s*\\?"({_UUID_PATTERN})\\?"'
+    r"\s*\}",
+    re.IGNORECASE,
+)
+"""The object RepoMesh already puts in the message that hands a Worker its task.
+
+Not a new protocol and not a parser for one. ``task_orchestration`` writes this
+line into every assignment message it sends
+(``{"task_id":"…","worker_agent_id":"…"}``), addressed to a Worker that is
+expected to read it and act — a containerised Worker does exactly that, through
+an MCP tool. An external Worker had no way to, so it read the same message as
+conversation and answered that it could not find the tool. This reads the line
+that was always addressed to it.
+
+Two shapes, one expression. The plain text is what the platform composes; the
+Matrix event usually carries it inside a collaboration envelope, where JSON
+encoding turns every ``"`` into ``\\"``. Both are the same directive and
+neither is a different message, so the optional backslash is written into the
+pattern rather than handled by unwrapping an envelope this module would then
+have to know the shape of.
+
+Strict about everything else: both keys, in the order RepoMesh writes them, each
+holding a whole uuid. Anything less exact is not a directive, and a message that
+merely talks about task ids stays conversation.
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentDirective:
+    """A dispatch RepoMesh addressed to one worker."""
+
+    task_id: UUID
+    worker_agent_id: UUID
+
+
+def assignment_directive(prompt: str) -> AssignmentDirective | None:
+    """The task a platform dispatch hands this room, or ``None``.
+
+    Whether *this* worker may act on it is the caller's question, not this
+    function's: the directive names its assignee, and reporting who was named is
+    how the caller can tell "not for me" from "not a directive at all".
+    """
+
+    match = _ASSIGNMENT_DIRECTIVE.search(prompt)
+    if match is None:
+        return None
+    try:
+        return AssignmentDirective(UUID(match.group(1)), UUID(match.group(2)))
+    except ValueError:  # pragma: no cover - the pattern already shapes both ids
+        return None
 
 
 class _RoomTrouble(Exception):
@@ -505,8 +564,45 @@ class RoomSupervisor:
         <id>" is a request to the control plane, and handing it to a coding CLI
         as well would run the same work twice, once under RepoMesh's governance
         and once outside it.
+
+        Two wake-ups reach that branch and they are tried in this order: the
+        platform's own dispatch first, then the typed command. The order is not a
+        preference. A message can hold both — an operator answering a dispatch by
+        repeating its id — and a single trigger must start a single run, so one
+        branch has to win outright, and the one that should is the one RepoMesh
+        wrote. Both then go through the same ``_start_governed`` under the same
+        trigger event id, which is the idempotency key the whole round is built
+        on: one mention, one start, whichever way it was phrased.
+
+        A dispatch naming a different worker is not refused, it is simply not a
+        directive *here*. The Bridge drops the reading and treats the message as
+        conversation, exactly as it did before this branch existed — refusing it
+        would mean answering for a worker whose room this also is.
+
+        None of this is a permission decision, and the security argument is the
+        one PR 5 already made for the typed command: a room message is a wake-up
+        and nothing more. Whether the task exists, whether it is assigned to this
+        worker, and whether this worker may run it are all re-decided by
+        RepoMesh's start action against its own records, so a forged dispatch
+        buys its author exactly what a forged ``start task`` does — a refusal
+        from the control plane, reported into the room.
         """
 
+        directive = assignment_directive(trigger.prompt)
+        if directive is not None:
+            if directive.worker_agent_id == self._enrollment.worker_agent_id:
+                _logger.info(
+                    "mention %s carries a RepoMesh dispatch for task %s",
+                    trigger.event_id,
+                    directive.task_id,
+                )
+                return await self._start_governed(trigger, directive.task_id)
+            _logger.info(
+                "mention %s carries a dispatch for worker %s, not this one; "
+                "reading it as conversation",
+                trigger.event_id,
+                directive.worker_agent_id,
+            )
         if (task_id := governed_task_id(trigger.prompt)) is not None:
             return await self._start_governed(trigger, task_id)
         request = TurnRequest(

@@ -102,6 +102,67 @@ def _command(event_id: str = "$command", *, body: str | None = None, **overrides
     return _event(event_id, body=body or f"@worker start task {TASK_ID}", **overrides)
 
 
+def dispatch_body(
+    task_id: UUID = TASK_ID, worker_agent_id: UUID = WORKER_UUID, *, packaged: bool = True
+) -> str:
+    """The assignment message RepoMesh really sends, composed by RepoMesh.
+
+    Built by calling ``TaskOrchestrator._assignment_body`` rather than by
+    copying its wording, because the wording is the thing under test: a fixture
+    typed out here would keep passing after the platform rephrased its dispatch,
+    and the Bridge would silently stop answering the message it exists to answer.
+    That import is a test reaching into the server it integrates with; the rule
+    that keeps ``repomesh`` out of the Bridge is about ``src``, and holding these
+    two sides together is exactly what a test is for.
+
+    Both shapes the platform emits: with a published package (what a governed
+    Worker receives) and without one (the plain JSON-report form).
+    """
+
+    from repomesh.modules.task_orchestration.application import TaskOrchestrator
+    from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage
+    from repomesh.modules.task_orchestration.domain import Task
+
+    task = Task(
+        organization_id=uuid4(),
+        project_id=uuid4(),
+        repository_id=uuid4(),
+        assigned_by_agent_id=uuid4(),
+        assignee_agent_id=worker_agent_id,
+        title="Implement changes for pricing-fixture",
+        instruction="raise the pricing floor",
+        acceptance=("scripts/run_tests.py passes",),
+        id=task_id,
+    )
+    published = (
+        PublishedTaskPackage(
+            team_name="repomesh-preflight-team",
+            task_path=f"teams/repomesh-preflight-team/shared/tasks/{task_id}",
+            content_hash="sha256:" + "a" * 64,
+        )
+        if packaged
+        else None
+    )
+    return TaskOrchestrator._assignment_body(task, published)
+
+
+def _enveloped(body: str) -> str:
+    """The dispatch as it reaches a room: inside the collaboration envelope.
+
+    The messenger sends the assignment as one JSON document with the text in a
+    ``body`` member, so every quote in the directive arrives backslash-escaped.
+    Live on 2026-08-28 this was the only form a Bridge ever saw, and a parser
+    that only handled the unescaped one would pass every test here and answer
+    nothing in a real room.
+    """
+
+    import json
+
+    return f"{MATRIX_USER_ID} " + json.dumps(
+        {"body": body, "kind": "task_assignment", "schema": "repomesh.collaboration.v1"}
+    )
+
+
 def _observation(body: str = "on it", *, kind: str = "note", **overrides: Any) -> RoomObservation:
     return RoomObservation(
         observation_id=uuid4(),
@@ -194,6 +255,144 @@ async def test_an_ordinary_mention_never_reaches_the_control_plane(
 
     assert governed.calls == [], "a question is not a wake-up"
     assert [turn.prompt for turn in session.turns] == ["@worker what is 2+2"]
+
+
+# ---------------------------------------------------------------------------
+# AC-03: the platform's own dispatch is a wake-up
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("shape", ["plain", "enveloped"])
+async def test_the_platform_dispatch_starts_the_run_with_nobody_typing_anything(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path, shape: str
+) -> None:
+    """AC-03: a Worker takes its own assignment from the message it is sent.
+
+    RepoMesh has always written ``{"task_id":…,"worker_agent_id":…}`` into the
+    message that hands a Worker its task, and a containerised Worker acts on it
+    through an MCP tool. An external Worker had no way to, so it read the message
+    as conversation and said it could not find the tool — measured live, twice.
+    Here the same message, composed by the same server function, starts the run.
+
+    Both shapes are driven because only one of them exists in a real room: the
+    plain body is what the platform composes, and the envelope is what the
+    messenger puts on the wire.
+    """
+
+    body = dispatch_body()
+    room = InMemoryRoomPort(
+        _batch(next_batch="s-0"),
+        _batch(
+            _command("$dispatch", body=body if shape == "plain" else _enveloped(body)),
+            next_batch="s-1",
+        ),
+    )
+    session = ScriptedCodingSession()
+    governed = InMemoryGovernedTaskPort(RECEIPT)
+    with _state(tmp_path) as state:
+        supervisor = _supervisor(enrollment, state, room, session, governed_task=governed)
+
+        await _drive(supervisor.serve(), room)
+
+        assert [(call.task_id, call.worker_agent_id) for call in governed.calls] == [
+            (TASK_ID, WORKER_UUID)
+        ], "the dispatch reached the control plane"
+        assert session.turns == [], "and never reached the coding session"
+        assert [message.body for message in room.sent] == [ACCEPTED_BODY]
+        anchor = state.anchor_for_run(RUN_ID)
+        assert anchor is not None and anchor.trigger_event_id == "$dispatch"
+
+
+async def test_a_dispatch_addressed_to_another_worker_is_only_conversation(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path
+) -> None:
+    """Somebody else's assignment is not this Bridge's to act on.
+
+    A team room carries every Worker's dispatches, so this message is one this
+    instance will see constantly. It must not start the run — that would be
+    running work assigned to another identity — and it must not be refused
+    either, because refusing would mean answering on that Worker's behalf. The
+    directive reading is dropped and the message is what it was before this
+    branch existed: an ordinary mention.
+    """
+
+    other = uuid4()
+    room = InMemoryRoomPort(
+        _batch(next_batch="s-0"),
+        _batch(_command("$theirs", body=dispatch_body(worker_agent_id=other)), next_batch="s-1"),
+    )
+    session = ScriptedCodingSession()
+    governed = InMemoryGovernedTaskPort(RECEIPT)
+    with _state(tmp_path) as state:
+        supervisor = _supervisor(enrollment, state, room, session, governed_task=governed)
+
+        await _drive(supervisor.serve(), room)
+
+    assert governed.calls == [], "another worker's dispatch starts nothing here"
+    assert len(session.turns) == 1, "and is read as an ordinary mention instead"
+
+
+async def test_a_message_that_is_both_a_dispatch_and_a_command_starts_one_run(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path
+) -> None:
+    """Two wake-ups, one trigger, one run.
+
+    An operator who answers a dispatch by repeating its id in the same message
+    produces exactly this, and two entrances to the same door must not open it
+    twice: both go through ``_start_governed`` under the trigger's own event id,
+    which is the key the whole round is idempotent on.
+    """
+
+    both = f"{dispatch_body()}\n\n@worker start task {TASK_ID}"
+    room = InMemoryRoomPort(
+        _batch(next_batch="s-0"), _batch(_command("$both", body=both), next_batch="s-1")
+    )
+    governed = InMemoryGovernedTaskPort(RECEIPT)
+    with _state(tmp_path) as state:
+        supervisor = _supervisor(
+            enrollment, state, room, ScriptedCodingSession(), governed_task=governed
+        )
+
+        await _drive(supervisor.serve(), room)
+
+        assert len(governed.calls) == 1
+        assert [message.body for message in room.sent] == [ACCEPTED_BODY]
+        assert len(state.sends_for_trigger("$both")) == 1
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '@worker {"task_id":"not-a-uuid","worker_agent_id":"also-not"}',
+        '@worker {"task_id":"11111111-2222-3333-4444-555555555555"}',
+        '@worker {"worker_agent_id":"11111111-2222-3333-4444-555555555555"}',
+        '@worker the dispatch said task_id 11111111-2222-3333-4444-555555555555, right?',
+    ],
+)
+async def test_a_directive_that_is_not_one_is_read_as_conversation(
+    enrollment: ExternalWorkerEnrollment, tmp_path: Path, body: str
+) -> None:
+    """Nearly-a-dispatch is not a dispatch.
+
+    Half an object, a broken id, or somebody talking *about* a dispatch: each
+    would be a run started on a guess, and the cost of guessing wrong here is a
+    worktree and an execution nobody asked for. Anything that is not exactly the
+    object RepoMesh writes goes to the coding session, which is where a sentence
+    belongs.
+    """
+
+    room = InMemoryRoomPort(
+        _batch(next_batch="s-0"), _batch(_command("$nearly", body=body), next_batch="s-1")
+    )
+    session = ScriptedCodingSession()
+    governed = InMemoryGovernedTaskPort(RECEIPT)
+    with _state(tmp_path) as state:
+        supervisor = _supervisor(enrollment, state, room, session, governed_task=governed)
+
+        await _drive(supervisor.serve(), room)
+
+    assert governed.calls == []
+    assert len(session.turns) == 1
 
 
 # ---------------------------------------------------------------------------
