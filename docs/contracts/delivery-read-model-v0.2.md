@@ -267,6 +267,7 @@ CONTRACT spec 的 scope），取不到时为 `null`。
   "active_task_count": 1,
   "runtime": {                                        // §4.4，整块 nullable
     "reachable": true,
+    "kind": "container|external|null",                // 2026-08-28 追认，见 §4.4
     "phase": "string|null",                           // Controller 观测阶段
     "runtime_kind": "openclaw|copaw|hermes|openhuman|repomesh-runner|null",
     "matrix_user_id": "string|null",
@@ -303,6 +304,15 @@ CONTRACT spec 的 scope），取不到时为 `null`。
 2. **`awake`（醒睡观测态）**：`DesiredRuntimeState`（Running/Sleeping/Stopped）是我们
    **下发的期望态**，不是观测态，且 `get_worker` 不回读它。以期望态冒充观测态即为编造。
    前端只能显 `phase` 字面值 + 「醒睡未接入」。补齐路径同上。
+
+**`kind`（托管方式，2026-08-28 主脑追认，Room-Native Bridge 线 PR 10）**：worker 探测
+现在转述 Controller 应答里一直存在、此前被投影丢弃的 `containerManaged`。三值：
+`container`（Controller 确认容器归它管）/ `external`（确认不归它管——本机 CLI 经
+Bridge 接入）/ `null`（这次探测没问，如 manager 探测——是未知不是 external）。
+**`external` 时 `phase` 与 `runtime_kind` 恒 null**：那是容器生命周期词汇，Controller
+对一个它永远不会启动容器的成员照样回默认 `Pending`，转述它即谎报（AC-06 FAIL 条款）。
+CLI 种类（codex 等）平台不观测、不入契约——enrollment 的 `codingProfile` 是 Bridge
+侧文件，服务端不经手，前端文案因此只写 `External` 不写 CLI 名。
 
 **不可达降级（硬性要求）**：`AgentTeamsUnavailable`（网络错误）或非 404 的
 `AgentTeamsResponseError` → 该条 `runtime = {"reachable": false}` 其余字段省略，
