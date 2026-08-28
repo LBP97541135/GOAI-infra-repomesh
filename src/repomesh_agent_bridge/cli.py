@@ -36,7 +36,12 @@ from .application import (
     _startup,
     resolve_env_credential,
 )
-from .contracts import BridgeStartupError, EnrollmentInvalid, ExternalWorkerEnrollment
+from .contracts import (
+    BridgeStartupError,
+    EnrollmentInvalid,
+    ExternalWorkerEnrollment,
+    read_enrollment,
+)
 from .instance_lock import InstanceAlreadyRunning
 from .ports import CodingSessionPort, RoomTransportError, WorkerBindingPort
 from .runner_consumer import (
@@ -92,7 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="turn on governed execution: accept 'start task <id>' from a room and "
         "consume this worker's RepoMesh runner queue, executing leased tasks in "
-        "worktrees under this existing directory",
+        "worktrees under this existing directory. Workers only — a repository "
+        "leader is never given a repository",
     )
     check = subcommands.add_parser(
         "check", help="run both startup validation stages and exit; joins nothing"
@@ -131,7 +137,7 @@ def main(
             _report(outcome)
             return EXIT_OK
 
-        workspace_root = _governed_workspace_root(arguments)
+        workspace_root = _governed_workspace_root(arguments, enrollment)
         # One factory for both halves of the process: the coding session's turns
         # and a governed run's driver spawn through the same containment
         # boundary, and two factories would be two Low-integrity stories to keep
@@ -193,6 +199,14 @@ def main(
 
 
 def _load_enrollment(path: Path) -> ExternalWorkerEnrollment:
+    """Read the enrollment file at whichever version it declares itself to be.
+
+    Both versions are accepted because both are live: a deployed worker Bridge
+    keeps its v1 document indefinitely, and a Repository Leader is only
+    expressible in v2. Which one arrived is not a flag anybody passes — the
+    document says so, and ``read_enrollment`` refuses one that says neither.
+    """
+
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as unreadable:
@@ -201,7 +215,7 @@ def _load_enrollment(path: Path) -> ExternalWorkerEnrollment:
         payload = json.loads(text)
     except json.JSONDecodeError as malformed:
         raise EnrollmentInvalid(f"enrollment file is not valid JSON: {path}") from malformed
-    return ExternalWorkerEnrollment.from_wire(payload)
+    return read_enrollment(payload)
 
 
 def _default_binding_port(enrollment: ExternalWorkerEnrollment) -> WorkerBindingPort:
@@ -209,8 +223,26 @@ def _default_binding_port(enrollment: ExternalWorkerEnrollment) -> WorkerBinding
     return RepoMeshBindingAdapter()
 
 
-def _governed_workspace_root(arguments: argparse.Namespace) -> Path | None:
+def _governed_workspace_root(
+    arguments: argparse.Namespace, enrollment: ExternalWorkerEnrollment
+) -> Path | None:
     """Read ``--workspace-root``, or refuse an invocation that cannot honour it.
+
+    A ``repository_leader`` enrollment is refused outright, and this is the
+    first of AC-02's three layers of defence in depth: a leader decides and does
+    not code, so a workspace is not something it may be given by accident, by a
+    copied command line, or by an operator who reached for the flag out of
+    habit. The other two layers are elsewhere and are not weaker for being
+    later — the coordination session is handed text and never a repository
+    (adjudication D-8), and RepoMesh's own worker-only checks still refuse a
+    leader token that asks to start a coding task. This one is here because it
+    is the cheapest place to say no: before a lock, before a socket, before any
+    process exists.
+
+    That a leader consumes no Runner queue then follows from the same refusal
+    rather than from a second check: ``--workspace-root`` is the only thing that
+    turns governed execution on at all, so an invocation that cannot carry the
+    flag cannot reach the consumer either.
 
     ``--inert`` is the deliberate way to bring a Bridge up with a stand-in that
     codes nothing, so asking for it *and* for governed execution is asking for
@@ -225,6 +257,12 @@ def _governed_workspace_root(arguments: argparse.Namespace) -> Path | None:
     root: Path | None = arguments.workspace_root
     if root is None:
         return None
+    if enrollment.is_repository_leader:
+        raise BridgeStartupError(
+            "--workspace-root turns on governed execution, which is a worker's job; this "
+            f"enrollment is a {enrollment.role} and a leader is never given a repository, "
+            "not even a read-only one. Drop --workspace-root"
+        )
     if arguments.inert:
         raise BridgeStartupError(
             "--workspace-root turns on governed execution and --inert turns off the "
@@ -366,6 +404,9 @@ def _report(outcome: StartupOutcome) -> None:
     lines = [
         "enrollment: valid",
         f"worker: {enrollment.worker_name} ({enrollment.worker_agent_id})",
+        # Both sides, because the two agreeing is what stage 2 established and
+        # a report that showed only one would hide the check it just ran.
+        f"role: {enrollment.role} (RepoMesh confirms: {binding.role})",
         f"team: {binding.team_name}",
         f"organization: {binding.organization_id}",
         f"matrix: {enrollment.matrix_user_id} via {enrollment.matrix_homeserver_url}",

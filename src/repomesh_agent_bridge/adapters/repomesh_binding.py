@@ -6,6 +6,21 @@ a 503 from an unconfigured control plane and a 409 from a still-managed worker
 are both refusals in HTTP's vocabulary, but only one of them is worth waiting
 for. That is why 429 and every 5xx are retried while every 4xx is not.
 
+**Two versions, two paths, and no content negotiation.** Which endpoint this
+adapter calls is decided by the enrollment it was handed, because that is the
+only honest source: a v1 enrollment gets v1's request and v1's reader, byte for
+byte what a deployed Bridge has always sent, and a v2 enrollment gets the
+``/runtime/v2/external-members`` sibling with its ``role`` query parameter. The
+server made the same call for the same reason (``agent_runtime/api/router.py``):
+a deployed v1 consumer must never discover that the endpoint it has always
+called started answering a longer document.
+
+The v2 exchange carries ``role`` in both directions and the adapter checks that
+they agree. RepoMesh checks it too and answers 409, and the duplication is
+deliberate: preflight exists to catch configuration drift between what this
+machine believes and what the control plane has on file, and every other
+identity field on this answer is already held to the same standard one layer up.
+
 Only the status code, the method, the path and the attempt number are logged.
 Never the body (it is the binding), never the enrollment, and never the
 credential.
@@ -17,19 +32,34 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
-from ..contracts import BindingRefused, BindingUnavailable, ExternalWorkerEnrollment, WorkerBinding
+from ..contracts import (
+    ENROLLMENT_V2_SCHEMA_VERSION,
+    BindingRefused,
+    BindingUnavailable,
+    ExternalWorkerEnrollment,
+    WorkerBinding,
+)
 
-__all__ = ["BINDING_PATH", "RepoMeshBindingAdapter"]
+__all__ = ["BINDING_PATH", "BINDING_V2_PATH", "RepoMeshBindingAdapter"]
 
 _logger = logging.getLogger(__name__)
 
 BINDING_PATH = "/api/v1/runtime/external-workers/{worker_agent_id}/binding"
-"""Where RepoMesh serves the preflight document.
+"""Where RepoMesh serves the v1 preflight document.
 
 The ``/api/v1`` prefix belongs to the path rather than to the enrollment's
 ``repomeshEndpoint``, which the schema describes as the control plane's base
 URL: the same base URL is what governed execution will post runs to in PR 5, so
 each caller owns its own path under it.
+"""
+
+BINDING_V2_PATH = "/api/v1/runtime/v2/external-members/{worker_agent_id}/binding"
+"""Where RepoMesh serves the v2 preflight document.
+
+A sibling route rather than the same one answering a longer body. The path
+segment is ``external-members`` because that is what v2 generalised the concept
+to; the ``{worker_agent_id}`` placeholder keeps its historical name here for the
+same reason the wire field does.
 """
 
 DEFAULT_MAX_ATTEMPTS = 3
@@ -71,13 +101,20 @@ class RepoMeshBindingAdapter:
     async def fetch_binding(
         self, enrollment: ExternalWorkerEnrollment, *, credential: str | None
     ) -> WorkerBinding:
-        path = BINDING_PATH.format(worker_agent_id=enrollment.worker_agent_id)
+        versioned = enrollment.schema_version == ENROLLMENT_V2_SCHEMA_VERSION
+        template = BINDING_V2_PATH if versioned else BINDING_PATH
+        path = template.format(worker_agent_id=enrollment.worker_agent_id)
+        # The enrollment's claimed role, as a query parameter the v2 endpoint
+        # requires. Sent from the enrollment rather than from anything else this
+        # process knows, because it is exactly the claim RepoMesh is being asked
+        # to confirm or contradict.
+        params = {"role": enrollment.role} if versioned else None
         headers = {"Accept": "application/json"}
         if credential:
             headers["Authorization"] = f"Bearer {credential}"
         for attempt in range(1, self._max_attempts + 1):
             try:
-                return await self._attempt(enrollment, path, headers, attempt)
+                return await self._attempt(enrollment, path, params, headers, attempt)
             except BindingUnavailable:
                 if attempt == self._max_attempts:
                     raise
@@ -88,6 +125,7 @@ class RepoMeshBindingAdapter:
         self,
         enrollment: ExternalWorkerEnrollment,
         path: str,
+        params: dict[str, str] | None,
         headers: dict[str, str],
         attempt: int,
     ) -> WorkerBinding:
@@ -102,7 +140,7 @@ class RepoMeshBindingAdapter:
             follow_redirects=False,
         ) as client:
             try:
-                response = await client.get(path, headers=headers)
+                response = await client.get(path, params=params, headers=headers)
             except httpx.HTTPError as unreachable:
                 _logger.warning(
                     "GET %s failed with %s (attempt %d/%d)",
@@ -121,10 +159,12 @@ class RepoMeshBindingAdapter:
                 attempt,
                 self._max_attempts,
             )
-            return _translate(response, path)
+            return _translate(response, path, enrollment)
 
 
-def _translate(response: httpx.Response, path: str) -> WorkerBinding:
+def _translate(
+    response: httpx.Response, path: str, enrollment: ExternalWorkerEnrollment
+) -> WorkerBinding:
     status = response.status_code
     if status == 429 or status >= 500:
         raise BindingUnavailable(f"RepoMesh preflight answered {status} for {path}")
@@ -138,4 +178,17 @@ def _translate(response: httpx.Response, path: str) -> WorkerBinding:
         raise BindingRefused(
             "RepoMesh preflight answered 200 with a body that is not JSON"
         ) from unreadable
-    return WorkerBinding.from_wire(payload)
+    if enrollment.schema_version != ENROLLMENT_V2_SCHEMA_VERSION:
+        return WorkerBinding.from_wire(payload)
+    binding = WorkerBinding.from_wire_v2(payload)
+    if binding.role != enrollment.role:
+        # RepoMesh answers 409 for this and the check would usually never fire.
+        # It is here because "usually" is the wrong standard for the field that
+        # decides whether this process may be handed a workspace at all: a
+        # Bridge that took the answer's word for its own role would inherit
+        # whatever a mistaken or compromised control plane said, and the whole
+        # point of preflight is that a disagreement is a refusal.
+        raise BindingRefused(
+            f"role disagrees with RepoMesh: {enrollment.role!r} != {binding.role!r}"
+        )
+    return binding
