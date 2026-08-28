@@ -123,7 +123,14 @@ W-B2  PR 8 底座     [波次2·B线]  状态: **底座段已验收合入(08-28)
       门禁: bridge 分项 484(PR 6 时 390,+94)、contracts 260 零漂移、
       全量 **2147/23 exit 0**(前基线 2053/23)。四禁区(supervisor.py/服务端/冻结契约/
       迁移)零触碰已核
-W-C2  PR 9+Q2      [波次2·C线]  状态: 排队
+W-B2b supervisor 集成 [波次2·B线] 状态: 施工中(08-28,opus 子代理,分支 feat/w-b2-supervisor,
+      baseline 6544872e)。范围: supervisor role 感知识别 leader planning 派活正文
+      (application.py:1358-1382)与 review-due 通知(:1478-1502),接 LeaderActionPort
+      走协调会话双流程;幂等沿 PR 6 纪律;fixture=服务端正文逐字。worker 轨零行为变化
+W-C2  PR 9+Q2      [波次2·C线]  状态: 施工中(08-28,opus 子代理,分支 feat/w-c2-room-timeline,
+      baseline 6544872e)。⚠ 迁移 0039 down_revision=0040(链尾已变,旧交接「down 写 0037」作废);
+      Q2 经 task_orchestration.contracts 窄 reader;D-3 出站优先去重/D-4 如实未知/白名单三裁决。
+      与 W-B2b 文件面零交集(Bridge vs 服务端),container.py 本轮只有 W-C2 动
 W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: 排队
 W-E1  E1 脚本       [空闲槽]      状态: 排队(等 W-A1 部署)
 ```
