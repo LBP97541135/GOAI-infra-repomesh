@@ -28,6 +28,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -50,6 +51,7 @@ from repomesh_agent_bridge.contracts import ExternalWorkerEnrollment
 from repomesh_agent_bridge.outbox import RUN_LANE, Outbox, observation_txn_id
 from repomesh_agent_bridge.ports import GovernedStartReceipt, RoomRefused
 from repomesh_agent_bridge.runner_consumer import (
+    GOVERNED_CODEX_CONFIG,
     RUN_CRASHED_BODY,
     RUN_STARTED_BODY,
     TEST_COMPLETED_BODY,
@@ -58,6 +60,9 @@ from repomesh_agent_bridge.runner_consumer import (
     GovernedRuntime,
     NarratingExecutor,
     ToolActionTally,
+    WorkspaceNotWritable,
+    _translated,
+    _write_governed_codex_config,
     runner_state_root,
 )
 from repomesh_agent_bridge.state import BridgeState, open_state, state_path
@@ -81,7 +86,7 @@ from repomesh_runner.drivers.base import (
     DriverResultStatus,
     PermissionDecision,
 )
-from repomesh_runner.executor import DriverExecutor
+from repomesh_runner.executor import AllowlistPermissionPolicy, DriverExecutor
 from repomesh_runner.main import Shutdown
 from repomesh_runner.main import serve as serve_runner
 from repomesh_runner.profiles import get_profile
@@ -293,7 +298,10 @@ def _narrating(
         worker_agent_id=WORKER_UUID,
         worker_name=WORKER_NAME,
         tally=counters,
-        prepare_workspace=prepare_workspace or (lambda path: None),
+        # Truthy by default because the label is a precondition now: production's
+        # preparer reports whether it stuck, and a test double that said "no"
+        # would refuse every run in this file for a reason none of them is about.
+        prepare_workspace=prepare_workspace or (lambda path: True),
     )
 
 
@@ -695,12 +703,17 @@ async def test_the_platform_worktree_is_relabelled_once_and_only_when_assigned(
     workspace = root / "ws"
     workspace.mkdir(parents=True)
     labelled: list[Path] = []
+
+    def label(path: Path) -> bool:
+        labelled.append(path)
+        return True
+
     with _state(tmp_path) as state:
         executor = _narrating(
             state,
             ScriptedDriver(),
             workspace_root=root,
-            prepare_workspace=labelled.append,
+            prepare_workspace=label,
         )
 
         await executor.execute(_task(workspace=_assigned(workspace)))
@@ -850,6 +863,254 @@ async def test_a_conversation_only_instance_starts_no_consumer_and_says_so(
 
 
 # ---------------------------------------------------------------------------
+# The two vocabularies that meet at the lease
+# ---------------------------------------------------------------------------
+
+LIVE_GRANT = RunnerPermissions(
+    mode=RunnerPermissionMode.ACCEPT_EDITS,
+    allowed_tools=(
+        "read",
+        "edit",
+        "test",
+        "repomesh.start_assigned_task",
+        "context7.resolve-library-id",
+        "context7.query-docs",
+    ),
+    disallowed_tools=("git-push", "github.contents.write", "github.pull_requests.merge"),
+    allowed_paths=("src/**", "scripts/**", "scripts/run_tests.py"),
+    denied_paths=(".git/**", ".github/workflows/**"),
+)
+"""The permissions RepoMesh actually dispatched on 2026-08-28.
+
+Copied from the run's own dispatch row rather than invented, because the defect
+this pins was invisible to every grant a test had written for itself: the words
+are RepoMesh's real capability vocabulary, and none of them is a name codex uses.
+"""
+
+
+def _decide(task: RunnerTask, workspace: Path, tool_name: str, tool_input: dict[str, object]):
+    """What the *real* policy says about a tool, for the task as executed."""
+
+    return AllowlistPermissionPolicy(task.permissions, workspace).decide(tool_name, tool_input)
+
+
+def test_a_codex_grant_reaches_the_policy_in_codexs_own_words(tmp_path: Path) -> None:
+    """Criterion: a governed codex may do what its grant already permitted.
+
+    The live failure, replayed. RepoMesh grants ``edit`` and ``test``; codex asks
+    under ``fileChange`` and ``commandExecution``; ``AllowlistPermissionPolicy``
+    compares the two by set membership and refuses everything — four requests,
+    four denials, nothing written, and a run that failed on tests its agent had
+    never been allowed to affect.
+
+    The assertions are made against the real policy over the real dispatched
+    grant, so this passes only while the two vocabularies genuinely meet. The
+    "before" half is asserted too: a translation that stopped being necessary
+    would make this test pass for the wrong reason.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    inside = {"type": "fileChange", "changes": [{"path": str(workspace / "src" / "pricing.py")}]}
+    outside = {"type": "fileChange", "changes": [{"path": str(workspace / "secrets" / "id.pem")}]}
+    command = {"type": "commandExecution", "command": ["python", "scripts/run_tests.py"]}
+
+    raw = _task(permissions=LIVE_GRANT, workspace=_assigned(workspace))
+    assert _decide(raw, workspace, "fileChange", inside) is PermissionDecision.DENY
+    assert _decide(raw, workspace, "commandExecution", command) is PermissionDecision.DENY
+
+    translated = _translated(raw)
+    assert _decide(translated, workspace, "fileChange", inside) is PermissionDecision.ALLOW
+    assert _decide(translated, workspace, "commandExecution", command) is PermissionDecision.ALLOW
+    assert _decide(translated, workspace, "fileChange", outside) is PermissionDecision.DENY, (
+        "the path allowlist decides before the tool name does, and still must"
+    )
+
+
+def test_the_translation_adds_codex_words_and_takes_nothing_away(tmp_path: Path) -> None:
+    """It is a translation: every granted word survives, and only codex gains."""
+
+    del tmp_path
+    translated = _translated(_task(permissions=LIVE_GRANT))
+    tools = translated.permissions.allowed_tools
+
+    assert set(LIVE_GRANT.allowed_tools) <= set(tools)
+    assert set(tools) - set(LIVE_GRANT.allowed_tools) == {"fileChange", "commandExecution"}
+    assert len(tools) == len(set(tools)), "RunnerPermissions rejects duplicates outright"
+    twice = _translated(translated).permissions.allowed_tools
+    assert twice == tools, "translating an already-translated task is a no-op"
+
+
+def test_a_grant_the_translation_has_no_business_touching_is_left_alone() -> None:
+    """Three tasks it must pass through: another runtime's, an unscoped one, and
+    one whose grant carries neither of the capabilities that map."""
+
+    other_runtime = _task(adapter_id="claude-code", permissions=LIVE_GRANT)
+    assert _translated(other_runtime) is other_runtime
+
+    unscoped = _task(permissions=RunnerPermissions(mode=RunnerPermissionMode.ACCEPT_EDITS))
+    assert _translated(unscoped) is unscoped, (
+        "an empty allowlist means no tool-name rule at all; filling it would scope "
+        "a task nobody scoped"
+    )
+
+    read_only = _task(
+        permissions=RunnerPermissions(
+            mode=RunnerPermissionMode.ACCEPT_EDITS, allowed_tools=("read",)
+        )
+    )
+    assert _translated(read_only) is read_only
+
+
+async def test_every_permission_decision_reaches_the_operators_log(
+    tmp_path: Path, caplog
+) -> None:
+    """Criterion: a denial is explainable without reading codex's rollout files.
+
+    The room is told how many actions were refused and deliberately not which —
+    a room is not a transcript — and the driver's own event carries the tool name
+    but never what the tool was pointed at. So the machine's log is the only
+    place the question "why did this run do nothing" can be answered, and this
+    pins that it is answered there.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    task = _translated(_task(permissions=LIVE_GRANT, workspace=_assigned(workspace)))
+    wrapper = GovernedDriver(
+        (driver := _AskingDriver()), environment={"PATH": "/nowhere"}, tally=ToolActionTally()
+    )
+
+    with caplog.at_level(logging.INFO, logger="repomesh_agent_bridge.runner_consumer"):
+        await wrapper.execute(
+            DriverRequest(
+                executable="codex",
+                workspace=workspace,
+                prompt="do the work",
+                permission_policy=AllowlistPermissionPolicy(task.permissions, workspace),
+            ),
+            get_profile("codex"),
+            lambda event: None,
+        )
+
+    lines = [record.getMessage() for record in caplog.records]
+    assert any("permission deny" in line and "id.pem" in line for line in lines), (
+        "a denial names what was refused"
+    )
+    assert any("permission allow" in line and "pricing.py" in line for line in lines)
+    assert driver.decisions == [PermissionDecision.ALLOW, PermissionDecision.DENY], (
+        "the wrapper reports the policy's verdict and never its own"
+    )
+
+
+# ---------------------------------------------------------------------------
+# A worktree the child cannot write is a run that cannot happen
+# ---------------------------------------------------------------------------
+
+
+async def test_a_worktree_that_cannot_be_labelled_ends_the_run_before_the_cli_starts(
+    tmp_path: Path,
+) -> None:
+    """Criterion (D-4): the label is a precondition, not a diagnostic.
+
+    Writing a mandatory label needs ``WRITE_OWNER``, which an inherited
+    ``Modify`` grant does not carry, so a workspace root outside the operator's
+    own profile keeps its Medium label and the Low-integrity child can write
+    nothing in it. Measured live: the run went ahead anyway, changed nothing, and
+    the room was told its tests had failed — a true sentence about a workspace the
+    agent had never been able to touch.
+
+    Three things are asserted, and the third is the reason for the other two: the
+    driver is never reached, the room hears the existing "could not be carried
+    out" line rather than a new word in a frozen schema, and the exception
+    escapes so the Runner's own failure path reports it to the control plane.
+    """
+
+    root = tmp_path / "worktrees"
+    workspace = root / "ws"
+    workspace.mkdir(parents=True)
+    driver = ScriptedDriver(writes=(("src/pricing.py", "changed\n"),))
+
+    with _state(tmp_path) as state:
+        _anchor(state)
+        executor = _narrating(
+            state,
+            driver,
+            workspace_root=root,
+            prepare_workspace=lambda path: False,
+        )
+
+        with pytest.raises(WorkspaceNotWritable):
+            await executor.execute(_task(workspace=_assigned(workspace)))
+
+        assert driver.requests == [], "no CLI is launched against a workspace it cannot write"
+        started, terminal = _run_lane(state)
+        assert started[:2] == (1, "run_started") and RUN_STARTED_BODY in started[2]
+        assert terminal[:2] == (3, "run_failed") and RUN_CRASHED_BODY in terminal[2]
+
+
+async def test_a_run_nobody_started_from_a_room_still_needs_a_writable_worktree(
+    tmp_path: Path,
+) -> None:
+    """The silent path is silent about narration, not about preconditions."""
+
+    root = tmp_path / "worktrees"
+    workspace = root / "ws"
+    workspace.mkdir(parents=True)
+    driver = ScriptedDriver()
+
+    with _state(tmp_path) as state:
+        executor = _narrating(
+            state, driver, workspace_root=root, prepare_workspace=lambda path: False
+        )
+        with pytest.raises(WorkspaceNotWritable):
+            await executor.execute(_task(workspace=_assigned(workspace)))
+        assert driver.requests == []
+
+
+# ---------------------------------------------------------------------------
+# codex's own configuration for a governed run
+# ---------------------------------------------------------------------------
+
+
+def test_a_governed_codex_home_is_configured_to_ask_before_it_acts(tmp_path: Path) -> None:
+    """Criterion (D-3): drop codex's nested sandbox, keep its approvals.
+
+    codex's Windows filesystem sandbox builds a restricted token, which a process
+    already running at Low integrity cannot do, so every ``apply_patch`` died
+    inside the helper before it reached an approval. Turning that sandbox off is
+    sound because it was never the boundary — the restricted token and the single
+    Low-labelled worktree are — but it is only sound *while codex still asks*,
+    because the approval callback is where this Bridge's decisions are made and
+    where the conversation track's deny-all is enforced.
+
+    So the asking half is asserted as an invariant. A future edit that set
+    ``approval_policy = "never"`` would silently turn both tracks into "act and
+    report", and this is the test that refuses to let it.
+    """
+
+    settings = tomllib.loads(GOVERNED_CODEX_CONFIG)
+    assert settings["sandbox_mode"] == "danger-full-access"
+    # codex 0.149.1's own list, quoted from the error it raised at a value that
+    # was not on it: untrusted, on-failure, on-request, granular, never. Only
+    # "never" stops the approvals, and an unparseable value is worse than either
+    # — codex logs one line to stderr and silently uses its defaults.
+    assert settings["approval_policy"] in {"untrusted", "on-failure", "on-request", "granular"}
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    _write_governed_codex_config(codex_home)
+    assert (codex_home / "config.toml").read_text(encoding="utf-8") == GOVERNED_CODEX_CONFIG
+
+    # codex-home is Low-labelled so the CLI can keep its own state there, which
+    # means a Low process can edit this file; a Bridge that rewrote it blindly
+    # would erase the evidence that one had.
+    (codex_home / "config.toml").write_text("sandbox_mode = 'read-only'\n", encoding="utf-8")
+    _write_governed_codex_config(codex_home)
+    assert (codex_home / "config.toml").read_text(encoding="utf-8") == GOVERNED_CODEX_CONFIG
+
+
+# ---------------------------------------------------------------------------
 # Where this worker's Runner ledger lives
 # ---------------------------------------------------------------------------
 
@@ -879,6 +1140,30 @@ def test_the_runner_ledger_is_per_worker_and_sits_beside_the_rest_of_its_state(
 class _AlwaysAllow:
     def decide(self, tool_name: str, tool_input: object) -> PermissionDecision:
         return PermissionDecision.ALLOW
+
+
+class _AskingDriver:
+    """A driver that asks its request's policy about two files and remembers the
+    answers, the way codex asks over the app-server protocol."""
+
+    def __init__(self) -> None:
+        self.decisions: list[PermissionDecision] = []
+
+    @property
+    def family(self) -> DriverFamily:
+        return DriverFamily.APP_SERVER
+
+    async def execute(self, request, profile, observer) -> DriverResult:  # type: ignore[no-untyped-def]
+        for target in ("src/pricing.py", "secrets/id.pem"):
+            self.decisions.append(
+                request.permission_policy.decide(
+                    "fileChange",
+                    {"type": "fileChange", "changes": [{"path": str(request.workspace / target)}]},
+                )
+            )
+        return DriverResult(
+            status=DriverResultStatus.SUCCEEDED, summary="", diagnostics="", native_session_id=None
+        )
 
 
 class _StubExecutor:

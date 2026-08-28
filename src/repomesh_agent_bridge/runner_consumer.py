@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -72,6 +72,7 @@ from repomesh_runner.drivers.base import (
     DriverRequest,
     DriverResult,
     PermissionDecision,
+    PermissionPolicy,
     ProtocolDriver,
 )
 from repomesh_runner.drivers.supervision import ProcessFactory, resolve_binary
@@ -97,7 +98,9 @@ from .ports import GovernedTaskPort
 from .state import BridgeState, RunAnchor
 
 __all__ = [
+    "CODEX_TOOL_VOCABULARY",
     "EVENT_SINK_PATH",
+    "GOVERNED_CODEX_CONFIG",
     "RUN_CRASHED_BODY",
     "RUN_STARTED_BODY",
     "TASK_SOURCE_PATH",
@@ -109,6 +112,7 @@ __all__ = [
     "NarratingExecutor",
     "RunnerConsumer",
     "ToolActionTally",
+    "WorkspaceNotWritable",
     "WorkspacePreparer",
     "build_runner_consumer",
     "governed_environment",
@@ -181,12 +185,172 @@ the words.
 _MAX_REASON_CHARS = 200
 """Even a quotable reason is bounded: a room line is a summary, not a report."""
 
+_MAX_TARGET_CHARS = 300
+"""How much of a tool's target one log line carries. Bounded because a patch body
+is unbounded and a log that swallowed one would bury the decision beside it."""
+
 WorkspacePreparer = Callable[[Path], object]
 """``prepare(path)`` — make the platform's worktree writable by the restricted
-child. The return value is deliberately ignored: production passes
+child, reporting whether it worked. Production passes
 :func:`~repomesh_agent_bridge.adapters.restricted_process.set_low_integrity`,
-which reports whether the label stuck, and a run that cannot write its workspace
-fails on its own evidence rather than on a boolean read here."""
+whose boolean is now the run's precondition rather than a diagnostic: see
+:meth:`NarratingExecutor._label_workspace`."""
+
+CODEX_TOOL_VOCABULARY: Mapping[str, tuple[str, ...]] = {
+    "edit": ("fileChange",),
+    "test": ("commandExecution",),
+}
+"""RepoMesh's capability words → the tool names codex's approvals actually carry.
+
+Two vocabularies meet at this boundary and neither side can be moved. RepoMesh
+grants capabilities in its own words — ``read``, ``edit``, ``test`` plus the MCP
+operation ids a role's servers expose — and puts them in the task's
+``allowed_tools``. codex asks for approval under the *item type* of the thing it
+wants to do, and its app-server surface has exactly two:
+``commandExecution`` and ``fileChange``. ``AllowlistPermissionPolicy`` compares
+one against the other by set membership, so on a real governed run every single
+approval falls through to "tool not in allowlist" and is denied — measured live
+on 2026-08-28, where four consecutive codex requests were refused, nothing was
+written and the run failed on its own untouched tests.
+
+The translation is **additive and codex-only**: the granted words stay in the
+list, so nothing that was permitted stops being permitted, and a task for any
+other adapter passes through untouched.
+
+Why this is a vocabulary bridge and not a grant of new power:
+
+*   The path allowlist still decides. ``AllowlistPermissionPolicy`` consults
+    ``denied_paths`` and then ``allowed_paths`` *before* it ever looks at the
+    tool name, so a ``fileChange`` aimed outside the grant is refused at the
+    path rule and never reaches the name rule this mapping affects.
+*   The three hard gates are the server's and are untouched: a changed path off
+    the allowlist voids the run before the tests, a failing test command fails
+    it and commits nothing, and a commit happens only on a success that changed
+    something.
+*   The real boundary was never this callback. It is the Low-integrity token the
+    child runs on and the single Low-labelled directory it can write; the
+    protocol callback is the second, cooperative line the contract already
+    describes it as.
+
+What it *does* widen, stated plainly rather than buried: a grant carrying
+``test`` now approves any ``commandExecution``, not only the task's own test
+commands, because the policy reads string leaves and cannot see a path inside a
+shell command string. The mitigation is the containment above, not this list.
+"""
+
+
+class WorkspaceNotWritable(RuntimeError):
+    """The platform's worktree could not be made writable by the restricted child.
+
+    Raised instead of executing, which is the whole point: an unlabelled worktree
+    produces a run that reads its repository, changes nothing, fails its own
+    untested tests and blames them — the failure mode measured live on
+    2026-08-28, where the room was told ``test_command_failed`` about a workspace
+    the agent had never been able to touch.
+
+    It travels the failure path the Runner already has. ``ExecuteRunnerTask``
+    turns any exception out of the executor into a ``runner.failed`` event for
+    the control plane, and ``NarratingExecutor`` tells the room the run could not
+    be carried out — existing words, existing ordinal, no new vocabulary in a
+    frozen schema.
+
+    The message names no path: it is copied into a control-plane event, and the
+    machine that holds the workspace is the one with the log.
+    """
+
+
+def _translated(task: RunnerTask) -> RunnerTask:
+    """Add the codex names for the capabilities this task was already granted.
+
+    See :data:`CODEX_TOOL_VOCABULARY` for why this is a translation rather than a
+    widening of the grant. Three things keep it narrow:
+
+    *   it runs only for the codex adapter, so no other runtime's task is touched;
+    *   it only ever appends, and only for a capability the grant already carries;
+    *   an empty ``allowed_tools`` is left empty, because in this policy an empty
+        allowlist means "no tool-name rule at all" and adding names to it would
+        turn a task nobody scoped into one scoped to exactly two verbs.
+    """
+
+    permissions = task.permissions
+    if task.adapter_id != CODEX_PROFILE_ID or not permissions.allowed_tools:
+        return task
+    granted = list(permissions.allowed_tools)
+    for capability, aliases in CODEX_TOOL_VOCABULARY.items():
+        if capability not in permissions.allowed_tools:
+            continue
+        # ``RunnerPermissions`` rejects duplicates outright, so a task that
+        # already names the codex word (a future RepoMesh that learned it, or a
+        # replay of a translated task) must not have it added twice.
+        granted.extend(alias for alias in aliases if alias not in granted)
+    if len(granted) == len(permissions.allowed_tools):
+        return task
+    return dataclasses.replace(
+        task,
+        permissions=dataclasses.replace(permissions, allowed_tools=tuple(granted)),
+    )
+
+
+class _LoggingPermissionPolicy:
+    """The task's own policy, with every decision written to the operator's log.
+
+    A wrapper rather than a change to the policy: ``DriverExecutor`` builds the
+    real one from ``task.permissions`` and hands it over on the ``DriverRequest``,
+    so the Bridge can decorate it on the way to the driver without owning the
+    rules or restating them.
+
+    This log line is the only place a denial is explained. The room gets a count
+    (``4 tool action(s), 4 denied``) because a room is not a transcript, and the
+    driver's ``PERMISSION_REQUEST`` event carries the tool name but not what the
+    tool was pointed at — so before this wrapper, finding out *why* a governed run
+    did nothing meant reading codex's own rollout files. The tool input is
+    summarised and bounded here: it is a machine-local diagnostic, which is where
+    the frozen contract has always said the words belong.
+
+    No run id is written, because the serve loop runs one task at a time and has
+    already logged ``accepted task run=… attempt=…`` above these lines. Carrying
+    one would mean a second piece of per-execution mutable state shared between
+    this wrapper and the executor, to restate something the line above already
+    says.
+    """
+
+    def __init__(self, policy: PermissionPolicy) -> None:
+        self._policy = policy
+
+    def decide(self, tool_name: str, tool_input: Mapping[str, object]) -> PermissionDecision:
+        decision = self._policy.decide(tool_name, tool_input)
+        _logger.info(
+            "permission %s: %s on %s", decision.value, tool_name, _target_summary(tool_input)
+        )
+        return decision
+
+
+def _target_summary(tool_input: Mapping[str, object]) -> str:
+    """A short, bounded rendering of what a tool was pointed at.
+
+    Whatever string leaves the input has, in order, joined and cut. Deliberately
+    not a parser: codex puts a command under ``command``, a patch under
+    ``changes`` and neither shape is promised, so a summary that guessed at keys
+    would go blank on the day the shape changed — which is the day the log is
+    needed. Never rendered into a room.
+    """
+
+    leaves = [value for value in _string_leaves(tool_input) if value.strip()]
+    if not leaves:
+        return "(no target)"
+    rendered = " ".join(leaves)
+    return rendered[:_MAX_TARGET_CHARS] if len(rendered) > _MAX_TARGET_CHARS else rendered
+
+
+def _string_leaves(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _string_leaves(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _string_leaves(item)
 
 
 class RunnerConsumer(Protocol):
@@ -234,6 +398,45 @@ def runner_state_root(worker_agent_id: UUID, state_dir: Path | None = None) -> P
     return (state_dir or default_state_dir()) / "runner" / str(worker_agent_id)
 
 
+GOVERNED_CODEX_CONFIG = """\
+# Written by repomesh-agent-bridge when governed execution is turned on.
+# sandbox_mode: codex's own filesystem sandbox is a nested restriction this
+#   process cannot create. The Bridge already launches codex on a Low-integrity
+#   token, and a Low-integrity process cannot build the restricted token codex's
+#   Windows sandbox helper needs, so every apply_patch died in the helper before
+#   it reached an approval ("windows sandbox failed: os error 5", measured
+#   2026-08-28). Containment here is the restricted token and the single
+#   Low-labelled worktree, not a second sandbox inside it.
+# approval_policy: which is why this must stay a policy that asks. The protocol
+#   approval callback is where every governed decision is made and where the
+#   conversation track's deny-all is enforced, so a policy that stopped asking
+#   would turn both tracks into "do it and report", which is the one outcome
+#   neither track may have. "untrusted" is codex 0.149.1's name for "ask before
+#   running anything an explicit exec policy rule does not already allow".
+sandbox_mode = "danger-full-access"
+approval_policy = "untrusted"
+"""
+"""codex's own configuration for a Bridge that executes governed runs.
+
+Written into the session's ``CODEX_HOME`` — which the conversation track shares,
+because the two tracks are deliberately one codex identity on one machine with
+one set of rollout files. That sharing is safe in exactly one direction and it is
+worth being precise about which: the file removes codex's *internal* sandbox and
+keeps its *approval* requests, and the conversation track's guarantee has never
+rested on the former. Its policy denies every request it is asked about, so as
+long as codex keeps asking, a room turn still executes nothing.
+
+That "as long as" is a property of codex, not of this file, so it is checked
+rather than assumed: a governed run logs every decision it makes (see
+:class:`_LoggingPermissionPolicy`), and a build where the requests stop arriving
+is a build where this file must not ship.
+
+Only written when governed execution is on. A Bridge running conversation-only
+(no ``--workspace-root``) never calls this path and its codex-home keeps whatever
+defaults codex ships with.
+"""
+
+
 def governed_environment(session_dir: Path) -> dict[str, str]:
     """The six-key environment a governed codex is launched with (J-12).
 
@@ -255,9 +458,31 @@ def governed_environment(session_dir: Path) -> dict[str, str]:
             "governed execution needs both codex and Node.js on PATH; install them and "
             "start the Bridge again"
         )
-    return session_environment(
-        prepare_session_dirs(session_dir), executable_path(node_binary, cli_binary)
-    )
+    dirs = prepare_session_dirs(session_dir)
+    _write_governed_codex_config(dirs.codex_home)
+    return session_environment(dirs, executable_path(node_binary, cli_binary))
+
+
+def _write_governed_codex_config(codex_home: Path) -> None:
+    """Put :data:`GOVERNED_CODEX_CONFIG` in place, rewriting only on a change.
+
+    Rewriting unconditionally would be simpler and worse: codex-home carries the
+    Low label so that the CLI can maintain its own state there (PR 4 §7.4), which
+    means a Low-integrity process can edit this file, and a Bridge that rewrote it
+    every start would erase the evidence that something had. Comparing first
+    turns that into a log line.
+    """
+
+    config = codex_home / "config.toml"
+    try:
+        current = config.read_text(encoding="utf-8")
+    except OSError:
+        current = None
+    if current == GOVERNED_CODEX_CONFIG:
+        return
+    if current is not None:
+        _logger.warning("codex config in %s differs from the governed one; rewriting", codex_home)
+    config.write_text(GOVERNED_CODEX_CONFIG, encoding="utf-8")
 
 
 @dataclass(slots=True)
@@ -306,11 +531,16 @@ class ToolActionTally:
 
 
 class GovernedDriver:
-    """A ``ProtocolDriver`` that supplies the environment and counts tool events.
+    """A ``ProtocolDriver`` that supplies the environment, counts tool events and
+    logs each permission decision.
 
-    Both jobs belong to the same wrapper because both are per-execution and the
-    driver boundary is where an execution begins. ``family`` delegates, so the
-    executor's driver lookup is unchanged.
+    All three jobs belong to the same wrapper because all three are
+    per-execution and the driver boundary is where an execution begins.
+    ``family`` delegates, so the executor's driver lookup is unchanged.
+
+    The decision log is put on here rather than anywhere else because this is the
+    only place the Bridge holds the ``DriverRequest``, and the request is what
+    carries the policy ``DriverExecutor`` built.
     """
 
     def __init__(
@@ -339,7 +569,13 @@ class GovernedDriver:
             observer(event)
 
         return await self._driver.execute(
-            dataclasses.replace(request, environment=self._environment), profile, counting
+            dataclasses.replace(
+                request,
+                environment=self._environment,
+                permission_policy=_LoggingPermissionPolicy(request.permission_policy),
+            ),
+            profile,
+            counting,
         )
 
 
@@ -384,14 +620,22 @@ class NarratingExecutor:
         # so a task that never reaches a driver cannot report the last one's
         # numbers.
         self._tally.reset()
-        self._label_workspace(task)
+        # Translated once, here, so everything downstream — the policy
+        # ``DriverExecutor`` builds, the evidence gates, the narration — sees one
+        # task. The room-facing ids and the workspace are untouched by it.
+        task = _translated(task)
         anchor = self._state.anchor_for_run(task.run_id)
         if anchor is None:
             _logger.info("run %s was not started from a room; executing it quietly", task.run_id)
+            self._label_workspace(task)
             return await self._executor.execute(task)
 
         self._observe(anchor, task, STARTED_ORDINAL, "run_started", RUN_STARTED_BODY)
         try:
+            # Inside the try, and before the executor: a workspace the child
+            # cannot write is a run that cannot happen, and saying so here is
+            # what stops it being reported an hour later as a test failure.
+            self._label_workspace(task)
             result = await self._executor.execute(task)
         except BaseException:
             # The room is told the run did not happen; the exception carries on
@@ -424,6 +668,17 @@ class NarratingExecutor:
         worktree while it is labelled. The alternative on offer is not a tighter
         label but no governed execution at all.
 
+        **A failure here ends the run.** The label does not always stick, and the
+        reason is an ownership fact nothing upstream checks: writing a mandatory
+        label needs ``WRITE_OWNER`` on the directory, which an inherited
+        ``Modify`` grant does not carry and which being the owner does not confer
+        either. A workspace root outside the user's own profile therefore silently
+        keeps its Medium label — measured live on 2026-08-28 under
+        ``D:\\...\\workspaces``, where the run went ahead, the agent could not
+        write a byte, and the room was told its tests had failed. The operator's
+        fix is one command (``icacls <root> /grant <user>:(OI)(CI)F``); what this
+        refusal buys is being told to run it.
+
         Only a task carrying a workspace assignment is labelled. A governed
         dispatch always carries one; a task without one runs in the executor's own
         transitional fallback directory, which this process created and already
@@ -432,7 +687,12 @@ class NarratingExecutor:
 
         if task.workspace is None:
             return
-        self._prepare_workspace(Path(task.workspace.path))
+        if not self._prepare_workspace(Path(task.workspace.path)):
+            raise WorkspaceNotWritable(
+                "the prepared worktree could not be labelled Low integrity, so the "
+                "restricted agent process cannot write it; grant this machine's user "
+                "full control of the runner workspace root and start the run again"
+            )
 
     def _observe_tests(
         self, anchor: RunAnchor, task: RunnerTask, result: RunnerExecutionResult
