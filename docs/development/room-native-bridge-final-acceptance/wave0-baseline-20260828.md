@@ -56,12 +56,24 @@ W-A1  PR 5.5A+B    [波次1·A线]  5.5A 段已验收合入: baseline e3eec185, 
       (ExternalWorkerProjection 硬编码 worker skills → leader 必 409)。记账风险:
       ①leaderName 为空时 leader 身份守卫 fail-open;②skills 修复未经真机,E1 做只读核验;
       ③PR 8 侧 BINDING_PATH 仍 v1 硬编码 + enrollment v2 解析全归 PR 8。
-      5.5B 段进行中(迁移 0037 以 down_revision=20260828_0038 入链;链序=合并序,与编号序不同)
+      5.5B 段已验收合入: 8f706382/71a74756/0b89f959(adoption 一读一决、domain 单向闩锁、
+      迁移 0037 down_revision=0038、前端只标 Leader 自拆)。记账: E1 时对 containerManaged
+      读取路径与 leader skills 做真机只读核验(两条并一次)。W-A1 全单收口;A 线转 W-A2
 W-B1  PR 7 核心纵切 [波次1·B线]  状态: 已验收合入  baseline: e3eec185  合入: 91b2e85e/492e715f/2b882089
       已裁决偏差: ①malformed REPOMESH_RUNNER_WORKER_TOKENS 在 leader 面答 401+ERROR 日志
       (冻结 enum 无 server-fault 码;与 agent_runtime 的 503 不一致,W-A2 重审);
       ②to_wire 对超 maxLength 的 title/workerName 截断(有损,记账)
-W-C1  V1→PR6       [波次1·C线]  状态: 待领取   baseline: ____(依赖 E0a,已备)
+W-C1  V1→PR6       [波次1·C线]  V1 段 **PASS**(08-28,run 2c00225e:三处对账全过+治理活着 15 allow/3 deny)
+      过程揪出并修掉六个缺陷(全在主分支): 234222cc(C-2 词表翻译+C-4 标签门禁+C-5 决策日志)、
+      57f93532/e38bd5df(C-3 governed codex-home 配置)、6fd4e1f1(C-7 剥「=workspace 根」的 cwd)、
+      cd81e691(C-5 迭代)、b1e00c21(**C-8a 红线窄口**: runner 审批应答词表 approved/denied/abort
+      →accept/decline/cancel,活体捕获为证,tests/runner 246→255;既有 4 个钉死旧词表的断言字面量
+      被迫同步,已注明来源)。证据 output/bridge-team/v1-evidence/(38 件,gitignored)。
+      遗留记账: ①fileChange 审批按名恒拒(_approval_tool_name 回退 method 串;本轮 codex 自行
+      回退 shell 不阻断;C-9 候选=Bridge 词表翻译追加该 method 名,路径钳制由叶子行走保留);
+      ②runner 通用策略把 cwd 当写目标(runner 线真缺陷,Bridge 已 C-7 绕过);③obs-1 坏 config
+      锁死启动序/obs-2 config.toml 整写抹 codex 自写键/obs-3 房间指路日志无日志 → PR 6 候选;
+      ④D-2 实测已非阻断(相对路径 shell 读 context 被 allow)。PR 6 段接续开工
 W-A2  PR 7 完整集成 [波次2·A线]  状态: 排队
 W-B2  PR 8         [波次2·B线]  状态: 排队
 W-C2  PR 9+Q2      [波次2·C线]  状态: 排队
