@@ -3,6 +3,7 @@
 from .application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    DispatchedWorkerTaskReader,
     LeaderDecisionLane,
     ObserveExecutionPlan,
     ReadLeaderAssignment,
@@ -56,6 +57,7 @@ __all__ = [
     "AdvanceExecutionPlan",
     "AssignTaskCommand",
     "DecomposeRepositoryTask",
+    "DispatchedWorkerTaskReader",
     "ExecutionPlan",
     "ExecutionPlanStatus",
     "ExecutionPlanStatusSnapshot",

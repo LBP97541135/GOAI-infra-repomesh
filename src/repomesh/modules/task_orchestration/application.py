@@ -310,6 +310,46 @@ class ObserveExecutionPlan:
         )
 
 
+class DispatchedWorkerTaskReader:
+    """Answers :class:`RoomReportEligibilityReader` from this module's own rules.
+
+    "Carries a published task package" is not a stored flag — nothing writes
+    one — so it is derived from the two facts that make it true, and only
+    those two:
+
+    * the assignee is a WORKER, and
+    * the task has a recorded assignment key, i.e. it was dispatched.
+
+    That pair is exactly the branch in ``_deliver_assignment`` that publishes:
+    a WORKER assignee makes publication mandatory there (a missing publisher
+    raises rather than skipping), so a dispatched WORKER task and a task with
+    a published package are the same set. The derivation lives here, next to
+    the code it describes, precisely so that a change to that branch has one
+    obvious place to update.
+
+    The window between ``assign(deliver=False)`` and ``deliver_assignment``
+    reads as "no room report accepted" even though nothing is published yet.
+    That is the right answer for a different reason: a task that has not been
+    announced has nothing to report on, and refusing is the safe direction.
+    """
+
+    def __init__(self, tasks: TaskStore, directory: AgentPrincipalReader) -> None:
+        self._tasks = tasks
+        self._directory = directory
+
+    async def accepts_room_report(self, task_id: UUID) -> bool:
+        task = await self._tasks.get(task_id)
+        if task is None:
+            # Not this reader's refusal to make: the report path already has
+            # its own answer for a task that does not exist, and swallowing it
+            # here would turn a wrong task id into silence.
+            return True
+        assignee = await self._directory.get_view(task.assignee_agent_id)
+        if assignee is None or assignee.role is not AgentRole.WORKER:
+            return True
+        return await self._tasks.assignment_key(task_id) is None
+
+
 class TaskOrchestrator:
     def __init__(
         self,

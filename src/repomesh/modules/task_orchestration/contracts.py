@@ -467,6 +467,27 @@ class TaskReportGateway(Protocol):
     async def report(self, command: ReportTaskCommand, *, idempotency_key: str) -> TaskView: ...
 
 
+class RoomReportEligibilityReader(Protocol):
+    """May a room's JSON message still move this task's state? (D-7)
+
+    ``False`` for the one case the adjudication closes: a task assigned to a
+    WORKER that was dispatched with a published task package. That task is a
+    coding task, its truth is the Runner's event stream, and a chat message
+    claiming it succeeded is at best a duplicate and at worst a Worker
+    reporting on work it did not do. Everything else — a leader task, a task
+    nothing ever dispatched, a task id that names nothing — stays ``True``, so
+    the paths this ruling does not close keep their existing behaviour,
+    including their existing refusals.
+
+    Narrow on purpose. ``collaboration`` needs exactly this one bit and must
+    not learn to read task rows to compute it: the rule is
+    ``task_orchestration``'s (it is a statement about how *its* dispatch works)
+    and lives with the module that could change it.
+    """
+
+    async def accepts_room_report(self, task_id: UUID) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SupersedeTaskCommand:
     """Mark a task as SUPERSEDED by a newer plan version."""
