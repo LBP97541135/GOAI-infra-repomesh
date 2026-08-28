@@ -123,10 +123,25 @@ W-B2  PR 8 底座     [波次2·B线]  状态: **底座段已验收合入(08-28)
       门禁: bridge 分项 484(PR 6 时 390,+94)、contracts 260 零漂移、
       全量 **2147/23 exit 0**(前基线 2053/23)。四禁区(supervisor.py/服务端/冻结契约/
       迁移)零触碰已核
-W-B2b supervisor 集成 [波次2·B线] 状态: 施工中(08-28,opus 子代理,分支 feat/w-b2-supervisor,
-      baseline 6544872e)。范围: supervisor role 感知识别 leader planning 派活正文
-      (application.py:1358-1382)与 review-due 通知(:1478-1502),接 LeaderActionPort
-      走协调会话双流程;幂等沿 PR 6 纪律;fixture=服务端正文逐字。worker 轨零行为变化
+W-B2b supervisor 集成 [波次2·B线] 状态: **已验收合入(08-28)——PR 8 全部收官**
+      合入 `bc455b1d`(cherry-pick 自 feat/w-b2-supervisor 的 ad9ccb42);
+      门禁: bridge 分项 515(前 484,+31)、contracts+task_orchestration 413、
+      全量 **2178/23 exit 0**(前 2147/23)。
+      两项主脑裁决(均接受): ①跨重启不双跑=「先 fetch_assignment 再决策」而非本地
+      state 表——RepoMesh phase 即持久真相,免 SCHEMA_VERSION 升版,陈旧通知只花一次 GET;
+      ②畸形草稿房间文案=固定句+详情进日志(模型产出非平台笔迹,不逐字入房;
+      RepoMesh refusal 照旧逐字)——与 PR 5 白名单纪律同构。
+      fixture 比工单更强: 两种通知正文由**运行服务端真实 leader-mode 轮次**取得
+      (非逐字抄写),服务端改措辞自动跟随、改路由必红。
+      M7 smoke 预检清单(子代理产出,主脑确认): ①头号未知=leader DM 事件是否带
+      m.mentions(matrix.py:129-150 只在 recipient_resource_name 非空且带 control_plane
+      时写),不带则 leader 轨活着但沉默——smoke 第一步先抓一条真实 DM 事件;
+      ②两个 POST 未对真实路由跑过(已开后台任务补 in-process ASGI 用例);
+      ③leader enrollment 凭据只认 env: locator 且放 external member token(D-6);
+      ④leader DM 房须同时在 enrollment 与 binding v2 的 allowedRoomIds;
+      ⑤M7 必须一 leader+一能真执行的 worker(review_due 要 worker 全终态);
+      ⑥真 codex 不肯只吐 JSON 时走拒绝草稿路径,房间一条 note、人再 @ 重试(设计预期)。
+      残余记账: 900s 超时覆盖整轮;RepoMeshGovernedTaskAdapter 至今无组合根关闭(既有小缺口)
 W-C2  PR 9+Q2      [波次2·C线]  状态: 施工中(08-28,opus 子代理,分支 feat/w-c2-room-timeline,
       baseline 6544872e)。⚠ 迁移 0039 down_revision=0040(链尾已变,旧交接「down 写 0037」作废);
       Q2 经 task_orchestration.contracts 窄 reader;D-3 出站优先去重/D-4 如实未知/白名单三裁决。
