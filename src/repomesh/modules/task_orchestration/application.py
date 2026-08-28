@@ -1,7 +1,8 @@
 import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -25,6 +26,9 @@ from repomesh.modules.project.contracts import (
     TopologyAwareCheckpointFallback,
 )
 from repomesh.modules.task_orchestration.contracts import (
+    LEADER_PROVENANCE_SOURCE,
+    AcceptedPlanView,
+    AcceptedReviewView,
     AssignTaskCommand,
     BatchDeliveryRefused,
     DeliveryStatePort,
@@ -35,23 +39,32 @@ from repomesh.modules.task_orchestration.contracts import (
     LeaderActionRefused,
     LeaderAssignmentPhase,
     LeaderAssignmentView,
+    LeaderReviewEvidenceView,
+    LeaderReviewVerdict,
     LeaderSafetyEnvelopeView,
+    LeaderWorkerTaskDraft,
     PlannedTaskExecutionStatus,
+    PlanReceipt,
     ProjectTaskProgress,
     PublishedTaskPackage,
     RedispatchScope,
     ReportTaskCommand,
     RepositoryAssignmentPackage,
+    RepositoryPlanDecision,
+    RepositoryReviewDecision,
     RepositoryTaskFactsView,
+    ReviewReceipt,
     RoundRedispatch,
     SupersedeTaskCommand,
     TaskAssignmentGateway,
     TaskAssignmentPublisher,
     TaskOrigin,
     TaskRedispatchGateway,
+    TaskReportGateway,
     TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
+    WorkerEvidenceView,
     WorkerRosterEntryView,
     WorkerTaskExecutionStatus,
 )
@@ -77,6 +90,42 @@ from repomesh.shared.idempotency import command_fingerprint
 _logger = logging.getLogger(__name__)
 
 _FAILED_TASK_STATUSES = frozenset({TaskStatus.FAILED, TaskStatus.CANCELLED})
+
+#: A worker task nobody is waiting on any more. Wider than
+#: ``FINAL_TASK_STATUSES`` by exactly ``BLOCKED``, because the frozen contract
+#: says review opens when no worker task is still ``assigned``/``in_progress``
+#: and lists ``blocked`` among the statuses a leader may be shown. A blocked
+#: task is resting, not running: something has to decide what happens to it,
+#: and in leader mode that decision is the leader's review.
+_OPEN_TASK_STATUSES = frozenset({TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS})
+
+
+def _worker_evidence(task: TaskView) -> WorkerEvidenceView:
+    """One worker task's contribution to the round's frozen evidence.
+
+    Everything is read off the task view, which already parses the Runner's
+    document out of ``result_summary`` — so there is no run lookup to make and
+    no second parser to keep in step with that one.
+
+    ``evidence is None`` is its own fact and is not smoothed over: a task whose
+    result was prose rather than a Runner document genuinely produced no run,
+    no commit, no changed files and no test results, and the nulls and empty
+    lists say so. ``diff_stat`` is always absent because nothing in this system
+    computes one; it is left unset rather than filled with a plausible string.
+    """
+
+    evidence = task.evidence
+    return WorkerEvidenceView(
+        worker_task_id=task.id,
+        worker_agent_id=task.assignee_agent_id,
+        status=task.status,
+        run_id=evidence.run_id if evidence is not None else None,
+        commit_sha=evidence.commit_sha if evidence is not None else None,
+        changed_files=evidence.changed_files if evidence is not None else (),
+        test_results=evidence.test_results if evidence is not None else (),
+        diff_stat=None,
+        summary=evidence.summary_text if evidence is not None else task.result_summary,
+    )
 
 #: Every ``idempotency_key`` column in the schema is ``String(200)`` — the task
 #: and execution-plan stores here, the collaboration message store a dispatch
@@ -1269,6 +1318,12 @@ class AdvanceExecutionPlan:
         children = await self._tasks.list_by_parent(parent.id)
         if not children:
             return parent
+        if await self._open_review_if_leader_side(parent, children):
+            # Leader mode: the leader task does not settle itself. It is
+            # returned unchanged, which stops ``on_task_terminal`` at its own
+            # "not final yet" guard and leaves the batch parked until a verdict
+            # arrives through POST /review.
+            return parent
         failed = tuple(child for child in children if child.status in _FAILED_TASK_STATUSES)
         if failed:
             updated = parent.report(
@@ -1289,6 +1344,93 @@ class AdvanceExecutionPlan:
             current = await self._tasks.get(parent.id)
             return current if current is not None else parent
         return updated
+
+    async def _open_review_if_leader_side(self, parent: Task, children: tuple[Task, ...]) -> bool:
+        """Turn a finished leader-mode round into a review, and say so.
+
+        Returns True whenever this leader task is one the platform must not
+        settle for itself — which is every leader-mode assignment past
+        ``planning``, whether or not this particular event completed the round.
+        Saying True while work is still in flight is the point: the alternative
+        is falling through to the server-side roll-up, and that is exactly the
+        automatic termination leader mode exists to remove.
+
+        Server mode reaches none of this. With no lane wired there is no read
+        at all, and with a lane wired a server-mode team has no assignment row,
+        so the ordinary path is byte-identical to what it was.
+
+        The transition itself is taken once. It fires when no worker task is
+        still open, and only out of ``executing`` — a round already in
+        ``review_due`` re-enters here on every sibling's terminal event, and
+        re-snapshotting would rewrite the evidence a leader may already be
+        reading, which is the one thing the snapshot exists to prevent.
+        """
+
+        if self._leader_lane is None:
+            return False
+        assignment = await self._leader_lane.assignments.get(parent.id)
+        if assignment is None:
+            return False
+        if assignment.phase is not LeaderAssignmentPhase.EXECUTING:
+            return True
+        if any(child.status in _OPEN_TASK_STATUSES for child in children):
+            return True
+        evidence = LeaderReviewEvidenceView(
+            review_revision=assignment.review_revision,
+            worker_evidence=tuple(
+                _worker_evidence(child.to_view()) for child in children
+            ),
+        )
+        await self._leader_lane.assignments.save(
+            replace(
+                assignment,
+                phase=LeaderAssignmentPhase.REVIEW_DUE,
+                review_evidence=evidence,
+            )
+        )
+        await self._notify_review_due(parent, assignment, evidence)
+        return True
+
+    async def _notify_review_due(
+        self,
+        parent: Task,
+        assignment: LeaderAssignmentView,
+        evidence: LeaderReviewEvidenceView,
+    ) -> None:
+        """Tell the leader its round is waiting on a verdict.
+
+        The same collaboration path and the same idempotency discipline as the
+        planning notification: org-leader → repository-leader routes to the
+        team's leader DM room, and the key names the round, so a replay of the
+        terminal event that opened review does not post a second time.
+        """
+
+        assert self._leader_lane is not None  # noqa: S101 - guarded by the caller
+        await self._leader_lane.collaboration.send(
+            SendCollaborationMessageCommand(
+                organization_id=assignment.organization_id,
+                project_id=assignment.project_id,
+                repository_id=assignment.repository_id,
+                task_id=parent.id,
+                sender_agent_id=parent.assigned_by_agent_id,
+                recipient_agent_id=assignment.leader_agent_id,
+                kind=CollaborationMessageKind.DECISION,
+                subject=f"{parent.title}: awaiting your review",
+                body=(
+                    f"All {len(evidence.worker_evidence)} worker tasks of this round have "
+                    "finished, so this repository is waiting on your verdict.\n\n"
+                    "Read the evidence, then submit approve, request_rework or escalate:\n"
+                    f"  GET  /api/v1/agent-actions/leader/assignments/{parent.id}\n"
+                    f"  POST /api/v1/agent-actions/leader/assignments/{parent.id}/review\n\n"
+                    "The package carries each worker task's status, run, commit, changed "
+                    "files and test results. Nothing is delivered until you approve."
+                ),
+                correlation_id=parent.id,
+            ),
+            idempotency_key=(
+                f"leader-review:{parent.id}:r{evidence.review_revision}:due"
+            ),
+        )
 
     async def _batch_succeeded(self, plan: ExecutionPlan) -> bool:
         for planned in plan.batches[plan.current_batch_index]:
@@ -1346,14 +1488,63 @@ class ReadLeaderAssignment:
         directory: AgentPrincipalReader,
         modes: TeamDecompositionModeReader,
     ) -> None:
+        self._authorizer = LeaderAssignmentAuthorizer(assignments, tasks, directory, modes)
+
+    async def execute(
+        self, leader_task_id: UUID, *, caller_agent_id: UUID
+    ) -> RepositoryAssignmentPackage:
+        assignment, task = await self._authorizer.resolve(
+            leader_task_id, caller_agent_id=caller_agent_id
+        )
+        return RepositoryAssignmentPackage(
+            assignment=assignment,
+            repository_task=RepositoryTaskFactsView(
+                title=task.title,
+                instruction=task.instruction,
+                # The wire carries one text; the row carries the criteria as
+                # separate lines and joining them is the only lossless way to
+                # spend a single string on them.
+                acceptance="\n".join(task.acceptance),
+            ),
+        )
+
+
+class LeaderAssignmentAuthorizer:
+    """Who may act on one leader assignment, asked once for all three endpoints.
+
+    Every request to this surface asks the same four questions in the same
+    order, and answering them in three places is how two of them would one day
+    answer differently. Extracted rather than duplicated for that reason alone;
+    the order itself is unchanged and still deliberate:
+
+    Role comes first because it is decidable without touching any row, so a
+    worker's token learns nothing about which task ids exist. Existence comes
+    before assignee because there is no way to know who the assignee is without
+    the row. Mode comes last because it is a statement about a real assignment
+    the caller really owns — ``decomposition_mode_conflict`` tells a leader that
+    this team's planning is done server-side, which would be a fact worth
+    leaking if it were said to anyone else.
+
+    ``caller_agent_id`` is derived by the API layer from the presented token and
+    never taken from a path or a body: the token names the subject
+    (adjudication D-6), so this treats it as established identity.
+    """
+
+    def __init__(
+        self,
+        assignments: LeaderAssignmentStore,
+        tasks: TaskStore,
+        directory: AgentPrincipalReader,
+        modes: TeamDecompositionModeReader,
+    ) -> None:
         self._assignments = assignments
         self._tasks = tasks
         self._directory = directory
         self._modes = modes
 
-    async def execute(
+    async def resolve(
         self, leader_task_id: UUID, *, caller_agent_id: UUID
-    ) -> RepositoryAssignmentPackage:
+    ) -> tuple[LeaderAssignmentView, Task]:
         caller = await self._directory.get_view(caller_agent_id)
         if (
             caller is None
@@ -1389,17 +1580,550 @@ class ReadLeaderAssignment:
                 LeaderActionErrorCode.DECOMPOSITION_MODE_CONFLICT,
                 "this team's planning is done server-side, so leader submissions are refused",
             )
-        return RepositoryAssignmentPackage(
-            assignment=assignment,
-            repository_task=RepositoryTaskFactsView(
-                title=task.title,
-                instruction=task.instruction,
-                # The wire carries one text; the row carries the criteria as
-                # separate lines and joining them is the only lossless way to
-                # spend a single string on them.
-                acceptance="\n".join(task.acceptance),
-            ),
+        return assignment, task
+
+
+def _plan_fingerprint(decision: RepositoryPlanDecision) -> str:
+    return _document_fingerprint(decision.raw)
+
+
+def _review_fingerprint(decision: RepositoryReviewDecision) -> str:
+    return _document_fingerprint(decision.raw)
+
+
+def _document_fingerprint(document: dict[str, object]) -> str:
+    """A stable identity for one submitted document.
+
+    ``sort_keys`` because two submissions of the same plan are the same plan
+    whatever order a client serialised its object keys in — JSON objects are
+    unordered, and a fingerprint that said otherwise would turn an honest
+    idempotent retry into a ``phase_conflict``.
+    """
+
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+class SubmitRepositoryPlan:
+    """Accept a Repository Leader's own plan, or refuse it with a frozen code.
+
+    The server does not author any of what arrives here: the Engineering Spec,
+    the DAG and the worker task drafts are the leader's products and are
+    persisted verbatim. What the server does is *clamp* — five families of
+    check, each with its own frozen code — and then create the worker tasks
+    through the ordinary assignment path, so a leader-planned task is
+    dispatched, published and permitted exactly like a server-planned one.
+
+    **The envelope is read, never re-derived.** ``safety_envelope`` comes off
+    the stored assignment, which is the copy the leader was handed when the
+    batch parked. Re-deriving it here would let a worker's responsibility paths
+    change while the leader was planning and reject a submission that was
+    inside its bounds when it was made.
+
+    **Idempotency is decided before the phase is.** An accepted plan moves the
+    assignment to ``executing``, so a leader whose 200 was lost and who retries
+    would meet a phase check that says ``planning`` is over. The contract says
+    that retry must get its receipt back, so the fingerprint is consulted first
+    and the phase check only guards submissions that are genuinely new.
+    """
+
+    def __init__(
+        self,
+        assignments: LeaderAssignmentStore,
+        tasks: TaskStore,
+        directory: AgentPrincipalReader,
+        modes: TeamDecompositionModeReader,
+        assigner: TaskAssignmentGateway,
+        spec_author: TaskSpecificationAuthor | None = None,
+    ) -> None:
+        self._authorizer = LeaderAssignmentAuthorizer(assignments, tasks, directory, modes)
+        self._assignments = assignments
+        self._directory = directory
+        self._assigner = assigner
+        self._spec_author = spec_author
+
+    async def execute(
+        self,
+        leader_task_id: UUID,
+        decision: RepositoryPlanDecision,
+        *,
+        caller_agent_id: UUID,
+    ) -> PlanReceipt:
+        assignment, task = await self._authorizer.resolve(
+            leader_task_id, caller_agent_id=caller_agent_id
         )
+        fingerprint = _plan_fingerprint(decision)
+        if assignment.accepted_plan is not None:
+            if assignment.accepted_plan.fingerprint == fingerprint:
+                return PlanReceipt(
+                    leader_task_id=leader_task_id,
+                    plan_revision=assignment.accepted_plan.plan_revision,
+                    worker_task_ids=assignment.accepted_plan.worker_task_ids,
+                )
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PHASE_CONFLICT,
+                "a different plan has already been accepted for this leader task",
+            )
+        if assignment.phase is not LeaderAssignmentPhase.PLANNING:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PHASE_CONFLICT,
+                f"a plan may only be submitted while planning; this assignment is "
+                f"{assignment.phase.value}",
+            )
+
+        _assert_plan_is_within_envelope(decision, assignment)
+
+        worker_task_ids: list[UUID] = []
+        for draft in decision.worker_tasks:
+            # Keyed on the leader task and the node, not on the position in the
+            # list: a node is the leader's own name for one piece of work, and
+            # the coverage check above has already made those names unique. A
+            # replay that reached this loop halfway therefore finds the tasks it
+            # already created rather than making a second set beside them.
+            key = f"leader-plan:{leader_task_id}:{draft.node_id}"
+            worker_task = await self._assigner.assign(
+                AssignTaskCommand(
+                    organization_id=assignment.organization_id,
+                    project_id=assignment.project_id,
+                    repository_id=assignment.repository_id,
+                    assigned_by_agent_id=assignment.leader_agent_id,
+                    assignee_agent_id=draft.assignee_worker_agent_id,
+                    title=draft.title,
+                    instruction=draft.instruction,
+                    acceptance=task.acceptance,
+                    parent_task_id=leader_task_id,
+                ),
+                idempotency_key=key,
+                origin=task.origin,
+            )
+            await self._author_permit(worker_task, draft, key=key)
+            worker_task_ids.append(worker_task.id)
+
+        receipt = PlanReceipt(
+            leader_task_id=leader_task_id,
+            # 1, and only ever 1 today. The contract reserves growth to the
+            # formal rework path, and rework returns the assignment to
+            # ``executing`` rather than to ``planning`` — so nothing in this
+            # slice can reach a second plan submission, and a number that
+            # counted resubmissions would be exactly the thing the receipt's
+            # own description forbids.
+            plan_revision=1,
+            worker_task_ids=tuple(worker_task_ids),
+        )
+        await self._assignments.save(
+            replace(
+                assignment,
+                phase=LeaderAssignmentPhase.EXECUTING,
+                accepted_plan=AcceptedPlanView(
+                    fingerprint=fingerprint,
+                    plan_revision=receipt.plan_revision,
+                    worker_task_ids=receipt.worker_task_ids,
+                    decision=decision.raw,
+                ),
+            )
+        )
+        return receipt
+
+    async def _author_permit(
+        self, worker_task: TaskView, draft: LeaderWorkerTaskDraft, *, key: str
+    ) -> None:
+        """The execution permit, carrying the leader's own paths and tests.
+
+        This is the one place a leader-planned task differs from a
+        server-planned one, and it is the point of the whole slice: the allowed
+        paths are the leader's ``allowedPaths`` rather than
+        ``derive_allowed_paths`` over the worker's responsibility, and the tests
+        are the leader's ``tests``. Both have already been clamped — paths to
+        the stored envelope's roots, tests to a superset of its commands — so
+        what reaches the permit is narrower than what the server would have
+        derived, never wider.
+        """
+
+        if self._spec_author is None:
+            return
+        worker = await self._directory.get_view(worker_task.assignee_agent_id)
+        if worker is None or worker.status is not AgentPrincipalStatus.ACTIVE:
+            raise TaskDenied("worker agent is missing or disabled")
+        await self._spec_author.ensure_approved(
+            worker_task,
+            allowed_paths=draft.allowed_paths,
+            tests=draft.tests,
+            idempotency_key=f"{key}:spec",
+        )
+
+
+def _assert_plan_is_within_envelope(
+    decision: RepositoryPlanDecision, assignment: LeaderAssignmentView
+) -> None:
+    """The five clamp families, in the order their codes are decided.
+
+    Order is a contract-visible choice, because a plan can break more than one
+    rule and only one code comes back. It runs from "is this a leader's product
+    at all" outward to "is each task inside its bounds", so the code a leader
+    receives names the outermost thing wrong with the submission rather than an
+    incidental consequence of it:
+
+    1. provenance — a plan without it is not the leader's product, and nothing
+       further about it is worth reporting;
+    2. DAG coverage — nodes and worker tasks must correspond one-to-one and
+       edges must name declared nodes, because a cycle check over a graph whose
+       nodes are not settled would be answering about a different graph;
+    3. DAG cycle;
+    4. assignee, then allowed paths, then tests — per worker task, in the order
+       the frozen invariant lists them.
+    """
+
+    if decision.provenance.source != LEADER_PROVENANCE_SOURCE:
+        raise LeaderActionRefused(
+            LeaderActionErrorCode.PLAN_INVALID_PROVENANCE,
+            "a repository plan must carry leader-codex-session provenance",
+        )
+
+    nodes = set(decision.nodes)
+    if len(nodes) != len(decision.nodes):
+        raise LeaderActionRefused(
+            LeaderActionErrorCode.PLAN_INVALID_DAG_COVERAGE,
+            "the task DAG declares the same node more than once",
+        )
+    claimed = [draft.node_id for draft in decision.worker_tasks]
+    if len(set(claimed)) != len(claimed) or set(claimed) != nodes:
+        raise LeaderActionRefused(
+            LeaderActionErrorCode.PLAN_INVALID_DAG_COVERAGE,
+            "every DAG node must be named by exactly one worker task, and vice versa",
+        )
+    for source, target in decision.edges:
+        if source not in nodes or target not in nodes:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PLAN_INVALID_DAG_COVERAGE,
+                "a DAG edge references a node the plan does not declare",
+            )
+    if _has_cycle(decision.nodes, decision.edges):
+        raise LeaderActionRefused(
+            LeaderActionErrorCode.PLAN_INVALID_DAG_CYCLE,
+            "the task DAG contains a cycle, so no execution order exists",
+        )
+
+    roster = {entry.worker_agent_id for entry in assignment.worker_roster}
+    envelope = assignment.safety_envelope
+    for draft in decision.worker_tasks:
+        if draft.assignee_worker_agent_id not in roster:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PLAN_INVALID_ASSIGNEE,
+                "a worker task is assigned to an agent outside this team's roster",
+            )
+        for path in draft.allowed_paths:
+            if not _within_roots(path, envelope.allowed_path_roots):
+                raise LeaderActionRefused(
+                    LeaderActionErrorCode.PLAN_INVALID_ALLOWED_PATHS,
+                    "a worker task's allowed paths fall outside the safety envelope",
+                )
+        missing = set(envelope.test_commands) - set(draft.tests)
+        if missing:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PLAN_INVALID_TESTS_REMOVED,
+                "a worker task drops a verification command the envelope requires",
+            )
+
+
+class SubmitRepositoryReview:
+    """Accept a Repository Leader's verdict over the round's own evidence.
+
+    Three outcomes, and each one is reached through a mechanism that already
+    exists rather than a new one:
+
+    *approve* reports the leader task SUCCEEDED through the ordinary
+    ``TaskReportGateway``, so the leader's ``summary`` becomes the roll-up body
+    the Organization Manager reads and the delivery gate — which has always
+    required a SUCCEEDED leader task — starts taking candidates without a line
+    of delivery code changing.
+
+    *escalate* reports it BLOCKED through the same gateway, which is what
+    triggers the existing EXCEPTION_ESCALATION checkpoint: that gateway already
+    raises one whenever a repository leader reports BLOCKED or FAILED. BLOCKED
+    is deliberately not a final status, so the plan stalls for an operator
+    rather than failing itself (AC-07: a leader that cannot finish is not the
+    same as a round that failed).
+
+    *request_rework* creates new revision worker tasks through the formal
+    assignment path and leaves every already-terminal worker task untouched.
+    The assignment returns to ``executing`` and its review revision advances,
+    so the next round's evidence is a new snapshot and the next verdict has its
+    own idempotency key.
+
+    Nothing here reads a worker task's live state to decide: the verdict is
+    judged against the stored evidence snapshot, which is what makes it
+    attributable to what the leader was actually shown.
+    """
+
+    def __init__(
+        self,
+        assignments: LeaderAssignmentStore,
+        tasks: TaskStore,
+        directory: AgentPrincipalReader,
+        modes: TeamDecompositionModeReader,
+        assigner: TaskAssignmentGateway,
+        reporter: TaskReportGateway,
+        spec_author: TaskSpecificationAuthor | None = None,
+        on_leader_task_terminal: Callable[[UUID], Awaitable[None]] | None = None,
+    ) -> None:
+        self._authorizer = LeaderAssignmentAuthorizer(assignments, tasks, directory, modes)
+        self._assignments = assignments
+        self._directory = directory
+        self._assigner = assigner
+        self._reporter = reporter
+        self._spec_author = spec_author
+        # The same collaborator the Runner gateway holds, for the same reason:
+        # a leader task reaching a terminal status is what lets the execution
+        # plan advance, and in leader mode this is the only place that happens.
+        self._on_leader_task_terminal = on_leader_task_terminal
+
+    async def execute(
+        self,
+        leader_task_id: UUID,
+        decision: RepositoryReviewDecision,
+        *,
+        caller_agent_id: UUID,
+    ) -> ReviewReceipt:
+        assignment, task = await self._authorizer.resolve(
+            leader_task_id, caller_agent_id=caller_agent_id
+        )
+        fingerprint = _review_fingerprint(decision)
+        # The revision is part of the idempotency key, so a replay is looked up
+        # under the round it judged rather than under the round now open.
+        for accepted in assignment.accepted_reviews:
+            if accepted.fingerprint == fingerprint:
+                return ReviewReceipt(
+                    leader_task_id=leader_task_id,
+                    verdict=LeaderReviewVerdict(accepted.verdict),
+                    review_revision=accepted.review_revision,
+                    leader_task_status=accepted.leader_task_status,
+                    rework_task_ids=accepted.rework_task_ids,
+                )
+        if assignment.accepted_review(assignment.review_revision) is not None:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PHASE_CONFLICT,
+                "a different verdict has already been accepted for this review round",
+            )
+        if (
+            assignment.phase is not LeaderAssignmentPhase.REVIEW_DUE
+            or assignment.review_evidence is None
+        ):
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PHASE_CONFLICT,
+                f"a review may only be submitted when review is due; this assignment is "
+                f"{assignment.phase.value}",
+            )
+
+        _assert_review_is_answerable(decision, assignment.review_evidence)
+
+        revision = assignment.review_evidence.review_revision
+        if decision.verdict is LeaderReviewVerdict.REQUEST_REWORK:
+            rework_task_ids = await self._create_rework(assignment, task, decision, revision)
+            updated = replace(
+                assignment,
+                phase=LeaderAssignmentPhase.EXECUTING,
+                review_revision=revision + 1,
+                # Cleared, not kept: the next round is judged against its own
+                # snapshot, and leaving this one in place would let a stale
+                # package answer a GET during the new round.
+                review_evidence=None,
+            )
+            status = TaskStatus.IN_PROGRESS.value
+        else:
+            reported = (
+                TaskStatus.SUCCEEDED
+                if decision.verdict is LeaderReviewVerdict.APPROVE
+                else TaskStatus.BLOCKED
+            )
+            await self._reporter.report(
+                ReportTaskCommand(
+                    task_id=leader_task_id,
+                    reporter_agent_id=assignment.leader_agent_id,
+                    status=reported,
+                    summary=decision.summary,
+                ),
+                idempotency_key=f"leader-review:{leader_task_id}:r{revision}:report",
+            )
+            rework_task_ids = ()
+            updated = replace(assignment, phase=LeaderAssignmentPhase.CLOSED)
+            status = reported.value
+
+        receipt = ReviewReceipt(
+            leader_task_id=leader_task_id,
+            verdict=decision.verdict,
+            review_revision=revision,
+            leader_task_status=status,
+            rework_task_ids=rework_task_ids,
+        )
+        await self._assignments.save(
+            replace(
+                updated,
+                accepted_reviews=(
+                    *assignment.accepted_reviews,
+                    AcceptedReviewView(
+                        fingerprint=fingerprint,
+                        verdict=receipt.verdict.value,
+                        review_revision=receipt.review_revision,
+                        leader_task_status=receipt.leader_task_status,
+                        rework_task_ids=receipt.rework_task_ids,
+                    ),
+                ),
+            )
+        )
+        if (
+            decision.verdict is LeaderReviewVerdict.APPROVE
+            and self._on_leader_task_terminal is not None
+        ):
+            # Only after the assignment is saved: the advance may deliver the
+            # batch, and a delivery that ran against an assignment still
+            # recorded as review_due would be reading a state that no longer
+            # matches the task it is delivering for.
+            await self._on_leader_task_terminal(leader_task_id)
+        return receipt
+
+    async def _create_rework(
+        self,
+        assignment: LeaderAssignmentView,
+        task: Task,
+        decision: RepositoryReviewDecision,
+        revision: int,
+    ) -> tuple[UUID, ...]:
+        """One new worker task per actionable finding, through the formal path.
+
+        ``TaskOrigin.REWORK`` is the existing vocabulary and it fits: the enum
+        says "created to repair", the read model already counts such a task as
+        an attempt beyond the first and displays its repository as repairing,
+        and a leader-requested repair is exactly that. Inventing a third origin
+        would leave every one of those consumers unable to see this task.
+
+        Already-terminal worker tasks are not touched (frozen invariant 5). The
+        repair is a *new* task carrying the leader's instruction, so the
+        evidence the verdict was based on stays exactly as it was reviewed.
+        """
+
+        created: list[UUID] = []
+        evidence_by_task = {
+            item.worker_task_id: item
+            for item in (
+                assignment.review_evidence.worker_evidence
+                if assignment.review_evidence is not None
+                else ()
+            )
+        }
+        for index, finding in enumerate(decision.rework_findings):
+            reviewed = evidence_by_task[finding.worker_task_id]
+            key = f"leader-review:{assignment.leader_task_id}:r{revision}:{index}"
+            worker_task = await self._assigner.assign(
+                AssignTaskCommand(
+                    organization_id=assignment.organization_id,
+                    project_id=assignment.project_id,
+                    repository_id=assignment.repository_id,
+                    assigned_by_agent_id=assignment.leader_agent_id,
+                    assignee_agent_id=reviewed.worker_agent_id,
+                    title=task.title,
+                    instruction=(
+                        f"{finding.rework_instruction}\n\n"
+                        f"Review finding on task {finding.worker_task_id}: {finding.note}"
+                    ),
+                    acceptance=task.acceptance,
+                    parent_task_id=assignment.leader_task_id,
+                ),
+                idempotency_key=key,
+                origin=TaskOrigin.REWORK,
+            )
+            await self._author_rework_permit(assignment, worker_task, key=key)
+            created.append(worker_task.id)
+        return tuple(created)
+
+    async def _author_rework_permit(
+        self, assignment: LeaderAssignmentView, worker_task: TaskView, *, key: str
+    ) -> None:
+        """The repair's permit, bounded by the stored envelope.
+
+        The leader named an instruction, not a path list, so the permit falls
+        back to the envelope's own roots and commands — the widest thing the
+        round was ever allowed and the same bound the original plan was clamped
+        to. A repair cannot therefore reach further than the work it repairs.
+        """
+
+        if self._spec_author is None:
+            return
+        worker = await self._directory.get_view(worker_task.assignee_agent_id)
+        if worker is None or worker.status is not AgentPrincipalStatus.ACTIVE:
+            raise TaskDenied("worker agent is missing or disabled")
+        await self._spec_author.ensure_approved(
+            worker_task,
+            allowed_paths=assignment.safety_envelope.allowed_path_roots,
+            tests=assignment.safety_envelope.test_commands,
+            idempotency_key=f"{key}:spec",
+        )
+
+
+def _assert_review_is_answerable(
+    decision: RepositoryReviewDecision, evidence: LeaderReviewEvidenceView
+) -> None:
+    """Frozen invariant 5's review half: findings must be actionable and real.
+
+    A ``request_rework`` with nothing to act on would move the assignment back
+    to ``executing`` with no work in flight — a round parked forever with no
+    signal that anything is wrong. A finding naming a task outside the evidence
+    is a verdict about something the leader was not shown, which is the one
+    thing the evidence snapshot exists to prevent.
+    """
+
+    reviewed = {item.worker_task_id for item in evidence.worker_evidence}
+    for finding in decision.findings:
+        if finding.worker_task_id not in reviewed:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.REVIEW_INVALID_FINDINGS,
+                "a finding names a worker task outside this round's evidence",
+            )
+    if decision.verdict is LeaderReviewVerdict.REQUEST_REWORK and not decision.rework_findings:
+        raise LeaderActionRefused(
+            LeaderActionErrorCode.REVIEW_INVALID_FINDINGS,
+            "requesting rework needs at least one finding carrying a rework instruction",
+        )
+
+
+def _within_roots(path: str, roots: tuple[str, ...]) -> bool:
+    """Is this path under one of the envelope's roots?
+
+    Prefix matching on the normalised text, because the envelope's roots are
+    the same glob-ish path strings ``derive_allowed_paths`` produces and the
+    permit renders — comparing them as filesystem paths would resolve against a
+    working directory this process does not have and the leader never sees.
+
+    A trailing ``**`` is stripped from a root before comparison: the envelope
+    spells a directory root either way, and a leader that wrote the plainer
+    form must not be refused for it.
+    """
+
+    candidate = path.strip().lstrip("./")
+    for root in roots:
+        normalised = root.strip().lstrip("./").removesuffix("**").removesuffix("*")
+        if not normalised or candidate.startswith(normalised):
+            return True
+    return False
+
+
+def _has_cycle(nodes: tuple[str, ...], edges: tuple[tuple[str, str], ...]) -> bool:
+    """Kahn's algorithm: a graph with a cycle cannot be fully ordered."""
+
+    outgoing: dict[str, list[str]] = {node: [] for node in nodes}
+    indegree = dict.fromkeys(nodes, 0)
+    for source, target in edges:
+        outgoing[source].append(target)
+        indegree[target] += 1
+    ready = [node for node, degree in indegree.items() if degree == 0]
+    ordered = 0
+    while ready:
+        node = ready.pop()
+        ordered += 1
+        for target in outgoing[node]:
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+    return ordered != len(nodes)
 
 
 class RedispatchRound:
