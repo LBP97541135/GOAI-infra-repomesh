@@ -988,6 +988,42 @@ async def test_terminal_task_outside_any_plan_is_ignored() -> None:
     assert environment.plans.plans == {}
 
 
+@pytest.mark.asyncio
+async def test_appended_dynamic_batch_is_dispatched_after_current_batch() -> None:
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0,),))
+    await environment.advancer.start(plan, idempotency_key="dynamic-start")
+    persisted = await environment.plans.get(plan.id)
+    assert persisted is not None
+    appended = persisted.append_tasks(
+        (
+            PlannedRepositoryTask(
+                repository_id=environment.repository_ids[1],
+                title="Discovered billing adapter",
+                instruction="Implement the newly discovered adapter",
+                acceptance=("adapter tests pass",),
+                depends_on=(environment.repository_ids[0],),
+            ),
+        )
+    )
+    await environment.plans.update(appended, expected_version=persisted.version)
+
+    first_leader = await environment.leader_task_id(plan.id, 0, 0)
+    first_worker = await environment.worker_task_of(first_leader)
+    await environment.finish(first_worker.id, TaskStatus.SUCCEEDED, "Initial work completed.")
+    await environment.advancer.on_task_terminal(first_worker.id)
+
+    revised = await environment.plans.get(plan.id)
+    assert revised is not None and revised.current_batch_index == 1
+    appended_keys = [
+        key
+        for command, key in environment.assigner.commands
+        if command.repository_id == environment.repository_ids[1]
+        and ":decompose:" not in key
+    ]
+    assert appended_keys == [f"{plan.id}:b1:{environment.repository_ids[1]}"]
+
+
 # ---------------------------------------------------------------------------
 # A refused delivery is a state, not a background traceback (A-19)
 # ---------------------------------------------------------------------------

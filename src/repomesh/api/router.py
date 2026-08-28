@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from repomesh.api.dynamic_plan import router as dynamic_plan_router
 from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
 from repomesh.api.platform_bootstrap import router as platform_bootstrap_router
@@ -27,6 +28,7 @@ from repomesh.modules.repository_intelligence.api.router import (
 )
 
 api_router = APIRouter()
+api_router.include_router(dynamic_plan_router)
 api_router.include_router(health_router)
 api_router.include_router(platform_setup_router)
 api_router.include_router(platform_credentials_router)

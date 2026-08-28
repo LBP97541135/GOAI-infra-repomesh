@@ -343,6 +343,7 @@ class PlannedRepositoryTask:
     tests: tuple[str, ...] = ()
     """Verification commands the Worker must run before reporting this task."""
     test_paths: tuple[str, ...] = ()
+    depends_on: tuple[UUID, ...] = ()
     """Where those commands read from, added to the Worker's allowed paths.
 
     Defect A-21. Supplying the command without the path it reads is a trap: the
@@ -371,6 +372,7 @@ class PlannedRepositoryTask:
             leader_task_id=self.leader_task_id,
             tests=self.tests,
             test_paths=self.test_paths,
+            depends_on=self.depends_on,
         )
 
 
@@ -564,6 +566,47 @@ class ExecutionPlan:
         if self.delivery_refusal is None:
             return None
         return replace(self, delivery_refusal=None, version=self.version + 1)
+
+    def append_tasks(self, items: tuple[PlannedRepositoryTask, ...]) -> "ExecutionPlan":
+        self._require_in_progress()
+        if not items:
+            raise TaskConflict("dynamic plan revision requires appended tasks")
+        existing = {
+            planned.repository_id for batch in self.batches for planned in batch
+        }
+        appended_ids = [item.repository_id for item in items]
+        if len(set(appended_ids)) != len(appended_ids):
+            raise TaskConflict("dynamic plan revision contains duplicate repositories")
+        if existing.intersection(appended_ids):
+            raise TaskConflict("existing repository work requires full replan")
+        all_ids = existing.union(appended_ids)
+        for item in items:
+            if item.repository_id in item.depends_on:
+                raise TaskConflict("a dynamic task cannot depend on itself")
+            if set(item.depends_on) - all_ids:
+                raise TaskConflict("dynamic task dependency is not in the plan")
+
+        remaining = {item.repository_id: item for item in items}
+        appended_batches: list[tuple[PlannedRepositoryTask, ...]] = []
+        satisfied = set(existing)
+        while remaining:
+            ready = tuple(
+                item
+                for _, item in sorted(remaining.items(), key=lambda pair: str(pair[0]))
+                if set(item.depends_on) <= satisfied
+            )
+            if not ready:
+                raise TaskConflict("dynamic task dependencies contain a cycle")
+            appended_batches.append(ready)
+            for item in ready:
+                remaining.pop(item.repository_id)
+                satisfied.add(item.repository_id)
+        return replace(
+            self,
+            batches=(*self.batches, *appended_batches),
+            version=self.version + 1,
+            delivery_refusal=None,
+        )
 
     def to_view(self) -> ExecutionPlanView:
         return ExecutionPlanView(

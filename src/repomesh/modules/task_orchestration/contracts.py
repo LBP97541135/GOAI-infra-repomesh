@@ -162,6 +162,44 @@ class PlannedRepositoryTaskView:
     leader_task_id: UUID | None
     tests: tuple[str, ...] = ()
     test_paths: tuple[str, ...] = ()
+    depends_on: tuple[UUID, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AppendPlanTaskInput:
+    repository_id: UUID
+    title: str
+    instruction: str
+    acceptance: tuple[str, ...]
+    depends_on: tuple[UUID, ...] = ()
+    tests: tuple[str, ...] = ()
+    test_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AppendPlanTasksCommand:
+    plan_id: UUID
+    expected_plan_version: int
+    actor_agent_id: UUID
+    reason: str
+    items: tuple[AppendPlanTaskInput, ...]
+    mode: str = "commit"
+
+
+@dataclass(frozen=True, slots=True)
+class DynamicPlanRevisionView:
+    id: UUID
+    plan_id: UUID
+    revision: int
+    base_plan_version: int
+    result_plan_version: int | None
+    actor_agent_id: UUID
+    reason: str
+    status: str
+    appended_repository_ids: tuple[UUID, ...]
+    previous_batches: tuple[tuple[UUID, ...], ...]
+    new_batches: tuple[tuple[UUID, ...], ...]
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)

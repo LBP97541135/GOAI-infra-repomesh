@@ -1481,6 +1481,19 @@ class ApplicationContainer:
     def execution_plan_observer(self) -> ObserveExecutionPlan:
         return ObserveExecutionPlan(self.execution_plan_store(), self.task_store)
 
+    @cached_service
+    def dynamic_plan_revision_service(self):
+        from repomesh.modules.task_orchestration import (
+            DynamicPlanRevisionService,
+            PostgresExecutionPlanRevisionStore,
+        )
+
+        return DynamicPlanRevisionService(
+            self.execution_plan_store(),
+            PostgresExecutionPlanRevisionStore(self.database),
+            self.topology_reader(),
+        )
+
     def handoff_doc_store(self) -> PostgresHandoffDocStore:
         return PostgresHandoffDocStore(self.database)
 

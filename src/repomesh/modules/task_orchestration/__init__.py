@@ -16,7 +16,10 @@ from .assignment import (
     TaskAssignmentAttemptRecord,
 )
 from .contracts import (
+    AppendPlanTaskInput,
+    AppendPlanTasksCommand,
     AssignTaskCommand,
+    DynamicPlanRevisionView,
     ExecutionPlanStatus,
     ExecutionPlanStatusSnapshot,
     ExecutionPlanView,
@@ -37,6 +40,11 @@ from .domain import (
     TaskNotFound,
     TaskOrchestrationError,
 )
+from .dynamic_revision import (
+    DynamicPlanRevisionService,
+    ExecutionPlanRevisionRecord,
+    PostgresExecutionPlanRevisionStore,
+)
 from .infrastructure import (
     InMemoryExecutionPlanStore,
     InMemoryTaskStore,
@@ -48,6 +56,8 @@ from .ports import ExecutionPlanStore, TaskStore
 __all__ = [
     "FINAL_TASK_STATUSES",
     "AdvanceExecutionPlan",
+    "AppendPlanTaskInput",
+    "AppendPlanTasksCommand",
     "AssignmentActorKind",
     "AssignmentAttemptState",
     "AssignmentReason",
@@ -58,6 +68,9 @@ __all__ = [
     "ExecutionPlanStatusSnapshot",
     "ExecutionPlanStore",
     "ExecutionPlanView",
+    "DynamicPlanRevisionService",
+    "DynamicPlanRevisionView",
+    "ExecutionPlanRevisionRecord",
     "InMemoryExecutionPlanStore",
     "InMemoryTaskStore",
     "ObserveExecutionPlan",
@@ -65,6 +78,7 @@ __all__ = [
     "PlannedRepositoryTaskView",
     "ProjectTaskProgress",
     "PostgresExecutionPlanStore",
+    "PostgresExecutionPlanRevisionStore",
     "PostgresTaskAssignmentStore",
     "PostgresTaskStore",
     "ReportTaskCommand",
