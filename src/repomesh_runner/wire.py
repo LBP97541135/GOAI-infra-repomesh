@@ -76,6 +76,14 @@ def parse_runner_task(payload: Mapping[str, Any]) -> RunnerTask:
         workspace=workspace,
         worker_agent_id=_optional_uuid(payload, "workerAgentId", "workerAgentId"),
         test_commands=_string_tuple(payload, "testCommands", "testCommands"),
+        assignment_attempt_id=_optional_uuid(
+            payload, "assignmentAttemptId", "assignmentAttemptId"
+        ),
+        assignment_generation=_optional_int(
+            payload, "assignmentGeneration", "assignmentGeneration"
+        ),
+        execution_id=_optional_uuid(payload, "executionId", "executionId"),
+        execution_version=_optional_int(payload, "executionVersion", "executionVersion"),
     )
 
 
@@ -182,6 +190,15 @@ def _int_field(payload: Mapping[str, Any], key: str, field: str) -> int:
         raise WireError(f"{field} is required")
     if isinstance(value, bool) or not isinstance(value, int):
         raise WireError(f"{field} must be an integer")
+    return value
+
+
+def _optional_int(payload: Mapping[str, Any], key: str, field: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise WireError(f"{field} must be an integer or null")
     return value
 
 

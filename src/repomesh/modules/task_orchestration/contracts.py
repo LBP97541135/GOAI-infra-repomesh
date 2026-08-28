@@ -15,6 +15,16 @@ class TaskStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class TaskAssignmentGenerationReader(Protocol):
+    async def allows_projection(
+        self, task_id: UUID, assignment_attempt_id: UUID, generation: int
+    ) -> bool: ...
+
+    async def complete_current(
+        self, task_id: UUID, assignment_attempt_id: UUID, generation: int
+    ) -> None: ...
+
+
 class TaskOrigin(StrEnum):
     """Why this task exists.
 

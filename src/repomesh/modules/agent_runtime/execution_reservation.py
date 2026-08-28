@@ -68,6 +68,8 @@ class WorkerExecutionReservationRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assignment_attempt_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    assignment_generation: Mapped[int | None] = mapped_column(Integer)
 
 
 class PostgresWorkerExecutionReservationStore:
@@ -84,6 +86,8 @@ class PostgresWorkerExecutionReservationStore:
         worker_agent_id: UUID,
         lease_owner: str,
         lease_seconds: int,
+        assignment_attempt_id: UUID | None = None,
+        assignment_generation: int | None = None,
     ) -> ReservedWorkerExecution:
         self._validate_lease(lease_owner, lease_seconds)
         try:
@@ -97,6 +101,13 @@ class PostgresWorkerExecutionReservationStore:
                         repository_id,
                         worker_agent_id,
                     )
+                    if (
+                        assignment_attempt_id is not None
+                        and existing.assignment_attempt_id != assignment_attempt_id
+                    ):
+                        raise WorkerExecutionReservationConflict(
+                            "active execution has a different assignment attempt"
+                        )
                     if not self._expired(existing):
                         return ReservedWorkerExecution(self._domain(existing), False)
                     self._expire(existing)
@@ -145,6 +156,8 @@ class PostgresWorkerExecutionReservationStore:
                     created_at=now,
                     updated_at=now,
                     completed_at=None,
+                    assignment_attempt_id=assignment_attempt_id,
+                    assignment_generation=assignment_generation,
                 )
                 session.add(record)
                 await session.flush()
@@ -166,6 +179,61 @@ class PostgresWorkerExecutionReservationStore:
         async with self._database.transaction() as session:
             record = await session.scalar(self._active_task(task_id))
             return self._domain(record) if record is not None else None
+
+    async def get(self, execution_id: UUID) -> WorkerExecutionReservation | None:
+        async with self._database.transaction() as session:
+            record = await session.get(WorkerExecutionReservationRecord, execution_id)
+            return self._domain(record) if record is not None else None
+
+    async def worker_busy(self, worker_agent_id: UUID) -> bool:
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(WorkerExecutionReservationRecord.id)
+                .where(
+                    WorkerExecutionReservationRecord.worker_agent_id == worker_agent_id,
+                    WorkerExecutionReservationRecord.status.in_(ACTIVE_EXECUTION_STATES),
+                )
+                .limit(1)
+            )
+            return record is not None
+
+    async def list_expired_active(
+        self, *, grace_seconds: int = 0, limit: int = 100
+    ) -> tuple[WorkerExecutionReservation, ...]:
+        cutoff = datetime.now(UTC) - timedelta(seconds=grace_seconds)
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(WorkerExecutionReservationRecord)
+                    .where(
+                        WorkerExecutionReservationRecord.status.in_(
+                            ACTIVE_EXECUTION_STATES
+                        ),
+                        WorkerExecutionReservationRecord.lease_expires_at < cutoff,
+                    )
+                    .order_by(WorkerExecutionReservationRecord.lease_expires_at)
+                    .limit(limit)
+                )
+            ).all()
+            return tuple(self._domain(record) for record in records)
+
+    async def reconcile_live_dispatch(
+        self, execution_id: UUID, *, lease_seconds: int
+    ) -> WorkerExecutionReservation:
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(WorkerExecutionReservationRecord)
+                .where(WorkerExecutionReservationRecord.id == execution_id)
+                .with_for_update()
+            )
+            if record is None or record.status not in ACTIVE_EXECUTION_STATES:
+                raise WorkerExecutionReservationConflict(
+                    "execution reservation is not active"
+                )
+            now = datetime.now(UTC)
+            record.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            record.updated_at = now
+            return self._domain(record)
 
     async def bind_payload(
         self,
@@ -319,6 +387,8 @@ class PostgresWorkerExecutionReservationStore:
             created_at=record.created_at,
             updated_at=record.updated_at,
             completed_at=record.completed_at,
+            assignment_attempt_id=record.assignment_attempt_id,
+            assignment_generation=record.assignment_generation,
         )
 
 

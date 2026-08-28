@@ -474,7 +474,154 @@ def build_default_container(
         *background_services,
         TraceIngester(TraceStore(database), _trace_source(settings)),
     )
-    return ApplicationContainer(
+    container_holder: dict[str, ApplicationContainer] = {}
+    if settings.worker_recovery_enabled:
+        import socket
+        from uuid import uuid4
+
+        from repomesh.integrations.runner.recovery import WorkerRecoveryCoordinator
+        from repomesh.modules.agent_runtime import (
+            PostgresWorkerExecutionReservationStore,
+            PostgresWorkerRecoveryStore,
+            WorkerRecoveryDecision,
+            WorkerRecoveryReconciler,
+        )
+        from repomesh.modules.agent_runtime.contracts import StartAssignedWorkerTaskCommand
+        from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
+        from repomesh.modules.project.contracts import ProjectCheckpoint
+        from repomesh.modules.project.domain import HumanReviewRequest
+        from repomesh.modules.task_orchestration import PostgresTaskAssignmentStore
+
+        reservations = PostgresWorkerExecutionReservationStore(database)
+        runner_store = PostgresRunnerGatewayStore(database)
+        recovery_store = PostgresWorkerRecoveryStore(database)
+        assignments = PostgresTaskAssignmentStore(database)
+        review_store = PostgresHumanReviewRequestStore(database)
+
+        class _WorkerHealth:
+            async def healthy(self, worker_agent_id):
+                principal = await agent_directory.get_view(worker_agent_id)
+                if principal is None:
+                    return False
+                try:
+                    runtime = await control_plane.get_worker(
+                        principal.agentteams_resource_name
+                    )
+                except Exception:
+                    return False
+                return runtime is not None and runtime.phase.lower() in {
+                    "ready", "running", "healthy"
+                }
+
+        async def _start(operation, worker_id, *, resume_session_id=None):
+            execution = await reservations.get(operation.execution_id)
+            payload = dict(execution.task_payload or {}) if execution else {}
+            repository = dict(payload.get("repository") or {})
+            await container_holder["container"].worker_execution_service().execute(
+                StartAssignedWorkerTaskCommand(
+                    task_id=operation.task_id,
+                    worker_agent_id=worker_id,
+                    adapter_id=str(payload.get("adapterId") or "mock"),
+                    base_revision=str(repository.get("baseRevision") or "main"),
+                    resume_session_id=resume_session_id,
+                )
+            )
+
+        async def _resume(operation):
+            await _start(
+                operation,
+                operation.failed_worker_id,
+                resume_session_id=operation.native_session_id,
+            )
+
+        async def _escalate(operation, reason):
+            task = await task_store.get(operation.task_id)
+            if task is None:
+                return
+            await review_store.ensure(
+                HumanReviewRequest(
+                    project_id=task.project_id,
+                    checkpoint=ProjectCheckpoint.EXCEPTION_ESCALATION,
+                    repository_id=task.repository_id,
+                    evidence_version=(
+                        f"worker-recovery:{operation.execution_id}:"
+                        f"g{operation.assignment_generation or 0}"
+                    ),
+                    title="Worker 自动恢复需要人工处理",
+                    summary=f"恢复无法安全继续，错误代码：{reason}",
+                    requested_by_agent_id=task.assigned_by_agent_id,
+                )
+            )
+
+        # Replacement callback needs the operation payload; keep it in a scoped
+        # holder only for the duration of one leased decision.
+        active_operation: dict[str, object] = {}
+
+        async def _replacement(task_id, worker_id):
+            operation = active_operation.get("operation")
+            if operation is None or operation.task_id != task_id:
+                raise RuntimeError("replacement recovery context unavailable")
+            await _start(operation, worker_id)
+
+        coordinator = WorkerRecoveryCoordinator(
+            task_store,
+            assignments,
+            agent_directory,
+            topology_store,
+            reservations,
+            _WorkerHealth(),
+            resume=_resume,
+            start_replacement=_replacement,
+            escalate=_escalate,
+            max_reassignments=settings.worker_recovery_max_reassignments,
+            recent_failures=recovery_store.recent_failures,
+        )
+
+        async def _decide(operation):
+            active_operation["operation"] = operation
+            try:
+                if operation.attempts > settings.worker_recovery_max_execution_attempts:
+                    await _escalate(operation, "recovery_attempts_exhausted")
+                    return WorkerRecoveryDecision.ESCALATE
+                return await coordinator.decide(operation)
+            finally:
+                active_operation.clear()
+
+        async def _discover():
+            for execution in await reservations.list_expired_active(
+                grace_seconds=settings.worker_recovery_grace_seconds
+            ):
+                dispatch = await runner_store.get_dispatch(execution.run_id)
+                if dispatch is not None and dispatch.status in {
+                    "queued", "leased", "accepted"
+                }:
+                    await reservations.reconcile_live_dispatch(
+                        execution.id,
+                        lease_seconds=settings.worker_execution_reservation_lease_seconds,
+                    )
+                    continue
+                await recovery_store.ensure(
+                    execution_id=execution.id,
+                    task_id=execution.task_id,
+                    assignment_attempt_id=execution.assignment_attempt_id,
+                    assignment_generation=execution.assignment_generation,
+                    failed_worker_id=execution.worker_agent_id,
+                    reason="lease_expired",
+                    native_session_id=None,
+                )
+
+        background_services = (
+            *background_services,
+            WorkerRecoveryReconciler(
+                recovery_store,
+                _decide,
+                owner=f"{socket.gethostname()}:{uuid4()}",
+                interval_seconds=settings.worker_recovery_scan_interval_seconds,
+                discover=_discover,
+            ),
+        )
+
+    container = ApplicationContainer(
         database=database,
         agent_directory=agent_directory,
         project_topology_store=topology_store,
@@ -504,6 +651,8 @@ def build_default_container(
         usage_recorder=usage_recorder,
         log_recorder=log_recorder,
     )
+    container_holder["container"] = container
+    return container
 
 
 async def _unhandled_exception_envelope(request: Request, exc: Exception) -> JSONResponse:

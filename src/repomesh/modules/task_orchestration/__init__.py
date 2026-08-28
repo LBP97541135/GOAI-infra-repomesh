@@ -7,6 +7,14 @@ from .application import (
     TaskExecutionState,
     TaskOrchestrator,
 )
+from .assignment import (
+    AssignmentActorKind,
+    AssignmentAttemptState,
+    AssignmentReason,
+    PostgresTaskAssignmentStore,
+    TaskAssignmentAttempt,
+    TaskAssignmentAttemptRecord,
+)
 from .contracts import (
     AssignTaskCommand,
     ExecutionPlanStatus,
@@ -40,6 +48,9 @@ from .ports import ExecutionPlanStore, TaskStore
 __all__ = [
     "FINAL_TASK_STATUSES",
     "AdvanceExecutionPlan",
+    "AssignmentActorKind",
+    "AssignmentAttemptState",
+    "AssignmentReason",
     "AssignTaskCommand",
     "DecomposeRepositoryTask",
     "ExecutionPlan",
@@ -54,9 +65,12 @@ __all__ = [
     "PlannedRepositoryTaskView",
     "ProjectTaskProgress",
     "PostgresExecutionPlanStore",
+    "PostgresTaskAssignmentStore",
     "PostgresTaskStore",
     "ReportTaskCommand",
     "TaskAssignmentGateway",
+    "TaskAssignmentAttempt",
+    "TaskAssignmentAttemptRecord",
     "TaskConflict",
     "TaskDenied",
     "TaskNotFound",

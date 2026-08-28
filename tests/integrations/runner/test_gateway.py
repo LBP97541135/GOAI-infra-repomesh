@@ -3,11 +3,17 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 
 from repomesh.integrations.runner.gateway import RunnerControlGateway
 from repomesh.modules.agent_runtime.runner_store import (
     PostgresRunnerGatewayStore,
+    RunnerEventRecord,
     RunnerGatewayConflict,
+)
+from repomesh.modules.task_orchestration.assignment import (
+    AssignmentReason,
+    PostgresTaskAssignmentStore,
 )
 from repomesh.modules.task_orchestration.contracts import TaskStatus
 from repomesh.modules.task_orchestration.domain import Task
@@ -392,6 +398,50 @@ async def test_failing_advancer_does_not_break_event_ingestion(tmp_path, caplog)
     assert "Failed to advance the execution plan" in caplog.text
     stored = await PostgresTaskStore(database).get(business_task.id)
     assert stored is not None and stored.status is TaskStatus.FAILED
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_assignment_generation_is_audited_without_task_writeback(tmp_path) -> None:
+    gateway, database, task, _ = await _gateway_with_dispatch(
+        tmp_path, "stale-generation.db"
+    )
+    # Replace the legacy dispatch with one carrying assignment fencing.
+    assignments = PostgresTaskAssignmentStore(database)
+    initial = await assignments.ensure_initial(task.id)
+    fenced_run = uuid4()
+    runner_task = RunnerTask(
+        organization_id=task.organization_id, project_id=task.project_id,
+        task_id=task.id, run_id=fenced_run, correlation_id=uuid4(), attempt=1,
+        adapter_id="claude", instruction="fenced run",
+        repository=RepositoryCheckout(task.repository_id, "https://example/repo.git", "main"),
+        context_bundle=ContextBundleRef(uuid4(), 1, "file:///manifest.json", SHA),
+        permissions=RunnerPermissions(), idempotency_key=f"fenced:{fenced_run}",
+        issued_at=datetime.now(UTC), worker_agent_id=task.assignee_agent_id,
+        assignment_attempt_id=initial.id, assignment_generation=initial.generation,
+    )
+    await gateway.enqueue(runner_task)
+    await assignments.reassign(
+        task.id, expected_task_version=task.version,
+        expected_generation=initial.generation, replacement_worker_id=uuid4(),
+        reason=AssignmentReason.WORKER_UNREACHABLE,
+    )
+    event = _event(task, fenced_run, "runner.completed")
+    event["assignmentAttemptId"] = str(initial.id)
+    event["assignmentGeneration"] = initial.generation
+
+    assert await gateway.receive_event(event) is True
+    current = await PostgresTaskStore(database).get(task.id)
+    assert current is not None and current.status is TaskStatus.ASSIGNED
+    async with database.transaction() as session:
+        recorded = await session.scalar(
+            select(RunnerEventRecord).where(
+                RunnerEventRecord.run_id == fenced_run
+            )
+        )
+        assert recorded is not None
+        assert recorded.projection_status == "rejected"
+        assert recorded.rejection_reason == "stale_assignment_generation"
     await database.dispose()
 
 

@@ -143,6 +143,10 @@ class RunnerTask:
     workspace: WorkspaceAssignment | None = None
     worker_agent_id: UUID | None = None
     test_commands: tuple[str, ...] = ()
+    assignment_attempt_id: UUID | None = None
+    assignment_generation: int | None = None
+    execution_id: UUID | None = None
+    execution_version: int | None = None
 
     def __post_init__(self) -> None:
         if self.attempt < 1:
@@ -203,6 +207,12 @@ class RunnerTask:
                 str(self.worker_agent_id) if self.worker_agent_id is not None else None
             ),
             "testCommands": list(self.test_commands),
+            "assignmentAttemptId": (
+                str(self.assignment_attempt_id) if self.assignment_attempt_id else None
+            ),
+            "assignmentGeneration": self.assignment_generation,
+            "executionId": str(self.execution_id) if self.execution_id else None,
+            "executionVersion": self.execution_version,
             "idempotencyKey": self.idempotency_key,
             "issuedAt": self.issued_at.isoformat(),
         }
@@ -283,5 +293,13 @@ class RunnerEvent:
             "sequence": self.sequence,
             "occurredAt": self.occurred_at.isoformat(),
             "nativeSessionId": self.native_session_id,
+            "assignmentAttemptId": (
+                str(self.task.assignment_attempt_id)
+                if self.task.assignment_attempt_id
+                else None
+            ),
+            "assignmentGeneration": self.task.assignment_generation,
+            "executionId": str(self.task.execution_id) if self.task.execution_id else None,
+            "executionVersion": self.task.execution_version,
             "payload": dict(self.payload),
         }

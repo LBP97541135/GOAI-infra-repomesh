@@ -46,6 +46,10 @@ class DispatchWorkerTaskCommand:
     resume_session_id: str | None = None
     credential_refs: tuple[str, ...] = ()
     task_features: frozenset[str] = frozenset()
+    assignment_attempt_id: UUID | None = None
+    assignment_generation: int | None = None
+    execution_id: UUID | None = None
+    execution_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +59,7 @@ class StartAssignedWorkerTaskCommand:
     adapter_id: str
     base_revision: str = "main"
     task_features: frozenset[str] = frozenset()
+    resume_session_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +112,8 @@ class WorkerExecutionReservation:
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    assignment_attempt_id: UUID | None = None
+    assignment_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,9 +133,13 @@ class WorkerExecutionReservationPort(Protocol):
         worker_agent_id: UUID,
         lease_owner: str,
         lease_seconds: int,
+        assignment_attempt_id: UUID | None = None,
+        assignment_generation: int | None = None,
     ) -> ReservedWorkerExecution: ...
 
     async def get_active(self, task_id: UUID) -> WorkerExecutionReservation | None: ...
+
+    async def get(self, execution_id: UUID) -> WorkerExecutionReservation | None: ...
 
     async def bind_payload(
         self,

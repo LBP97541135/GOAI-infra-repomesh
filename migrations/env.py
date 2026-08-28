@@ -9,6 +9,7 @@ from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipa
 from repomesh.modules.agent_runtime.execution_reservation import (
     WorkerExecutionReservationRecord,
 )
+from repomesh.modules.agent_runtime.recovery import WorkerRecoveryOperationRecord
 from repomesh.modules.collaboration.infrastructure import (
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
@@ -46,6 +47,7 @@ from repomesh.modules.specification.infrastructure import (
     SpecificationRecord,
     SpecificationVersionRecord,
 )
+from repomesh.modules.task_orchestration.assignment import TaskAssignmentAttemptRecord
 from repomesh.modules.task_orchestration.infrastructure import TaskRecord
 from repomesh.persistence.base import Base
 from repomesh.persistence.models import (
@@ -60,6 +62,7 @@ from repomesh.settings import get_settings
 _REGISTERED_MODELS = (
     AgentPrincipalRecord,
     WorkerExecutionReservationRecord,
+    WorkerRecoveryOperationRecord,
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
     ContextObjectRecord,
@@ -84,6 +87,7 @@ _REGISTERED_MODELS = (
     SpecificationRecord,
     SpecificationVersionRecord,
     TaskRecord,
+    TaskAssignmentAttemptRecord,
     StateEventRecord,
     AuditEventRecord,
     OutboxEventRecord,

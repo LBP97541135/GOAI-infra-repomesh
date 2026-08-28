@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     runner_workspace_root: Path = Path(".repomesh-workspaces")
     worker_execution_reservation_lease_seconds: int = Field(default=300, ge=30)
     worker_execution_reservation_wait_seconds: int = Field(default=30, ge=1)
+    worker_recovery_enabled: bool = False
+    worker_recovery_scan_interval_seconds: int = Field(default=15, ge=5)
+    worker_recovery_grace_seconds: int = Field(default=60, ge=10)
+    worker_recovery_max_execution_attempts: int = Field(default=3, ge=1)
+    worker_recovery_max_reassignments: int = Field(default=2, ge=0)
     capability_root: Path = Path(".")
     # OTLP/HTTP collector base URL (e.g. a local AgentScope Studio). None keeps
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.

@@ -56,6 +56,10 @@ class RunnerTaskProjectionRequest:
     resume_session_id: str | None = None
     credential_refs: tuple[str, ...] = ()
     issued_at: datetime | None = None
+    assignment_attempt_id: UUID | None = None
+    assignment_generation: int | None = None
+    execution_id: UUID | None = None
+    execution_version: int | None = None
 
 
 class RunnerTaskProjector:
@@ -181,6 +185,10 @@ class RunnerTaskProjector:
             worker_agent_id=package.worker_agent_id,
             idempotency_key=(f"{package.task_id}:run:{request.run_id}:attempt:{request.attempt}"),
             issued_at=issued_at,
+            assignment_attempt_id=request.assignment_attempt_id,
+            assignment_generation=request.assignment_generation,
+            execution_id=request.execution_id,
+            execution_version=request.execution_version,
         )
 
     @staticmethod

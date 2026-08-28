@@ -1552,12 +1552,14 @@ class ApplicationContainer:
 
     def runner_gateway(self):
         from repomesh.integrations.runner.gateway import RunnerControlGateway
+        from repomesh.modules.task_orchestration import PostgresTaskAssignmentStore
 
         advancer = self.execution_plan_advancer()
         return RunnerControlGateway(
             PostgresRunnerGatewayStore(self.database),
             self.task_store,
             advancer.on_task_terminal if advancer is not None else None,
+            PostgresTaskAssignmentStore(self.database),
         )
 
     def worker_task_dispatcher(self):
@@ -1583,7 +1585,10 @@ class ApplicationContainer:
         from repomesh.integrations.workspace import GitWorktreeManager
         from repomesh.modules.agent_runtime import PostgresWorkerExecutionReservationStore
         from repomesh.modules.context.application import PublishContextBundle
-        from repomesh.modules.task_orchestration import TaskExecutionState
+        from repomesh.modules.task_orchestration import (
+            PostgresTaskAssignmentStore,
+            TaskExecutionState,
+        )
 
         states = TaskExecutionState(self.agent_directory, self.task_store)
         execution = StartWorkerTaskExecution(
@@ -1609,6 +1614,7 @@ class ApplicationContainer:
                 settings.worker_execution_reservation_lease_seconds
             ),
             reservation_wait_seconds=settings.worker_execution_reservation_wait_seconds,
+            assignments=PostgresTaskAssignmentStore(self.database),
         )
 
     async def close(self) -> None:

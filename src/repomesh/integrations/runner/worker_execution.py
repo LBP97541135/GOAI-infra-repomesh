@@ -22,6 +22,7 @@ from repomesh.modules.specification import (
     BuildCodingAgentPackage,
     BuildCodingAgentPackageCommand,
 )
+from repomesh.modules.task_orchestration.assignment import PostgresTaskAssignmentStore
 from repomesh.modules.task_orchestration.contracts import (
     ReportTaskCommand,
     TaskExecutionStateGateway,
@@ -109,6 +110,7 @@ class StartAssignedWorkerTask:
         reservation_lease_seconds: int = 300,
         reservation_wait_seconds: int = 30,
         reservation_owner: str | None = None,
+        assignments: PostgresTaskAssignmentStore | None = None,
     ) -> None:
         self._directory = directory
         self._tasks = tasks
@@ -125,6 +127,7 @@ class StartAssignedWorkerTask:
         self._reservation_lease_seconds = reservation_lease_seconds
         self._reservation_wait_seconds = reservation_wait_seconds
         self._reservation_owner = reservation_owner or f"{socket.gethostname()}:{uuid4()}"
+        self._assignments = assignments
 
     async def execute(self, command: StartAssignedWorkerTaskCommand) -> WorkerExecutionStarted:
         principal = await self._directory.get_view(command.worker_agent_id)
@@ -143,6 +146,11 @@ class StartAssignedWorkerTask:
         if in_flight is not None:
             return in_flight
         reservation = None
+        assignment = (
+            await self._assignments.ensure_initial(task.id)
+            if self._assignments is not None
+            else None
+        )
         if self._reservations is not None:
             try:
                 reserved = await self._reservations.reserve(
@@ -153,12 +161,20 @@ class StartAssignedWorkerTask:
                     worker_agent_id=command.worker_agent_id,
                     lease_owner=self._reservation_owner,
                     lease_seconds=self._reservation_lease_seconds,
+                    assignment_attempt_id=assignment.id if assignment else None,
+                    assignment_generation=assignment.generation if assignment else None,
                 )
             except Exception as error:
                 raise WorkerExecutionStartError(
                     f"worker execution reservation unavailable: {error}"
                 ) from error
             reservation = reserved.reservation
+            if assignment is not None and reserved.created:
+                await self._assignments.bind_execution(
+                    task.id,
+                    expected_generation=assignment.generation,
+                    execution_id=reservation.id,
+                )
             if not reserved.created:
                 return await self._wait_for_reserved_execution(reservation)
         run_id = reservation.run_id if reservation is not None else uuid4()
@@ -253,7 +269,12 @@ class StartAssignedWorkerTask:
                 adapter_id=command.adapter_id,
                 base_revision=command.base_revision,
                 task_features=command.task_features,
-            )
+                resume_session_id=command.resume_session_id,
+                assignment_attempt_id=assignment.id if assignment else None,
+                assignment_generation=assignment.generation if assignment else None,
+                execution_id=reservation.id if reservation else None,
+                execution_version=reservation.version if reservation else None,
+                )
             )
             if reservation is not None and self._reservations is not None:
                 await self._reservations.bind_payload(
