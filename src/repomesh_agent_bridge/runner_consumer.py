@@ -400,22 +400,26 @@ def runner_state_root(worker_agent_id: UUID, state_dir: Path | None = None) -> P
 
 GOVERNED_CODEX_CONFIG = """\
 # Written by repomesh-agent-bridge when governed execution is turned on.
-# sandbox_mode: codex's own filesystem sandbox is a nested restriction this
-#   process cannot create. The Bridge already launches codex on a Low-integrity
-#   token, and a Low-integrity process cannot build the restricted token codex's
-#   Windows sandbox helper needs, so every apply_patch died in the helper before
-#   it reached an approval ("windows sandbox failed: os error 5", measured
-#   2026-08-28). Containment here is the restricted token and the single
-#   Low-labelled worktree, not a second sandbox inside it.
-# approval_policy: which is why this must stay a policy that asks. The protocol
-#   approval callback is where every governed decision is made and where the
-#   conversation track's deny-all is enforced, so a policy that stopped asking
-#   would turn both tracks into "do it and report", which is the one outcome
-#   neither track may have. codex 0.149.1 removed "untrusted" and accepts only
-#   read-only, workspace-write or danger-full-access for the sandbox; the first
-#   two are the ones that build the helper this process cannot build.
-sandbox_mode = "danger-full-access"
+# The Bridge already launches codex on a Low-integrity token, and a Low-integrity
+# process cannot build the further-restricted token codex's own Windows sandbox
+# needs: every apply_patch died inside that helper before it reached an approval
+# ("windows sandbox failed: os error 5", measured 2026-08-28). So the nested
+# sandbox is turned off at its backend, and only there.
+#
+# sandbox_mode stays read-only, and that is the point. Approvals are how codex
+# asks to act outside its sandbox, so a mode that needs no approval takes away
+# the one channel this Bridge governs through -- the protocol callback where a
+# governed run's permissions are enforced and where the conversation track's
+# deny-all lives. Turning the sandbox off wholesale with danger-full-access does
+# exactly that: measured 2026-08-28, five tool actions executed on the governed
+# track and four on the conversation track with zero approval requests between
+# them.
+sandbox_mode = "read-only"
 approval_policy = "on-request"
+
+[features]
+experimental_windows_sandbox = false
+elevated_windows_sandbox = false
 """
 """codex's own configuration for a Bridge that executes governed runs.
 

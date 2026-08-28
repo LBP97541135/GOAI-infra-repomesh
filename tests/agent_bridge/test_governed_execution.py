@@ -1084,18 +1084,26 @@ def test_a_governed_codex_home_is_configured_to_ask_before_it_acts(tmp_path: Pat
     because the approval callback is where this Bridge's decisions are made and
     where the conversation track's deny-all is enforced.
 
-    So the asking half is asserted as an invariant. A future edit that set
-    ``approval_policy = "never"`` would silently turn both tracks into "act and
-    report", and this is the test that refuses to let it.
+    So the asking half is asserted as an invariant, and it has already been lost
+    once: ``sandbox_mode = "danger-full-access"`` removes the sandbox and with it
+    every approval, measured live at five governed tool actions and four
+    conversation ones with not one request between them. The sandbox is therefore
+    disabled at its *backend* while the mode stays one that has to ask.
     """
 
     settings = tomllib.loads(GOVERNED_CODEX_CONFIG)
-    assert settings["sandbox_mode"] == "danger-full-access"
+    features = settings["features"]
+    assert features["experimental_windows_sandbox"] is False
+    assert features["elevated_windows_sandbox"] is False
+    assert settings["sandbox_mode"] != "danger-full-access", (
+        "a sandbox with nothing to escalate out of is a codex that never asks"
+    )
     # codex 0.149.1's own list, quoted from the error it raised at a value that
-    # was not on it: untrusted, on-failure, on-request, granular, never. Only
-    # "never" stops the approvals, and an unparseable value is worse than either
-    # — codex logs one line to stderr and silently uses its defaults.
-    assert settings["approval_policy"] in {"untrusted", "on-failure", "on-request", "granular"}
+    # was not on it: untrusted, on-failure, on-request, granular, never — and
+    # "untrusted" parses but is refused at startup. Only "never" stops the
+    # approvals outright, and an unparseable value is worse than either: codex
+    # logs one line to stderr and silently falls back to its defaults.
+    assert settings["approval_policy"] in {"on-failure", "on-request", "granular"}
 
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
