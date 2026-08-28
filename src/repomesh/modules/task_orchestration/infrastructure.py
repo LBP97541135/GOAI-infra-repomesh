@@ -19,8 +19,12 @@ from sqlalchemy.types import Uuid
 
 from repomesh.modules.task_orchestration.contracts import (
     ExecutionPlanStatus,
+    LeaderAssignmentPhase,
+    LeaderAssignmentView,
+    LeaderSafetyEnvelopeView,
     TaskOrigin,
     TaskStatus,
+    WorkerRosterEntryView,
 )
 from repomesh.modules.task_orchestration.domain import (
     DeliveryRefusal,
@@ -109,6 +113,136 @@ class ExecutionPlanTaskRecord(Base):
     leader_task_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     plan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     batch_index: Mapped[int] = mapped_column(Integer)
+
+
+class LeaderAssignmentRecord(Base):
+    """One repository batch item parked for an external Repository Leader.
+
+    Keyed by the leader task id, which is also the leader-actions surface's
+    only path parameter: there is exactly one assignment per leader task, and
+    a surrogate key would only add a second way to name the same row.
+
+    The envelope and the roster are stored as documents rather than as tables
+    of their own because nothing queries inside them — they are read back
+    whole, by the one key above, to be handed to a leader verbatim.
+    """
+
+    __tablename__ = "leader_assignments"
+    __table_args__ = ({"schema": "task_orchestration"},)
+
+    leader_task_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    repository_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    leader_agent_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    phase: Mapped[str] = mapped_column(String(20), index=True)
+    safety_envelope: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT)
+    worker_roster: Mapped[list[dict[str, object]]] = mapped_column(JSON_DOCUMENT)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+def _encode_leader_assignment(assignment: LeaderAssignmentView) -> dict[str, object]:
+    """The two JSON documents, shared by both adapters.
+
+    Both stores encode identically so the behaviour test that runs one suite
+    over the pair is comparing the same values, not two dialects of them.
+    """
+
+    return {
+        "safety_envelope": {
+            "allowed_path_roots": list(assignment.safety_envelope.allowed_path_roots),
+            "test_paths": list(assignment.safety_envelope.test_paths),
+            "test_commands": list(assignment.safety_envelope.test_commands),
+        },
+        "worker_roster": [
+            {
+                "worker_agent_id": str(entry.worker_agent_id),
+                "worker_name": entry.worker_name,
+                "responsibility_paths": list(entry.responsibility_paths),
+            }
+            for entry in assignment.worker_roster
+        ],
+    }
+
+
+def _decode_leader_assignment(record: LeaderAssignmentRecord) -> LeaderAssignmentView:
+    envelope = record.safety_envelope
+    return LeaderAssignmentView(
+        leader_task_id=record.leader_task_id,
+        organization_id=record.organization_id,
+        project_id=record.project_id,
+        repository_id=record.repository_id,
+        leader_agent_id=record.leader_agent_id,
+        phase=LeaderAssignmentPhase(record.phase),
+        safety_envelope=LeaderSafetyEnvelopeView(
+            allowed_path_roots=tuple(envelope["allowed_path_roots"]),
+            test_paths=tuple(envelope["test_paths"]),
+            test_commands=tuple(envelope["test_commands"]),
+        ),
+        worker_roster=tuple(
+            WorkerRosterEntryView(
+                worker_agent_id=UUID(str(entry["worker_agent_id"])),
+                worker_name=str(entry["worker_name"]),
+                responsibility_paths=tuple(entry["responsibility_paths"]),
+            )
+            for entry in record.worker_roster
+        ),
+    )
+
+
+class InMemoryLeaderAssignmentStore:
+    def __init__(self) -> None:
+        self.assignments: dict[UUID, LeaderAssignmentView] = {}
+
+    async def ensure(self, assignment: LeaderAssignmentView) -> LeaderAssignmentView:
+        return self.assignments.setdefault(assignment.leader_task_id, assignment)
+
+    async def get(self, leader_task_id: UUID) -> LeaderAssignmentView | None:
+        return self.assignments.get(leader_task_id)
+
+
+class PostgresLeaderAssignmentStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def ensure(self, assignment: LeaderAssignmentView) -> LeaderAssignmentView:
+        """Write the row, or read back the one that is already there.
+
+        The read-then-write race is settled by the primary key rather than by
+        the check: two concurrent parks of the same leader task both see no
+        row, one INSERT wins and the loser's ``IntegrityError`` is turned into
+        the same read the fast path takes. So a replay and a race land on the
+        same record, which is the property the frozen envelope depends on.
+        """
+
+        existing = await self.get(assignment.leader_task_id)
+        if existing is not None:
+            return existing
+        try:
+            async with self._database.transaction() as session:
+                session.add(
+                    LeaderAssignmentRecord(
+                        leader_task_id=assignment.leader_task_id,
+                        organization_id=assignment.organization_id,
+                        project_id=assignment.project_id,
+                        repository_id=assignment.repository_id,
+                        leader_agent_id=assignment.leader_agent_id,
+                        phase=assignment.phase.value,
+                        created_at=datetime.now(UTC),
+                        **_encode_leader_assignment(assignment),
+                    )
+                )
+        except IntegrityError:
+            stored = await self.get(assignment.leader_task_id)
+            if stored is None:  # pragma: no cover - the row must exist to conflict
+                raise
+            return stored
+        return assignment
+
+    async def get(self, leader_task_id: UUID) -> LeaderAssignmentView | None:
+        async with self._database.transaction() as session:
+            record = await session.get(LeaderAssignmentRecord, leader_task_id)
+            return _decode_leader_assignment(record) if record is not None else None
 
 
 class InMemoryTaskStore:

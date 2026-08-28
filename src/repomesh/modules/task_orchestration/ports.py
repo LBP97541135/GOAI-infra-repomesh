@@ -1,6 +1,7 @@
 from typing import Protocol
 from uuid import UUID
 
+from repomesh.modules.task_orchestration.contracts import LeaderAssignmentView
 from repomesh.modules.task_orchestration.domain import ExecutionPlan, Task
 
 
@@ -46,3 +47,23 @@ class ExecutionPlanStore(Protocol):
     async def find_by_leader_task(self, leader_task_id: UUID) -> ExecutionPlan | None: ...
 
     async def list_all(self) -> tuple[ExecutionPlan, ...]: ...
+
+
+class LeaderAssignmentStore(Protocol):
+    """Where a batch parked for an external Repository Leader is recorded.
+
+    Two operations, because the leader-actions surface asks two questions and
+    batch assignment answers one of them.
+
+    ``ensure`` is idempotent *by existence*, not by key, and deliberately
+    returns the stored record rather than the one it was handed. Batch
+    assignment re-runs whole (see ``AdvanceExecutionPlan._resume``), so the
+    second call arrives with a freshly derived envelope; overwriting would let
+    the bounds a leader is planning against move underneath it, which is
+    precisely what the frozen envelope exists to prevent. First write wins,
+    every replay reads it back.
+    """
+
+    async def ensure(self, assignment: LeaderAssignmentView) -> LeaderAssignmentView: ...
+
+    async def get(self, leader_task_id: UUID) -> LeaderAssignmentView | None: ...

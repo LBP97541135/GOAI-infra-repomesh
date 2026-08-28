@@ -346,12 +346,20 @@ def test_handoff_doc_chain_is_undefined_table_at_0035_and_whole_at_head(
 
 
 def test_head_downgrade_0035_upgrade_head_round_trips(scratch_database: str) -> None:
-    """The new revision is reversible and re-appliable, and it *is* the head."""
+    """The new revision is reversible, re-appliable, and creates the table itself."""
     url = scratch_database
+
+    # Stopped *at* this revision rather than at head, and the identity checked
+    # there. ``alembic current`` names the chain's tip, and this revision
+    # stopped being the tip the moment 20260828_0038 was added on top of it;
+    # asserting it against head was an assertion about which revision happens
+    # to be last, which is not what this test is about.
+    _alembic(url, "upgrade", REVISION_UNDER_TEST)
+    assert REVISION_UNDER_TEST in _alembic(url, "current")
+    assert _table_exists(url) is True
 
     _alembic(url, "upgrade", "head")
     assert _table_exists(url) is True
-    assert REVISION_UNDER_TEST in _alembic(url, "current")
 
     # Destructive on purpose: the downgrade drops the table and every
     # approval decision with it. Safe here only because the database is a

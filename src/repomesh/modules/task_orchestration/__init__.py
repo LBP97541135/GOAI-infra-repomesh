@@ -3,22 +3,32 @@
 from .application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    LeaderDecisionLane,
     ObserveExecutionPlan,
+    ReadLeaderAssignment,
     TaskExecutionState,
     TaskOrchestrator,
+    derive_allowed_paths,
 )
 from .contracts import (
     AssignTaskCommand,
     ExecutionPlanStatus,
     ExecutionPlanStatusSnapshot,
     ExecutionPlanView,
+    LeaderActionErrorCode,
+    LeaderActionRefused,
+    LeaderAssignmentPhase,
+    LeaderAssignmentView,
+    LeaderSafetyEnvelopeView,
     PlannedRepositoryTaskView,
     ProjectTaskProgress,
     ReportTaskCommand,
+    RepositoryAssignmentPackage,
     TaskAssignmentGateway,
     TaskSpecificationAuthor,
     TaskStatus,
     TaskView,
+    WorkerRosterEntryView,
 )
 from .domain import (
     FINAL_TASK_STATUSES,
@@ -31,11 +41,13 @@ from .domain import (
 )
 from .infrastructure import (
     InMemoryExecutionPlanStore,
+    InMemoryLeaderAssignmentStore,
     InMemoryTaskStore,
     PostgresExecutionPlanStore,
+    PostgresLeaderAssignmentStore,
     PostgresTaskStore,
 )
-from .ports import ExecutionPlanStore, TaskStore
+from .ports import ExecutionPlanStore, LeaderAssignmentStore, TaskStore
 
 __all__ = [
     "FINAL_TASK_STATUSES",
@@ -48,14 +60,25 @@ __all__ = [
     "ExecutionPlanStore",
     "ExecutionPlanView",
     "InMemoryExecutionPlanStore",
+    "InMemoryLeaderAssignmentStore",
     "InMemoryTaskStore",
+    "LeaderActionErrorCode",
+    "LeaderActionRefused",
+    "LeaderAssignmentPhase",
+    "LeaderAssignmentStore",
+    "LeaderAssignmentView",
+    "LeaderDecisionLane",
+    "LeaderSafetyEnvelopeView",
     "ObserveExecutionPlan",
     "PlannedRepositoryTask",
     "PlannedRepositoryTaskView",
     "ProjectTaskProgress",
     "PostgresExecutionPlanStore",
+    "PostgresLeaderAssignmentStore",
     "PostgresTaskStore",
+    "ReadLeaderAssignment",
     "ReportTaskCommand",
+    "RepositoryAssignmentPackage",
     "TaskAssignmentGateway",
     "TaskConflict",
     "TaskDenied",
@@ -67,4 +90,6 @@ __all__ = [
     "TaskStatus",
     "TaskStore",
     "TaskView",
+    "WorkerRosterEntryView",
+    "derive_allowed_paths",
 ]

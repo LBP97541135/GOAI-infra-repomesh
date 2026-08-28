@@ -483,3 +483,240 @@ class TaskExecutionStateGateway(Protocol):
     async def start(self, task_id: UUID, *, agent_id: UUID) -> TaskView: ...
 
     async def block(self, task_id: UUID, *, agent_id: UUID, summary: str) -> TaskView: ...
+
+
+# ---------------------------------------------------------------------------
+# LeaderDecision — the external Repository Leader's decision surface
+#
+# Producer of ``contracts/leader-actions/v1``. Everything below is this
+# module's own vocabulary for that frozen wire contract: the phase a leader
+# assignment is in, the facts the server hands a leader to plan from, and the
+# refusal codes the HTTP surface may answer with. The wire shape is produced
+# by ``RepositoryAssignmentPackage.to_wire`` and nowhere else, so an API layer
+# cannot re-derive it into a second, drifting copy.
+# ---------------------------------------------------------------------------
+
+
+class LeaderAssignmentPhase(StrEnum):
+    """Where one leader assignment stands in its own state machine.
+
+    The four values are the frozen wire enum
+    (``repository-assignment-package.schema.json``), declared in full because
+    they are the contract's vocabulary. Only ``PLANNING`` is *reachable*
+    today: a batch parked for an external leader is written in that phase and
+    stays there until ``POST /plan`` lands, which is a later slice. Declaring
+    the others is not the same as implementing their transitions, and a
+    partial enum would have forced the wire producer to invent names.
+    """
+
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    REVIEW_DUE = "review_due"
+    CLOSED = "closed"
+
+
+class LeaderActionErrorCode(StrEnum):
+    """The frozen machine-readable refusals of the leader-actions surface.
+
+    Mirrors ``structured-error.schema.json``'s enum exactly, and the whole
+    enum is declared rather than the subset one slice raises: the code-to-
+    status mapping is frozen in ``fixtures/error-matrix.json`` as a single
+    table, and a producer that knew half of it could reuse a code under the
+    wrong status without any test noticing.
+    """
+
+    INVALID_TOKEN = "invalid_token"
+    FORBIDDEN_NOT_ASSIGNEE = "forbidden_not_assignee"
+    FORBIDDEN_ROLE = "forbidden_role"
+    ASSIGNMENT_NOT_FOUND = "assignment_not_found"
+    PHASE_CONFLICT = "phase_conflict"
+    DECOMPOSITION_MODE_CONFLICT = "decomposition_mode_conflict"
+    PLAN_INVALID_DAG_CYCLE = "plan_invalid_dag_cycle"
+    PLAN_INVALID_DAG_COVERAGE = "plan_invalid_dag_coverage"
+    PLAN_INVALID_ASSIGNEE = "plan_invalid_assignee"
+    PLAN_INVALID_ALLOWED_PATHS = "plan_invalid_allowed_paths"
+    PLAN_INVALID_TESTS_REMOVED = "plan_invalid_tests_removed"
+    PLAN_INVALID_PROVENANCE = "plan_invalid_provenance"
+    REVIEW_INVALID_FINDINGS = "review_invalid_findings"
+
+
+class LeaderActionRefused(Exception):
+    """A verdict on a leader-actions request, carrying its frozen code.
+
+    Declared in ``contracts`` rather than ``domain`` for the reason the
+    collaboration module gives for its own hierarchy: the API layer has to map
+    these onto status codes, and reaching into a module's ``domain`` to read
+    its refusals is importing internals. The code travels with the exception
+    so the translation is a table lookup rather than a chain of ``except``
+    clauses that could disagree with the frozen matrix.
+    """
+
+    def __init__(self, code: LeaderActionErrorCode, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderSafetyEnvelopeView:
+    """The hard bounds a leader's plan is validated against.
+
+    Derived once, when the batch is parked, and stored — not re-derived on
+    every read. A worker's responsibility paths can change while a leader is
+    planning, and an envelope that moved underneath the plan would reject a
+    submission that was inside its bounds when it was handed out. The envelope
+    the leader was given is the envelope the clamp must use.
+    """
+
+    allowed_path_roots: tuple[str, ...]
+    test_paths: tuple[str, ...]
+    test_commands: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerRosterEntryView:
+    """One worker a leader may assign to, as the leader sees it.
+
+    ``worker_name`` is the agent's AgentTeams resource name: the only name
+    RepoMesh holds for a principal, and the one a leader will see again in the
+    room. No workspace path and no room id — a leader is given text and
+    structured facts, never a place on disk (adjudication D-8).
+    """
+
+    worker_agent_id: UUID
+    worker_name: str
+    responsibility_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderAssignmentView:
+    """The persisted record of a batch parked for an external leader.
+
+    Written by batch assignment at the moment it decides not to decompose
+    server-side, and read back by every leader-actions request. It carries the
+    facts that must not drift (the envelope, the roster) and the phase; the
+    repository task's own text is *not* copied here, because the task row is
+    its source of truth and a second copy could only ever disagree with it.
+    """
+
+    leader_task_id: UUID
+    organization_id: UUID
+    project_id: UUID
+    repository_id: UUID
+    leader_agent_id: UUID
+    phase: LeaderAssignmentPhase
+    safety_envelope: LeaderSafetyEnvelopeView
+    worker_roster: tuple[WorkerRosterEntryView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryTaskFactsView:
+    """The repository-level task as the Organization Manager assigned it."""
+
+    title: str
+    instruction: str
+    acceptance: str
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryDependencyEdge:
+    """Discovery's cross-repository fact: downstream depends on upstream."""
+
+    upstream_repository_id: UUID
+    downstream_repository_id: UUID
+
+
+#: ``repositoryTask.title`` is ``maxLength: 200`` on the wire while the task
+#: row is ``String(500)``; ``workerRoster[].workerName`` is ``maxLength: 100``
+#: while a resource name has no declared bound. Truncating is the lesser evil:
+#: the alternative is a package that fails its own frozen schema and reaches
+#: no leader at all.
+_WIRE_TITLE_LIMIT = 200
+_WIRE_WORKER_NAME_LIMIT = 100
+
+
+def _clamp(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit]
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryAssignmentPackage:
+    """Response of ``GET /agent-actions/leader/assignments/{taskId}``.
+
+    Assembled per request from the assignment record plus the leader task row,
+    so the text a leader reads is always the task's current text while the
+    bounds it is clamped by are the frozen ones.
+
+    ``advisory_*`` is everything the server offers as a *hint*: the wire object
+    carries ``authoritative: false`` and nothing in it is validated against or
+    clamped to. Empty is a legitimate answer and is what this slice produces —
+    a hint the server does not have is better absent than invented.
+    """
+
+    assignment: LeaderAssignmentView
+    repository_task: RepositoryTaskFactsView
+    advisory_dependency_edges: tuple[RepositoryDependencyEdge, ...] = ()
+    advisory_discovery_evidence: str | None = None
+    advisory_decomposition_hint: str | None = None
+
+    def to_wire(self) -> dict[str, object]:
+        """The frozen ``repository-assignment-package.v1`` document.
+
+        ``reviewEvidence`` is ``null`` here because this producer can only
+        reach ``planning``/``executing``, where the contract's first frozen
+        invariant *requires* null. A phase this method cannot honestly answer
+        for raises rather than emitting a null the invariant forbids — the
+        slice that reaches ``review_due`` has to come here and say what the
+        evidence is.
+        """
+
+        assignment = self.assignment
+        if assignment.phase not in {
+            LeaderAssignmentPhase.PLANNING,
+            LeaderAssignmentPhase.EXECUTING,
+        }:
+            raise NotImplementedError(
+                f"assignment package for phase {assignment.phase.value} needs review "
+                "evidence, which this producer does not assemble yet"
+            )
+        advisory: dict[str, object] = {"authoritative": False}
+        if self.advisory_discovery_evidence:
+            advisory["discoveryEvidence"] = self.advisory_discovery_evidence
+        if self.advisory_dependency_edges:
+            advisory["dependencyEdges"] = [
+                {
+                    "upstreamRepositoryId": str(edge.upstream_repository_id),
+                    "downstreamRepositoryId": str(edge.downstream_repository_id),
+                }
+                for edge in self.advisory_dependency_edges
+            ]
+        if self.advisory_decomposition_hint:
+            advisory["decompositionHint"] = self.advisory_decomposition_hint
+        return {
+            "schemaVersion": "repomesh.leader-actions.assignment-package.v1",
+            "leaderTaskId": str(assignment.leader_task_id),
+            "phase": assignment.phase.value,
+            "organizationId": str(assignment.organization_id),
+            "projectId": str(assignment.project_id),
+            "repositoryId": str(assignment.repository_id),
+            "repositoryTask": {
+                "title": _clamp(self.repository_task.title, _WIRE_TITLE_LIMIT),
+                "instruction": self.repository_task.instruction,
+                "acceptance": self.repository_task.acceptance,
+            },
+            "workerRoster": [
+                {
+                    "workerAgentId": str(entry.worker_agent_id),
+                    "workerName": _clamp(entry.worker_name, _WIRE_WORKER_NAME_LIMIT),
+                    "responsibilityPaths": list(entry.responsibility_paths),
+                }
+                for entry in assignment.worker_roster
+            ],
+            "safetyEnvelope": {
+                "allowedPathRoots": list(assignment.safety_envelope.allowed_path_roots),
+                "testPaths": list(assignment.safety_envelope.test_paths),
+                "testCommands": list(assignment.safety_envelope.test_commands),
+            },
+            "advisoryContext": advisory,
+            "reviewEvidence": None,
+        }
