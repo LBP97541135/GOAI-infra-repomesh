@@ -15,19 +15,38 @@ stand-in and never a port.
 
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from ..contracts import ExternalWorkerEnrollment, RoomObservation, WorkerBinding
-from ..ports import GovernedStartReceipt, RoomBatch, RoomBody, TurnOutcome, TurnRequest
+from ..contracts import (
+    ExternalWorkerEnrollment,
+    PlanReceipt,
+    RepositoryAssignmentPackage,
+    RepositoryPlanDecision,
+    RepositoryReviewDecision,
+    ReviewEvidence,
+    ReviewReceipt,
+    RoomObservation,
+    WorkerBinding,
+)
+from ..ports import (
+    GovernedStartReceipt,
+    LeaderActionRefused,
+    RoomBatch,
+    RoomBody,
+    TurnOutcome,
+    TurnRequest,
+)
 
 __all__ = [
     "GovernedStartCall",
     "InertCodingSession",
     "InMemoryGovernedTaskPort",
+    "InMemoryLeaderActionPort",
     "InMemoryRoomPort",
     "InMemoryWorkerBindingPort",
+    "LeaderActionCall",
     "ScriptedCodingSession",
     "SentMessage",
 ]
@@ -117,6 +136,202 @@ class InMemoryGovernedTaskPort:
         if isinstance(answer, BaseException):
             raise answer
         return answer
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderActionCall:
+    """One leader action, exactly as the Bridge made it."""
+
+    action: str
+    """``fetch`` | ``plan`` | ``review``."""
+    task_id: UUID
+
+
+class InMemoryLeaderActionPort:
+    """The leader decision surface, with its phase machine actually implemented.
+
+    The second implementation of :class:`~repomesh_agent_bridge.ports.LeaderActionPort`,
+    and the one that makes it a seam rather than an interface with a single
+    caller. It is not a stub that echoes canned answers: the phases really
+    advance, the envelope clamp really rejects, the receipts really repeat, and
+    the review revision really increments — because every one of those is a
+    claim the leader lane rests on, and a double that faked them would let the
+    lane pass while depending on behaviour no server has.
+
+    What it deliberately does *not* decide is anything only a real deployment
+    knows: an invalid token, a caller who is not the assignee, a team whose
+    planning happens server-side. Those arrive through :attr:`refusals`, one per
+    call, so a test that wants a particular frozen code says so in one line
+    instead of contorting the world into producing it.
+
+    ``worker task ids`` come from the review evidence when a caller supplies
+    some, so the fake reproduces the frozen fixture scenario exactly: the ids
+    the plan receipt names are the ids the evidence later reports on, which is
+    the cross-document identity the contract test pins.
+    """
+
+    def __init__(
+        self,
+        package: RepositoryAssignmentPackage,
+        *,
+        review_evidence: ReviewEvidence | None = None,
+    ) -> None:
+        if package.phase != "planning":
+            raise ValueError("the fake starts a round at the beginning: give it a planning package")
+        self._planning = package
+        self._evidence = review_evidence
+        self._package = package
+        self._plan: RepositoryPlanDecision | None = None
+        self._plan_receipt: PlanReceipt | None = None
+        self._review: RepositoryReviewDecision | None = None
+        self._review_receipt: ReviewReceipt | None = None
+        self.refusals: list[BaseException] = []
+        """Raised one per call, before anything else. Empty means "behave"."""
+        self.calls: list[LeaderActionCall] = []
+
+    # -- the port ----------------------------------------------------------
+
+    async def fetch_assignment(self, task_id: UUID) -> RepositoryAssignmentPackage:
+        self.calls.append(LeaderActionCall(action="fetch", task_id=task_id))
+        self._scripted()
+        self._known(task_id)
+        return self._package
+
+    async def submit_plan(
+        self, task_id: UUID, decision: RepositoryPlanDecision
+    ) -> PlanReceipt:
+        self.calls.append(LeaderActionCall(action="plan", task_id=task_id))
+        self._scripted()
+        self._known(task_id)
+        if self._plan_receipt is not None:
+            # Frozen invariant 2: the same plan replays onto the same receipt;
+            # a different one under the same key is refused, never substituted.
+            if decision == self._plan:
+                return self._plan_receipt
+            raise LeaderActionRefused(
+                "this leader task already has an accepted plan", code="phase_conflict"
+            )
+        if self._package.phase != "planning":
+            raise LeaderActionRefused(
+                f"a plan may only be submitted while planning, not while {self._package.phase}",
+                code="phase_conflict",
+            )
+        if reason := self._package.refuse_plan(decision):
+            raise LeaderActionRefused(reason, code=_plan_refusal_code(reason))
+        worker_task_ids = (
+            tuple(entry.worker_task_id for entry in self._evidence.worker_evidence)
+            if self._evidence is not None
+            else tuple(uuid4() for _ in decision.worker_tasks)
+        )
+        self._plan = decision
+        self._plan_receipt = PlanReceipt(
+            leader_task_id=self._package.leader_task_id,
+            plan_revision=1,
+            worker_task_ids=worker_task_ids,
+        )
+        self._package = replace(self._package, phase="executing")
+        return self._plan_receipt
+
+    async def submit_review(
+        self, task_id: UUID, decision: RepositoryReviewDecision
+    ) -> ReviewReceipt:
+        self.calls.append(LeaderActionCall(action="review", task_id=task_id))
+        self._scripted()
+        self._known(task_id)
+        if self._review_receipt is not None:
+            if decision == self._review:
+                return self._review_receipt
+            raise LeaderActionRefused(
+                "this review round already has a verdict", code="phase_conflict"
+            )
+        if self._package.phase != "review_due":
+            raise LeaderActionRefused(
+                f"a verdict may only be submitted while review_due, not while "
+                f"{self._package.phase}",
+                code="phase_conflict",
+            )
+        if reason := self._package.refuse_review(decision):
+            raise LeaderActionRefused(reason, code="review_invalid_findings")
+        assert self._package.review_evidence is not None  # noqa: S101 - the phase guarantees it
+        revision = self._package.review_evidence.review_revision
+        rework = (
+            tuple(uuid4() for finding in decision.findings if finding.rework_instruction)
+            if decision.verdict == "request_rework"
+            else ()
+        )
+        self._review = decision
+        self._review_receipt = ReviewReceipt(
+            leader_task_id=self._package.leader_task_id,
+            verdict=decision.verdict,
+            review_revision=revision,
+            leader_task_status={
+                "approve": "succeeded",
+                "request_rework": "in_progress",
+                "escalate": "blocked",
+            }[decision.verdict],
+            rework_task_ids=rework,
+        )
+        # Rework sends the round back to ``executing`` with the new revision
+        # tasks in flight, and frozen invariant 1 says an executing package
+        # carries no evidence: the round it belonged to is over, and the next
+        # verdict must be based on the next round's evidence, not this one's.
+        self._package = (
+            replace(self._package, phase="executing", review_evidence=None)
+            if decision.verdict == "request_rework"
+            else replace(self._package, phase="closed")
+        )
+        return self._review_receipt
+
+    # -- what a real deployment's worker tasks would do ---------------------
+
+    def worker_tasks_finished(self, evidence: ReviewEvidence | None = None) -> None:
+        """Every worker task has reached a terminal status; review is now due.
+
+        The one thing this fake cannot derive: worker tasks execute somewhere
+        else entirely, and the round moves when they finish. A test says so
+        explicitly rather than the double guessing, which also makes "the leader
+        did not review before the evidence existed" an observable claim.
+        """
+
+        carried = evidence or self._evidence
+        if carried is None:
+            raise ValueError("review_due needs evidence: give the fake some, here or at build time")
+        self._evidence = carried
+        self._package = replace(self._package, phase="review_due", review_evidence=carried)
+        self._review = None
+        self._review_receipt = None
+
+    @property
+    def phase(self) -> str:
+        """Where the round is now. Read by tests, never by the lane under test."""
+
+        return self._package.phase
+
+    def _known(self, task_id: UUID) -> None:
+        if task_id != self._planning.leader_task_id:
+            raise LeaderActionRefused(
+                "no assignment for that leader task", code="assignment_not_found"
+            )
+
+    def _scripted(self) -> None:
+        if self.refusals:
+            raise self.refusals.pop(0)
+
+
+def _plan_refusal_code(reason: str) -> str:
+    """Which frozen code the envelope clamp's own sentence corresponds to.
+
+    The clamp check returns prose because its first reader is the leader's own
+    session, which needs a sentence rather than an enum. A server refusing the
+    same plan would name a code, so the fake names the same one — otherwise a
+    lane that branched on the code would pass here and fail against production.
+    """
+
+    if "roster" in reason:
+        return "plan_invalid_assignee"
+    if "outside the safety envelope" in reason:
+        return "plan_invalid_allowed_paths"
+    return "plan_invalid_tests_removed"
 
 
 @dataclass(frozen=True, slots=True)

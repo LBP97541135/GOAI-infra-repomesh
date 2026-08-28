@@ -319,29 +319,45 @@ class DriverCodingSession:
 
     # -- one turn (H-11..H-13) ----------------------------------------------
 
-    async def respond(self, turn: TurnRequest) -> TurnOutcome:
-        """Serve one turn, resuming its thread when a handle was issued.
+    async def deliver(
+        self, prompt: str, *, resume_session_id: str | None = None
+    ) -> tuple[DriverResult, _SessionObserver]:
+        """Run one codex turn under the restriction and hand back what it made.
+
+        The session stack, without the room projection on top: the same
+        deny-all policy, the same allowlisted environment, the same private
+        workspace, the same watchdog windows, the same cancellation discipline.
+        ``respond`` puts a room's view on the result; the leader's coordination
+        session next door reads a structured decision out of it instead. There
+        is deliberately one stack and two readers rather than two stacks —
+        inventing a second way to launch codex would mean two containment
+        stories to keep true on one machine (adjudication B2-1).
 
         The driver runs in its own task so cancellation stays deterministic. The
         app-server driver swallows ``CancelledError`` into an INTERRUPTED result
-        (``app_server.py``), so awaiting it inline would let the supervisor's
+        (``app_server.py``), so awaiting it inline would let a caller's
         ``asyncio.timeout`` accounting be broken by a turn that reported a value
         where the timeout expected an exception. Shielding the child instead
-        means a cancelled ``respond`` cancels the child, waits for it to reap its
+        means a cancelled call cancels the child, waits for it to reap its
         subprocess, and re-raises ``CancelledError`` unchanged (H-12).
+
+        The observer comes back with the result because the two are read
+        together: the count of denied tool requests and the thread id a
+        SESSION_STARTED announced are facts about the turn that the result alone
+        does not carry.
         """
 
         if self._dirs is None or self._binary is None or self._path is None:
-            raise SessionNotReady("respond was reached before ensure_ready opened the session")
+            raise SessionNotReady("a turn was reached before ensure_ready opened the session")
 
         request = DriverRequest(
             executable=self._binary,
             workspace=self._dirs.workspace,
-            prompt=turn.prompt,
+            prompt=prompt,
             permission_policy=_DenyAllPolicy(),
             environment=session_environment(self._dirs, self._path),
             model=None,
-            resume_session_id=turn.native_session_id,
+            resume_session_id=resume_session_id,
             idle_window_seconds=_IDLE_WINDOW_SECONDS,
             tool_window_seconds=_TOOL_WINDOW_SECONDS,
         )
@@ -354,6 +370,14 @@ class DriverCodingSession:
             with contextlib.suppress(BaseException):
                 await task
             raise
+        return result, observer
+
+    async def respond(self, turn: TurnRequest) -> TurnOutcome:
+        """Serve one turn, resuming its thread when a handle was issued."""
+
+        result, observer = await self.deliver(
+            turn.prompt, resume_session_id=turn.native_session_id
+        )
         return self._to_outcome(turn, result, observer)
 
     def _to_outcome(

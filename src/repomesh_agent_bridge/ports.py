@@ -14,6 +14,17 @@ once at startup and decides whether the process runs at all, the other is a
 write performed mid-session on behalf of somebody in a room, and a double for
 one is never a usable double for the other.
 
+A fifth arrives with the leader lane: :class:`LeaderActionPort`, the decision
+surface a Repository Leader plans and reviews through (adjudication D-1 — over
+HTTP on the existing ``agent-actions`` face, because six external members and
+no containers means an MCP channel would have zero consumers). It is its own
+seam for the reason the governed one is: the two are used by different roles in
+the same process family, a worker Bridge never touches this one, and the phase
+machine behind it — planning, executing, review_due — is state a start-task
+double has no way to express. Its two implementations are the HTTP adapter and
+the in-memory one next to it, which is what makes it a seam rather than an
+interface with a single caller.
+
 Two failure vocabularies meet in this package and they live in different
 modules for one reason each. The *preflight* one lives in
 :mod:`repomesh_agent_bridge.contracts`, next to the wire models that raise it:
@@ -33,7 +44,16 @@ from dataclasses import dataclass
 from typing import NewType, Protocol
 from uuid import UUID
 
-from .contracts import ExternalWorkerEnrollment, RoomObservation, WorkerBinding
+from .contracts import (
+    ExternalWorkerEnrollment,
+    PlanReceipt,
+    RepositoryAssignmentPackage,
+    RepositoryPlanDecision,
+    RepositoryReviewDecision,
+    ReviewReceipt,
+    RoomObservation,
+    WorkerBinding,
+)
 
 __all__ = [
     "CodingSessionPort",
@@ -42,6 +62,10 @@ __all__ = [
     "GovernedTaskPort",
     "GovernedTaskRefused",
     "GovernedTaskUnavailable",
+    "LeaderActionError",
+    "LeaderActionPort",
+    "LeaderActionRefused",
+    "LeaderActionUnavailable",
     "RoomBatch",
     "RoomBody",
     "RoomEvent",
@@ -391,5 +415,106 @@ class GovernedTaskPort(Protocol):
 
         Raises :class:`GovernedTaskRefused` when RepoMesh decided against it and
         :class:`GovernedTaskUnavailable` when it never decided at all.
+        """
+        ...
+
+
+class LeaderActionError(RuntimeError):
+    """A leader action did not complete.
+
+    Its own family for the reason the governed one has its own: none of these
+    stops a process from starting, and the two halves below are told apart by
+    the only distinction the caller acts on — did RepoMesh decide something.
+    """
+
+
+class LeaderActionRefused(LeaderActionError):
+    """RepoMesh was asked and said no, in the frozen contract's own vocabulary.
+
+    Carries the machine-readable ``code`` beside the sentence, because the two
+    are used by different readers: a leader lane branches on the code — a
+    ``phase_conflict`` on a replayed submission is not the same event as a
+    ``plan_invalid_dag_cycle`` — while the message is what a room or an operator
+    is shown. Both come from the server's own structured error body; nothing
+    about the exchange, no status code and no credential, is added to either.
+
+    An unreadable 2xx body lands here too, on the same reasoning the governed
+    adapter uses for its receipts: an answer this process cannot parse is not an
+    answer, and a retry will not make it one. Such a refusal carries no code from
+    the frozen enum, because the server never named one.
+    """
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        """The frozen ``structured-error`` code, or ``None`` when the refusal was
+        not one the server put a code on. Never assumed to be in the frozen
+        enum: an unrecognised code is carried through as itself rather than
+        turned into a crash at the moment the two sides have drifted."""
+
+
+class LeaderActionUnavailable(LeaderActionError):
+    """RepoMesh could not be asked, or could not answer.
+
+    A connection that failed, a request that timed out, a 429, a 5xx. Split from
+    :class:`LeaderActionRefused` by "did RepoMesh decide anything", which is what
+    decides whether there is a reason worth repeating to the leader.
+    """
+
+
+class LeaderActionPort(Protocol):
+    """The Repository Leader's decision surface (``contracts/leader-actions/v1``).
+
+    Three calls and a phase machine behind them: read the facts, submit the
+    plan, submit the verdict. What the leader may do is bounded by what this
+    port can express, which is the point — nothing here can start, edit or
+    execute a coding task, so a leader that wanted to do a worker's job has no
+    method to do it with (AC-02). The reverse boundary is the server's and is
+    unchanged: a leader token calling ``start-worker-task`` is still refused.
+
+    **Nothing here retries.** The reads are safe to repeat and the writes are
+    idempotent *at the server* — the leader task id keys a plan, the leader task
+    id and review revision key a verdict — so a replay is safe because RepoMesh
+    makes it safe, and re-issuing a request the control plane may already have
+    answered is a judgement only it can make. An implementation that retried
+    would be inventing that judgement, which is the same reasoning
+    :meth:`GovernedTaskPort.start_task` is built on.
+
+    Every method raises :class:`LeaderActionRefused` when RepoMesh decided
+    against the call and :class:`LeaderActionUnavailable` when it never decided.
+    """
+
+    async def fetch_assignment(self, task_id: UUID) -> RepositoryAssignmentPackage:
+        """Read the fact package for ``task_id`` in whatever phase it is in.
+
+        Valid in every phase, and the only way the leader learns anything about
+        the work: the roster it may assign to, the envelope its plan is clamped
+        against, and — from ``review_due`` on — the evidence its verdict has to
+        be based on. Facts and non-authoritative hints; never a workspace, and
+        never a plan the server wrote on the leader's behalf.
+        """
+        ...
+
+    async def submit_plan(
+        self, task_id: UUID, decision: RepositoryPlanDecision
+    ) -> PlanReceipt:
+        """Submit the leader's Spec, DAG and worker tasks; return the receipt.
+
+        Valid only in ``planning``; anywhere else RepoMesh answers
+        ``phase_conflict``. An identical resubmission returns the original
+        receipt, which is what makes a replay after an ambiguous failure safe;
+        a *different* plan under the same key is refused rather than silently
+        replacing the first.
+        """
+        ...
+
+    async def submit_review(
+        self, task_id: UUID, decision: RepositoryReviewDecision
+    ) -> ReviewReceipt:
+        """Submit the leader's verdict over the current round; return the receipt.
+
+        Valid only in ``review_due``. This is the only way a leader task reaches
+        a terminal status in leader mode — there is no automatic roll-up — so a
+        round that is never reviewed stays open rather than resolving itself.
         """
         ...

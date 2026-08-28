@@ -20,11 +20,22 @@ enrollment (PR 4), and it is launched only through ``RestrictedProcessFactory``.
 Both are exported here, alongside ``prepare_session_dirs`` and the
 ``IsolationReport`` its probe returns, so the composition root can build the one
 containment boundary the driver and the session share.
+
+The leader lane adds three names and no fourth stack. ``RepoMeshLeaderActionAdapter``
+and ``InMemoryLeaderActionPort`` are the two implementations of ``LeaderActionPort``
+— an HTTP one and one that really runs the phase machine, which is what makes it
+a seam. ``LeaderCoordinationSession`` is not a second ``CodingSessionPort``: it
+holds a ``DriverCodingSession`` and reads a structured decision out of the same
+turn the room lane reads a note out of, so both lanes share one containment
+boundary rather than each keeping its own.
 """
 
 from ..ports import RoomRefused, RoomTransportError, RoomUnavailable
 from .coding_session import DriverCodingSession
+from .leader_actions import RepoMeshLeaderActionAdapter
+from .leader_session import LeaderCoordinationSession
 from .matrix import MatrixRoomAdapter
+from .memory import InMemoryLeaderActionPort
 from .restricted_process import (
     IsolationReport,
     RestrictedProcessFactory,
@@ -33,8 +44,11 @@ from .restricted_process import (
 
 __all__ = [
     "DriverCodingSession",
+    "InMemoryLeaderActionPort",
     "IsolationReport",
+    "LeaderCoordinationSession",
     "MatrixRoomAdapter",
+    "RepoMeshLeaderActionAdapter",
     "RestrictedProcessFactory",
     "RoomRefused",
     "RoomTransportError",
