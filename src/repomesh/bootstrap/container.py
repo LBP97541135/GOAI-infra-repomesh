@@ -1838,31 +1838,6 @@ class ApplicationContainer:
         return ReadRoomTimeline(self.room_timeline_store())
 
     @cached_service
-    def room_timeline_recorder(self):
-        """The ingest use case the Matrix poller writes through, or None.
-
-        None without a control plane, for the same reason
-        ``collaboration_gateway`` is None without a messenger: identity
-        resolution has nowhere to ask, and a recorder that attributes every
-        message to nobody is worse than one that was never wired — the first
-        write would freeze "unknown" onto messages whose sender is perfectly
-        knowable.
-        """
-
-        if self.agent_team_control_plane is None:
-            return None
-        from repomesh.integrations.agentteams import AgentTeamsMatrixIdentityResolver
-        from repomesh.modules.collaboration import RecordRoomTimeline
-
-        return RecordRoomTimeline(
-            authorized_room_reader(self.project_topology_store),
-            AgentTeamsMatrixIdentityResolver(
-                self.agent_directory, self.agent_team_control_plane
-            ),
-            self.room_timeline_store(),
-        )
-
-    @cached_service
     def execution_plan_advancer(self) -> AdvanceExecutionPlan | None:
         assigner = self.task_assignment_gateway()
         if assigner is None:
