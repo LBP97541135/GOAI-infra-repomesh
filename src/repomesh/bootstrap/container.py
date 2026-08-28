@@ -80,6 +80,8 @@ from repomesh.modules.task_orchestration import (
     PostgresExecutionPlanStore,
     PostgresLeaderAssignmentStore,
     ReadLeaderAssignment,
+    SubmitRepositoryPlan,
+    SubmitRepositoryReview,
 )
 from repomesh.modules.task_orchestration.contracts import (
     PublishedTaskPackage,
@@ -1666,6 +1668,73 @@ class ApplicationContainer:
             self.task_store,
             self.agent_directory,
             self.team_decomposition_mode_reader(),
+        )
+
+    @cached_service
+    def leader_plan_submitter(self) -> SubmitRepositoryPlan:
+        """The write behind ``POST .../plan``.
+
+        The assigner and the spec author are the *same* two collaborators
+        ``DecomposeRepositoryTask`` uses, and that is the point of the slice: a
+        leader-planned worker task is created, published, told about and
+        permitted by exactly the machinery that creates a server-planned one.
+        A second path would be a second set of bugs.
+
+        Raises rather than answering None when the orchestrator is absent. The
+        optional services above are optional because a *round* can exist
+        without a messenger; this endpoint cannot — a plan that could not
+        dispatch its worker tasks would be accepted and then do nothing, which
+        is worse than refusing to answer at all.
+        """
+
+        assigner = self.task_assignment_gateway()
+        if assigner is None:
+            raise RuntimeError(
+                "the AgentTeams messenger is not configured, so a leader plan could not "
+                "dispatch the worker tasks it creates"
+            )
+        return SubmitRepositoryPlan(
+            self.leader_assignment_store(),
+            self.task_store,
+            self.agent_directory,
+            self.team_decomposition_mode_reader(),
+            assigner,
+            spec_author=ApprovedTaskSpecificationAuthor(
+                self.specification_service(), self.specification_store
+            ),
+        )
+
+    @cached_service
+    def leader_review_submitter(self) -> SubmitRepositoryReview:
+        """The write behind ``POST .../review``.
+
+        ``on_leader_task_terminal`` is the execution plan's own advance hook,
+        the same callable the Runner gateway holds. In leader mode an approved
+        review is the *only* way a leader task reaches a terminal status, so
+        without it an approved round would settle the task and leave its plan
+        parked one batch short of finished.
+        """
+
+        assigner = self.task_assignment_gateway()
+        if assigner is None or self.task_report_gateway is None:
+            raise RuntimeError(
+                "the AgentTeams messenger is not configured, so a leader review could not "
+                "report its verdict"
+            )
+        advancer = self.execution_plan_advancer()
+        return SubmitRepositoryReview(
+            self.leader_assignment_store(),
+            self.task_store,
+            self.agent_directory,
+            self.team_decomposition_mode_reader(),
+            assigner,
+            self.task_report_gateway,
+            spec_author=ApprovedTaskSpecificationAuthor(
+                self.specification_service(), self.specification_store
+            ),
+            on_leader_task_terminal=(
+                advancer.on_task_terminal if advancer is not None else None
+            ),
         )
 
     @cached_service

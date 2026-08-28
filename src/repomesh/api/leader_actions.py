@@ -13,9 +13,8 @@ alternative here is worse — the credential map is parsed by ``agent_runtime``'
 router, and a business module reaching into a sibling module's API package to
 borrow a private function inverts the dependency the packages exist to express.
 
-This slice implements the read. ``POST /plan`` and ``POST /review`` are the
-same surface's writes and land with the use cases behind them; a stub that
-answered them now would be a second, weaker contract.
+All three endpoints of the frozen contract live here: the read a leader plans
+and reviews from, and the two writes that are its own products.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
+from repomesh.api.leader_action_models import PlanDecisionBody, ReviewDecisionBody
 from repomesh.modules.task_orchestration.contracts import (
     LeaderActionErrorCode,
     LeaderActionRefused,
@@ -80,6 +80,55 @@ async def leader_assignment_package(task_id: UUID, request: Request) -> dict[str
     except LeaderActionRefused as refusal:
         raise _refusal(refusal) from refusal
     return package.to_wire()
+
+
+@router.post("/agent-actions/leader/assignments/{task_id}/plan", response_model=None)
+async def submit_repository_plan(
+    task_id: UUID, body: PlanDecisionBody, request: Request
+) -> dict[str, object]:
+    """The leader's Engineering Spec, DAG and worker tasks (``plan-receipt.v1``).
+
+    The path id is the idempotency key and the body does not repeat it, so
+    there is one place a plan's identity lives. A resubmission of the same plan
+    returns the same receipt with 200 — the leader may have lost the first
+    answer, and making it 409 would leave a Bridge unable to find out what
+    happened to work that had already been dispatched. A *different* plan under
+    that key is 409 ``phase_conflict``, never a silent replacement.
+
+    The body model checks shape and the use case renders the verdict; see
+    ``leader_action_models`` for why a malformed body is the framework's 422
+    rather than one of the frozen 409 codes.
+    """
+
+    try:
+        member_agent_id = _authenticated_member(request)
+        receipt = await request.app.state.container.leader_plan_submitter().execute(
+            task_id, body.to_decision(), caller_agent_id=member_agent_id
+        )
+    except LeaderActionRefused as refusal:
+        raise _refusal(refusal) from refusal
+    return receipt.to_wire()
+
+
+@router.post("/agent-actions/leader/assignments/{task_id}/review", response_model=None)
+async def submit_repository_review(
+    task_id: UUID, body: ReviewDecisionBody, request: Request
+) -> dict[str, object]:
+    """The leader's evidence-based verdict (``review-receipt.v1``).
+
+    Idempotent per review round rather than per task: the key is the pair
+    (leader task id, review revision), because ``request_rework`` opens a
+    second round and round 1's receipt has to stay replayable after it does.
+    """
+
+    try:
+        member_agent_id = _authenticated_member(request)
+        receipt = await request.app.state.container.leader_review_submitter().execute(
+            task_id, body.to_decision(), caller_agent_id=member_agent_id
+        )
+    except LeaderActionRefused as refusal:
+        raise _refusal(refusal) from refusal
+    return receipt.to_wire()
 
 
 def _refusal(refusal: LeaderActionRefused) -> HTTPException:
