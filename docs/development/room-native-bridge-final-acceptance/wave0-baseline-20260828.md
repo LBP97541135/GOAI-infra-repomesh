@@ -92,12 +92,23 @@ W-A2  PR 7 完整集成 [波次2·A线]  状态: **已验收合入(08-28)**  bas
       (前基线 1977/23,+66 全为本单新测试,skip 未增)。
       已裁决偏差(验收时定,沿 wave1 交接 §5): planRevision 恒 1、rework 回执
       in_progress 不动行、许可回落包络根、save 无版本列
-W-S1  S-1 派发/宣告拆分 [插单·主脑裁决 08-28] 状态: 施工中(opus 子代理,分支 feat/s1-dispatch-split,
-      baseline f9ea4fbf)。裁决: 按 wave1 交接 §3 建议方向——TaskAssignmentGateway.assign 增
-      keyword-only deliver=True + 新 deliver_assignment(task_id)(原 key 经 assignment_key 读回),
-      三处调用点(decompose :777/leader plan :1684/rework :2016)改「建行→写许可→宣告」三步序;
-      不变式=Worker 任务的宣告绝不先于其执行许可存在;A-10 重放语义保留。
-      合入后必须重跑「Bridge 在线稳态自动接单」活体取证,S-1 才算关闭
+W-S1  S-1 派发/宣告拆分 [插单·主脑裁决 08-28] 状态: **已关闭(08-28,代码+活体双证)**
+      裁决与实现: TaskAssignmentGateway.assign 增 keyword-only deliver=True +
+      新 deliver_assignment(task_id)(原 key 经 assignment_key 读回);三处调用点
+      (decompose/leader plan/rework)改「建行→写许可→宣告」三步序;A-10 重放语义保留。
+      合入 `64da59f7`(cherry-pick 自 feat/s1-dispatch-split 的 03139349);
+      门禁 ruff 干净 + 全量 **2053/23 exit 0**(+10 为排序不变式新测试,含反证:
+      摘掉三处 deliver=False 后 6 条红)。测试关键设计: collaboration fake 在发送时刻
+      回查许可(等价在线 Bridge preflight),录音机式断言会放过此缺陷。
+      **稳态活体取证 PASS**(证据 output/bridge-team/s1-steady-evidence/,13 件):
+      Bridge 在线 2m37s 后派活、单实例 sync cursor 单调、零人工 UUID、两侧
+      SpecificationNotFound 零命中、start-worker-task 202、run accepted→completed、
+      task succeeded 真提交 b3784bae;**同一请求 DB 时钟直录许可(13:28:30.260)先于
+      房间消息(13:28:30.449)189ms**——事务边界残余风险一并了结(真库上许可先于通告可见)。
+      AC-03 稳态口径自此成立。
+      新记账(不阻塞,缺口 P 同族): run 终态记录里 codex 自述「PATH 无 python 验证被阻断」
+      与权威 testResults exit 0 并存——受限子进程 6 键 PATH 与 Runner 验证是两个主体,
+      房间转述权威侧,但 agent 反话随同一条记录保留;待 P 立项时一并处理
 W-B2  PR 8         [波次2·B线]  状态: 排队
 W-C2  PR 9+Q2      [波次2·C线]  状态: 排队
 W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: 排队
