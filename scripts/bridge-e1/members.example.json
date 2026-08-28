@@ -1,0 +1,70 @@
+{
+  "organizationId": "4d1e6f00-0000-4000-8000-000000000000",
+  "organizationLeaderAgentId": "4d1e6f00-0000-4000-8000-000000000001",
+  "repomeshEndpoint": "http://127.0.0.1:8077",
+  "matrixHomeserverUrl": "http://127.0.0.1:18080",
+  "controllerUrl": "http://127.0.0.1:18090",
+  "codingProfile": "codex",
+  "members": [
+    {
+      "key": "alpha-leader",
+      "role": "repository_leader",
+      "agentId": "4d1e6f00-0000-4000-8000-0000000000a1",
+      "repositoryId": "1a1f0c37-9d40-4c11-9f01-0000000000a1",
+      "resourceName": "repo-1a1f0c379d40-leader",
+      "responsibilityPaths": ["**"],
+      "subsets": ["e1", "m7"]
+    },
+    {
+      "key": "alpha-worker",
+      "role": "worker",
+      "agentId": "4d1e6f00-0000-4000-8000-0000000000a2",
+      "repositoryId": "1a1f0c37-9d40-4c11-9f01-0000000000a1",
+      "resourceName": "repo-1a1f0c379d40-worker-01",
+      "responsibilityPaths": ["**"],
+      "leaderKey": "alpha-leader",
+      "workspaceRoot": "D:/Project4work/.repomesh-e1/workspaces/alpha",
+      "subsets": ["e1", "m7"]
+    },
+    {
+      "key": "beta-leader",
+      "role": "repository_leader",
+      "agentId": "4d1e6f00-0000-4000-8000-0000000000b1",
+      "repositoryId": "2b2e1d48-ae51-4d22-8f02-0000000000b2",
+      "resourceName": "repo-2b2e1d48ae51-leader",
+      "responsibilityPaths": ["**"],
+      "subsets": ["e1"]
+    },
+    {
+      "key": "beta-worker",
+      "role": "worker",
+      "agentId": "4d1e6f00-0000-4000-8000-0000000000b2",
+      "repositoryId": "2b2e1d48-ae51-4d22-8f02-0000000000b2",
+      "resourceName": "repo-2b2e1d48ae51-worker-01",
+      "responsibilityPaths": ["**"],
+      "leaderKey": "beta-leader",
+      "workspaceRoot": "D:/Project4work/.repomesh-e1/workspaces/beta",
+      "subsets": ["e1"]
+    },
+    {
+      "key": "gamma-leader",
+      "role": "repository_leader",
+      "agentId": "4d1e6f00-0000-4000-8000-0000000000c1",
+      "repositoryId": "3c3f2e59-bf62-4e33-9f03-0000000000c3",
+      "resourceName": "repo-3c3f2e59bf62-leader",
+      "responsibilityPaths": ["**"],
+      "subsets": ["e1"]
+    },
+    {
+      "key": "gamma-worker",
+      "role": "worker",
+      "agentId": "4d1e6f00-0000-4000-8000-0000000000c2",
+      "repositoryId": "3c3f2e59-bf62-4e33-9f03-0000000000c3",
+      "resourceName": "repo-3c3f2e59bf62-worker-01",
+      "responsibilityPaths": ["**"],
+      "leaderKey": "gamma-leader",
+      "workspaceRoot": "D:/Project4work/.repomesh-e1/workspaces/gamma",
+      "subsets": ["e1"]
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# The real roster names live identities and machine paths; only the example is tracked.
+members.json
+
+# Anything the scripts write: binding answers, enrollments, pid files, logs and the
+# env file that holds the six Matrix tokens. Never tracked, and the env file never
+# leaves this machine.
+out/
+*.env
+*.pid
+*.log
