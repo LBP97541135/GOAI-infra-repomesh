@@ -161,8 +161,45 @@ W-C2  PR 9+Q2      [波次2·C线]  状态: **已验收合入(08-28)**
       rooms.join,最可能挡 M8 的一条);③拓扑 room_id/leader_room_id 必须已回写(白名单
       全来自拓扑);④人类发送者按 raw matrix id 显示是 D-4 设计而非 bug;
       ⑤REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN 有效否则静默只显出站
-W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: 排队
-W-E1  E1 脚本       [空闲槽]      状态: 排队(等 W-A1 部署)
+W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: **已验收合入(08-28)——波次 2 开发面就此全清**
+      拆两张子单并行(文件面零交集):
+      **W-C3a(PR 10+TS 收窄)** 合入 050759df/f8833111/12f7e6e1(ff)+契约追认 5c82310f;
+      门禁 **2210/26**。两项开工前裁决: ①W-C3-D1 `coding_profile` 不加——当日核查
+      controller WorkerResponse 无 coding-CLI 字段,「透传」无源;前端文案 `External`
+      (AC-06「或等价文案」),不硬编码 Codex; ②W-C3-D2 Teams 成员芯片 external 标记
+      不做(list_teams 只探测 team 资源,per-member 无诚实数据源;Agents 页为运行形态
+      roster of record)——对主计划 §2.3 第 3 条的申报偏差。
+      wire 形状: runtime 块增 `kind: container|external|null`(False→external 且
+      phase/runtime_kind 置 null,True→container,None→null);契约 v0.2 §4.3/§4.4
+      已追认。浏览器实走(replay 夹具, vite 5299)截图核过: External 行 kraft 色、
+      全页无 Pending;replay 夹具让 repomesh-leader-core 转正为 external(它在 teams
+      夹具里本就是被采用的外部 leader)。界外发现记账: ①recipient_agent_id 有与
+      sender_agent_id 同类的类型谎言(投影给 None,契约仍 string); ②服务端时间线
+      投影发 sender_matrix_user_id 而前端类型缺此字段; ③RUNTIME_SKIN.external 生产
+      暂无渲染者(TeamsPage 的 runtime 块不带 kind,Record 完整性强制条目)。
+      **W-C3b(Q1+Q3a)** 合入 ee0e423d/e31f98a3(cherry-pick);门禁 **2213/26**。
+      Q1 按 W-C3-D3 无迁移方案: DeliveryTraceability+render_delivery_pull_request_body
+      落 modules/delivery/contracts.py(纯函数,缺席字段整行省略),主路径九行全出、
+      reconciler 六行如实;子代理超工单修掉一处真缺陷——`_backfill_sibling_links`
+      重写全部已发布 PR 正文,批次 2 回填会把批次 1 的 run/worker 两行冲掉,
+      已补 `_delivered_provenance` 并测试钉死。Q3a 审计(tracked 文档
+      q3a-mock-audit-20260828.md): 零触达成立,mock 工厂唯一消费者是无人调用的
+      POST /api/v1/coding-runs/mock;三种 fake 分类(工厂/runner mock profile/--inert)
+      + V2 取证条目 E-1~E-7。**审计发现 F-1: 该 mock 端点无鉴权**(未修,独立任务卡)。
+W-E1  E1 脚本       [空闲槽]      状态: **已验收合入(08-28,脚本轨;活体开通排波次 3)**
+      合入 bfb82bbe/953f5b4f(cherry-pick)+裁决改笔 b0581335。scripts/bridge-e1/ 全套:
+      README(11 步 runbook)+roster 样例+e1_config(唯一路径推导,import 真 session_root)
+      +seed(幂等,directory.add 复刻 CreateAgent 的 singleton_key/事件包)+provision
+      (PUT/GET 可拆 --stage)+matrix token(appservice login)+enrollment 生成(binding
+      应答为 allowedRoomIds 权威,read_enrollment 双重校验)+auth.json 复制(D-10,只拷
+      auth.json,须在首次 ensure_ready 前——Low 标签时序)+启停(PID 文件,杀前核
+      CommandLine)+R8 只读预检。静态验证: compileall+ruff+PS 语法解析全过,零活体调用。
+      **裁决 W-E1-D2**: Team 只由 materialize 正式 reconcile 建立/采用,不走
+      `agt create team` 旁路;R8 预检两段论(materialize 前 controller 半边,后全绿)。
+      成员 token 铸发维持人工(R2 先例)。关键事实入档: binding GET 五前置里
+      「属于某 Team」使步骤 3(PUT)与步骤 5(GET)必须隔着建团;materialize 不铸名,
+      规则=预建名逐字等于 principal 名;v1.2.0 controller GET worker 不带 skills,
+      预检「带了才核」。待定: 预认证 codex-home 钉给哪个成员,M7 激活时再选。
 ```
 
 E0a 环境凭据(LLM key、Worker Matrix token、`REPOMESH_RUNNER_WORKER_TOKENS` 值)不入库,
