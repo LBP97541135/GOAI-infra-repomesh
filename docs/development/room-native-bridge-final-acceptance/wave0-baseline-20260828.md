@@ -85,7 +85,19 @@ W-C1  V1→PR6       [波次1·C线]  V1 段 **PASS**(08-28,run 2c00225e:三处�
       修法方向:拆开「派发」与「宣告」(spec 以 task 为键,非简单换序)。
       另两条小观察:夹具无 .gitignore 时 __pycache__ 入 commit(门禁行为正确);
       materialize 幂等重放不重发房间消息(与 A-10 注释描述层次不同,知情即可)
-W-A2  PR 7 完整集成 [波次2·A线]  状态: 排队
+W-A2  PR 7 完整集成 [波次2·A线]  状态: **已验收合入(08-28)**  baseline: b016f058(A worktree)
+      合入: bc8f6410/7590070d/f9ea4fbf(cherry-pick 自 c43dfecd/b74f47fc/33596046,零冲突;
+      与中间的 PR 6 两提交文件面零交集)。迁移 0040 down=0037 无需改,
+      链 0036→0038→0037→0040 单头已核。合入门禁: ruff 干净 + 全量 **2043/23 exit 0**
+      (前基线 1977/23,+66 全为本单新测试,skip 未增)。
+      已裁决偏差(验收时定,沿 wave1 交接 §5): planRevision 恒 1、rework 回执
+      in_progress 不动行、许可回落包络根、save 无版本列
+W-S1  S-1 派发/宣告拆分 [插单·主脑裁决 08-28] 状态: 施工中(opus 子代理,分支 feat/s1-dispatch-split,
+      baseline f9ea4fbf)。裁决: 按 wave1 交接 §3 建议方向——TaskAssignmentGateway.assign 增
+      keyword-only deliver=True + 新 deliver_assignment(task_id)(原 key 经 assignment_key 读回),
+      三处调用点(decompose :777/leader plan :1684/rework :2016)改「建行→写许可→宣告」三步序;
+      不变式=Worker 任务的宣告绝不先于其执行许可存在;A-10 重放语义保留。
+      合入后必须重跑「Bridge 在线稳态自动接单」活体取证,S-1 才算关闭
 W-B2  PR 8         [波次2·B线]  状态: 排队
 W-C2  PR 9+Q2      [波次2·C线]  状态: 排队
 W-C3  PR10+Q1+Q3a  [波次2·等待] 状态: 排队
