@@ -1,17 +1,23 @@
-import type { RuntimeBlock } from "../api/contract";
+import type { AgentRuntimeHosting, RuntimeBlock } from "../api/contract";
 import { runtimeDisplay, type RuntimeDisplay, type RuntimePhase } from "../display";
 
 /** §4.4 运行时状态徽标，团队页与花名册页共用（两者的 runtime 块字段不同，
  *  但都带 `phase`，本组件只用这一个字段，故按结构收窄而不绑定具体页面类型）。
  *
  *  配色刻意「安静」：除 observed 外一律中性令牌，**不用 salmon**——探测不可达
- *  是契约规定的降级（HTTP 仍 200，持久化事实照常为真），涂成红色等于在说系统坏了。 */
+ *  是契约规定的降级（HTTP 仍 200，持久化事实照常为真），涂成红色等于在说系统坏了。
+ *
+ *  `external` 取 kraft：这套令牌里 kraft 是**分类/标签**的颜色（房间流的消息种类、
+ *  治理条目都用它），不是健康色。它不能用 bluegray——那是「Controller 观测到的
+ *  容器阶段」的专属，而 external 恰恰是「没有容器可观测」；也不能落回 `text-tx2`
+ *  那档中性，那是「无观测值」三态的皮肤，会把一件核实过的事实读成缺数据。 */
 
 const RUNTIME_SKIN: Record<RuntimeDisplay["kind"], string> = {
   probing: "border-line text-tx3",
   probe_failed: "border-line text-tx2",
   unreachable: "border-line text-tx2",
   absent: "border-line text-tx2",
+  external: "border-kraft text-kraft",
   observed: "border-bluegray text-bluegray",
 };
 
@@ -21,7 +27,7 @@ export function RuntimeBadge({
   prefix = "运行时 · ",
 }: {
   phase: RuntimePhase;
-  runtime: RuntimeBlock<{ phase: string | null }>;
+  runtime: RuntimeBlock<{ phase: string | null; kind?: AgentRuntimeHosting | null }>;
   prefix?: string;
 }) {
   const d = runtimeDisplay(phase, runtime);

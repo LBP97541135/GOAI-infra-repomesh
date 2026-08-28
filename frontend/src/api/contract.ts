@@ -349,7 +349,18 @@ export interface TeamRuntimeFields {
 /** §4.3 契约枚举：Controller 回报的运行时适配器种类。 */
 export type RuntimeKind = "openclaw" | "copaw" | "hermes" | "openhuman" | "repomesh-runner";
 
+/** 这个成员**由谁托管**——服务端向 Controller 核实的 `containerManaged` 转述：
+ *   - `container`：Controller 确认容器归它管；
+ *   - `external`：Controller 确认容器**不**归它管（本机 CLI 经 Bridge 接入）；
+ *   - `null`：这次探测压根没问（manager 探测不带该字段）——是**未知不是 external**。
+ *
+ *  `external` 时 `phase` / `runtime_kind` 恒 null：那是容器生命周期词汇，对一个
+ *  永远不会被容器化的成员没有主语。Controller 仍会为它回 `Pending`（空 phase 的
+ *  默认值），服务端已在 §4.3 投影处扣掉——前端拿到的就是 null。 */
+export type AgentRuntimeHosting = "container" | "external";
+
 export interface AgentRuntimeFields {
+  kind: AgentRuntimeHosting | null;
   phase: string | null;
   runtime_kind: RuntimeKind | null;
   matrix_user_id: string | null;

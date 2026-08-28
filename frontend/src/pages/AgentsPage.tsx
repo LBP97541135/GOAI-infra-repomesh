@@ -16,7 +16,9 @@ import { useRuntimeRows } from "./useRuntimeRows";
  *      `uptime_seconds` 恒 null。列保留但整列显「未接入」，并在页脚写明补齐路径——
  *      删掉这列会让缺口消失于无形，填上假数字则更糟；
  *   3. 原型的运行时列直接写 `claude-code`；真实情况是 `runtime_kind` 只在探测通时
- *      才有值，不可达/未配置时没有——按 §4.4 三态呈现。 */
+ *      才有值，不可达/未配置时没有——按 §4.4 三态呈现。确认由 Bridge 接入的成员
+ *      （`kind: "external"`）连探通了也没有：平台核实的是「容器不归 Controller 管」，
+ *      它跑的是哪个 CLI 平台不观测，所以这一格只写 External，不写任何 CLI 名字。 */
 
 const ROLE_LABEL: Record<AgentRole, string> = {
   organization_leader: "组织 leader",
@@ -72,7 +74,12 @@ function AgentRow({
       </td>
 
       <td className="py-2 pr-3 align-top">
-        <div className="font-mono text-[11.5px] text-tx2" title={d.hint}>
+        {/* external 不与降级三态同色：那三种是「没取到观测值」，它是**核实过的
+            事实**，涂成同一档中性会让人以为运行时列又没读到东西 */}
+        <div
+          className={`font-mono text-[11.5px] ${d.kind === "external" ? "text-kraft" : "text-tx2"}`}
+          title={d.hint}
+        >
           {runtimeKind ?? d.label}
         </div>
         {runtimeKind && <div className="text-[10.5px] text-bluegray">{d.label}</div>}

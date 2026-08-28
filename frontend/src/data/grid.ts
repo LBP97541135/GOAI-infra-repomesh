@@ -6,7 +6,11 @@
  *
  *  夹具刻意覆盖 §4.4 的**运行时三态**——`reachable: true` / `{reachable: false}` /
  *  `null`。联调环境的 controller（8090）当前无监听，live 模式下三条全是
- *  `{reachable: false}`，只有夹具能验到 true 分支与 null 分支的渲染差异。 */
+ *  `{reachable: false}`，只有夹具能验到 true 分支与 null 分支的渲染差异。
+ *
+ *  探通的那几条再分 `kind` 三值（container / external / null=没问）：external
+ *  行是本地 CLI 经 Bridge 接入的成员，`phase` 与 `runtime_kind` 恒 null——replay
+ *  下打开花名册就该看到它写 External 而不是任何容器阶段词。 */
 import type {
   ConsoleAgentView,
   ConsoleRepositoryView,
@@ -156,6 +160,8 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     issue_id: null,
     active_task_count: 0,
     runtime: {
+      // manager 探测不带 containerManaged：托管方式是**未知**，不是 external
+      kind: null,
       reachable: true,
       phase: "Running",
       runtime_kind: "openclaw",
@@ -180,9 +186,14 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     issue_id: ISSUE_ID,
     active_task_count: 0,
     runtime: {
+      // 本仓库的 leader 正是被采用的**外部** Repository Leader（团队夹具的
+      // decomposition_mode: "leader" 说的就是他）。Controller 核实容器不归它管，
+      // 所以 phase 与 runtime_kind 没有主语——服务端投影已扣掉 Controller 那句
+      // 默认的 "Pending"，夹具必须同形，否则 replay 世界会把这条渲染成容器成员。
+      kind: "external",
       reachable: true,
-      phase: "Running",
-      runtime_kind: "openclaw",
+      phase: null,
+      runtime_kind: null,
       matrix_user_id: "@repomesh-leader-core:matrix.local",
       room_id: "!repomesh-leader-core:matrix.local",
       message: null,
@@ -204,6 +215,7 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     issue_id: ISSUE_ID,
     active_task_count: 1,
     runtime: {
+      kind: "container",
       reachable: true,
       phase: "Executing",
       runtime_kind: "hermes",
