@@ -411,10 +411,11 @@ GOVERNED_CODEX_CONFIG = """\
 #   approval callback is where every governed decision is made and where the
 #   conversation track's deny-all is enforced, so a policy that stopped asking
 #   would turn both tracks into "do it and report", which is the one outcome
-#   neither track may have. "untrusted" is codex 0.149.1's name for "ask before
-#   running anything an explicit exec policy rule does not already allow".
+#   neither track may have. codex 0.149.1 removed "untrusted" and accepts only
+#   read-only, workspace-write or danger-full-access for the sandbox; the first
+#   two are the ones that build the helper this process cannot build.
 sandbox_mode = "danger-full-access"
-approval_policy = "untrusted"
+approval_policy = "on-request"
 """
 """codex's own configuration for a Bridge that executes governed runs.
 
