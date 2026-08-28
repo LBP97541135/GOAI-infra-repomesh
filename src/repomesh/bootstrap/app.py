@@ -10,6 +10,7 @@ from repomesh.api.router import api_router
 from repomesh.bootstrap.container import (
     ApplicationContainer,
     AsyncCloseable,
+    authorized_room_reader,
     collaboration_routed_messenger,
     project_topology_reader,
     storage_backed_task_publisher,
@@ -17,6 +18,7 @@ from repomesh.bootstrap.container import (
 from repomesh.integrations.agentteams import (
     AgentTeamsControlPlaneClient,
     AgentTeamsMatrixClient,
+    AgentTeamsMatrixIdentityResolver,
     AgentTeamsMatrixIdentityVerifier,
     AgentTeamsMatrixInboundPoller,
 )
@@ -52,9 +54,12 @@ from repomesh.integrations.scm.github_auth import (
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
 from repomesh.modules.collaboration import (
     CollaborationDeliveryRetryWorker,
+    PostgresCollaborationAuditLedger,
     PostgresCollaborationMessageStore,
     PostgresProcessedMatrixEventStore,
+    PostgresRoomTimelineStore,
     ProcessMatrixTaskReport,
+    RecordRoomTimeline,
     SendCollaborationMessage,
 )
 from repomesh.modules.context.infrastructure import PostgresContextStore
@@ -96,7 +101,11 @@ from repomesh.modules.review_validation import (
     ValidationSnapshotService,
 )
 from repomesh.modules.specification import PostgresSpecificationStore
-from repomesh.modules.task_orchestration import PostgresTaskStore, TaskOrchestrator
+from repomesh.modules.task_orchestration import (
+    DispatchedWorkerTaskReader,
+    PostgresTaskStore,
+    TaskOrchestrator,
+)
 from repomesh.modules.task_orchestration.contracts import TaskAssignmentPublisher
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
@@ -248,11 +257,22 @@ def build_default_container() -> ApplicationContainer:
             AgentTeamsMatrixIdentityVerifier(control_plane),
             PostgresProcessedMatrixEventStore(database),
             tasks,
+            DispatchedWorkerTaskReader(task_store, agent_directory),
+            PostgresCollaborationAuditLedger(database),
+        )
+        # Recording what a room said and acting on what it said are two
+        # consumers of one sync loop, composed separately: the recorder never
+        # touches the task store and the report consumer never writes the
+        # transcript, so neither can grow into the other's authority.
+        room_timeline = RecordRoomTimeline(
+            authorized_room_reader(topology_store),
+            AgentTeamsMatrixIdentityResolver(agent_directory, control_plane),
+            PostgresRoomTimelineStore(database),
         )
         background_services = (
             # Inbound polling is not delivery, so it reads the Matrix gateway
             # directly rather than through the delivery-only wrapper.
-            AgentTeamsMatrixInboundPoller(matrix_client, inbound),
+            AgentTeamsMatrixInboundPoller(matrix_client, inbound, room_timeline),
             CollaborationDeliveryRetryWorker(collaboration_store, collaboration),
         )
     if settings.github_webhook_secret or scm_adapter is not None:

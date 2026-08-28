@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -17,6 +18,7 @@ from repomesh.modules.collaboration import (
     CollaborationDenied,
     CollaborationMessageKind,
     InboundMatrixMessage,
+    InMemoryCollaborationAuditLedger,
     InMemoryCollaborationMessageStore,
     InMemoryProcessedMatrixEventStore,
     MatrixInboundResult,
@@ -97,6 +99,9 @@ class EmptyReceiptMessenger(RecordingMessenger):
         return ""
 
 
+T0 = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
+
+
 class StaticIdentityVerifier:
     def __init__(self, agent_id, matrix_user_id: str) -> None:
         self.agent_id = agent_id
@@ -104,6 +109,13 @@ class StaticIdentityVerifier:
 
     async def verify(self, profile, matrix_user_id: str) -> bool:
         return profile.id == self.agent_id and matrix_user_id == self.matrix_user_id
+
+
+class AcceptEveryRoomReport:
+    """The D-7 gate held open, so tests of the *other* checks reach them."""
+
+    async def accepts_room_report(self, task_id) -> bool:
+        return True
 
 
 class RecordingTaskPublisher:
@@ -515,6 +527,17 @@ async def test_assignment_retry_recovers_failed_matrix_delivery() -> None:
 
 @pytest.mark.asyncio
 async def test_matrix_task_report_is_authenticated_processed_and_deduplicated() -> None:
+    """The room-report path that adjudication D-7 leaves open: a leader task.
+
+    Reported through the leader DM by the repository leader, which is not a
+    task carrying a published package, so the ruling that closes the coding
+    path does not touch it. Everything this test pinned before D-7 —
+    authentication against the sender's Matrix identity, replay returning
+    DUPLICATE, a spoofed sender being refused — is pinned here unchanged; only
+    the task it happens on moved. The closed half is
+    ``test_room_report_narrowing.py``.
+    """
+
     (
         organization_id,
         repository_id,
@@ -527,59 +550,48 @@ async def test_matrix_task_report_is_authenticated_processed_and_deduplicated() 
         directory,
         topologies,
     ) = await build_flow()
+    leader = repository_team.leader
     repository_task = await orchestrator.assign(
         AssignTaskCommand(
             organization_id=organization_id,
             project_id=project_id,
             repository_id=repository_id,
             assigned_by_agent_id=organization_leader.id,
-            assignee_agent_id=repository_team.leader.id,
+            assignee_agent_id=leader.id,
             title="Repository task",
             instruction="Coordinate the pricing change.",
             acceptance=("Worker result is collected",),
         ),
         idempotency_key="inbound-repository-task",
     )
-    worker = repository_team.workers[0]
-    worker_task = await orchestrator.assign(
-        AssignTaskCommand(
-            organization_id=organization_id,
-            project_id=project_id,
-            repository_id=repository_id,
-            parent_task_id=repository_task.id,
-            assigned_by_agent_id=repository_team.leader.id,
-            assignee_agent_id=worker.id,
-            title="Worker task",
-            instruction="Implement pricing.",
-            acceptance=("Tests pass",),
-        ),
-        idempotency_key="inbound-worker-task",
-    )
     topology = await topologies.get_view(project_id)
     assert topology is not None
-    room_id = topology.repository_teams[0].room_id
+    room_id = topology.repository_teams[0].leader_room_id
     assert room_id is not None
     processor = ProcessMatrixTaskReport(
         directory,
         topologies,
-        StaticIdentityVerifier(worker.id, "@worker:matrix.local"),
+        StaticIdentityVerifier(leader.id, "@leader:matrix.local"),
         InMemoryProcessedMatrixEventStore(),
         orchestrator,
+        AcceptEveryRoomReport(),
+        InMemoryCollaborationAuditLedger(),
     )
     message = InboundMatrixMessage(
-        event_id="$worker-report",
+        event_id="$leader-report",
         room_id=room_id,
-        sender="@worker:matrix.local",
+        sender="@leader:matrix.local",
         body=json.dumps(
             {
                 "schema": "repomesh.agent-report.v1",
-                "sender_agent_id": str(worker.id),
+                "sender_agent_id": str(leader.id),
                 "project_id": str(project_id),
-                "task_id": str(worker_task.id),
+                "task_id": str(repository_task.id),
                 "status": "succeeded",
                 "summary": "Pricing implementation and tests completed.",
             }
         ),
+        occurred_at=T0,
     )
     assert await processor.execute(message) is MatrixInboundResult.PROCESSED
     assert await processor.execute(message) is MatrixInboundResult.DUPLICATE
@@ -591,6 +603,7 @@ async def test_matrix_task_report_is_authenticated_processed_and_deduplicated() 
         room_id=room_id,
         sender="@attacker:matrix.local",
         body=message.body,
+        occurred_at=T0,
     )
     with pytest.raises(CollaborationDenied, match="does not match"):
         await processor.execute(spoofed)

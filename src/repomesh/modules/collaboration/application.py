@@ -16,6 +16,10 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationMessageView,
     InboundMatrixMessage,
     MatrixInboundResult,
+    MatrixTaskReport,
+    RecordRoomTimelineCommand,
+    RoomTimelineCursor,
+    RoomTimelineEntryView,
     SendCollaborationMessageCommand,
 )
 from repomesh.modules.collaboration.domain import (
@@ -26,10 +30,14 @@ from repomesh.modules.collaboration.domain import (
     parse_matrix_task_report,
 )
 from repomesh.modules.collaboration.ports import (
+    AuthorizedRoomReader,
+    CollaborationAuditLedger,
     CollaborationMessageStore,
     CollaborationMessenger,
+    MatrixIdentityResolver,
     MatrixIdentityVerifier,
     ProcessedMatrixEventStore,
+    RoomTimelineStore,
 )
 from repomesh.modules.identity_access.contracts import (
     AgentAuthorizationGateway,
@@ -43,9 +51,11 @@ from repomesh.modules.project.contracts import (
 )
 from repomesh.modules.task_orchestration.contracts import (
     ReportTaskCommand,
+    RoomReportEligibilityReader,
     TaskReportGateway,
     TaskStatus,
 )
+from repomesh.shared.events import ActorType, EventEnvelope
 from repomesh.shared.idempotency import command_fingerprint
 
 
@@ -288,6 +298,88 @@ class CollaborationDeliveryRetryWorker:
             await asyncio.sleep(self._interval)
 
 
+class RecordRoomTimeline:
+    """Keep what an authorized room actually said, verbatim and in order.
+
+    The room is a display surface, not a truth source, and this use case is
+    written to stay on that side of the line: it stores messages, resolves who
+    sent them where it honestly can, and moves nothing. Nothing downstream of
+    it can advance a task, and that is the point — the console gained a
+    transcript without the room gaining authority.
+
+    Three properties are load-bearing and each is one line below:
+
+    1. **Idempotent by Matrix event id.** A sync batch is replayed whole
+       whenever any message in it fails, so the same event arrives repeatedly
+       in normal operation. The second arrival returns the first row.
+    2. **Ordered by the room's clock.** ``occurred_at`` is the homeserver's
+       ``origin_server_ts``, never our receive time, so a message delayed in
+       transit still sorts where it happened.
+    3. **Only authorized rooms.** The whitelist is the topology; an event from
+       any other room is dropped rather than mirrored. RepoMesh's account can
+       be invited anywhere, and a homeserver mirror is not a feature anyone
+       asked for.
+    """
+
+    def __init__(
+        self,
+        rooms: AuthorizedRoomReader,
+        resolver: MatrixIdentityResolver,
+        store: RoomTimelineStore,
+    ) -> None:
+        self._rooms = rooms
+        self._resolver = resolver
+        self._store = store
+
+    async def record(
+        self, command: RecordRoomTimelineCommand
+    ) -> RoomTimelineEntryView | None:
+        room = await self._rooms.authorized_room(command.room_id)
+        if room is None:
+            return None
+        if stored := await self._store.get(command.event_id):
+            # Replay. Deliberately returns the stored row without re-resolving
+            # the sender: an identity that was unknown when the message
+            # arrived stays recorded as unknown, so a message does not change
+            # its attributed author days later because a principal was added.
+            return stored
+        entry = RoomTimelineEntryView(
+            event_id=command.event_id,
+            room_id=room.room_id,
+            project_id=room.project_id,
+            repository_id=room.repository_id,
+            sender_matrix_user_id=command.sender_matrix_user_id,
+            sender_agent_id=await self._resolver.resolve(command.sender_matrix_user_id),
+            body=command.body,
+            occurred_at=command.occurred_at,
+        )
+        return await self._store.add(entry)
+
+
+class ReadRoomTimeline:
+    """The read half, so the console never touches the store directly."""
+
+    def __init__(self, store: RoomTimelineStore) -> None:
+        self._store = store
+
+    async def list_room(
+        self,
+        room_id: str,
+        *,
+        after: RoomTimelineCursor | None = None,
+        limit: int = 100,
+    ) -> tuple[RoomTimelineEntryView, ...]:
+        return await self._store.list_room(room_id, after=after, limit=limit)
+
+
+#: Why a room report was refused. One string, so the audit trail and the test
+#: that pins it cannot drift apart.
+ROOM_REPORT_IGNORED_REASON = "worker_task_truth_comes_from_runner"
+
+#: The audited event type for that refusal (adjudication D-7).
+ROOM_REPORT_IGNORED_EVENT = "collaboration.matrix_task_report.ignored"
+
+
 class ProcessMatrixTaskReport:
     def __init__(
         self,
@@ -296,12 +388,16 @@ class ProcessMatrixTaskReport:
         identity_verifier: MatrixIdentityVerifier,
         processed_events: ProcessedMatrixEventStore,
         tasks: TaskReportGateway,
+        eligibility: RoomReportEligibilityReader,
+        audit: CollaborationAuditLedger,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
         self._identity_verifier = identity_verifier
         self._processed_events = processed_events
         self._tasks = tasks
+        self._eligibility = eligibility
+        self._audit = audit
 
     async def execute(self, message: InboundMatrixMessage) -> MatrixInboundResult:
         if await self._processed_events.contains(message.event_id):
@@ -309,6 +405,8 @@ class ProcessMatrixTaskReport:
         report = parse_matrix_task_report(message.body)
         if report is None:
             return MatrixInboundResult.IGNORED
+        if not await self._eligibility.accepts_room_report(report.task_id):
+            return await self._ignore_closed_path(message, report)
         profile = await self._directory.get_view(report.sender_agent_id)
         if profile is None or profile.status is not AgentPrincipalStatus.ACTIVE:
             raise CollaborationDenied("inbound agent is missing or disabled")
@@ -336,6 +434,61 @@ class ProcessMatrixTaskReport:
             sender_agent_id=report.sender_agent_id,
         )
         return MatrixInboundResult.PROCESSED
+
+    async def _ignore_closed_path(
+        self, message: InboundMatrixMessage, report: MatrixTaskReport
+    ) -> MatrixInboundResult:
+        """Refuse a coding task's room report, and leave a record of refusing.
+
+        Ignoring silently would be indistinguishable from a message that never
+        arrived, and the difference matters to whoever is asking why a Worker's
+        "done" did not finish the task: the answer is that RepoMesh heard it
+        and declined to believe it, which is only readable if it was written
+        down. The row carries the sender's *raw Matrix id* rather than the
+        agent id the body claims — the claim is unverified by the time we get
+        here, and recording an unverified claim as an actor identity is the
+        error this whole path exists to avoid.
+
+        Checked before identity verification on purpose. This path is closed
+        whoever is knocking, so consulting the control plane first would spend
+        a round trip to reach the same answer — and, worse, a spoofed report
+        would raise, which makes the poller retry its whole batch forever
+        rather than move on.
+
+        The event is then marked consumed so a replayed batch reads as
+        DUPLICATE instead of writing a second identical audit row.
+        """
+
+        await self._audit.record(
+            EventEnvelope(
+                event_type=ROOM_REPORT_IGNORED_EVENT,
+                actor_type=ActorType.AGENT,
+                actor_id=message.sender,
+                aggregate_type="task",
+                aggregate_id=report.task_id,
+                aggregate_version=0,
+                payload={
+                    "reason": ROOM_REPORT_IGNORED_REASON,
+                    "matrix_event_id": message.event_id,
+                    "room_id": message.room_id,
+                    "sender_matrix_user_id": message.sender,
+                    "claimed_sender_agent_id": str(report.sender_agent_id),
+                    "claimed_status": report.status,
+                    "claimed_summary": report.summary,
+                },
+                correlation_id=report.task_id,
+                project_id=report.project_id,
+                task_id=report.task_id,
+                occurred_at=message.occurred_at,
+            )
+        )
+        await self._processed_events.add(
+            message.event_id,
+            project_id=report.project_id,
+            task_id=report.task_id,
+            sender_agent_id=report.sender_agent_id,
+        )
+        return MatrixInboundResult.IGNORED
 
     @staticmethod
     def _report_room(

@@ -68,6 +68,15 @@ class InboundMatrixMessage:
     room_id: str
     sender: str
     body: str
+    occurred_at: datetime
+    """Matrix ``origin_server_ts``, as the homeserver stamped it.
+
+    Required rather than defaulted: the room timeline is ordered by when the
+    event happened in the room, and a default would let a caller that never
+    read the field record every message as having happened at the moment the
+    poller happened to run. A batch that arrives late, or is replayed after a
+    crash, would then sort after messages that really came later.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +96,104 @@ class MatrixInboundResult(StrEnum):
 
 class MatrixInboundProcessor(Protocol):
     async def execute(self, message: InboundMatrixMessage) -> MatrixInboundResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedRoom:
+    """A room this deployment is allowed to ingest, and what it belongs to.
+
+    The whitelist is the topology: a room id is authorized exactly when some
+    repository team names it as its team room or its leader DM. Carrying the
+    two owning ids with it means the recorder never has to ask a second
+    question to attribute what it stores, and a room nobody's topology claims
+    resolves to ``None`` — which is the whole of the "do not mirror the
+    homeserver" rule.
+    """
+
+    room_id: str
+    project_id: UUID
+    repository_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class RecordRoomTimelineCommand:
+    """One ``m.room.message`` as the homeserver handed it over."""
+
+    event_id: str
+    room_id: str
+    sender_matrix_user_id: str
+    body: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RoomTimelineEntryView:
+    """A recorded room message, plus what we could resolve about its sender.
+
+    ``sender_agent_id`` is nullable on purpose (adjudication D-4): a Matrix
+    user we cannot map onto a registered principal is stored with its raw
+    ``sender_matrix_user_id`` and no agent id. An honest unknown beats a
+    guessed identity — AC-06 forbids showing a message under the wrong name,
+    not showing one whose sender has no RepoMesh name.
+    """
+
+    event_id: str
+    room_id: str
+    project_id: UUID
+    repository_id: UUID
+    sender_matrix_user_id: str
+    sender_agent_id: UUID | None
+    body: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RoomTimelineCursor:
+    """Where a page of the timeline resumes.
+
+    Both halves of the sort key, because ``occurred_at`` alone is not unique:
+    a homeserver stamps events at millisecond resolution and two messages can
+    share a timestamp. Resuming on the timestamp alone would either repeat the
+    tie or skip half of it.
+    """
+
+    occurred_at: datetime
+    event_id: str
+
+
+class RoomTimelineIngest(Protocol):
+    """The write half: record one room message, keyed by its Matrix event id.
+
+    The event id *is* the idempotency key — it is globally unique, the
+    homeserver assigns it, and it is the only key a replayed sync batch can
+    present — so it travels inside the command rather than beside it.
+
+    Returns ``None`` when the room is not one this deployment ingests. A
+    dropped message and a stored one are different outcomes and the caller
+    must be able to tell them apart, so this is not an exception: a message in
+    somebody else's room is not an error, it is simply not ours.
+    """
+
+    async def record(
+        self, command: RecordRoomTimelineCommand
+    ) -> RoomTimelineEntryView | None: ...
+
+
+class RoomTimelineQuery(Protocol):
+    """The read half, for the console's room stream.
+
+    Separate from :class:`RoomTimelineIngest` because the two callers are
+    different processes' worth of concern: the poller only writes and the read
+    model only reads, and neither should be handed the other's verb.
+    """
+
+    async def list_room(
+        self,
+        room_id: str,
+        *,
+        after: RoomTimelineCursor | None = None,
+        limit: int = 100,
+    ) -> tuple[RoomTimelineEntryView, ...]: ...
 
 
 class CollaborationError(Exception):

@@ -12,6 +12,16 @@ class MatrixRoomMessage:
     room_id: str
     sender: str
     body: str
+    origin_server_ts: int
+    """Milliseconds since the epoch, as the homeserver stamped the event.
+
+    Kept because the room's order is the room's own, not our poller's: a batch
+    that arrives late, or is replayed after a crash, still has to sort where it
+    happened. An event whose ``origin_server_ts`` is missing or not an integer
+    is dropped with the rest of a malformed event rather than defaulted — an
+    invented timestamp is a message claiming to have been said at a time it
+    was not.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +113,22 @@ class AgentTeamsMatrixClient:
                     event_id = event.get("event_id")
                     sender = event.get("sender")
                     body = content.get("body")
-                    if all(isinstance(value, str) and value for value in (event_id, sender, body)):
-                        messages.append(MatrixRoomMessage(event_id, room_id, sender, body))
+                    origin_server_ts = event.get("origin_server_ts")
+                    if not all(
+                        isinstance(value, str) and value for value in (event_id, sender, body)
+                    ):
+                        continue
+                    # ``bool`` is an ``int`` subclass and would slip through a
+                    # bare isinstance check as a timestamp of 0 or 1.
+                    if not isinstance(origin_server_ts, int) or isinstance(
+                        origin_server_ts, bool
+                    ):
+                        continue
+                    messages.append(
+                        MatrixRoomMessage(
+                            event_id, room_id, sender, body, origin_server_ts
+                        )
+                    )
         return MatrixSyncBatch(next_batch, tuple(messages))
 
     async def send_task(

@@ -379,12 +379,22 @@ async def test_matrix_sync_extracts_joined_text_messages() -> None:
                                         "type": "m.room.message",
                                         "event_id": "$report-1",
                                         "sender": "@worker:matrix.local",
+                                        "origin_server_ts": 1_787_000_000_000,
                                         "content": {
                                             "msgtype": "m.text",
                                             "body": '{"schema":"repomesh.agent-report.v1"}',
                                         },
                                     },
                                     {"type": "m.room.member", "event_id": "$member"},
+                                    # No ``origin_server_ts``: dropped rather
+                                    # than stamped with our clock, because the
+                                    # room's order is the room's own (PR 9).
+                                    {
+                                        "type": "m.room.message",
+                                        "event_id": "$undated",
+                                        "sender": "@worker:matrix.local",
+                                        "content": {"msgtype": "m.text", "body": "hello"},
+                                    },
                                 ]
                             }
                         }
@@ -406,6 +416,7 @@ async def test_matrix_sync_extracts_joined_text_messages() -> None:
     assert len(batch.messages) == 1
     assert batch.messages[0].event_id == "$report-1"
     assert batch.messages[0].room_id == "!team:matrix.local"
+    assert batch.messages[0].origin_server_ts == 1_787_000_000_000
 
 
 # ---------------------------------------------------------------------------

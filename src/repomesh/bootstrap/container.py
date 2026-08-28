@@ -29,8 +29,8 @@ from repomesh.modules.capability_management import (
     ResolveAgentCapabilities,
 )
 from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
-from repomesh.modules.collaboration.contracts import CollaborationGateway
-from repomesh.modules.collaboration.ports import CollaborationMessageStore
+from repomesh.modules.collaboration.contracts import AuthorizedRoom, CollaborationGateway
+from repomesh.modules.collaboration.ports import AuthorizedRoomReader, CollaborationMessageStore
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import LocalAccountService, PolicyAuthorizationGateway
@@ -121,6 +121,37 @@ def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReade
         async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None:
             topology = await store.get(project_id)
             return topology.to_view() if topology else None
+
+    return _Adapter()
+
+
+def authorized_room_reader(store: ProjectTopologyStore) -> AuthorizedRoomReader:
+    """The room-ingest whitelist, derived from the topology and nothing else.
+
+    A room is authorized exactly when some repository team names it as its
+    team room or its leader DM — there is no separate list to maintain and no
+    way for one to drift from the teams that actually exist. Everything else,
+    including any room RepoMesh's account is merely invited to, resolves to
+    None and is never recorded.
+
+    The lookup returns the *team's* project and repository so the recorder can
+    attribute the message without a second query; a room id that matches two
+    teams is impossible (each id appears in one team's row).
+    """
+
+    class _Adapter:
+        async def authorized_room(self, room_id: str) -> AuthorizedRoom | None:
+            topology = await store.find_view_by_room(room_id)
+            if topology is None:
+                return None
+            for team in topology.repository_teams:
+                if room_id in {team.room_id, team.leader_room_id}:
+                    return AuthorizedRoom(
+                        room_id=room_id,
+                        project_id=topology.project_id,
+                        repository_id=team.repository_id,
+                    )
+            return None
 
     return _Adapter()
 
