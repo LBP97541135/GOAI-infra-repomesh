@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -291,38 +292,91 @@ def _translated(task: RunnerTask) -> RunnerTask:
     )
 
 
-class _LoggingPermissionPolicy:
-    """The task's own policy, with every decision written to the operator's log.
+class _GovernedApprovalPolicy:
+    """The task's own policy, reached through the Bridge's two adaptations.
 
     A wrapper rather than a change to the policy: ``DriverExecutor`` builds the
     real one from ``task.permissions`` and hands it over on the ``DriverRequest``,
     so the Bridge can decorate it on the way to the driver without owning the
-    rules or restating them.
+    rules or restating them. Both adaptations belong here because both are about
+    the *approval*, and neither is about the rules.
 
-    This log line is the only place a denial is explained. The room gets a count
+    **It drops the workspace root codex echoes back.** Every approval item codex
+    sends carries a top-level ``cwd``, and for a governed run that value is the
+    worktree the *platform* chose and put in the task. ``AllowlistPermissionPolicy``
+    reads every string leaf of the input and refuses any that lands inside the
+    workspace without being on the allowlist — so the echoed root, which is the
+    parent of everything on the allowlist and therefore never on it, refuses every
+    approval codex can possibly make. Measured live on 2026-08-28: with the tool
+    names finally matching, a ``commandExecution`` was still denied, and a replay
+    of the same item with the ``cwd`` removed was allowed.
+
+    Removing it is not a widening, and the boundary of that claim is the whole
+    design here: **only** a ``cwd`` that resolves to this run's own worktree root
+    is dropped. Any other value — a subdirectory, a path outside the workspace, a
+    root belonging to some other run — is passed through untouched and judged
+    exactly as it is today, denied-path rules included. What is dropped is a fact
+    the platform already knew and already decided; what is judged is unchanged:
+    the ``changes`` paths of a ``fileChange``, the command string of a
+    ``commandExecution``, and every other leaf. The authoritative wall was never
+    this callback anyway — the server re-checks changed paths before it commits
+    (PR 5 acceptance 3).
+
+    **It logs every decision**, and logs the input as codex sent it — before any
+    dropping — noting whether the root was dropped. The room gets a count
     (``4 tool action(s), 4 denied``) because a room is not a transcript, and the
     driver's ``PERMISSION_REQUEST`` event carries the tool name but not what the
-    tool was pointed at — so before this wrapper, finding out *why* a governed run
-    did nothing meant reading codex's own rollout files. The tool input is
-    summarised and bounded here: it is a machine-local diagnostic, which is where
-    the frozen contract has always said the words belong.
+    tool was pointed at, so this line is the only place a denial is explained. A
+    log that showed the *edited* input would hide the one edit this class makes,
+    which is the edit a reader would most want to see.
 
     No run id is written, because the serve loop runs one task at a time and has
-    already logged ``accepted task run=… attempt=…`` above these lines. Carrying
-    one would mean a second piece of per-execution mutable state shared between
-    this wrapper and the executor, to restate something the line above already
-    says.
+    already logged ``accepted task run=… attempt=…`` above these lines.
     """
 
-    def __init__(self, policy: PermissionPolicy) -> None:
+    def __init__(self, policy: PermissionPolicy, *, workspace_root: Path | None) -> None:
         self._policy = policy
+        self._workspace_root = _normalized(workspace_root) if workspace_root else None
 
     def decide(self, tool_name: str, tool_input: Mapping[str, object]) -> PermissionDecision:
-        decision = self._policy.decide(tool_name, tool_input)
+        judged, dropped = self._without_echoed_root(tool_input)
+        decision = self._policy.decide(tool_name, judged)
         _logger.info(
-            "permission %s: %s on %s", decision.value, tool_name, _target_summary(tool_input)
+            "permission %s: %s on %s%s",
+            decision.value,
+            tool_name,
+            _target_summary(tool_input),
+            " [workspace-root cwd dropped]" if dropped else "",
         )
         return decision
+
+    def _without_echoed_root(
+        self, tool_input: Mapping[str, object]
+    ) -> tuple[Mapping[str, object], bool]:
+        """``(input to judge, whether the platform's own root was dropped)``."""
+
+        if self._workspace_root is None:
+            return tool_input, False
+        cwd = tool_input.get("cwd")
+        if not isinstance(cwd, str) or _normalized(Path(cwd)) != self._workspace_root:
+            return tool_input, False
+        return {key: value for key, value in tool_input.items() if key != "cwd"}, True
+
+
+def _normalized(path: Path) -> str:
+    """One comparable spelling of a path, or a spelling nothing will match.
+
+    ``resolve`` for the symlinks and the ``..`` segments, ``normcase`` because
+    Windows paths differ in case and separator without differing at all. A path
+    the OS refuses to resolve is answered with a value that compares equal to
+    nothing, so an unreadable ``cwd`` is judged rather than dropped — the failure
+    that keeps a rule than the one that skips it.
+    """
+
+    try:
+        return os.path.normcase(os.path.normpath(str(Path(path).resolve())))
+    except OSError:
+        return "\x00unresolvable"
 
 
 def _target_summary(tool_input: Mapping[str, object]) -> str:
@@ -577,7 +631,14 @@ class GovernedDriver:
             dataclasses.replace(
                 request,
                 environment=self._environment,
-                permission_policy=_LoggingPermissionPolicy(request.permission_policy),
+                permission_policy=_GovernedApprovalPolicy(
+                    request.permission_policy,
+                    # Only codex echoes the platform's ``cwd`` back on every
+                    # approval, and codex is the only runtime whose approval
+                    # shapes this build has measured. Another adapter's items go
+                    # to the policy exactly as they arrive.
+                    workspace_root=request.workspace if profile.id == CODEX_PROFILE_ID else None,
+                ),
             ),
             profile,
             counting,

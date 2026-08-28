@@ -61,6 +61,7 @@ from repomesh_agent_bridge.runner_consumer import (
     NarratingExecutor,
     ToolActionTally,
     WorkspaceNotWritable,
+    _GovernedApprovalPolicy,
     _translated,
     _write_governed_codex_config,
     runner_state_root,
@@ -1003,6 +1004,138 @@ async def test_every_permission_decision_reaches_the_operators_log(
     )
 
 
+def _governed(workspace: Path, permissions: RunnerPermissions = LIVE_GRANT):
+    """The real policy behind the Bridge's approval wrapper, and behind nothing."""
+
+    translated = _translated(_task(permissions=permissions)).permissions
+    raw = AllowlistPermissionPolicy(translated, workspace)
+    return _GovernedApprovalPolicy(raw, workspace_root=workspace), raw
+
+
+def test_the_workspace_root_codex_echoes_back_stops_refusing_every_approval(
+    tmp_path: Path,
+) -> None:
+    """Criterion (C-7): the platform's own ``cwd`` is not evidence against the run.
+
+    Every codex approval carries a top-level ``cwd``, and on a governed run that
+    is the worktree RepoMesh chose. The policy judges every string leaf that
+    lands inside the workspace, and the workspace root is the parent of
+    everything on the allowlist and therefore never on it — so the echoed root
+    denied every approval codex could make, whatever it was actually pointed at.
+    Measured live on 2026-08-28, after the tool names already matched.
+
+    The "before" is asserted with the same item against the unwrapped policy, so
+    this passes only while the drop is doing the work.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    policy, raw = _governed(workspace)
+    command = {
+        "type": "commandExecution",
+        "command": ["powershell.exe", "-Command", "python scripts/run_tests.py"],
+        "cwd": str(workspace),
+    }
+
+    assert raw.decide("commandExecution", command) is PermissionDecision.DENY
+    assert policy.decide("commandExecution", command) is PermissionDecision.ALLOW
+
+
+def test_dropping_the_echoed_root_drops_nothing_else(tmp_path: Path) -> None:
+    """The drop is one value, and every rule that was deciding still decides.
+
+    Four items, all carrying the root: a denied path still denies, a write off
+    the allowlist still denies, a write on it is allowed, and none of that
+    changes because the root went away.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    policy, _ = _governed(workspace)
+    root = str(workspace)
+
+    denied_leaf = {
+        "type": "commandExecution",
+        "command": ["type", str(workspace / ".git" / "config")],
+        "cwd": root,
+    }
+    assert policy.decide("commandExecution", denied_leaf) is PermissionDecision.DENY, (
+        "denied_paths outranks everything, and outranks this too"
+    )
+
+    inside = {
+        "type": "fileChange",
+        "changes": [{"path": str(workspace / "src" / "pricing.py")}],
+        "cwd": root,
+    }
+    outside = {
+        "type": "fileChange",
+        "changes": [{"path": str(workspace / "secrets" / "id.pem")}],
+        "cwd": root,
+    }
+    assert policy.decide("fileChange", inside) is PermissionDecision.ALLOW
+    assert policy.decide("fileChange", outside) is PermissionDecision.DENY
+
+
+@pytest.mark.parametrize("elsewhere", ["subdirectory", "outside", "other-run"])
+def test_a_cwd_that_is_not_this_runs_root_is_judged_exactly_as_before(
+    tmp_path: Path, elsewhere: str
+) -> None:
+    """Only *this* run's root is dropped. Everything else keeps today's verdict.
+
+    Asserted against the unwrapped policy rather than against a remembered
+    answer, so it stays true if the rules change underneath.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    policy, raw = _governed(workspace)
+    cwd = {
+        "subdirectory": workspace / "src",
+        "outside": tmp_path / "somewhere-else",
+        "other-run": tmp_path / "ws2",
+    }[elsewhere]
+    item = {
+        "type": "commandExecution",
+        "command": ["powershell.exe", "-Command", "python scripts/run_tests.py"],
+        "cwd": str(cwd),
+    }
+
+    assert policy.decide("commandExecution", item) is raw.decide("commandExecution", item)
+
+
+async def test_only_the_codex_adapter_gets_its_echoed_root_dropped(tmp_path: Path) -> None:
+    """The drop is codex's shape, so it is codex's alone.
+
+    Another runtime's approval reaches the policy exactly as it arrived — which
+    for this item means the same denial codex used to get.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    permissions = _translated(_task(permissions=LIVE_GRANT)).permissions
+
+    verdicts = {}
+    for profile_id in ("codex", "claude-code"):
+        driver = _CwdEchoingDriver()
+        await GovernedDriver(
+            driver, environment={"PATH": "/nowhere"}, tally=ToolActionTally()
+        ).execute(
+            DriverRequest(
+                executable="codex",
+                workspace=workspace,
+                prompt="do the work",
+                permission_policy=AllowlistPermissionPolicy(permissions, workspace),
+            ),
+            get_profile(profile_id),
+            lambda event: None,
+        )
+        verdicts[profile_id] = driver.decision
+
+    assert verdicts["codex"] is PermissionDecision.ALLOW
+    assert verdicts["claude-code"] is PermissionDecision.DENY
+
+
 # ---------------------------------------------------------------------------
 # A worktree the child cannot write is a run that cannot happen
 # ---------------------------------------------------------------------------
@@ -1148,6 +1281,31 @@ def test_the_runner_ledger_is_per_worker_and_sits_beside_the_rest_of_its_state(
 class _AlwaysAllow:
     def decide(self, tool_name: str, tool_input: object) -> PermissionDecision:
         return PermissionDecision.ALLOW
+
+
+class _CwdEchoingDriver:
+    """Asks about one in-allowlist write, carrying the workspace root as ``cwd``
+    the way codex's app-server approvals do."""
+
+    def __init__(self) -> None:
+        self.decision: PermissionDecision | None = None
+
+    @property
+    def family(self) -> DriverFamily:
+        return DriverFamily.APP_SERVER
+
+    async def execute(self, request, profile, observer) -> DriverResult:  # type: ignore[no-untyped-def]
+        self.decision = request.permission_policy.decide(
+            "commandExecution",
+            {
+                "type": "commandExecution",
+                "command": ["powershell.exe", "-Command", "python scripts/run_tests.py"],
+                "cwd": str(request.workspace),
+            },
+        )
+        return DriverResult(
+            status=DriverResultStatus.SUCCEEDED, summary="", diagnostics="", native_session_id=None
+        )
 
 
 class _AskingDriver:
