@@ -33,6 +33,7 @@ from repomesh.integrations.llm import make_llm_client
 from repomesh.integrations.scm import (
     ChangeSetSCMCoordinator,
     CIReworkTaskCreator,
+    DeliveryConflictTaskCreator,
     DeliveryReconciler,
     GitHubAdapter,
     GitHubObservationPoller,
@@ -62,6 +63,7 @@ from repomesh.modules.context.infrastructure import PostgresContextStore
 from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
+    PostgresDeliveryConflictCaseStore,
     PostgresSCMCommandStore,
     PostgresSCMObservationStore,
     PostgresSCMPollCursorStore,
@@ -95,6 +97,8 @@ from repomesh.modules.platform_config import (
     PostgresPlatformCredentialStore,
 )
 from repomesh.modules.project import ProjectCheckpointService
+from repomesh.modules.project.contracts import ProjectCheckpoint
+from repomesh.modules.project.domain import HumanReviewRequest
 from repomesh.modules.project.infrastructure import (
     PostgresHumanReviewRequestStore,
     PostgresProjectCheckpointDecisionStore,
@@ -284,10 +288,11 @@ def build_default_container(
         resources = (*resources, scm_adapter, scm_token_provider)
     agent_directory = PostgresAgentDirectory(database)
     topology_store = PostgresProjectTopologyStore(database)
+    human_review_store = PostgresHumanReviewRequestStore(database)
     checkpoint_service = ProjectCheckpointService(
         topology_store,
         PostgresProjectCheckpointDecisionStore(database),
-        PostgresHumanReviewRequestStore(database),
+        human_review_store,
     )
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
@@ -305,7 +310,7 @@ def build_default_container(
         checkpoint_service = ProjectCheckpointService(
             topology_store,
             PostgresProjectCheckpointDecisionStore(database),
-            PostgresHumanReviewRequestStore(database),
+            human_review_store,
             HumanDecisionCollaborationNotifier(collaboration),
         )
         tasks = TaskOrchestrator(
@@ -332,23 +337,48 @@ def build_default_container(
         )
     if github_webhook_secret or scm_adapter is not None:
         validation = ValidationSnapshotService(PostgresValidationSnapshotStore(database))
+        conflict_cases = PostgresDeliveryConflictCaseStore(database)
         delivery = DeliveryService(
             PostgresChangeSetStore(database),
             require_governance=settings.delivery_auto_enabled,
             require_validation=settings.delivery_auto_enabled,
             validation_reader=validation,
+            conflict_cases=conflict_cases,
         )
         observations = SCMObservationService(PostgresSCMObservationStore(database))
         commands = SCMCommandService(
             PostgresSCMCommandStore(database),
             lease_seconds=settings.scm_command_lease_seconds,
         )
+        conflict_tasks = (
+            DeliveryConflictTaskCreator(
+                task_report_gateway, project_topology_reader(topology_store)
+            )
+            if task_report_gateway is not None
+            else None
+        )
+
+        async def escalate_delivery_conflict(case, reason):
+            await human_review_store.ensure(
+                HumanReviewRequest(
+                    project_id=case.project_id,
+                    checkpoint=ProjectCheckpoint.EXCEPTION_ESCALATION,
+                    repository_id=case.repository_id,
+                    evidence_version=f"delivery-conflict:{case.id}:v{case.version}",
+                    title="多仓交付冲突需要人工处理",
+                    summary=f"自动冲突修复无法派发，错误代码：{reason}",
+                )
+            )
+
         coordinator = ChangeSetSCMCoordinator(
             delivery,
             repository_catalog,
             scm_adapter,
             command_service=commands,
             base_branch=settings.delivery_base_branch,
+            conflict_cases=conflict_cases,
+            conflict_tasks=conflict_tasks,
+            conflict_escalate=escalate_delivery_conflict,
         )
         # A failed candidate needs a Worker to repair it; without AgentTeams the
         # CI failure only changes delivery state and waits to be noticed.
@@ -402,11 +432,13 @@ def build_default_container(
             )
     if scm_adapter is not None and settings.delivery_auto_enabled:
         validation = ValidationSnapshotService(PostgresValidationSnapshotStore(database))
+        forward_conflict_cases = PostgresDeliveryConflictCaseStore(database)
         delivery = DeliveryService(
             PostgresChangeSetStore(database),
             require_governance=True,
             require_validation=True,
             validation_reader=validation,
+            conflict_cases=forward_conflict_cases,
         )
         commands = SCMCommandService(PostgresSCMCommandStore(database))
         # Revert conflicts need a Worker to repair them; without AgentTeams the
@@ -428,6 +460,16 @@ def build_default_container(
                     scm_adapter,
                     command_service=commands,
                     base_branch=settings.delivery_base_branch,
+                    conflict_cases=forward_conflict_cases,
+                    conflict_tasks=(
+                        DeliveryConflictTaskCreator(
+                            task_report_gateway,
+                            project_topology_reader(topology_store),
+                        )
+                        if task_report_gateway is not None
+                        else None
+                    ),
+                    conflict_escalate=escalate_delivery_conflict,
                 ),
                 interval_seconds=settings.delivery_reconcile_interval_seconds,
             ),
@@ -488,8 +530,6 @@ def build_default_container(
         )
         from repomesh.modules.agent_runtime.contracts import StartAssignedWorkerTaskCommand
         from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
-        from repomesh.modules.project.contracts import ProjectCheckpoint
-        from repomesh.modules.project.domain import HumanReviewRequest
         from repomesh.modules.task_orchestration import PostgresTaskAssignmentStore
 
         reservations = PostgresWorkerExecutionReservationStore(database)

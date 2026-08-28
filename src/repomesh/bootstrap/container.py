@@ -553,7 +553,11 @@ class ApplicationContainer:
 
     @cached_service
     def delivery_service(self):
-        from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
+        from repomesh.modules.delivery import (
+            DeliveryService,
+            PostgresChangeSetStore,
+            PostgresDeliveryConflictCaseStore,
+        )
 
         validation = self.validation_snapshot_service()
         return DeliveryService(
@@ -564,6 +568,7 @@ class ApplicationContainer:
             contract_catalog=(
                 self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
+            conflict_cases=PostgresDeliveryConflictCaseStore(self.database),
         )
 
     @cached_service
@@ -1244,6 +1249,8 @@ class ApplicationContainer:
                 self.scm_adapter,
                 command_service=self.scm_command_service(),
                 base_branch=get_settings().delivery_base_branch,
+                conflict_cases=self.delivery_conflict_case_store(),
+                conflict_tasks=self.delivery_conflict_task_gateway(),
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
@@ -1265,7 +1272,23 @@ class ApplicationContainer:
             ),
             command_service=self.scm_command_service(),
             base_branch=get_settings().delivery_base_branch,
+            conflict_cases=self.delivery_conflict_case_store(),
+            conflict_tasks=self.delivery_conflict_task_gateway(),
         )
+
+    @cached_service
+    def delivery_conflict_case_store(self):
+        from repomesh.modules.delivery import PostgresDeliveryConflictCaseStore
+
+        return PostgresDeliveryConflictCaseStore(self.database)
+
+    def delivery_conflict_task_gateway(self):
+        from repomesh.integrations.scm import DeliveryConflictTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return DeliveryConflictTaskCreator(tasks, self.topology_reader())
 
     def ci_rework_task_gateway(self):
         """Route a failed delivery candidate back to the repository Worker.

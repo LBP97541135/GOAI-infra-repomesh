@@ -5,6 +5,7 @@ from uuid import UUID
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanView
 from repomesh.shared.events import EventEnvelope
 
+from .conflicts import DeliveryConflictCase
 from .contracts import ContractView, DeliveryArchiveView, ValidationEvidenceDecision
 from .domain import ChangeSet, SCMCommand, SCMObservation, SCMPollCursor
 
@@ -129,6 +130,16 @@ class ExecutionPlanStatusReader(Protocol):
 
 class DeliveryAuditLog(Protocol):
     async def append(self, event: EventEnvelope) -> None: ...
+
+
+class DeliveryConflictCasePort(Protocol):
+    async def active_for(
+        self, change_set_id: UUID, repository_id: UUID
+    ) -> DeliveryConflictCase | None: ...
+
+    async def resolve_for_revision(
+        self, change_set_id: UUID, repository_id: UUID, previous_head_sha: str
+    ) -> None: ...
 
 
 class ValidationSnapshotReader(Protocol):

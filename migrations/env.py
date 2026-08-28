@@ -24,6 +24,7 @@ from repomesh.modules.context.infrastructure.models import (
     ContextObjectVersionRecord,
     ContextRelationRecord,
 )
+from repomesh.modules.delivery.conflicts import DeliveryConflictCaseRecord
 from repomesh.modules.delivery.infrastructure import (
     ChangeSetRecord,
     ChangeSetRepositoryRecord,
@@ -76,6 +77,7 @@ _REGISTERED_MODELS = (
     ContextAccessEventRecord,
     ChangeSetRecord,
     ChangeSetRepositoryRecord,
+    DeliveryConflictCaseRecord,
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
     TopologyPolicyDraftRecord,

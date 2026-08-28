@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from repomesh.modules.delivery.conflicts import DeliveryConflictCase
 from repomesh.modules.delivery.contracts import ChangeSetView, RepositoryDeliveryView
 from repomesh.modules.project.contracts import ProjectTopologyReader
 from repomesh.modules.task_orchestration.contracts import (
@@ -158,5 +159,57 @@ class RecoveryConflictTaskCreator:
                 ),
             ),
             idempotency_key=f"revert-conflict:{change_set.id}:{action.id}",
+        )
+        return task.id
+
+
+class DeliveryConflictTaskCreator:
+    """Create one forward-delivery repair task for a durable Conflict Case."""
+
+    def __init__(self, tasks: TaskAssignmentGateway, topology: ProjectTopologyReader) -> None:
+        self._tasks = tasks
+        self._topology = topology
+
+    async def create(
+        self, change_set: ChangeSetView, candidate: RepositoryDeliveryView,
+        case: DeliveryConflictCase,
+    ) -> UUID:
+        view = await self._topology.get_view(change_set.project_id)
+        team = next(
+            (
+                item for item in (view.repository_teams if view else ())
+                if item.repository_id == candidate.repository_id
+            ),
+            None,
+        )
+        if team is None or not team.worker_agent_ids:
+            raise ValueError(
+                f"repository {candidate.repository_id} has no Worker to resolve delivery conflict"
+            )
+        task = await self._tasks.assign(
+            AssignTaskCommand(
+                organization_id=change_set.organization_id,
+                project_id=change_set.project_id,
+                repository_id=candidate.repository_id,
+                assigned_by_agent_id=team.leader_agent_id,
+                assignee_agent_id=team.worker_agent_ids[0],
+                parent_task_id=candidate.task_id,
+                title="Resolve delivery branch conflict",
+                instruction=(
+                    f"Candidate {candidate.commit_sha} for ChangeSet {change_set.id} is based on "
+                    f"{case.expected_base_sha}, while the target branch is "
+                    f"{case.observed_base_sha}. "
+                    f"Conflict type: {case.kind.value}. Reapply the intended change on the current "
+                    "target branch without force-resetting shared history, run repository tests, "
+                    "and publish a new candidate Head."
+                ),
+                acceptance=(
+                    "The intended change applies cleanly on the current target branch.",
+                    "Repository verification passes from the new base.",
+                    "The result contains a new full candidate commit SHA.",
+                ),
+            ),
+            idempotency_key=f"delivery-conflict:{case.id}",
+            origin=TaskOrigin.REWORK,
         )
         return task.id

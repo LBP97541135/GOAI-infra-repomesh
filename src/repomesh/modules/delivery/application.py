@@ -67,6 +67,7 @@ from .ports import (
     ContractCatalogPort,
     DeliveryArchiveStore,
     DeliveryAuditLog,
+    DeliveryConflictCasePort,
     ExecutionPlanStatusReader,
     SCMCommandStore,
     SCMObservationStore,
@@ -337,12 +338,14 @@ class DeliveryService:
         require_validation: bool = False,
         validation_reader: ValidationSnapshotReader | None = None,
         contract_catalog: ContractCatalogPort | None = None,
+        conflict_cases: DeliveryConflictCasePort | None = None,
     ) -> None:
         self._store = store
         self._require_governance = require_governance
         self._require_validation = require_validation
         self._validation_reader = validation_reader
         self._contract_catalog = contract_catalog
+        self._conflict_cases = conflict_cases
 
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
@@ -539,6 +542,12 @@ class DeliveryService:
             command.reason,
         )
         await self._store.update(updated, expected_version=change_set.version)
+        if self._conflict_cases is not None:
+            await self._conflict_cases.resolve_for_revision(
+                command.change_set_id,
+                command.repository_id,
+                command.previous_head_sha.strip().lower(),
+            )
         return updated.to_view()
 
     async def evaluate_merge_gate(
@@ -547,6 +556,10 @@ class DeliveryService:
         change_set = await self._required(change_set_id)
         target = self._repository(change_set, repository_id)
         reasons: list[str] = []
+        if self._conflict_cases is not None:
+            conflict = await self._conflict_cases.active_for(change_set_id, repository_id)
+            if conflict is not None:
+                reasons.append(f"delivery conflict is unresolved: {conflict.kind.value}")
         if target.status is not RepositoryDeliveryStatus.READY_TO_MERGE:
             reasons.append("required CI checks have not passed")
         if target.status in {
