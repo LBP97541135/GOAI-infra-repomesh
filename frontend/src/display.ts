@@ -54,6 +54,22 @@ export const TEAM_STATUS_SKIN: Record<"pending" | "ready" | "failed", string> = 
   failed: "border-salmon text-salmon",
 };
 
+/** 拆解模式的措辞与说明（裁决 D-2）。措辞落在**谁拆解**这件事上，不写「external」
+ *  三个字——运行形态（External · Codex）是 PR 10 的 `runtime` 块的事，本页只回显
+ *  拓扑里已采用的事实，两个来源不能在同一个徽标里混说。
+ *
+ *  `server` 是绝大多数团队的常态，**不给徽标**：满屏都是的事实不是信息。只有
+ *  `leader` 显示，因为它才是「这个团队被采用成了 leader 自拆」的那一条。 */
+export const TEAM_DECOMPOSITION_LABEL: Record<"server" | "leader", string> = {
+  server: "平台拆解",
+  leader: "Leader 自拆",
+};
+
+export const TEAM_DECOMPOSITION_HINT: Record<"server" | "leader", string> = {
+  server: "平台在派 leader 任务的同一步里拆解直派（默认）",
+  leader: "批次停在 leader 任务，等本团队的 Repository Leader 提交计划（materialize 采用外部 leader 的结果）",
+};
+
 /** 发现链三档的措辞与皮肤唯一表（契约 v0.4）。三色沿决策夹标签色（设计定稿
  *  「新界面不新增颜色语义」）：橄榄绿 = 必需、琥珀 = 可能、赭红 = 排除。
  *  展示皮肤，不是状态映射——生效分档由读模型的 `effective_tiers` 给出。 */

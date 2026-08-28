@@ -383,6 +383,15 @@ export interface ConsoleRepositoryView {
 /** §4.2。`runtime_status`（拓扑记录的**建团结果**，历史事实）与 `runtime.phase`
  *  （Controller 的**当前观测态**，可能不可达）是两个不同事实，**契约明文不得合并**：
  *  合成一个徽标会让 controller 打不通时显示成「团队坏了」，而团队其实建成过。 */
+/** 谁把本团队的仓库级任务拆成 worker 任务（裁决 D-2，迁移 0037）。
+ *
+ *  `server` = 平台在派 leader 任务的同一步里拆解直派（历史行为、绝大多数团队）；
+ *  `leader` = 批次停在 leader 任务，等这个团队自己的 external Repository Leader
+ *  经 leader-actions 面提交计划。**只有正式 adoption 通道**（materialize 时
+ *  controller 说这个 leader 的容器不归它管）才写得出 `leader`，没有任何脚本或
+ *  界面开关能设它——所以这个字段是**采用结果的回显**，不是一个可切换的配置。 */
+export type TeamDecompositionMode = "server" | "leader";
+
 export interface ConsoleTeamView {
   team_id: string;
   agentteams_team_name: string;
@@ -391,6 +400,8 @@ export interface ConsoleTeamView {
   /** 契约写 string，但实现在 catalog 查不到该仓库时给 null（已核 service.py） */
   repository_name: string | null;
   runtime_status: TeamRuntimeStatus;
+  /** 拓扑持久化的**采用结果**，与 `runtime` 探测无关：controller 打不通时它照样为真。 */
+  decomposition_mode: TeamDecompositionMode;
   team_room_id: string | null;
   leader_room_id: string | null;
   leader: RoomMemberView;
