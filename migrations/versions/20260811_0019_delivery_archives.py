@@ -1,7 +1,7 @@
 """Archive inactive deliveries without deleting their data.
 
 Revision ID: 20260811_0019
-Revises: 20260811_0018
+Revises: 20260812_0020
 """
 
 from collections.abc import Sequence
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20260811_0019"
-down_revision: str | None = "20260811_0018"
+down_revision: str | None = "20260812_0020"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

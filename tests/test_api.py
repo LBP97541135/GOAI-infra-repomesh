@@ -490,6 +490,34 @@ def _register_and_discover(
         assert discovered.json()[0]["matched_terms"] == ["invoice", "payment"]
 
 
+def test_runner_control_requires_configured_token(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    monkeypatch.setenv("REPOMESH_RUNNER_CONTROL_TOKEN", "")
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.get("/api/v1/runtime/runner-tasks/next")
+        assert response.status_code == 503
+        assert response.json()["detail"] == "runner control token is not configured"
+
+        monkeypatch.setenv("REPOMESH_RUNNER_CONTROL_TOKEN", "runner-secret")
+        get_settings.cache_clear()
+        with TestClient(create_app(application_container)) as client:
+            unauthorized = client.get(
+                "/api/v1/runtime/runner-tasks/next",
+                headers={"Authorization": "Bearer wrong"},
+            )
+            authorized = client.get(
+                "/api/v1/runtime/runner-tasks/next",
+                headers={"Authorization": "Bearer runner-secret"},
+            )
+        assert unauthorized.status_code == 401
+        assert authorized.status_code == 204
+    finally:
+        get_settings.cache_clear()
+
+
 def test_worker_start_action_requires_internal_token(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:

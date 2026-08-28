@@ -1,7 +1,7 @@
 """Create observability.log_entries.
 
-Revision ID: 20260815_0031
-Revises: 20260815_0030
+Revision ID: 20260815_0034
+Revises: 20260815_0033
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260815_0031"
-down_revision: str | None = "20260815_0030"
+revision: str = "20260815_0034"
+down_revision: str | None = "20260815_0033"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

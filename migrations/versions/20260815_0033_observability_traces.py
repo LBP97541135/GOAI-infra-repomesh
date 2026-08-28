@@ -7,8 +7,8 @@ session in ``trace_sessions`` and one row per normalized event in
 unchanged or changed — never duplicates rows; the ingester relies on
 ``INSERT ... ON CONFLICT DO NOTHING`` for idempotency.
 
-Revision ID: 20260815_0030
-Revises: 20260814_0029
+Revision ID: 20260815_0033
+Revises: 20260815_0032
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260815_0030"
-down_revision: str | None = "20260814_0029"
+revision: str = "20260815_0033"
+down_revision: str | None = "20260815_0032"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

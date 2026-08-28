@@ -131,15 +131,10 @@ rename-follow、`api/human_control.py`(main 的 onboard 复用其处理函数)�
 
 ## 4. 迁移链收敛方案
 
-1. 本分支链 `20260811_0019 … 20260812_0027` **保持原样不动**(已应用于 8100 验收环境)。
-2. main 的 `20260812_0020_delivery_policies` **重排到 `20260812_0027` 之后**
-   (改 down_revision;表内容原样保留)。
-3. main 的 `20260812_0019_reuse_repository_agentteams_teams` **重写**:去掉
-   drop-unique(0024 已以复合约束落定该语义),只保留 `agentteams_team_name` 普通索引的
-   创建(按名查找有用、无害),同样重排到链尾。
-4. ⚠ 风险声明:重排即改写 main 已发布的迁移历史。**若有任何数据库已按 main 原序执行过这两个
-   迁移,该库需要人工对账**(本地已知:5432 活体库谱系本就不符,不在本分支迁移射程内,维持既有
-   纪律不动它)。
+1. 保留 main 已发布的 `20260812_0019 → 20260812_0020` 历史，避免已升级数据库失去谱系。
+2. 将本分支的 `20260811_0019` 接在 `20260812_0020` 后，之后继续原有的 `20260811_0020 … 20260812_0027` 链。
+3. `20260812_0024` 只创建复合唯一约束；旧的全表唯一约束已由 main 的 `20260812_0019` 删除，普通索引也由该迁移保留。
+4. 删除重复执行同一 DDL 的重铸迁移 `20260814_0028/0029`，后续迁移直接续接 `20260812_0027`。这样空库与已执行 main 迁移的数据库都沿同一单头链升级。
 
 ---
 
@@ -168,8 +163,8 @@ rename-follow、`api/human_control.py`(main 的 onboard 复用其处理函数)�
 
 | # | 决议 | 状态 |
 | --- | --- | --- |
-| D-1 | `repository_agent_teams` 取复合唯一 `(project_id, agentteams_team_name)` + main 的确定性铸名/复用逻辑;main 0019 重写为纯索引迁移 | **已按建议案执行**(2026-08-14,可复议) |
-| D-2 | 迁移链:本分支链不动,main 两迁移重排链尾 | 已执行 |
+| D-1 | `repository_agent_teams` 取复合唯一 `(project_id, agentteams_team_name)` + main 的确定性铸名/复用逻辑；main 0019 保留 drop-unique + 普通索引，console-v2 0024 只补复合约束 | **已执行** |
+| D-2 | 迁移链保留 main 已发布历史，console-v2 链续接其后 | 已执行 |
 | D-3 | 快照序列化修复:两边等价,合并取本分支版本(带成因注释) | 已执行 |
 | D-4 | PRD 入口以 frontend 发现面板为准;web 双前端短期并存 | 合并后立项,本次不动 |
 
@@ -186,8 +181,7 @@ rename-follow、`api/human_control.py`(main 的 onboard 复用其处理函数)�
 - **rename-follow 缺口**:git 把本分支对 `contracts.py` 的修改自动跟进了
   `contracts/repository.py`,但 main 写的包 `__init__.py` 只导出自己认识的名字;
   发现链边界(`IssueIntakeCommand`、`GUI_STEP_OF` 等 14 个名)靠 AST 全量对账补齐。
-- **迁移**:新链尾 `20260814_0028`(纯索引)、`20260814_0029`(delivery_policies 原文),
-  一次性 postgres 从空库跑通全链,复合约束/索引/新表/快照三列并存确认。
+- **迁移**：保留 main 已发布的 `20260812_0019/0020`，把 console-v2 链续接其后；`20260812_0024` 只补复合约束，避免与 main 已执行的 drop/index DDL 重复。
 - **测试适配 4 处**:main 的 `StubSnapshotWriter` 补 `current_draft`;main 的
   `/integration` 测试补 v0.4 动作 token;本分支两处快照断言从「按位置」改「按名」
   (normalize_plan 会排序投影、并把契约 consumer 折进图节点——这是 main 的既定语义,

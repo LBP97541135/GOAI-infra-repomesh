@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from repomesh.modules.change_orchestration import ExecutionPlaneUnavailable
+from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavailable
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
     HandoffDocError,
@@ -784,6 +784,7 @@ async def materialize_plan(body: MaterializeRequest, request: Request) -> Materi
             for t in body.task_dag
         ],
         execution_batches=[list(b) for b in body.execution_batches],
+        graph=body.graph,
     )
 
     try:

@@ -14,6 +14,8 @@ def git(path: Path, *arguments: str) -> str:
         check=True,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     ).stdout.strip()
 
 

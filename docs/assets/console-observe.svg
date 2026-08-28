@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 480" width="1160" height="480" role="img" aria-labelledby="t d">
+  <title id="t">The RepoMesh observability centre</title>
+  <desc id="d">The observability portal: three health numbers over four section cards — reasoning traces, usage, logs and alerts — each carrying its own live count.</desc>
+
+  <style>
+    text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+  </style>
+
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <clipPath id="win"><rect x="1" y="1" width="1158" height="478" rx="2"/></clipPath>
+
+    <g id="ic-issues" fill="none" stroke-width="1.3">
+      <circle cx="7" cy="7" r="5.4"/><circle cx="7" cy="7" r="1.5" stroke="none"/>
+    </g>
+    <g id="ic-reviews" fill="none" stroke-width="1.3">
+      <rect x="1.6" y="1.6" width="10.8" height="10.8" rx="1"/><path d="M4.3 7.1 L6.2 9.1 L9.8 4.9"/>
+    </g>
+    <g id="ic-repositories" fill="none" stroke-width="1.3">
+      <rect x="1.6" y="2.2" width="10.8" height="3.9" rx="1"/><rect x="1.6" y="7.9" width="10.8" height="3.9" rx="1"/>
+    </g>
+    <g id="ic-teams" fill="none" stroke-width="1.3">
+      <path d="M4.2 5.3 L9.8 5.3 M4.6 5.9 L6.6 9.4 M9.4 5.9 L7.4 9.4"/>
+      <circle cx="3.4" cy="4.2" r="1.7"/><circle cx="10.6" cy="4.2" r="1.7"/><circle cx="7" cy="10.6" r="1.7"/>
+    </g>
+    <g id="ic-agents" fill="none" stroke-width="1.3">
+      <path d="M7 1.4 L12.1 4.3 V9.7 L7 12.6 L1.9 9.7 V4.3 Z"/>
+    </g>
+    <g id="ic-observe" fill="none" stroke-width="1.3" stroke-linejoin="round">
+      <path d="M1.4 8 H4.4 L6.1 4 L8.1 11.2 L9.7 8 H12.6"/>
+    </g>
+    <g id="ic-settings" fill="none" stroke-width="1.3">
+      <path d="M1.8 4.7 H12.2 M1.8 9.6 H12.2"/>
+      <circle cx="4.9" cy="4.7" r="1.6"/><circle cx="9.1" cy="9.6" r="1.6"/>
+    </g>
+  </defs>
+
+        <rect x="0.5" y="0.5" width="1159" height="479" rx="2" fill="#16130d" stroke="#3b3323"/>
+    <g clip-path="url(#win)">
+    <rect x="1" y="1" width="1158" height="35" rx="0" fill="#131009"/>
+    <rect x="18" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="33" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="48" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="430" y="9" width="300" height="19" rx="2" fill="#1b1710" stroke="#2b2417"/>
+    <text class="mono" x="580" y="22.5" font-size="11" fill="#6b6046" text-anchor="middle">127.0.0.1:5280 · delivery console</text>
+    <path d="M1 36.5 H1159" stroke="#3b3323"/>
+    <rect x="1" y="37" width="235" height="442" rx="0" fill="#131009"/>
+    <path d="M236.5 37 V479" stroke="#3b3323"/>
+    <rect x="18" y="54" width="32" height="32" rx="2" fill="#c99e52"/>
+    <text class="mono" x="34" y="77" font-size="16" fill="#16120a" text-anchor="middle" font-weight="800">R</text>
+    <text class="mono" x="60" y="70" font-size="13" fill="#e9dec2" font-weight="700" letter-spacing="1.9">REPOMESH</text>
+    <text x="60" y="86" font-size="11.5" fill="#93876c">console-demo ▾</text>
+    <rect x="18" y="104" width="200" height="30" rx="2" fill="#c99e52"/>
+    <text x="118" y="124" font-size="12.5" fill="#191308" text-anchor="middle" font-weight="600">+ New issue</text>
+    <use href="#ic-issues" x="31" y="160" stroke="#c99e52"/>
+    <text x="55" y="172" font-size="12.5" fill="#d8cdb2">Issues</text>
+    <rect x="188" y="160" width="22" height="15" rx="2" fill="#3b3323"/>
+    <text class="mono" x="199" y="171" font-size="10" fill="#93876c" text-anchor="middle">5</text>
+    <use href="#ic-reviews" x="31" y="194" stroke="#c99e52"/>
+    <text x="55" y="206" font-size="12.5" fill="#d8cdb2">Reviews</text>
+    <rect x="188" y="194" width="22" height="15" rx="2" fill="#3b3323"/>
+    <text class="mono" x="199" y="205" font-size="10" fill="#93876c" text-anchor="middle">1</text>
+    <use href="#ic-repositories" x="31" y="228" stroke="#c99e52"/>
+    <text x="55" y="240" font-size="12.5" fill="#d8cdb2">Repositories</text>
+    <use href="#ic-teams" x="31" y="262" stroke="#c99e52"/>
+    <text x="55" y="274" font-size="12.5" fill="#d8cdb2">Teams</text>
+    <use href="#ic-agents" x="31" y="296" stroke="#c99e52"/>
+    <text x="55" y="308" font-size="12.5" fill="#d8cdb2">Agents</text>
+    <rect x="18" y="322" width="200" height="31" rx="0" fill="#c99e52" opacity="0.1"/>
+    <rect x="18" y="322" width="2" height="31" rx="0" fill="#c99e52"/>
+    <use href="#ic-observe" x="31" y="330" stroke="#e3c078"/>
+    <text x="55" y="342" font-size="12.5" fill="#e3c078">Observe</text>
+    <path d="M18 424.5 H218" stroke="#3b3323"/>
+    <use href="#ic-settings" x="31" y="436" stroke="#c99e52"/>
+    <text x="55" y="448" font-size="12.5" fill="#d8cdb2">Settings</text>
+    <text x="268" y="78" font-size="19" fill="#e9dec2" font-weight="600">Observe</text>
+    <text x="348.59000000000003" y="78" font-size="11.5" fill="#93876c">Observability centre · by section · data from the observability module</text>
+    <path d="M268 91.5 H1128" stroke="#3b3323"/>
+    <rect x="268" y="104" width="278" height="64" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="284" y="124" font-size="10.5" fill="#93876c" font-weight="700" letter-spacing="1.4">CALLS, LAST 7 DAYS</text>
+    <text class="mono" x="284" y="150" font-size="18" fill="#e9dec2">15</text>
+    <rect x="559" y="104" width="278" height="64" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="575" y="124" font-size="10.5" fill="#93876c" font-weight="700" letter-spacing="1.4">SUCCESS RATE</text>
+    <text class="mono" x="575" y="150" font-size="18" fill="#e9dec2">100.0%</text>
+    <rect x="850" y="104" width="278" height="64" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="866" y="124" font-size="10.5" fill="#93876c" font-weight="700" letter-spacing="1.4">ACTIVE ALERTS</text>
+    <text class="mono" x="866" y="150" font-size="18" fill="#e9dec2">0</text>
+    <rect x="268" y="188" width="424" height="86" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text x="284" y="211" font-size="15" fill="#c99e52">⌁</text>
+    <text x="304" y="211" font-size="13" fill="#e9dec2" font-weight="600">Reasoning traces</text>
+    <text x="284" y="229" font-size="11.5" fill="#6b6046">Trace · skill calls, MCP tools, RAG retrieval and agent sessions,</text>
+    <text x="284" y="244" font-size="11.5" fill="#6b6046">end to end — the coverage the brief names explicitly</text>
+    <text class="mono" x="284" y="264" font-size="11" fill="#93876c">0 sessions</text>
+    <text x="676" y="264" font-size="11" fill="#93876c" text-anchor="end">Enter →</text>
+    <rect x="704" y="188" width="424" height="86" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text x="720" y="211" font-size="15" fill="#c99e52">◈</text>
+    <text x="740" y="211" font-size="13" fill="#e9dec2" font-weight="600">Usage dashboard</text>
+    <text x="720" y="229" font-size="11.5" fill="#6b6046">Metrics · LLM tokens, cost, latency and success rate; trends,</text>
+    <text x="720" y="244" font-size="11.5" fill="#6b6046">model split, attribution back to the issue</text>
+    <text class="mono" x="720" y="264" font-size="11" fill="#93876c">15 calls · 100.0% success</text>
+    <text x="1112" y="264" font-size="11" fill="#93876c" text-anchor="end">Enter →</text>
+    <rect x="268" y="286" width="424" height="86" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text x="284" y="309" font-size="15" fill="#c99e52">✎</text>
+    <text x="304" y="309" font-size="13" fill="#e9dec2" font-weight="600">Logs</text>
+    <text x="284" y="327" font-size="11.5" fill="#6b6046">Log · one query across level, source, issue and full text,</text>
+    <text x="284" y="342" font-size="11.5" fill="#6b6046">so an anomaly can be located</text>
+    <text class="mono" x="284" y="362" font-size="11" fill="#93876c">54 entries</text>
+    <text x="676" y="362" font-size="11" fill="#93876c" text-anchor="end">Enter →</text>
+    <rect x="704" y="286" width="424" height="86" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text x="720" y="309" font-size="15" fill="#c99e52">⚠</text>
+    <text x="740" y="309" font-size="13" fill="#e9dec2" font-weight="600">Alerts</text>
+    <text x="720" y="327" font-size="11.5" fill="#6b6046">Online monitoring · threshold rules plus firing history,</text>
+    <text x="720" y="342" font-size="11.5" fill="#6b6046">visible the moment one hits</text>
+    <text class="mono" x="720" y="362" font-size="11" fill="#93876c">0 firing</text>
+    <text x="1112" y="362" font-size="11" fill="#93876c" text-anchor="end">Enter →</text>
+    <text x="268" y="402" font-size="11" fill="#6b6046">The sections map onto the observability requirement one for one: reasoning traces (skill / MCP / agent sessions) for the</text>
+    <text x="268" y="418" font-size="11" fill="#6b6046">end-to-end trace coverage it names, the usage dashboard (metrics) and logs for the data types, and alerts for the online</text>
+    <text x="268" y="434" font-size="11" fill="#6b6046">monitoring case. Filled sections carry numbers from the planning side; execution-side agent data arrives through traces.</text>
+    <text class="mono" x="1128" y="458" font-size="10" fill="#6b6046" text-anchor="end">Illustrative · the console ships in Chinese; labels translated here</text>
+    <rect x="1" y="1" width="1158" height="478" rx="0" filter="url(#grain)" opacity="0.03" pointer-events="none"/>
+    </g>
+</svg>

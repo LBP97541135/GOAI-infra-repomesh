@@ -1,9 +1,43 @@
-# RepoMesh
+<div align="center">
+
+<img src="docs/assets/logo.svg" alt="RepoMesh — observable delivery control plane" width="820">
+
+**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+![Apache 2.0](https://img.shields.io/badge/license-Apache_2.0-c99e52?style=flat-square&labelColor=16130d)
+![Python 3.12+](https://img.shields.io/badge/python-3.12+-c99e52?style=flat-square&labelColor=16130d&logo=python&logoColor=e9dec2)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-c99e52?style=flat-square&labelColor=16130d&logo=fastapi&logoColor=e9dec2)
+![PostgreSQL 17](https://img.shields.io/badge/PostgreSQL-17-c99e52?style=flat-square&labelColor=16130d&logo=postgresql&logoColor=e9dec2)
+![React 19](https://img.shields.io/badge/React-19-c99e52?style=flat-square&labelColor=16130d&logo=react&logoColor=e9dec2)
+![Vite 8](https://img.shields.io/badge/Vite-8-c99e52?style=flat-square&labelColor=16130d&logo=vite&logoColor=e9dec2)
+![TypeScript 6](https://img.shields.io/badge/TypeScript-6-c99e52?style=flat-square&labelColor=16130d&logo=typescript&logoColor=e9dec2)
+![Docker Compose](https://img.shields.io/badge/Docker-compose-c99e52?style=flat-square&labelColor=16130d&logo=docker&logoColor=e9dec2)
+
+**An observable control plane for multi-repository coding-agent delivery.**
+Issues become plans, plans become teams of agents in real repositories, and every
+gate along the way stays on the record.
+
+|  |  |  |  |  |  |  |  |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Works with** | Claude Code | OpenAI Codex | OpenCode | Cursor Agent | Copilot CLI | Aider | Goose |
+
+*23 coding-agent CLIs are wired in `src/repomesh/integrations/coding_agents/catalog.py`;
+the runtime port is provider-neutral, so a CLI that can take a task can be hired.*
+
+</div>
+
+---
 
 RepoMesh is an observable control plane for multi-repository coding-agent delivery. RepoMesh owns
 projects, specifications, tasks, context, validation, change sets, recovery, and audit history.
 AgentTeams is RepoMesh's first-party runtime control plane for teams, workers, skills, and
 message transport.
+
+![The RepoMesh delivery console: a flat issue list where each issue carries its delivery phase
+as a badge — plan awaiting materialize, executing, release, paused, decision pending](docs/assets/console.svg)
+
+The other five surfaces — review desk, repositories, teams, agents, observability —
+are drawn in [the console tour](docs/console-tour.md).
 
 ## Open the console
 
@@ -46,9 +80,12 @@ docker compose --profile console exec console-api python scripts/seed-console-de
 moves the development database off 5432. Tear the stack down with
 `docker compose --profile console down`, add `-v` to drop its database too.
 
-The console has no login gate: opening it puts you straight in as the default
-administrator. Its data plane authenticates with a Bearer action token, not a
-session, so there is nothing to sign in to.
+The console opens on a login gate. A fresh database holds no accounts, so the
+first visit goes through *initialize administrator*, and the credentials stay on
+your machine. Two planes authenticate differently, on purpose: the read models
+take a Bearer action token, while human control — the review desk, checkpoint
+decisions — takes the session. That is why an agent token cannot approve
+anything.
 
 Status, honestly: what has been exercised is the re-entrant path (every
 component already serving, everything skipped) and the compose configuration.
@@ -124,6 +161,10 @@ uv run ruff check .
 uv run pytest
 ```
 
+## License
+
+RepoMesh is licensed under the Apache License, Version 2.0. See `LICENSE`.
+
 ## What the launcher does, and how to do it by hand
 
 `scripts/dev-up.*` is the four manual steps below in order, with a probe in
@@ -164,10 +205,14 @@ degradation notes, the seed script, and the data-source switch.
 ## Team entry points
 
 - Documentation index: `docs/README.md`
+- Skill lifecycle: `capabilities/skills/README.md`
+- Open source readiness: `docs/open-source-readiness.md`
+- Third-party notices: `THIRD_PARTY_NOTICES.md`
 - Current phase plan (full GUI loop, construction complete):
   `docs/development/full-loop-plan-20260812.md`
 - Team handoff (architecture sections; status sections superseded):
   `docs/development/team-handoff.md`
+- Parallel work plan: `docs/development/parallel-work-plan.md`
 - Public contracts: `docs/contracts/public-contracts-v0.1.md`
 - Delivery read model contract: `docs/contracts/delivery-read-model-v0.1.md`
   (v0.2–v0.4 are increments, all in force)

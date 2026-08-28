@@ -12,7 +12,6 @@ from .checkpoint_control import (
     ProjectCheckpointService,
     RecordCheckpointDecisionCommand,
 )
-from .checkpoint_fallback import TopologyAwareCheckpointFallback
 from .contracts import (
     CheckpointDecisionKind,
     CheckpointGateDecision,
@@ -28,6 +27,7 @@ from .contracts import (
     ProjectTeamRuntimeStatus,
     ProjectTopologyProvisioner,
     RepositoryTeamView,
+    TopologyAwareCheckpointFallback,
 )
 from .human_control import (
     HumanAuthorizationDecision,

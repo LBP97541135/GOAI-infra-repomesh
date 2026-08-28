@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 300" width="1160" height="300" role="img" aria-labelledby="t d">
+  <title id="t">RepoMesh</title>
+  <desc id="d">The RepoMesh wordmark beside its mark: three repository cubes and three agent nodes wired to one control-plane hub.</desc>
+
+  <style>
+    text { font-family: Consolas, "SF Mono", Menlo, monospace; }
+  </style>
+
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <clipPath id="card"><rect x="1" y="1" width="1158" height="298" rx="3"/></clipPath>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="1159" height="299" rx="3" fill="#16130d" stroke="#3b3323"/>
+
+  <g clip-path="url(#card)">
+    <!-- the mark: repositories are cubes, agents are nodes, everything meets at one hub -->
+    <g transform="translate(260 30) scale(1.2)">
+      <g stroke="#c99e52" stroke-width="4" stroke-linecap="round">
+        <path d="M100 96 L100 57"/>
+        <path d="M100 96 L36 146"/>
+        <path d="M100 96 L164 146"/>
+        <path d="M100 96 L24 52"/>
+        <path d="M100 96 L176 52"/>
+        <path d="M100 96 L100 180"/>
+      </g>
+
+      <!-- repository cube, top -->
+      <g stroke="#16130d" stroke-width="2" stroke-linejoin="round">
+        <path d="M100 3 L123.4 16.5 L100 30 L76.6 16.5 Z" fill="#e3c078"/>
+        <path d="M76.6 16.5 L100 30 L100 57 L76.6 43.5 Z" fill="#c99e52"/>
+        <path d="M123.4 16.5 L100 30 L100 57 L123.4 43.5 Z" fill="#a8853f"/>
+      </g>
+
+      <!-- repository cube, lower left -->
+      <g stroke="#16130d" stroke-width="2" stroke-linejoin="round">
+        <path d="M36 119 L59.4 132.5 L36 146 L12.6 132.5 Z" fill="#e3c078"/>
+        <path d="M12.6 132.5 L36 146 L36 173 L12.6 159.5 Z" fill="#c99e52"/>
+        <path d="M59.4 132.5 L36 146 L36 173 L59.4 159.5 Z" fill="#a8853f"/>
+      </g>
+
+      <!-- repository cube, lower right -->
+      <g stroke="#16130d" stroke-width="2" stroke-linejoin="round">
+        <path d="M164 119 L187.4 132.5 L164 146 L140.6 132.5 Z" fill="#e3c078"/>
+        <path d="M140.6 132.5 L164 146 L164 173 L140.6 159.5 Z" fill="#c99e52"/>
+        <path d="M187.4 132.5 L164 146 L164 173 L187.4 159.5 Z" fill="#a8853f"/>
+      </g>
+
+      <!-- agent nodes -->
+      <circle cx="24" cy="52" r="10.5" fill="#c99e52" stroke="#16130d" stroke-width="2"/>
+      <circle cx="176" cy="52" r="10.5" fill="#c99e52" stroke="#16130d" stroke-width="2"/>
+      <circle cx="100" cy="180" r="10.5" fill="#c99e52" stroke="#16130d" stroke-width="2"/>
+
+      <!-- the control plane -->
+      <circle cx="100" cy="96" r="23" fill="#e3c078" stroke="#16130d" stroke-width="2"/>
+    </g>
+
+    <text x="540" y="154" font-size="62" font-weight="700" letter-spacing="7" fill="#e9dec2">REPOMESH</text>
+    <rect x="540" y="174" width="359" height="2" fill="#c99e52"/>
+    <text x="540" y="199" font-size="13" font-weight="700" letter-spacing="3.2" fill="#93876c">OBSERVABLE DELIVERY CONTROL PLANE</text>
+
+    <rect x="1" y="1" width="1158" height="298" filter="url(#grain)" opacity="0.03" pointer-events="none"/>
+  </g>
+</svg>

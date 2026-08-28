@@ -46,10 +46,16 @@ services:
       REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-deepseek-chat}}
       REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
       REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_AGENT_ACTION_TOKEN:-}
-      REPOMESH_WORKER_TASK_CONTROL_URL: ${REPOMESH_WORKER_TASK_CONTROL_URL:-}
+      # 非空才会让 principal_registration.with_task_control 把 repomesh-task-control
+      # 这个 MCP server 投影进 worker CRD，控制器据此为 worker 生成 config/mcporter.json；
+      # 留空则 worker 没有该工具、无法调用 start_assigned_task 消费任务包（会 BLOCKED）。
+      # 指向平台 api 服务在 agentteams-net 上的别名（worker 侧已验证 api:8000 可达）。
+      REPOMESH_WORKER_TASK_CONTROL_URL: ${REPOMESH_WORKER_TASK_CONTROL_URL:-http://api:8000/api/v1/mcp/worker}
       REPOMESH_MCP_GATEWAY_TOKEN: ${REPOMESH_MCP_GATEWAY_TOKEN:-}
       REPOMESH_MCP_GATEWAY_TOKENS: ${REPOMESH_MCP_GATEWAY_TOKENS:-[]}
-      REPOMESH_DIRECT_WORKER_MCP_ENABLED: ${REPOMESH_DIRECT_WORKER_MCP_ENABLED:-false}
+      # 开发免鉴权直连 worker MCP。端点自身在 environment 非 development/test 时仍返回
+      # 503（见 worker_mcp._authorize），故默认 true 只在本 dev 编排生效、自带护栏。
+      REPOMESH_DIRECT_WORKER_MCP_ENABLED: ${REPOMESH_DIRECT_WORKER_MCP_ENABLED:-true}
       REPOMESH_GITHUB_APP_ID: ${REPOMESH_GITHUB_APP_ID:-0}
       REPOMESH_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/repomesh-github-app.pem
       REPOMESH_GITHUB_APP_PRIVATE_KEY_BASE64: ${REPOMESH_GITHUB_APP_PRIVATE_KEY_BASE64:-}
@@ -64,10 +70,19 @@ services:
       REPOMESH_SCM_POLL_SCAN_INTERVAL_SECONDS: ${REPOMESH_SCM_POLL_SCAN_INTERVAL_SECONDS:-15}
       REPOMESH_SCM_COMMAND_DISPATCH_INTERVAL_SECONDS: ${REPOMESH_SCM_COMMAND_DISPATCH_INTERVAL_SECONDS:-5}
       REPOMESH_RUNNER_WORKSPACE_ROOT: /runner-workspaces
-      # LocalTraceSource 直接读共享卷里的 MinIO 桶目录，agent 会话无需手动同步。
-      # 桶名默认 hiclaw-storage（本环境 AgentTeams 实际桶名）；换部署时在 .env
-      # 用 REPOMESH_AGENTTEAMS_STORAGE_BUCKET 覆盖（标准部署一般是 agentteams-storage）。
-      REPOMESH_AGENTTEAMS_STORAGE_ROOT: /agentteams-data/minio/${REPOMESH_AGENTTEAMS_STORAGE_BUCKET:-hiclaw-storage}
+      # STORAGE_ROOT 只服务 LocalTraceSource：从共享卷里直接读 MinIO 桶目录做可观测
+      # 性 trace 采集（api 与 controller/MinIO 共享 agentteams-data 卷）。它不是任务包
+      # 的投递路径——Worker 走 S3（mc mirror agentteams/<桶>/teams/.../shared/tasks/...）
+      # 取包，而 MinIO 的 S3 API 不会把裸写进后端目录的文件当对象返回。所以任务包必须由
+      # API 通过下面的 STORAGE_ENDPOINT/ACCESS_KEY/SECRET_KEY 走 S3 对象发布器写入；三者
+      # 都配齐时 bootstrap 才选 AgentTeamsObjectTaskPublisher，否则回退到磁盘发布器、
+      # Worker 的 mirror 什么也读不到。桶名两处共用，必须与 AgentTeams 实际注册的桶一致
+      # （本环境是 agentteams-storage，mc ls 只列出它）。
+      REPOMESH_AGENTTEAMS_STORAGE_ROOT: /agentteams-data/minio/${REPOMESH_AGENTTEAMS_STORAGE_BUCKET:-agentteams-storage}
+      REPOMESH_AGENTTEAMS_STORAGE_ENDPOINT: ${REPOMESH_AGENTTEAMS_STORAGE_ENDPOINT:-}
+      REPOMESH_AGENTTEAMS_STORAGE_ACCESS_KEY: ${REPOMESH_AGENTTEAMS_STORAGE_ACCESS_KEY:-}
+      REPOMESH_AGENTTEAMS_STORAGE_SECRET_KEY: ${REPOMESH_AGENTTEAMS_STORAGE_SECRET_KEY:-}
+      REPOMESH_AGENTTEAMS_STORAGE_BUCKET: ${REPOMESH_AGENTTEAMS_STORAGE_BUCKET:-agentteams-storage}
     ports:
       - "8000:8000"
     volumes:

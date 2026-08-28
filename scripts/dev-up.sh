@@ -196,6 +196,27 @@ else
     "多半是网络或 Python 版本问题；把上面的报错原文贴出来定位。"
   ok "Python 依赖就绪。"
 
+  # 1b-2. 迁移前谱系比对（M-9 / A-2）
+  # 上面的端口归属守卫只保证“这个库不是别的进程的”，保证不了“这个库的迁移谱系跟
+  # 当前代码同源”。一个先于本脚本存在、被采纳的同端口 compose 库（compose 的
+  # postgres 容器已在跑那条分支），可能停在本地 alembic 历史里根本没有的 revision
+  # 上——对它 upgrade head 会把它改坏。所以在迁移前先问一次库的当前 revision：只要
+  # alembic 认不出它（“Can't locate revision”即谱系不符），就中止，而不是改坏它。
+  info "比对数据库迁移谱系（alembic current）…"
+  lineage_out="$(REPOMESH_DATABASE_URL="${DSN}" uv run alembic current 2>&1)"
+  if grep -qi "can.t locate revision" <<<"${lineage_out}"; then
+    stuck_rev="$(printf '%s' "${lineage_out}" | grep -oE "identified by '[^']+'" | head -1 | sed "s/identified by '//; s/'$//")"
+    fail "数据库停在本地 alembic 历史里没有的 revision（${stuck_rev:-见下方原文}）。" \
+      "这个库的迁移谱系跟当前代码不同源——多半是先于本脚本存在的、别的分支或别的项目" \
+      "留下的同端口 compose 库。对它执行 upgrade head 会把它改坏，所以这里直接中止。" \
+      "alembic 原文：${lineage_out}" \
+      "三选一：" \
+      "  1) 换个空库（换端口）： REPOMESH_POSTGRES_PORT=5433 scripts/dev-up.sh" \
+      "  2) 清掉旧卷重来（会清数据）： docker compose down -v 后重跑本脚本" \
+      "  3) 若确认这库确属本项目、只是分支超前——先把代码切到与库匹配的分支再起"
+  fi
+  ok "迁移谱系一致（或是全新空库），可以安全迁移。"
+
   # 1c. 迁移
   info "执行数据库迁移（alembic upgrade head → ${DSN}）…"
   REPOMESH_DATABASE_URL="${DSN}" uv run alembic upgrade head || fail "alembic upgrade head 失败。" \
@@ -275,7 +296,11 @@ else
   fi
 
   info "启动 vite…"
-  (cd "${REPO_ROOT}/frontend" && nohup npm run dev >"${STATE_DIR}/frontend.log" 2>&1 & echo $! >"${STATE_DIR}/frontend.pid")
+  # vite.config.ts 的代理默认已指向容器全执行面 API（:8000）。本脚本起的是
+  # 计划态后端（:8100），所以在这里把 REPOMESH_API_TARGET 显式指回自己的
+  # :8100——否则计划态控制台会打到可能没起的 :8000 上。
+  (cd "${REPO_ROOT}/frontend" && REPOMESH_API_TARGET="http://127.0.0.1:${API_PORT}" \
+    nohup npm run dev >"${STATE_DIR}/frontend.log" 2>&1 & echo $! >"${STATE_DIR}/frontend.pid")
 
   serving=0
   for _ in $(seq 1 30); do
@@ -310,6 +335,15 @@ cat <<SUMMARY
 
 身份：    控制台无登录门，打开即默认管理员身份。
 数据源：  默认就是真实数据（打 8100 后端）；演示夹具要显式加 ?source=replay。
+
+执行面：  本脚本只起“计划态”控制台（后端 API + 前端 + 数据库），不含 AgentTeams
+          执行面。所以 materialize / 派单 / 真正跑 agent 会返回 503
+          （“…has no rooms for this project's teams (AgentTeams request failed…)”）——
+          这是预期限制、不是故障：宿主进程本就连不到控制器（控制器的 8090/6167 只在
+          agentteams-net 内网可达，没有映射到宿主）。要完整执行面（能 materialize、
+          能派单、能跑 agent），用容器内跑、接入 agentteams-net 的那条路：
+            scripts/start-platform.sh          # 首次装执行面加 --install-agentteams
+          它把 API 跑在容器里并连上控制器（就是已在跑的 :8000 那套）。
 
 日志： ${STATE_DIR}/backend.log · ${STATE_DIR}/frontend.log
 收摊： scripts/dev-down.sh（只停本脚本起的组件，且逐项问你）

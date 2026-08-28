@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 440" width="1160" height="440" role="img" aria-labelledby="t d">
+  <title id="t">The RepoMesh review desk</title>
+  <desc id="d">The human review queue: one card per checkpoint awaiting a decision, carrying its status, its checkpoint and the evidence version the decision will be pinned to.</desc>
+
+  <style>
+    text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+  </style>
+
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <clipPath id="win"><rect x="1" y="1" width="1158" height="438" rx="2"/></clipPath>
+
+    <g id="ic-issues" fill="none" stroke-width="1.3">
+      <circle cx="7" cy="7" r="5.4"/><circle cx="7" cy="7" r="1.5" stroke="none"/>
+    </g>
+    <g id="ic-reviews" fill="none" stroke-width="1.3">
+      <rect x="1.6" y="1.6" width="10.8" height="10.8" rx="1"/><path d="M4.3 7.1 L6.2 9.1 L9.8 4.9"/>
+    </g>
+    <g id="ic-repositories" fill="none" stroke-width="1.3">
+      <rect x="1.6" y="2.2" width="10.8" height="3.9" rx="1"/><rect x="1.6" y="7.9" width="10.8" height="3.9" rx="1"/>
+    </g>
+    <g id="ic-teams" fill="none" stroke-width="1.3">
+      <path d="M4.2 5.3 L9.8 5.3 M4.6 5.9 L6.6 9.4 M9.4 5.9 L7.4 9.4"/>
+      <circle cx="3.4" cy="4.2" r="1.7"/><circle cx="10.6" cy="4.2" r="1.7"/><circle cx="7" cy="10.6" r="1.7"/>
+    </g>
+    <g id="ic-agents" fill="none" stroke-width="1.3">
+      <path d="M7 1.4 L12.1 4.3 V9.7 L7 12.6 L1.9 9.7 V4.3 Z"/>
+    </g>
+    <g id="ic-observe" fill="none" stroke-width="1.3" stroke-linejoin="round">
+      <path d="M1.4 8 H4.4 L6.1 4 L8.1 11.2 L9.7 8 H12.6"/>
+    </g>
+    <g id="ic-settings" fill="none" stroke-width="1.3">
+      <path d="M1.8 4.7 H12.2 M1.8 9.6 H12.2"/>
+      <circle cx="4.9" cy="4.7" r="1.6"/><circle cx="9.1" cy="9.6" r="1.6"/>
+    </g>
+  </defs>
+
+        <rect x="0.5" y="0.5" width="1159" height="439" rx="2" fill="#16130d" stroke="#3b3323"/>
+    <g clip-path="url(#win)">
+    <rect x="1" y="1" width="1158" height="35" rx="0" fill="#131009"/>
+    <rect x="18" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="33" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="48" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="430" y="9" width="300" height="19" rx="2" fill="#1b1710" stroke="#2b2417"/>
+    <text class="mono" x="580" y="22.5" font-size="11" fill="#6b6046" text-anchor="middle">127.0.0.1:5280 · delivery console</text>
+    <path d="M1 36.5 H1159" stroke="#3b3323"/>
+    <rect x="1" y="37" width="235" height="402" rx="0" fill="#131009"/>
+    <path d="M236.5 37 V439" stroke="#3b3323"/>
+    <rect x="18" y="54" width="32" height="32" rx="2" fill="#c99e52"/>
+    <text class="mono" x="34" y="77" font-size="16" fill="#16120a" text-anchor="middle" font-weight="800">R</text>
+    <text class="mono" x="60" y="70" font-size="13" fill="#e9dec2" font-weight="700" letter-spacing="1.9">REPOMESH</text>
+    <text x="60" y="86" font-size="11.5" fill="#93876c">console-demo ▾</text>
+    <rect x="18" y="104" width="200" height="30" rx="2" fill="#c99e52"/>
+    <text x="118" y="124" font-size="12.5" fill="#191308" text-anchor="middle" font-weight="600">+ New issue</text>
+    <use href="#ic-issues" x="31" y="160" stroke="#c99e52"/>
+    <text x="55" y="172" font-size="12.5" fill="#d8cdb2">Issues</text>
+    <rect x="188" y="160" width="22" height="15" rx="2" fill="#3b3323"/>
+    <text class="mono" x="199" y="171" font-size="10" fill="#93876c" text-anchor="middle">5</text>
+    <rect x="18" y="186" width="200" height="31" rx="0" fill="#c99e52" opacity="0.1"/>
+    <rect x="18" y="186" width="2" height="31" rx="0" fill="#c99e52"/>
+    <use href="#ic-reviews" x="31" y="194" stroke="#e3c078"/>
+    <text x="55" y="206" font-size="12.5" fill="#e3c078">Reviews</text>
+    <rect x="188" y="194" width="22" height="15" rx="2" fill="#3b3323"/>
+    <text class="mono" x="199" y="205" font-size="10" fill="#93876c" text-anchor="middle">1</text>
+    <use href="#ic-repositories" x="31" y="228" stroke="#c99e52"/>
+    <text x="55" y="240" font-size="12.5" fill="#d8cdb2">Repositories</text>
+    <use href="#ic-teams" x="31" y="262" stroke="#c99e52"/>
+    <text x="55" y="274" font-size="12.5" fill="#d8cdb2">Teams</text>
+    <use href="#ic-agents" x="31" y="296" stroke="#c99e52"/>
+    <text x="55" y="308" font-size="12.5" fill="#d8cdb2">Agents</text>
+    <use href="#ic-observe" x="31" y="330" stroke="#c99e52"/>
+    <text x="55" y="342" font-size="12.5" fill="#d8cdb2">Observe</text>
+    <path d="M18 384.5 H218" stroke="#3b3323"/>
+    <use href="#ic-settings" x="31" y="396" stroke="#c99e52"/>
+    <text x="55" y="408" font-size="12.5" fill="#d8cdb2">Settings</text>
+    <text x="268" y="78" font-size="19" fill="#e9dec2" font-weight="600">Human review</text>
+    <text x="397.04" y="78" font-size="11.5" fill="#93876c">1 pending</text>
+    <rect x="1035" y="64" width="93" height="21" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="1081.5" y="78.5" font-size="11.5" fill="#93876c" text-anchor="middle">Show resolved</text>
+    <path d="M268 91.5 H1128" stroke="#3b3323"/>
+    <rect x="268" y="104" width="860" height="148" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text x="284" y="128" font-size="13" fill="#d8cdb2">Repository change scope needs human confirmation</text>
+    <rect x="598.9800000000001" y="116" width="62" height="19" rx="2" fill="none" stroke="#c99e52"/><text x="629.9800000000001" y="129.5" font-size="11" fill="#c99e52" text-anchor="middle">Pending</text>
+    <rect x="666.9800000000001" y="116" width="107" height="19" rx="2" fill="none" stroke="#3b3323"/><text x="720.4800000000001" y="129.5" font-size="11" fill="#93876c" text-anchor="middle">Repository scope</text>
+    <text class="mono" x="1112" y="128" font-size="10.5" fill="#6b6046" text-anchor="end">#7ff1d44d · Aug 16</text>
+    <text x="284" y="149" font-size="11.5" fill="#93876c">An agent reached a human control checkpoint; every controlled operation after it is paused.</text>
+    <text class="mono" x="284" y="167" font-size="10.5" fill="#6b6046">evidence sha256:0c4c85d04237922eb8bf204f70f6e19be8db77bc…</text>
+    <rect x="284" y="178" width="828" height="28" rx="2" fill="#16130d" stroke="#3b3323"/>
+    <text x="294" y="196.5" font-size="12" fill="#6b6046">Reason for the decision (recorded alongside it)</text>
+    <rect x="284" y="216" width="62" height="22" rx="2" fill="none" stroke="#3b3323"/><text x="315.0" y="231.0" font-size="11.5" fill="#93876c" text-anchor="middle">Approve</text>
+    <rect x="352" y="216" width="108" height="22" rx="2" fill="none" stroke="#3b3323"/><text x="406.0" y="231.0" font-size="11.5" fill="#93876c" text-anchor="middle">Request changes</text>
+    <rect x="466" y="216" width="53" height="22" rx="2" fill="none" stroke="#3b3323"/><text x="492.5" y="231.0" font-size="11.5" fill="#93876c" text-anchor="middle">Reject</text>
+    <text x="268" y="290" font-size="11" fill="#6b6046">Source: live · GET /review-requests — the human control plane, authenticated by the local session, not by an agent token.</text>
+    <text x="268" y="306" font-size="11" fill="#6b6046">The decider comes from the session account and is never sent by the browser. Administrators see every request; other</text>
+    <text x="268" y="322" font-size="11" fill="#6b6046">accounts see only what is assigned to them.</text>
+    <text class="mono" x="1128" y="418" font-size="10" fill="#6b6046" text-anchor="end">Illustrative · the console ships in Chinese; labels translated here</text>
+    <rect x="1" y="1" width="1158" height="438" rx="0" filter="url(#grain)" opacity="0.03" pointer-events="none"/>
+    </g>
+</svg>

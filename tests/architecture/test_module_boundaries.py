@@ -75,6 +75,32 @@ def test_business_modules_publish_ownership_metadata() -> None:
     assert missing == []
 
 
+def test_cross_module_imports_target_contracts_only() -> None:
+    module_root = SOURCE_ROOT / "modules"
+    violations = []
+    for path in module_root.rglob("*.py"):
+        relative = path.relative_to(module_root)
+        if not relative.parts or relative.parts[0].startswith("__"):
+            continue
+        owner = relative.parts[0]
+        for dependency in imported_modules(path):
+            if not dependency.startswith("repomesh.modules."):
+                continue
+            parts = dependency.split(".")
+            if len(parts) < 3:
+                continue
+            producer = parts[2]
+            suffix = ".".join(parts[3:])
+            if producer == owner:
+                continue
+            if suffix == "contracts" or suffix.startswith("contracts."):
+                continue
+            violations.append(
+                f"{path.relative_to(SOURCE_ROOT)} -> {dependency}"
+            )
+    assert violations == []
+
+
 class TopologyReader:
     def __init__(self, topology) -> None:
         self.topology = topology

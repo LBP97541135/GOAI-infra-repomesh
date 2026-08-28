@@ -11,7 +11,7 @@ The three policy columns are deliberately the same names and the same types as
 reshaping, which is one fewer place to get the shape wrong.
 
 Revision ID: 20260814_0030
-Revises: 20260814_0029
+Revises: 20260812_0027
 """
 
 from collections.abc import Sequence
@@ -21,7 +21,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "20260814_0030"
-down_revision: str | None = "20260814_0029"
+down_revision: str | None = "20260812_0027"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

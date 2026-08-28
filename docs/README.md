@@ -2,6 +2,7 @@
 
 ## 当前阶段（全流程 GUI 闭环）
 
+- [控制台六个面的图示](console-tour.md)
 - [全流程闭环总计划（已收官，含批次记录）](development/full-loop-plan-20260812.md)
 - [全流程 GUI 设计定稿](development/full-loop-gui-design-20260812.md)
 - [交付读模型契约 v0.4（发现链，现行）](contracts/delivery-read-model-v0.4.md)
@@ -18,6 +19,8 @@
 ## 架构
 
 - [模块与 Owner](architecture/module-map.md)
+- [Agent Identity 清单](architecture/agent-identity-catalog.md)
+- [云产品与官方 Skill 接入](architecture/cloud-skill-integration.md)
 - [依赖规则](architecture/dependency-rules.md)
 - [数据库所有权](architecture/database-ownership.md)
 - [上下文管理](architecture/context-management.md)
@@ -34,6 +37,7 @@
 
 - [数据库基础](database.md)
 - [产品方向与验证方案](agentic-delivery-product-brief.md)
+- [开源就绪清单](open-source-readiness.md)
 - [仓库原生交付 PRD v0.1](repository-native-delivery-prd-v0.1.md)
 - [仓库原生交付技术方案 v0.1](development/repository-native-delivery-tech-design-v0.1.md)
 

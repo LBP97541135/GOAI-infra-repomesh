@@ -825,6 +825,7 @@ def test_an_unconfigured_llm_is_503_on_every_step_that_needs_one(
                         "required": [],
                         "maybe": [],
                         "excluded": [],
+                        "supplemented_repos": [],
                         "final_repos": [],
                     },
                 },

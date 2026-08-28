@@ -15,12 +15,12 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationMessageKind,
     SendCollaborationMessageCommand,
 )
-from repomesh.modules.project.checkpoint_fallback import TopologyAwareCheckpointFallback
 from repomesh.modules.project.contracts import (
     ProjectCheckpoint,
     ProjectCheckpointGateway,
     ProjectTopologyReader,
     RepositoryTeamView,
+    TopologyAwareCheckpointFallback,
 )
 from repomesh.modules.task_orchestration.contracts import (
     AssignTaskCommand,

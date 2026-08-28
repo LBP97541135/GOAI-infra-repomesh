@@ -51,7 +51,7 @@
 | `src/repomesh/modules/change_orchestration/application.py` | `materialize()` 第 5 步：**两条路径（填草稿 / 开新版本）都要写对齐版本后的 `graph_edges` + `integration_method`**。改这里前先读 §7 的融合说明 |
 | `src/repomesh/modules/repository_intelligence/contracts/__init__.py` | 跨模块唯一边界。main 的 R100 包化把本分支的发现链导出漏了，现已补齐（14 个名）。**加新导出必须同步这里**，否则应用起不来 |
 | `src/repomesh/modules/project/domain.py` | `repository_agentteams_team_name` 委托 `RepositoryTeam.canonical_agentteams_team_name`（裁决 D-1）。**不要让两个铸名模板再并存** |
-| `migrations/versions/20260814_0028*` `0029*` | main 两个迁移的重铸版本。**main 原版 0019/0020 已删** |
+| `migrations/versions/20260812_0019*` `0020*` | main 已发布历史，必须保留；console-v2 链从其后继续，禁止再次重铸或重复执行同一 DDL |
 
 ### 2.3 前端双凭据（改任何请求前必读）
 
@@ -245,9 +245,7 @@ cd frontend && REPOMESH_API_TARGET=http://127.0.0.1:8101 npx vite --port 5281
 
 ### 5.1 立即可做
 
-1. **推 GitHub**（302 个提交未推）。推之前要知会协作者一件事：main 原版迁移
-   `20260812_0019/0020` 已被删除重铸为 `20260814_0028/0029`，**任何已按 main 原序
-   执行过这两个迁移的数据库需要人工对账**（分析文档 §4 有说明）。
+1. **推 GitHub**。迁移链已保留 main 原版 `20260812_0019/0020` 并将 console-v2 迁移续接其后；已执行 main 迁移的数据库可直接继续升级，无需人工对账。
 2. **补走两条未验证路径**（§3.2）：在合并后的代码上跑一次完整 materialize，既能拿到
    带 `graph_edges` 的快照验证 DAG 语义渲染，也能顺带验证建团。
 
@@ -304,7 +302,7 @@ cd frontend && REPOMESH_API_TARGET=http://127.0.0.1:8101 npx vite --port 5281
 | # | 裁决 | 日期 | 出处 |
 | --- | --- | --- | --- |
 | D-1 | `repository_agent_teams` 取复合唯一 `(project_id, agentteams_team_name)`；铸名统一 `rm-team-{repository_id.hex}` | 08-14 | 分析文档 §2 硬点 1 |
-| D-2 | 本分支迁移链不动，main 两个迁移重排链尾 | 08-14 | 分析文档 §4 |
+| D-2 | 保留 main 已发布迁移，console-v2 链续接其后 | 08-16 | 分析文档 §4 |
 | D-4 | 前端以 `frontend/` 为准，`web/` 短期并存 | 08-14 | 分析文档 §6 |
 | —— | **前端加登录门**（推翻 08-12「不设登录门」） | 08-14 | 用户裁决；理由见 `ConsoleShell.tsx` 文件头 |
 | —— | 控制台不设第二套状态映射：`state`/`phase`/`display_status` 唯一实现在读模型 | 既有 | 契约 v0.1 §5.1 |

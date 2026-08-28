@@ -3,6 +3,9 @@
 RepoMesh ships reviewed local wrappers around selected official projects. Upstream
 content is never loaded directly into an agent at runtime.
 
+- [Skill engineering lifecycle](skills/README.md)
+- [MCP server catalog](mcp/servers.json)
+
 | Role | Default Skills | Default MCP | Conditional MCP |
 | --- | ---: | ---: | ---: |
 | Organization Leader | 3 | 1 | 0 |

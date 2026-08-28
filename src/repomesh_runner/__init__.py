@@ -21,6 +21,7 @@ from .engine import (
     RunnerExecutionError,
     RunnerExecutor,
 )
+from .validation import RunnerTaskValidationError, StrictRunnerTaskValidator
 from .wire import WireError, parse_runner_task
 
 __all__ = [
@@ -43,4 +44,6 @@ __all__ = [
     "WireError",
     "WorkspaceAssignment",
     "parse_runner_task",
+    "RunnerTaskValidationError",
+    "StrictRunnerTaskValidator",
 ]

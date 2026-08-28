@@ -12,12 +12,16 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from repomesh.bootstrap import create_app
 from repomesh.bootstrap.container import ApplicationContainer
+from repomesh.modules.change_orchestration.contracts import MaterializationResult
+from repomesh.modules.repository_intelligence.api.router import router as ri_router
 from repomesh.modules.repository_intelligence.infrastructure import (
     PlanSnapshotStore,
 )
@@ -158,6 +162,84 @@ def test_integration_returns_graph_with_matching_projections(
     # Nodes carry instructions for the timeline cards.
     instructions = {n["repository"]: n["instruction"] for n in graph["nodes"]}
     assert instructions == {"A": "change A", "B": "change B"}
+
+
+def test_materialize_endpoint_preserves_request_graph(monkeypatch) -> None:
+    """The materialize API must pass through the graph produced by integration."""
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "planning-secret")
+    get_settings.cache_clear()
+
+    class Bridge:
+        captured_graph = None
+
+        async def materialize(self, *, plan, **kwargs):  # noqa: ANN001
+            self.captured_graph = plan.graph
+            return MaterializationResult(
+                engineering_spec=SimpleNamespace(id=uuid4()),
+                contract_specs=[],
+                tasks=[],
+                skipped_repos=[],
+                plan_id=None,
+                handoff_doc_ids=[],
+            )
+
+    bridge = Bridge()
+
+    class Container:
+        async def start(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+        def plan_execution_bridge(self) -> Bridge:
+            return bridge
+
+    app = FastAPI()
+    app.state.container = Container()
+    app.include_router(ri_router, prefix="/api/v1")
+    graph = {
+        "plan_version": 1,
+        "nodes": [
+            {"repository": "A", "instruction": "change A"},
+            {"repository": "B", "instruction": "change B"},
+        ],
+        "edges": [
+            {
+                "from": "A",
+                "to": "B",
+                "status": "confirmed",
+                "source": "scan",
+                "interface": "API1",
+                "agreement": "ok",
+            }
+        ],
+    }
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/bridge/materialize",
+                headers={"Authorization": "Bearer planning-secret"},
+                json={
+                    "engineering_spec": "Connect A and B",
+                    "contracts": [],
+                    "task_dag": [],
+                    "execution_batches": [],
+                    "graph": graph,
+                    "project_id": str(uuid4()),
+                    "leader_agent_id": str(uuid4()),
+                    "idempotency_prefix": "graph-pass-through",
+                },
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 200, response.text
+    assert bridge.captured_graph is not None
+    assert bridge.captured_graph.edges[0].source == "scan"
+    assert bridge.captured_graph.edges[0].from_ == "A"
 
 
 async def _save_snapshot(

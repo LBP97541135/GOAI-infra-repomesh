@@ -39,7 +39,7 @@
 | 项 | 值 |
 |---|---|
 | Base URL | `https://www.vibeapi.cn/v1` |
-| API Key | `sk-BodQQPYCDtj2zHRJnQt6PLwqlxoXPwk0AqEIiwWPkwDZBcq4` |
+| API Key | `<redacted—rotate and provide through secret management>` |
 | 模型 | `gemini-3-flash` |
 | 说明 | new-api 网关（v1.7.38），模型列表含 gemini-3-flash；直连 200 验证通过 |
 
@@ -47,12 +47,12 @@
 
 ```jsonc
 {
-  "tokens": ["sk-BodQQPYCDtj2zHRJnQt6PLwqlxoXPwk0AqEIiwWPkwDZBcq4"],   // 顶层 tokens 也必须更新！
+  "tokens": ["<redacted—rotate and provide through secret management>"],   // 顶层 tokens 也必须更新！
   "rawConfigs": {
     "openaiCustomUrl": "https://www.vibeapi.cn/v1",
     "openaiCustomServiceName": "vibeapi.dns",        // 指向服务源（不能直接填裸域名！）
     "openaiCustomServicePort": 443,
-    "apiTokens": ["sk-BodQQPYCDtj2zHRJnQt6PLwqlxoXPwk0AqEIiwWPkwDZBcq4"],
+    "apiTokens": ["<redacted—rotate and provide through secret management>"],
     "agentteamsMode": true,
     "type": "openai",
     "protocol": "openai/v1"

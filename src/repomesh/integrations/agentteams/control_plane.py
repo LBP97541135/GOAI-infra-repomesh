@@ -57,11 +57,16 @@ class AgentTeamsControlPlaneClient:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         headers = {"Authorization": f"Bearer {token}"} if token else {}
+        # The control-plane base URL is an in-cluster address (container DNS name
+        # or loopback). A host-level HTTP_PROXY/HTTPS_PROXY must never intercept
+        # these calls — honoring it silently hijacks the controller-DNS request
+        # and surfaces as a spurious "AgentTeams unreachable" 503 (see E-1).
         self._client = httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             headers=headers,
             timeout=timeout,
             transport=transport,
+            trust_env=False,
         )
 
     async def close(self) -> None:

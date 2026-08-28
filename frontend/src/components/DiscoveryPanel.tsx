@@ -312,6 +312,7 @@ export function DiscoveryPanel({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const hasView = useRef(false);
 
   const [task, setTask] = useState<DiscoveryTaskView | null>(null);
   const [taskLost, setTaskLost] = useState(false);
@@ -352,17 +353,19 @@ export function DiscoveryPanel({
     let cancelled = false;
     // 首次加载（view 为空）才显示 loading 骨架；后续 reload 保留旧数据静默刷新，
     // 避免内容闪烁导致滚动位置丢失。
-    if (!view) setLoading(true);
+    if (!hasView.current) setLoading(true);
     setLoadError(null);
     fetchDiscovery(issueId)
       .then((next) => {
         if (cancelled) return;
         setView(next);
+        hasView.current = true;
         setLoading(false);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
         setView(null);
+        hasView.current = false;
         setLoadError(errText(err));
         setLoading(false);
       });
@@ -374,6 +377,7 @@ export function DiscoveryPanel({
   // 换 issue 时清掉本地草稿与在途键：答复表单是**这个** issue 的追问的答案
   useEffect(() => {
     setView(null);
+    hasView.current = false;
     setAnswers({});
     setWriteError(null);
     setApprovalError(null);

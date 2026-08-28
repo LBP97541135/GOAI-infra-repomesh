@@ -1,8 +1,10 @@
 import base64
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from repomesh.api.router import api_router
 from repomesh.bootstrap.container import (
@@ -107,6 +109,8 @@ from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import Settings, get_settings
 from repomesh_runner.telemetry import setup_tracing
+
+_API_LOGGER = logging.getLogger("repomesh.api")
 
 
 @asynccontextmanager
@@ -443,6 +447,25 @@ def build_default_container() -> ApplicationContainer:
     )
 
 
+async def _unhandled_exception_envelope(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort JSON envelope for otherwise-unhandled errors (M-10).
+
+    Endpoints that translate a domain failure raise ``HTTPException`` with a
+    named status and keep their own body — those are dispatched by FastAPI's
+    own handler and never reach here. This catch-all exists so that a *new*
+    endpoint which forgets to translate (or a driver-level fault such as
+    ``StringDataRightTruncation``) still returns a structured 500 instead of a
+    bare text body. The real cause is logged with a traceback, not leaked.
+    """
+    _API_LOGGER.exception(
+        "unhandled error on %s %s", request.method, request.url.path
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "internal server error", "error": type(exc).__name__},
+    )
+
+
 _PUBLIC_DEV_ACTION_TOKEN = "console-dev-token"
 
 
@@ -479,4 +502,5 @@ def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     )
     application.state.container = container or build_default_container()
     application.include_router(api_router)
+    application.add_exception_handler(Exception, _unhandled_exception_envelope)
     return application

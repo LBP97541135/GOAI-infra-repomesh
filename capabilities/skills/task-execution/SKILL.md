@@ -1,9 +1,59 @@
 ---
 name: task-execution
-description: Execute only the currently assigned RepoMesh task.
+description: Execute only the currently assigned RepoMesh task. Use when a Worker receives a RepoMesh task assignment and must start a governed Runner execution through the approved MCP entry without expanding scope, changing specs, creating PRs, or contacting peer Workers.
 ---
-# 当前任务执行
 
-读取当前 Task、允许路径、仓库上下文和验收标准，通过 Coding Agent 完成修改。不得扩大范围、修改 Spec、创建 PR 或联系其他 Worker；任务结束后提交结果并释放当前任务上下文。
+# Task Execution
 
-收到仓库 Leader 分配的 Task 后，调用 `repomesh-task-control.start_assigned_task`，只传入消息中的 `task_id`、自己的 `worker_agent_id` 和指定的 `adapter_id`。不得自行生成 Run ID、Context Bundle、Workspace 或扩大执行参数；这些内容由 RepoMesh 控制面创建并校验。
+Execute one assigned task through RepoMesh Runner. The Worker supplies only the permitted start
+parameters; RepoMesh creates the run, context bundle, workspace and dispatch.
+
+## Inputs
+
+- Assigned `task_id`, `worker_agent_id` and approved `adapter_id`.
+- Task notification containing the immutable context bundle reference and hash.
+- Approved allowed paths, allowed tools and test commands.
+
+## Outputs
+
+- Runner dispatch id and execution events.
+- Candidate commit only when path policy and tests pass.
+- Task result summary with changed files, commit SHA, tests, artifacts and blockers.
+
+## Workflow
+
+1. Call `repomesh-task-control.start_assigned_task` with only `task_id`, `worker_agent_id` and
+   `adapter_id`.
+2. Read the materialized Task Spec, allowed paths and acceptance criteria from the Runner workspace.
+3. Make only the task-scoped code changes.
+4. Run required tests and preserve evidence.
+5. Submit the structured result and release task-local context.
+
+## Dependencies
+
+- RepoMesh Worker MCP, Runner, coding-agent adapter and workspace manager.
+- Approved context bundle and task specification.
+- Repository-local test tools allowed by policy.
+
+## Failure Handling
+
+- Report a blocker when MCP start, workspace preparation, permissions or tests fail.
+- Do not retry non-idempotent external actions without a retry policy.
+- Preserve failed workspaces and logs for Repository Leader diagnosis.
+
+## Safety
+
+- Do not generate a run id, context bundle, workspace path or broaden execution parameters.
+- Do not edit specs, create PRs, merge, change credentials or contact peer Workers.
+- Do not write outside delegated paths or bypass Runner permissions.
+
+## Validation
+
+- The result references the run id, context hash and commit SHA produced by RepoMesh.
+- Every changed path is allowed and staged by Runner after tests pass.
+- Required tests are attached with command and exit code.
+
+## AgentTeams Mapping
+
+Workers use this Skill after Repository Leaders notify them in the AgentTeams Team Room. The
+AgentTeams message is a dispatch signal; RepoMesh MCP remains the execution authority.

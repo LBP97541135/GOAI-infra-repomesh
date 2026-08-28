@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 636" width="1160" height="636" role="img" aria-labelledby="t d">
+  <title id="t">The RepoMesh teams page</title>
+  <desc id="d">One card per team, keeping the persisted build result and the live runtime observation in two separate badges, with the leader, the workers and both Matrix rooms.</desc>
+
+  <style>
+    text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .mono { font-family: Consolas, "SF Mono", Menlo, monospace; }
+  </style>
+
+  <defs>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="3" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <clipPath id="win"><rect x="1" y="1" width="1158" height="634" rx="2"/></clipPath>
+
+    <g id="ic-issues" fill="none" stroke-width="1.3">
+      <circle cx="7" cy="7" r="5.4"/><circle cx="7" cy="7" r="1.5" stroke="none"/>
+    </g>
+    <g id="ic-reviews" fill="none" stroke-width="1.3">
+      <rect x="1.6" y="1.6" width="10.8" height="10.8" rx="1"/><path d="M4.3 7.1 L6.2 9.1 L9.8 4.9"/>
+    </g>
+    <g id="ic-repositories" fill="none" stroke-width="1.3">
+      <rect x="1.6" y="2.2" width="10.8" height="3.9" rx="1"/><rect x="1.6" y="7.9" width="10.8" height="3.9" rx="1"/>
+    </g>
+    <g id="ic-teams" fill="none" stroke-width="1.3">
+      <path d="M4.2 5.3 L9.8 5.3 M4.6 5.9 L6.6 9.4 M9.4 5.9 L7.4 9.4"/>
+      <circle cx="3.4" cy="4.2" r="1.7"/><circle cx="10.6" cy="4.2" r="1.7"/><circle cx="7" cy="10.6" r="1.7"/>
+    </g>
+    <g id="ic-agents" fill="none" stroke-width="1.3">
+      <path d="M7 1.4 L12.1 4.3 V9.7 L7 12.6 L1.9 9.7 V4.3 Z"/>
+    </g>
+    <g id="ic-observe" fill="none" stroke-width="1.3" stroke-linejoin="round">
+      <path d="M1.4 8 H4.4 L6.1 4 L8.1 11.2 L9.7 8 H12.6"/>
+    </g>
+    <g id="ic-settings" fill="none" stroke-width="1.3">
+      <path d="M1.8 4.7 H12.2 M1.8 9.6 H12.2"/>
+      <circle cx="4.9" cy="4.7" r="1.6"/><circle cx="9.1" cy="9.6" r="1.6"/>
+    </g>
+  </defs>
+
+        <rect x="0.5" y="0.5" width="1159" height="635" rx="2" fill="#16130d" stroke="#3b3323"/>
+    <g clip-path="url(#win)">
+    <rect x="1" y="1" width="1158" height="35" rx="0" fill="#131009"/>
+    <rect x="18" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="33" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="48" y="14" width="9" height="9" rx="0" fill="#332c1e"/>
+    <rect x="430" y="9" width="300" height="19" rx="2" fill="#1b1710" stroke="#2b2417"/>
+    <text class="mono" x="580" y="22.5" font-size="11" fill="#6b6046" text-anchor="middle">127.0.0.1:5280 · delivery console</text>
+    <path d="M1 36.5 H1159" stroke="#3b3323"/>
+    <rect x="1" y="37" width="235" height="598" rx="0" fill="#131009"/>
+    <path d="M236.5 37 V635" stroke="#3b3323"/>
+    <rect x="18" y="54" width="32" height="32" rx="2" fill="#c99e52"/>
+    <text class="mono" x="34" y="77" font-size="16" fill="#16120a" text-anchor="middle" font-weight="800">R</text>
+    <text class="mono" x="60" y="70" font-size="13" fill="#e9dec2" font-weight="700" letter-spacing="1.9">REPOMESH</text>
+    <text x="60" y="86" font-size="11.5" fill="#93876c">console-demo ▾</text>
+    <rect x="18" y="104" width="200" height="30" rx="2" fill="#c99e52"/>
+    <text x="118" y="124" font-size="12.5" fill="#191308" text-anchor="middle" font-weight="600">+ New issue</text>
+    <use href="#ic-issues" x="31" y="160" stroke="#c99e52"/>
+    <text x="55" y="172" font-size="12.5" fill="#d8cdb2">Issues</text>
+    <rect x="188" y="160" width="22" height="15" rx="2" fill="#3b3323"/>
+    <text class="mono" x="199" y="171" font-size="10" fill="#93876c" text-anchor="middle">5</text>
+    <use href="#ic-reviews" x="31" y="194" stroke="#c99e52"/>
+    <text x="55" y="206" font-size="12.5" fill="#d8cdb2">Reviews</text>
+    <rect x="188" y="194" width="22" height="15" rx="2" fill="#3b3323"/>
+    <text class="mono" x="199" y="205" font-size="10" fill="#93876c" text-anchor="middle">1</text>
+    <use href="#ic-repositories" x="31" y="228" stroke="#c99e52"/>
+    <text x="55" y="240" font-size="12.5" fill="#d8cdb2">Repositories</text>
+    <rect x="18" y="254" width="200" height="31" rx="0" fill="#c99e52" opacity="0.1"/>
+    <rect x="18" y="254" width="2" height="31" rx="0" fill="#c99e52"/>
+    <use href="#ic-teams" x="31" y="262" stroke="#e3c078"/>
+    <text x="55" y="274" font-size="12.5" fill="#e3c078">Teams</text>
+    <use href="#ic-agents" x="31" y="296" stroke="#c99e52"/>
+    <text x="55" y="308" font-size="12.5" fill="#d8cdb2">Agents</text>
+    <use href="#ic-observe" x="31" y="330" stroke="#c99e52"/>
+    <text x="55" y="342" font-size="12.5" fill="#d8cdb2">Observe</text>
+    <path d="M18 580.5 H218" stroke="#3b3323"/>
+    <use href="#ic-settings" x="31" y="592" stroke="#c99e52"/>
+    <text x="55" y="604" font-size="12.5" fill="#d8cdb2">Settings</text>
+    <text x="268" y="78" font-size="19" fill="#e9dec2" font-weight="600">Teams</text>
+    <text x="338.52" y="78" font-size="11.5" fill="#93876c">12</text>
+    <path d="M268 91.5 H1128" stroke="#3b3323"/>
+    <rect x="268" y="104" width="860" height="100" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="284" y="126" font-size="12.5" fill="#d8cdb2">rm-team-48ff85ee83e15d9f8120154ef5fb5908</text>
+    <text x="596.0" y="126" font-size="11.5" fill="#93876c">repomesh-e2e-api</text>
+    <rect x="1033" y="112" width="79" height="18" rx="2" fill="none" stroke="#3b3323"/>
+    <text class="mono" x="1072.5" y="125" font-size="11" fill="#93876c" text-anchor="middle">#13d3c372</text>
+    <rect x="284" y="136" width="80" height="19" rx="2" fill="none" stroke="#94a35a"/><text x="324.0" y="149.5" font-size="11" fill="#94a35a" text-anchor="middle">Team ready</text>
+    <rect x="370" y="136" width="113" height="19" rx="2" fill="none" stroke="#8aa0b4"/><text x="426.5" y="149.5" font-size="11" fill="#8aa0b4" text-anchor="middle">Runtime · Running</text>
+    <text x="491" y="149.5" font-size="11" fill="#93876c">ready 1/1</text>
+    <rect x="284" y="161" width="121" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="295" y="174.5" font-size="11" fill="#c99e52">LD</text>
+    <text x="312.6" y="174.5" font-size="11" fill="#93876c">rm-leader-a-api</text>
+    <rect x="411" y="161" width="124" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="422" y="174.5" font-size="11" fill="#c99e52">WK</text>
+    <text x="441.91" y="174.5" font-size="11" fill="#93876c">rm-worker-a-api</text>
+    <text class="mono" x="284" y="196" font-size="11" fill="#93876c">▤ teamRoom</text>
+    <text class="mono" x="364" y="196" font-size="11" fill="#93876c">▤ leaderDM</text>
+    <rect x="268" y="212" width="860" height="100" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="284" y="234" font-size="12.5" fill="#d8cdb2">rm-team-1ea852aa775c58898f237da286884f80</text>
+    <text x="596.0" y="234" font-size="11.5" fill="#93876c">repomesh-e2e-client</text>
+    <rect x="1033" y="220" width="79" height="18" rx="2" fill="none" stroke="#3b3323"/>
+    <text class="mono" x="1072.5" y="233" font-size="11" fill="#93876c" text-anchor="middle">#13d3c372</text>
+    <rect x="284" y="244" width="80" height="19" rx="2" fill="none" stroke="#94a35a"/><text x="324.0" y="257.5" font-size="11" fill="#94a35a" text-anchor="middle">Team ready</text>
+    <rect x="370" y="244" width="113" height="19" rx="2" fill="none" stroke="#8aa0b4"/><text x="426.5" y="257.5" font-size="11" fill="#8aa0b4" text-anchor="middle">Runtime · Running</text>
+    <text x="491" y="257.5" font-size="11" fill="#93876c">ready 1/1</text>
+    <rect x="284" y="269" width="134" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="295" y="282.5" font-size="11" fill="#c99e52">LD</text>
+    <text x="312.6" y="282.5" font-size="11" fill="#93876c">rm-leader-a-client</text>
+    <rect x="424" y="269" width="137" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="435" y="282.5" font-size="11" fill="#c99e52">WK</text>
+    <text x="454.91" y="282.5" font-size="11" fill="#93876c">rm-worker-a-client</text>
+    <text class="mono" x="284" y="304" font-size="11" fill="#93876c">▤ teamRoom</text>
+    <text class="mono" x="364" y="304" font-size="11" fill="#93876c">▤ leaderDM</text>
+    <rect x="268" y="320" width="860" height="100" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="284" y="342" font-size="12.5" fill="#d8cdb2">rm-team-579a61c425ff5a23bf9ef1bda545b9bf</text>
+    <text x="596.0" y="342" font-size="11.5" fill="#93876c">repomesh-e2e-checkout</text>
+    <rect x="1033" y="328" width="79" height="18" rx="2" fill="none" stroke="#3b3323"/>
+    <text class="mono" x="1072.5" y="341" font-size="11" fill="#93876c" text-anchor="middle">#13d3c372</text>
+    <rect x="284" y="352" width="80" height="19" rx="2" fill="none" stroke="#94a35a"/><text x="324.0" y="365.5" font-size="11" fill="#94a35a" text-anchor="middle">Team ready</text>
+    <rect x="370" y="352" width="113" height="19" rx="2" fill="none" stroke="#8aa0b4"/><text x="426.5" y="365.5" font-size="11" fill="#8aa0b4" text-anchor="middle">Runtime · Running</text>
+    <text x="491" y="365.5" font-size="11" fill="#93876c">ready 1/1</text>
+    <rect x="284" y="377" width="150" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="295" y="390.5" font-size="11" fill="#c99e52">LD</text>
+    <text x="312.6" y="390.5" font-size="11" fill="#93876c">rm-leader-b-checkout</text>
+    <rect x="440" y="377" width="153" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="451" y="390.5" font-size="11" fill="#c99e52">WK</text>
+    <text x="470.91" y="390.5" font-size="11" fill="#93876c">rm-worker-b-checkout</text>
+    <text class="mono" x="284" y="412" font-size="11" fill="#93876c">▤ teamRoom</text>
+    <text class="mono" x="364" y="412" font-size="11" fill="#93876c">▤ leaderDM</text>
+    <rect x="268" y="428" width="860" height="100" rx="2" fill="#201b12" stroke="#3b3323"/>
+    <text class="mono" x="284" y="450" font-size="12.5" fill="#d8cdb2">rm-team-9dfa78f27f3a509e86b363fc5ce96e67</text>
+    <text x="596.0" y="450" font-size="11.5" fill="#93876c">repomesh-e2e-billing</text>
+    <rect x="1033" y="436" width="79" height="18" rx="2" fill="none" stroke="#3b3323"/>
+    <text class="mono" x="1072.5" y="449" font-size="11" fill="#93876c" text-anchor="middle">#13d3c372</text>
+    <rect x="284" y="460" width="80" height="19" rx="2" fill="none" stroke="#94a35a"/><text x="324.0" y="473.5" font-size="11" fill="#94a35a" text-anchor="middle">Team ready</text>
+    <rect x="370" y="460" width="113" height="19" rx="2" fill="none" stroke="#8aa0b4"/><text x="426.5" y="473.5" font-size="11" fill="#8aa0b4" text-anchor="middle">Runtime · Running</text>
+    <text x="491" y="473.5" font-size="11" fill="#93876c">ready 1/1</text>
+    <rect x="284" y="485" width="138" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="295" y="498.5" font-size="11" fill="#c99e52">LD</text>
+    <text x="312.6" y="498.5" font-size="11" fill="#93876c">rm-leader-c-billing</text>
+    <rect x="428" y="485" width="140" height="19" rx="2" fill="none" stroke="#3b3323"/>
+    <text x="439" y="498.5" font-size="11" fill="#c99e52">WK</text>
+    <text x="458.91" y="498.5" font-size="11" fill="#93876c">rm-worker-c-billing</text>
+    <text class="mono" x="284" y="520" font-size="11" fill="#93876c">▤ teamRoom</text>
+    <text class="mono" x="364" y="520" font-size="11" fill="#93876c">▤ leaderDM</text>
+    <text x="268" y="558" font-size="11" fill="#6b6046">“Team ready” comes from the persisted topology — the historical fact that this team was built. “Runtime” is what the</text>
+    <text x="268" y="574" font-size="11" fill="#6b6046">AgentTeams controller observes right now. They are different facts, so they get two badges: merging them would print</text>
+    <text x="268" y="590" font-size="11" fill="#6b6046">“team failed” for a team that was built and whose rooms still exist, the moment the controller goes quiet.</text>
+    <text class="mono" x="1128" y="614" font-size="10" fill="#6b6046" text-anchor="end">Illustrative · the console ships in Chinese; labels translated here</text>
+    <rect x="1" y="1" width="1158" height="634" rx="0" filter="url(#grain)" opacity="0.03" pointer-events="none"/>
+    </g>
+</svg>

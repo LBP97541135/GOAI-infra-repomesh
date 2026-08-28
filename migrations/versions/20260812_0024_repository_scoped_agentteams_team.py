@@ -45,7 +45,6 @@ _NAME = "uq_project_agentteams_team_name"
 
 
 def upgrade() -> None:
-    op.drop_constraint(_NAME, _TABLE, schema=_SCHEMA, type_="unique")
     op.create_unique_constraint(
         _NAME,
         _TABLE,
@@ -55,20 +54,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Reversible only while no repository is actually shared.
-
-    Going back re-imposes "one row per Team name" on a table that may by then
-    hold several rows legitimately naming one Team, and the constraint will
-    refuse to build. That is the honest behaviour: the downgrade is failing
-    because the data has moved past the schema, not because the migration is
-    broken, and silently deduplicating names would destroy the rooms those rows
-    point at.
-    """
-
     op.drop_constraint(_NAME, _TABLE, schema=_SCHEMA, type_="unique")
-    op.create_unique_constraint(
-        _NAME,
-        _TABLE,
-        ["agentteams_team_name"],
-        schema=_SCHEMA,
-    )

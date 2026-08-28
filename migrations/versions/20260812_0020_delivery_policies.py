@@ -1,11 +1,7 @@
 """Persist organization and repository delivery policies.
 
-Content of main's ``20260812_0020_delivery_policies``, re-seated onto this
-branch's chain by the 2026-08-14 functional merge (D-2). The table is
-unchanged; only the revision identity moved so the merged chain stays linear.
-
-Revision ID: 20260814_0029
-Revises: 20260814_0028
+Revision ID: 20260812_0020
+Revises: 20260812_0019
 """
 
 from collections.abc import Sequence
@@ -14,8 +10,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260814_0029"
-down_revision: str | None = "20260814_0028"
+revision: str = "20260812_0020"
+down_revision: str | None = "20260812_0019"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

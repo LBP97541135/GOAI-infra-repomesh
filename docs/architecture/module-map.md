@@ -23,6 +23,7 @@ when the repository moves into an organization.
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
 | Capability Management | platform | governed MCP and Skill presets, role-scoped agent capability bundles | runtime authorization decisions |
+| Runtime | runtime-integrations | planned runtime-neutral contracts, cross-plane execution policy and gateway schemas | coding run state, CLI process execution, concrete AgentTeams or vendor adapters |
 
 ## Runtime component and integration ownership
 
