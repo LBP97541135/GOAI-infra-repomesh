@@ -43,6 +43,7 @@ from .runner_consumer import (
     GovernedRunConsumer,
     GovernedRuntime,
     build_runner_consumer,
+    prepare_governed_codex_home,
     runner_state_root,
 )
 from .state import BridgeState
@@ -270,6 +271,12 @@ def _build_governed_runtime(
             "governed execution needs credentialRefs.repomesh: the lease, the run events "
             "and the start action are all authenticated as this worker"
         )
+    # Before ``RoomNativeAgent`` exists, and therefore before the conversation
+    # track's readiness gate starts a codex that reads this file. The repair used
+    # to run after that gate, which meant a configuration codex refused took the
+    # gate down and took the repair with it — a Bridge locked out by the one file
+    # it knows how to fix.
+    prepare_governed_codex_home(session_root(enrollment.worker_agent_id, state_dir))
     return GovernedRuntime(
         task_port=RepoMeshGovernedTaskAdapter(
             endpoint=enrollment.repomesh_endpoint,

@@ -62,6 +62,7 @@ from repomesh_agent_bridge.runner_consumer import (
     ToolActionTally,
     WorkspaceNotWritable,
     _GovernedApprovalPolicy,
+    _room_safe_reason,
     _translated,
     _write_governed_codex_config,
     runner_state_root,
@@ -928,6 +929,39 @@ def test_a_codex_grant_reaches_the_policy_in_codexs_own_words(tmp_path: Path) ->
     )
 
 
+def test_a_filechange_approval_is_allowed_by_name_and_still_clamped_by_path(
+    tmp_path: Path,
+) -> None:
+    """C-9: the third name for ``edit``, and the rule it does not escape.
+
+    A fileChange approval carries no ``item``, no ``command`` and no ``changes``,
+    so the driver names it after its method — ``item/fileChange/requestApproval``
+    — and the allowlist, which knows ``edit``, refused all three of them in the
+    live run of 2026-08-28. That name is now translated like the others.
+
+    The shape below is the one the live decision log proves (the tool name is the
+    method, and the request carried no in-workspace leaf of its own); the params
+    body itself was never captured, because codex only reaches this request
+    through ``apply_patch``, which dies in its Windows sandbox helper before
+    asking. So what this pins is the half that was measured: allowed by name,
+    and — with a path put in front of it — still refused by path.
+    """
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    method = "item/fileChange/requestApproval"
+    policy, raw = _governed(workspace)
+
+    bare = {"threadId": "t", "turnId": "u", "itemId": "exec-1", "cwd": str(workspace)}
+    assert raw.decide(method, bare) is PermissionDecision.DENY, "the live failure, replayed"
+    assert policy.decide(method, bare) is PermissionDecision.ALLOW
+
+    outside = {**bare, "path": str(workspace / "secrets" / "id.pem")}
+    assert policy.decide(method, outside) is PermissionDecision.DENY, (
+        "a name may be translated; a path may not"
+    )
+
+
 def test_the_translation_adds_codex_words_and_takes_nothing_away(tmp_path: Path) -> None:
     """It is a translation: every granted word survives, and only codex gains."""
 
@@ -936,7 +970,11 @@ def test_the_translation_adds_codex_words_and_takes_nothing_away(tmp_path: Path)
     tools = translated.permissions.allowed_tools
 
     assert set(LIVE_GRANT.allowed_tools) <= set(tools)
-    assert set(tools) - set(LIVE_GRANT.allowed_tools) == {"fileChange", "commandExecution"}
+    assert set(tools) - set(LIVE_GRANT.allowed_tools) == {
+        "fileChange",
+        "item/fileChange/requestApproval",
+        "commandExecution",
+    }
     assert len(tools) == len(set(tools)), "RunnerPermissions rejects duplicates outright"
     twice = _translated(translated).permissions.allowed_tools
     assert twice == tools, "translating an already-translated task is a no-op"
@@ -1243,12 +1281,70 @@ def test_a_governed_codex_home_is_configured_to_ask_before_it_acts(tmp_path: Pat
     _write_governed_codex_config(codex_home)
     assert (codex_home / "config.toml").read_text(encoding="utf-8") == GOVERNED_CODEX_CONFIG
 
-    # codex-home is Low-labelled so the CLI can keep its own state there, which
-    # means a Low process can edit this file; a Bridge that rewrote it blindly
-    # would erase the evidence that one had.
-    (codex_home / "config.toml").write_text("sandbox_mode = 'read-only'\n", encoding="utf-8")
+
+def test_the_governed_block_is_rewritten_without_discarding_what_codex_wrote(
+    tmp_path: Path,
+) -> None:
+    """obs-2: codex owns this file too, and keeps its own state in it.
+
+    codex records trusted projects as it goes, and the first version of this
+    writer replaced the whole document whenever it differed — so every start
+    silently threw that away. Only the marked block belongs to the Bridge.
+    """
+
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    config = codex_home / "config.toml"
     _write_governed_codex_config(codex_home)
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == GOVERNED_CODEX_CONFIG
+
+    # A literal-string key, the way codex writes a Windows project path.
+    codex_state = "[projects.'d:\\work']\ntrust_level = \"trusted\"\n"
+    config.write_text(config.read_text(encoding="utf-8") + "\n" + codex_state, encoding="utf-8")
+    # A Low-integrity process can edit this file, so assume one did — to the
+    # block as well as around it.
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            'sandbox_mode = "read-only"', 'sandbox_mode = "danger-full-access"'
+        ),
+        encoding="utf-8",
+    )
+    _write_governed_codex_config(codex_home)
+
+    merged = config.read_text(encoding="utf-8")
+    settings = tomllib.loads(merged)
+    assert settings["sandbox_mode"] == "read-only", "the block is restored"
+    assert settings["projects"] == {"d:\\work": {"trust_level": "trusted"}}, "codex's state is kept"
+    assert settings["features"] == {
+        "experimental_windows_sandbox": False,
+        "elevated_windows_sandbox": False,
+    }
+
+    _write_governed_codex_config(codex_home)
+    assert config.read_text(encoding="utf-8") == merged, "and a second write changes nothing"
+
+
+def test_a_reason_the_room_may_not_read_is_written_where_the_room_is_sent(
+    caplog,
+) -> None:
+    """obs-3: "this machine's log has the details" has to be true.
+
+    Both pointer clauses used to be promises nothing kept — the reason was
+    dropped here and written nowhere — so the sentence sent an operator to a log
+    that never mentioned the run. A quotable gate reason is unaffected: it goes
+    to the room, and a room is not a log.
+    """
+
+    with caplog.at_level(logging.WARNING, logger="repomesh_agent_bridge.runner_consumer"):
+        assert "log has the details" in _room_safe_reason("codex exploded: 0xdeadbeef")
+        assert _room_safe_reason("test_command_failed: pytest (exit code 1)").startswith(
+            "test_command_failed:"
+        )
+
+    logged = [record.getMessage() for record in caplog.records]
+    assert any("0xdeadbeef" in line for line in logged), "the withheld reason is on this machine"
+    assert not any("test_command_failed" in line for line in logged), (
+        "what the room was told needs no second copy"
+    )
 
 
 # ---------------------------------------------------------------------------

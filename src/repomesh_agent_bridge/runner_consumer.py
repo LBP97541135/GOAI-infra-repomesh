@@ -117,6 +117,7 @@ __all__ = [
     "WorkspacePreparer",
     "build_runner_consumer",
     "governed_environment",
+    "prepare_governed_codex_home",
     "runner_state_root",
 ]
 
@@ -202,7 +203,7 @@ whose boolean is now the run's precondition rather than a diagnostic: see
 :meth:`NarratingExecutor._label_workspace`."""
 
 CODEX_TOOL_VOCABULARY: Mapping[str, tuple[str, ...]] = {
-    "edit": ("fileChange",),
+    "edit": ("fileChange", "item/fileChange/requestApproval"),
     "test": ("commandExecution",),
 }
 """RepoMesh's capability words → the tool names codex's approvals actually carry.
@@ -221,6 +222,21 @@ written and the run failed on its own untouched tests.
 The translation is **additive and codex-only**: the granted words stay in the
 list, so nothing that was permitted stops being permitted, and a task for any
 other adapter passes through untouched.
+
+``item/fileChange/requestApproval`` is in there because it is a *third* name for
+the same capability, and not by design. The driver names an approval after the
+item type it carries, and a fileChange request carries no ``item``, no
+``command`` and no ``changes`` — so the name falls back to the method string.
+Measured live on 2026-08-28: three fileChange approvals refused under that name
+in a run that otherwise succeeded, because codex reached the file another way.
+The commandExecution method string is deliberately *not* here: that request does
+carry ``command`` and resolves to the short name, so adding it would be guarding
+against a shape nothing has ever sent.
+
+Letting the name through changes nothing about where the edit may land. The
+policy walks the request's own leaves for paths before it ever reads a tool
+name, so a fileChange aimed off the allowlist is refused at the path rule with
+or without this entry.
 
 Why this is a vocabulary bridge and not a grant of new power:
 
@@ -487,7 +503,9 @@ def runner_state_root(worker_agent_id: UUID, state_dir: Path | None = None) -> P
 
 
 GOVERNED_CODEX_CONFIG = """\
+# >>> repomesh-agent-bridge managed block >>>
 # Written by repomesh-agent-bridge when governed execution is turned on.
+# Everything below the closing marker belongs to codex and is preserved.
 # The Bridge already launches codex on a Low-integrity token, and a Low-integrity
 # process cannot build the further-restricted token codex's own Windows sandbox
 # needs: every apply_patch died inside that helper before it reached an approval
@@ -504,10 +522,9 @@ GOVERNED_CODEX_CONFIG = """\
 # them.
 sandbox_mode = "read-only"
 approval_policy = "on-request"
-
-[features]
-experimental_windows_sandbox = false
-elevated_windows_sandbox = false
+features.experimental_windows_sandbox = false
+features.elevated_windows_sandbox = false
+# <<< repomesh-agent-bridge managed block <<<
 """
 """codex's own configuration for a Bridge that executes governed runs.
 
@@ -556,14 +573,49 @@ def governed_environment(session_dir: Path) -> dict[str, str]:
     return session_environment(dirs, executable_path(node_binary, cli_binary))
 
 
-def _write_governed_codex_config(codex_home: Path) -> None:
-    """Put :data:`GOVERNED_CODEX_CONFIG` in place, rewriting only on a change.
+_MANAGED_OPEN = "# >>> repomesh-agent-bridge managed block >>>"
+_MANAGED_CLOSE = "# <<< repomesh-agent-bridge managed block <<<"
+_MANAGED_KEYS = (
+    "sandbox_mode",
+    "approval_policy",
+    "features.experimental_windows_sandbox",
+    "features.elevated_windows_sandbox",
+)
 
-    Rewriting unconditionally would be simpler and worse: codex-home carries the
-    Low label so that the CLI can maintain its own state there (PR 4 §7.4), which
-    means a Low-integrity process can edit this file, and a Bridge that rewrote it
-    every start would erase the evidence that something had. Comparing first
-    turns that into a log line.
+
+def prepare_governed_codex_home(session_dir: Path) -> None:
+    """Make this worker's codex-home fit for governed execution.
+
+    Called from the composition root, before the conversation track's readiness
+    gate runs, and that ordering is the whole reason it is a function of its own.
+    The gate starts codex; codex reads this file; a file codex refuses takes the
+    gate down with it — and the code that repairs the file used to live *after*
+    the gate, so a single bad value locked the Bridge out of the one path that
+    would have fixed it. Observed: ``approval_policy = "untrusted"`` parsed,
+    was refused at startup, and only a hand-deleted file got the process up.
+    """
+
+    _write_governed_codex_config(prepare_session_dirs(session_dir).codex_home)
+
+
+def _write_governed_codex_config(codex_home: Path) -> None:
+    """Put the managed block in place, keeping everything codex wrote itself.
+
+    codex owns this file too. It records trusted projects here as it goes
+    (``[projects.'…']``), so the earlier version of this function — write the
+    whole document whenever it differs — quietly discarded that state on every
+    start, and would have gone on discarding it. Only the block between the two
+    markers is this Bridge's; the rest is read back and rewritten unchanged.
+
+    The managed settings are spelled as dotted keys rather than a ``[features]``
+    table so the block stays a run of top-level assignments. A table would have
+    to be last in the file (TOML puts every following bare key inside it), which
+    is exactly where codex's own tables need to be, and two owners appending to
+    one tail is a merge conflict waiting in a config file.
+
+    Rewriting only on a real difference keeps the log honest: a warning here
+    means something actually changed the block, which on a Low-labelled
+    directory is worth knowing.
     """
 
     config = codex_home / "config.toml"
@@ -571,11 +623,47 @@ def _write_governed_codex_config(codex_home: Path) -> None:
         current = config.read_text(encoding="utf-8")
     except OSError:
         current = None
-    if current == GOVERNED_CODEX_CONFIG:
+    merged = GOVERNED_CODEX_CONFIG + _preserved(current or "")
+    if current == merged:
         return
-    if current is not None:
-        _logger.warning("codex config in %s differs from the governed one; rewriting", codex_home)
-    config.write_text(GOVERNED_CODEX_CONFIG, encoding="utf-8")
+    if current:
+        _logger.warning("codex config in %s is not the governed one; rewriting", codex_home)
+    config.write_text(merged, encoding="utf-8")
+
+
+def _preserved(document: str) -> str:
+    """Everything in ``document`` that is codex's rather than this Bridge's.
+
+    Three things go: the previous managed block, any stray top-level assignment
+    of a managed key (a document written before the markers existed), and a
+    ``[features]`` table holding nothing but the two flags this block now sets as
+    dotted keys — that table is this Bridge's own earlier spelling, and leaving it
+    beside the dotted keys would be two definitions of one value.
+    """
+
+    kept: list[str] = []
+    inside_block = False
+    dropping_table = False
+    for line in document.splitlines():
+        stripped = line.strip()
+        if stripped == _MANAGED_OPEN:
+            inside_block = True
+            continue
+        if inside_block:
+            inside_block = stripped != _MANAGED_CLOSE
+            continue
+        if stripped.startswith("["):
+            dropping_table = stripped == "[features]"
+        elif dropping_table and stripped and not stripped.startswith("#"):
+            name = stripped.split("=", 1)[0].strip()
+            dropping_table = f"features.{name}" in _MANAGED_KEYS
+        if dropping_table:
+            continue
+        if stripped.split("=", 1)[0].strip() in _MANAGED_KEYS and "=" in stripped:
+            continue
+        kept.append(line)
+    body = "\n".join(kept).strip("\n")
+    return f"\n{body}\n" if body else ""
 
 
 @dataclass(slots=True)
@@ -905,9 +993,25 @@ def _terminal_body(result: RunnerExecutionResult, tally: ToolActionTally) -> str
 
 
 def _room_safe_reason(summary: str) -> str:
+    """What the room is told, and — for anything it may not be told — the log.
+
+    The two clauses that send a reader to this machine's log used to be a promise
+    nothing kept: the reason was dropped here and written nowhere, so "this
+    machine's log has the details" pointed at a log with no details in it. Live
+    on 2026-08-28 that cost a diagnosis: a run failed half a second after it was
+    leased and the only account of why was in the control plane's event payload.
+
+    So the reason is logged at exactly the point it is withheld. The log is the
+    place the frozen contract has always said these words belong; what the
+    contract bans is putting them in a room, which is what the return value
+    still refuses to do.
+    """
+
     reason = summary.strip()
     if reason.startswith(_QUOTED_REASONS):
         return reason[:_MAX_REASON_CHARS]
+    if reason:
+        _logger.warning("run outcome not repeatable into a room: %s", reason)
     if reason.startswith("commit_failed:"):
         return "commit_failed (git's own words are in the run record)"
     return "this machine's log has the details"
