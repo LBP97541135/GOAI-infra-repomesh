@@ -796,6 +796,12 @@ class DeliveryReadModelService:
             "active_round_id": active.plan.id if active is not None else None,
             "latest_round_id": latest.plan.id if latest is not None else None,
             "pending_decision_count": sum(facts.pending_decision_count for facts in rounds),
+            # §2.3: a requirement is "pending planning" while its draft has not
+            # been materialized into an execution plan yet — the Org Leader's
+            # next action on it is to drive discovery and materialize. Same
+            # branch as the "计划 vN 待物化" phase note above: draft present and
+            # not a single round recorded.
+            "pending_planning": draft is not None and not rounds,
             "repository_count": len(repository_ids),
             "team_count": len(topology.repository_teams) if topology else 0,
             # Topology-only facts degrade to null rather than a fabricated

@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID, uuid4
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, select, update
 from sqlalchemy.exc import IntegrityError
 
 from repomesh.modules.repository_intelligence.contracts import (
@@ -108,6 +108,17 @@ def plan_graph_from_snapshot(record: PlanSnapshotRecord) -> PlanGraph:
 
 class PlanSnapshotAlreadyExists(DomainError):
     """A snapshot with the same (project_id, plan_version) already exists."""
+
+
+class PlanSnapshotVersionConflict(DomainError):
+    """The discovery block moved between the caller's read and write.
+
+    Optimistic-lock refusal (v0.4 §4): the caller read the draft at version N,
+    edited the block, and by write time the row's ``discovery_version`` is no
+    longer N — another writer landed in between. Re-writing would silently
+    overwrite that writer's work, so the write is refused and the caller
+    reloads and retries.
+    """
 
 
 class PlanSnapshotStore:
@@ -239,15 +250,32 @@ class PlanSnapshotStore:
         This is also what consumes a draft: once the column is set the row is
         immutable (module docstring) and the next round starts a new draft at
         ``next_version()``.
+
+        The update is conditional on the draft still being unconsumed. Two
+        concurrent materializations with different idempotency keys can both
+        read the same draft (each misses the other's receipt); the loser of
+        this WHERE clause is the one that must not create a second execution
+        plan, so a zero rowcount raises instead of silently succeeding.
+        ``change_orchestration`` turns that into a recorded, replayable
+        failure (RoundNotRecorded) and the winner's receipt answers the
+        retry.
         """
-        async with self._database.transaction() as session:
-            stmt = select(PlanSnapshotRecord).where(
-                PlanSnapshotRecord.id == snapshot_id
+        statement = (
+            update(PlanSnapshotRecord)
+            .where(
+                PlanSnapshotRecord.id == snapshot_id,
+                PlanSnapshotRecord.execution_plan_id.is_(None),
             )
-            result = await session.execute(stmt)
-            record = result.scalar_one_or_none()
-            if record is not None:
-                record.execution_plan_id = execution_plan_id
+            .values(execution_plan_id=execution_plan_id)
+        )
+        async with self._database.transaction() as session:
+            result = await session.execute(statement)
+        if not result.rowcount:
+            raise PlanSnapshotAlreadyExists(
+                f"snapshot {snapshot_id} was already consumed by another "
+                "materialization; this round is already on record under a "
+                "different idempotency key"
+            )
 
     async def current_draft(self, project_id: UUID) -> PlanSnapshotRecord | None:
         """Contract v0.4 §2.3: the highest unconsumed version, or None.
@@ -271,22 +299,42 @@ class PlanSnapshotStore:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
-    async def set_discovery(self, snapshot_id: UUID, discovery: dict | None) -> None:
-        """Replace the discovery block of one draft snapshot.
+    async def set_discovery(
+        self, snapshot_id: UUID, discovery: dict | None, *, expected_version: int
+    ) -> None:
+        """Replace the discovery block of one draft snapshot (optimistic).
 
         Whole-block writes only. The caller reads the block, edits it, and
         hands back the result — read-modify-write in the service so that
         "re-running a step voids its downstream steps" is one statement rather
         than one per step that can land partially.
+
+        ``expected_version`` is the ``discovery_version`` the caller read.
+        The UPDATE is conditional on it: two writers that both read version N
+        cannot both land — the second one's WHERE clause matches nothing and
+        the write is refused as :class:`PlanSnapshotVersionConflict` instead
+        of silently overwriting the first writer's block.
         """
 
-        async with self._database.transaction() as session:
-            result = await session.execute(
-                select(PlanSnapshotRecord).where(PlanSnapshotRecord.id == snapshot_id)
+        statement = (
+            update(PlanSnapshotRecord)
+            .where(
+                PlanSnapshotRecord.id == snapshot_id,
+                PlanSnapshotRecord.discovery_version == expected_version,
             )
-            record = result.scalar_one_or_none()
-            if record is not None:
-                record.discovery = discovery
+            .values(
+                discovery=discovery,
+                discovery_version=expected_version + 1,
+            )
+        )
+        async with self._database.transaction() as session:
+            result = await session.execute(statement)
+        if not result.rowcount:
+            raise PlanSnapshotVersionConflict(
+                f"snapshot {snapshot_id} discovery block changed while it was "
+                f"being written (expected version {expected_version}); reload "
+                "the draft and retry"
+            )
 
     async def set_integration(
         self,

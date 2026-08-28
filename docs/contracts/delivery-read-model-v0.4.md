@@ -58,13 +58,18 @@ v0.3 把「从界面发起需求」的入口打通到「建 issue = 落 `plan_ve
 | --- | --- | --- | --- | --- | --- |
 | Step 0 需求分析 | `POST /requirement-analysis` | `router.py:469` | `RequirementAnalysisRequest`（`models.py:221`：只有 `requirement`） | `RequirementAnalysisView`（`models.py:225`：`sufficient` / `confidence` / `missing_dimensions` / `questions` / `extracted_keywords`） | 1 次 |
 | Step 1 候选评分 | `POST /discovery` | `router.py:443` | `DiscoveryRequest`（`models.py:206`：`requirement` / `limit` / `entry_point`） | `list[DiscoveryCandidate]`（`models.py:212`：`repository_id` / `repository_name` / `score` / `matched_terms` / `rationale` / `is_entry_point`） | 1 次（可回退，见 §1.4） |
-| Step 2 三档分类 | `POST /confirmation` | `router.py:505` | `ConfirmationRequest`（`models.py:238`：`requirement` / **`candidate_repos`** / **`discovery_evidence`**） | `ConfirmationSummaryView`（`models.py:267`：`required` / `maybe` / `excluded` / `supplemented_repos` / `final_repos`） | **N 次**（每候选一次） |
+| Step 2 三档分类 | `POST /confirmation` | `router.py:505` | `ConfirmationRequest`（`models.py:238`：`requirement` / **`candidate_repos`** / **`discovery_evidence`**） | `ConfirmationSummaryView`（`models.py:267`：`required` / `maybe` / `excluded` / `final_repos`） | **N 次**（每候选一次） |
 | Step 3 集成 | `POST /integration` | `router.py:566` | `IntegrationRequest`（`models.py:275`：`requirement` + **整块 `confirmation`**） | `IntegratedPlanView`（`models.py:296`：`engineering_spec` / `contracts` / `task_dag` / `execution_batches`） | 1 次 |
 | Step 4 物化 | `POST /bridge/materialize` | `router.py:602` | `MaterializeRequest`（`models.py:303`：**整块计划** + `project_id` / `leader_agent_id` / `idempotency_prefix`） | `MaterializeResponse`（`models.py:322`） | 0 次 |
 
 三档取值是**大写字符串**：`ConfirmationResult.status ∈ {"REQUIRED","MAYBE","EXCLUDED"}`
 （`application/confirmation.py:86`、`:253-255`），不是枚举类型；GUI 的行内下拉展示小写
 （`required/maybe/excluded`），大小写映射必须只有一处实现。
+
+**两路径形状差异**：`ConfirmationSummaryView`（`POST /confirmation` 的响应）是**脚本路径**
+的简化视图，只有 `required` / `maybe` / `excluded` / `final_repos`；GUI 不读它——审批界面
+读的是 §2.2 的完整 `classification` block（含 `supplements` / `conflicts` / `observations`
+等全量形状）。形状差异是两处词汇唯一（同一事实单一拼写），不靠补字段抹平。
 
 ### 1.2 步骤之间传什么：**服务端一无所有**
 
@@ -183,7 +188,9 @@ repository_intelligence.plan_snapshots
     "required": [ ConfirmationResultView ],
     "maybe":    [ ConfirmationResultView ],
     "excluded": [ ConfirmationResultView ],
-    "supplemented_repos": ["repo-x"],
+    "supplements": [ SupplementEvidenceView ],
+    "conflicts": [ GraphConflictView ],
+    "observations": [ SupplementObservationView ],
     "adjustments": [ { "repository": "repo-a", "from": "MAYBE|null", "to": "REQUIRED",
                        "by_agent_id": "uuid", "at": "..." } ],
                        // from=null：模型从未给该仓分档、审批人自行加入（实现
@@ -205,8 +212,36 @@ repository_intelligence.plan_snapshots
 ```
 
 - `ConfirmationResultView` 复用 `api/models.py:255` 既有形状（`repository` / `status` /
-  `confidence` / `reason` / `plan_summary` / `plan` / `missing_dependencies`），**不另写
-  第二套序列化**（v0.3 §1.4 同一条红线）。
+  `confidence` / `reason` / `plan_summary` / `plan` / `missing_dependencies`）。**词汇唯一**：
+  `discovery_chain.py` 的 `_result_to_dict`（block 落盘序列化）与 `models.py:255` 的 view 是
+  **同一词汇的第二份实现**，字段名逐一对齐——两端都加了「与另一处对齐」的引用注释防漂移
+  （v0.3 §1.4 同一条红线）。本批追加两个**恒可下发的布尔**：
+  - `is_supplemented`：该仓不是候选评分出来的，而是 PM 调图预补充进确认名单的
+    （`supplements` 里有它的证据）；非补充仓恒为 `false`，**不省略**——前端只按
+    `true` 渲染「图扩充」标记，缺字段按假处理会跟真假并存时一样渲染，但契约
+    规定恒发，避免两端各自猜测缺省语义。
+  - `graph_conflict`：模型判它 EXCLUDED，但图谱上存在一条**已确认**依赖边把它连到
+    保留仓（REQUIRED/MAYBE）；恒为 `false` 的字段同样照发。它只是复核建议，不是
+    报错——生效分档仍以 `effective_tiers` 为准（§3.1）。
+- `supplements` 是**图预补充的证据明细**（生产方：`discovery_chain.py` 的
+  `_supplement_candidates`；每仓一条，形状 `SupplementEvidenceView`）：
+  `{ "repository": "repo-x", "via": "repo-a", "confidence": "confirmed|declared",
+     "mechanism": "forward_dependencies|reverse_dependencies", "match_reason": "…" }`。
+  `via` 是拉它进来的那个候选仓；`confidence` 是**图边**的置信度（不是 LLM 的）。
+  确认阶段的 LLM 提示里带着这条证据（「Why You Were Added」），本块原样再存一份
+  供审计——证据只在两处出现（提示 + 本块），不另写第三份。
+- `conflicts` 是**图与模型的分歧清单**（形状 `GraphConflictView`）：
+  `{ "repository": "repo-x", "status": "EXCLUDED", "via": ["repo-a"],
+     "edges": [ { "producer": "…", "consumer": "…", "confidence": "…",
+                  "mechanism": "…", "match_reason": "…" } ] }`。
+  语义：`status` 是模型原判（实践中恒 EXCLUDED）；`via` 是那些被保留的、图边指向
+  的仓；`edges` 是触发的已确认边原文。审批人看到的是「这张排除是该复核的」，
+  不是「系统帮你改好了」——改档仍走 `adjustments`。
+- `observations` 是**低信任观察名单**（形状 `SupplementObservationView`，每仓一条
+  `{ "repository": "repo-y", "via": "repo-a" }`）：确认阶段模型在
+  `missing_dependencies` / `plan.impacts` 里报过这些名字，但它们既不在确认名单里、
+  也没有图边背书——纯模型口述，**不进补充、不自动纳入**，摆给审批人看，要纳入
+  走 `adjustments`（该机制本就支持加入没人确认过的仓）。`via` 是报告它的被确认仓。
 - 每个步块的 `error` 为 `null` 或 `{ "message": "服务端错误原文摘要（≤500 字）",
   "at": "..." }`。**不设计假进度**：一步失败就是这一步 `error` 非空、后续步块保持 `null`。
 - `adjustments` 是**审批人改档的留痕**（GUI「行内分档下拉」），与 LLM 原判并存：
@@ -684,7 +719,9 @@ A-2（`api/console.py`）刚落地的模式：写请求返 **202 + task_id**，
 ### 5.3 `evidence_version`：审批绑在它批的那份分档上
 
 `evidence_version = sha256` of 规范化后的三档结果（排序后的
-`{repository, status}` 列表 + `supplemented_repos`），**与 materialize 现有 gate 的取指纹
+`{repository, status}` 列表 + 补充仓集合；补充仓由 `supplements[].repository` 派生，
+payload 的 JSON key 仍叫 `supplemented_repos`——历史遗留，改键会让既有审批全部 409），
+**与 materialize 现有 gate 的取指纹
 方式同风格**（`change_orchestration/application.py:188-204` 对
 `{repositories, contracts}` 取 `sha256`）。
 

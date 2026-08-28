@@ -320,12 +320,14 @@ class DeliveryService:
         require_validation: bool = False,
         validation_reader: ValidationSnapshotReader | None = None,
         contract_catalog: ContractCatalogPort | None = None,
+        audit: DeliveryAuditLog | None = None,
     ) -> None:
         self._store = store
         self._require_governance = require_governance
         self._require_validation = require_validation
         self._validation_reader = validation_reader
         self._contract_catalog = contract_catalog
+        self._audit = audit
 
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
@@ -435,7 +437,9 @@ class DeliveryService:
         )
 
     async def observe_pull_request(self, command: PullRequestObservationCommand) -> ChangeSetView:
-        return await self._update_repository(
+        change_set = await self._required(command.change_set_id)
+        target = self._repository(change_set, command.repository_id)
+        view = await self._update_repository(
             command.change_set_id,
             command.repository_id,
             lambda item: item.observe_pr(
@@ -443,6 +447,49 @@ class DeliveryService:
                 command.pull_request_url,
                 command.head_sha,
             ),
+        )
+        if target.pull_request_number != command.pull_request_number:
+            # A replay (same PR number) already landed; emit only on a new
+            # observation, so the decision chain gets one node per PR.
+            await self._emit_pull_request_observed(change_set, target, command)
+        return view
+
+    async def _emit_pull_request_observed(
+        self,
+        change_set: ChangeSet,
+        repository: RepositoryDelivery,
+        command: PullRequestObservationCommand,
+    ) -> None:
+        """Contract decision-chain v0.1 §3.2 — ``PullRequestObserved``.
+
+        ``organization_id`` / ``project_id`` come from the ChangeSet (E9):
+        the PR observation command itself carries neither (E4), so the lookup
+        is the one place the chain's L1 is derived for this step.
+        """
+
+        if self._audit is None:
+            return
+        await self._audit.append(
+            EventEnvelope(
+                event_type="PullRequestObserved",
+                actor_type=ActorType.SERVICE,
+                actor_id=str(change_set.created_by_agent_id),
+                aggregate_type="ChangeSet",
+                aggregate_id=change_set.id,
+                aggregate_version=change_set.version,
+                correlation_id=new_id(),
+                organization_id=change_set.organization_id,
+                project_id=change_set.project_id,
+                payload={
+                    "schema_version": 1,
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "change_set_id": str(change_set.id),
+                    "repository_id": str(repository.repository_id),
+                    "pull_request_number": command.pull_request_number,
+                    "pull_request_url": command.pull_request_url,
+                    "task_ids": [str(repository.task_id)],
+                },
+            )
         )
 
     async def observe_ci(self, command: CIObservationCommand) -> ChangeSetView:

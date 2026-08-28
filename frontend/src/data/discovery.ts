@@ -87,6 +87,7 @@ const CANDIDATE_ITEMS: DiscoveryCandidateItem[] = [
     rationale:
       "近 30 天有结账路由改动；checkout/price_override.py 已有 override_amount 字段但无原因列，订单模型的审计表就在本仓。该仓是价格写入的唯一入口，原因字段必须与金额在同一事务内落库。",
     is_entry_point: true,
+    low_signal: false,
   },
   {
     repository_id: REPO_WEB,
@@ -96,6 +97,7 @@ const CANDIDATE_ITEMS: DiscoveryCandidateItem[] = [
     rationale:
       "后台订单详情页在本仓；价格修改弹窗组件 PriceOverrideDialog 需要新增原因选择器与必填校验。",
     is_entry_point: false,
+    low_signal: false,
   },
   {
     repository_id: REPO_STORE,
@@ -104,6 +106,8 @@ const CANDIDATE_ITEMS: DiscoveryCandidateItem[] = [
     matched_terms: [],
     rationale: "名称语义相关；无直接依赖证据。",
     is_entry_point: false,
+    // 除名字外没有可倚仗的信号——分数是猜测，面板如实标「低信号」
+    low_signal: true,
   },
   {
     repository_id: REPO_DOCS,
@@ -112,6 +116,7 @@ const CANDIDATE_ITEMS: DiscoveryCandidateItem[] = [
     matched_terms: ["订单"],
     rationale: "仅文档仓，未见价格相关章节。",
     is_entry_point: false,
+    low_signal: false,
   },
 ];
 
@@ -142,6 +147,7 @@ const result = (
   confidence: number,
   reason: string,
   plan_summary: string,
+  flags?: { is_supplemented?: boolean; graph_conflict?: boolean; missing_dependencies?: string[] },
 ): ConfirmationResultView => ({
   repository,
   status,
@@ -149,7 +155,9 @@ const result = (
   reason,
   plan_summary,
   plan: null,
-  missing_dependencies: [],
+  missing_dependencies: flags?.missing_dependencies ?? [],
+  is_supplemented: flags?.is_supplemented ?? false,
+  graph_conflict: flags?.graph_conflict ?? false,
 });
 
 const CLASSIFICATION = {
@@ -160,6 +168,8 @@ const CLASSIFICATION = {
       0.91,
       "价格写入的唯一入口，原因字段与金额必须同事务落库；不改本仓则需求无法成立。",
       "price_override 表增 reason 枚举列与 audit 字段，写入路径加必填校验",
+      // 模型在这里报了付款网关——不在确认名单里，进观察名单而非自动纳入
+      { missing_dependencies: ["saleor-payment-gateway"] },
     ),
     result(
       "saleor-dashboard",
@@ -167,6 +177,15 @@ const CLASSIFICATION = {
       0.84,
       "后台订单详情页与价格修改弹窗都在本仓，展示与必填校验的落点。",
       "PriceOverrideDialog 增原因选择器；订单详情页增原因展示行",
+    ),
+    // 不在候选评分里：PM 调图从 saleor-core 的反向依赖预补充进来（见 supplements）
+    result(
+      "saleor-data-export",
+      "REQUIRED",
+      0.72,
+      "数据导出仓消费结账写入路径；订单新增价格原因字段后，导出结构必须同步，否则下游报表失真。",
+      "导出映射表增 reason 字段；历史导出兼容新列",
+      { is_supplemented: true },
     ),
   ],
   maybe: [
@@ -179,9 +198,40 @@ const CLASSIFICATION = {
     ),
   ],
   excluded: [
-    result("saleor-docs", "EXCLUDED", 0.12, "纯文档仓，无价格相关章节，改动无落点。", ""),
+    // 图上有已确认边 saleor-core → saleor-docs：这张排除值得复核（见 conflicts）
+    result("saleor-docs", "EXCLUDED", 0.12, "纯文档仓，无价格相关章节，改动无落点。", "", {
+      graph_conflict: true,
+    }),
   ],
-  supplemented_repos: ["saleor-dashboard"],
+  supplements: [
+    {
+      repository: "saleor-data-export",
+      via: "saleor-core",
+      confidence: "confirmed",
+      mechanism: "reverse_dependencies",
+      match_reason: "数据导出仓消费结账写入路径，价格原因字段变更必然影响导出结构",
+    },
+  ],
+  conflicts: [
+    {
+      repository: "saleor-docs",
+      status: "EXCLUDED",
+      via: ["saleor-core"],
+      edges: [
+        {
+          producer: "saleor-core",
+          consumer: "saleor-docs",
+          confidence: "confirmed",
+          mechanism: "reverse_dependencies",
+          match_reason: "文档仓引用结账 API schema，字段变更需同步文档",
+        },
+      ],
+    },
+  ],
+  observations: [
+    { repository: "saleor-payment-gateway", via: "saleor-core" },
+    { repository: "saleor-search-index", via: "saleor-dashboard" },
+  ],
   adjustments: [],
   ran_at: AT,
   by_agent_id: LEADER,
@@ -191,6 +241,7 @@ const CLASSIFICATION = {
 const TIERS_UNADJUSTED = [
   { repository: "saleor-core", tier: "required" as const, adjusted: false, original_tier: null },
   { repository: "saleor-dashboard", tier: "required" as const, adjusted: false, original_tier: null },
+  { repository: "saleor-data-export", tier: "required" as const, adjusted: false, original_tier: null },
   { repository: "saleor-storefront", tier: "maybe" as const, adjusted: false, original_tier: null },
   { repository: "saleor-docs", tier: "excluded" as const, adjusted: false, original_tier: null },
 ];
@@ -202,6 +253,7 @@ const TIERS_ADJUSTED = [
   TIERS_UNADJUSTED[0],
   TIERS_UNADJUSTED[1],
   TIERS_UNADJUSTED[2],
+  TIERS_UNADJUSTED[3],
   { repository: "saleor-docs", tier: "required" as const, adjusted: true, original_tier: "excluded" as const },
 ];
 

@@ -1,6 +1,6 @@
 # Module Ownership Map
 
-This map is the source of truth for team ownership. RepoMesh currently has fifteen business
+This map is the source of truth for team ownership. RepoMesh currently has sixteen business
 modules. Each module also has a machine-readable `module.toml`; its `status` field distinguishes
 active modules from planned boundaries. Replace the provisional team labels with GitHub teams
 when the repository moves into an organization.
@@ -19,8 +19,10 @@ when the repository moves into an organization.
 | Change Control | project-planning | impact assessment and change decisions | silent task mutation |
 | Change Orchestration | orchestration | cross-repository materialization, replan and handoff coordination | repository scanning, task state, code execution, PR delivery |
 | Delivery | quality-delivery | ChangeSets, Push/PR, SCM approval facts, CI gates, merge order, rollback | code generation and internal review content |
+| Decision Chain | quality-delivery | chain projection (`decision_chain_nodes`), decision trace, structural similarity summaries (consumed by Repository Intelligence via `DecisionHistoryPort`, Phase 4b prompt injection) | producer events, requirement text, full event payloads |
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
+| Capability Management | platform | governed MCP and Skill presets, role-scoped agent capability bundles | runtime authorization decisions |
 
 ## Runtime component and integration ownership
 

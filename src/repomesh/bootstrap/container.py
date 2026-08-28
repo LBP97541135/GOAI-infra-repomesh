@@ -49,6 +49,7 @@ from repomesh.modules.repository_intelligence.application.discovery import LLMCl
 from repomesh.modules.repository_intelligence.application.requirement_analysis import (
     RequirementAnalyzer,
 )
+from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.infrastructure.handoff_doc_store import (
     PostgresHandoffDocStore,
 )
@@ -493,21 +494,206 @@ class ApplicationContainer:
 
         if self.llm_client is None:
             return None
-        return RequirementAnalyzer(self.llm_client)
+        return RequirementAnalyzer(
+            self.llm_client,
+            sufficiency_threshold=get_settings().discovery_analysis_confidence_threshold,
+        )
+
+    async def repository_profiles(self) -> list[RepositoryProfile]:
+        """全量仓库档案（进程内缓存）。
+
+        M1：档案与依赖图是派生数据，源是 ``repositories.metadata_payload``。
+        进程内复用一份，避免每次分类/计划全量读库。档案变更后由
+        ``invalidate_world_graph`` 显式失效，进程重启后自然重建。
+        """
+        key = "repository_profiles"
+        if key not in self._service_cache:
+            self._service_cache[key] = await self.repository_catalog.list()
+        return cast(list[RepositoryProfile], self._service_cache[key])
+
+    async def world_graph(self) -> DependencyGraphService | None:
+        """世界层依赖图：进程内懒加载缓存（M1）。
+
+        图 = f(profiles)，纯派生数据：分类与计划共享同一份图，避免每次
+        调用全量重建。仓库扫描更新后调用 ``invalidate_world_graph`` 失效。
+        """
+        key = "world_graph"
+        if key not in self._service_cache:
+            profiles = await self.repository_profiles()
+            self._service_cache[key] = (
+                DependencyGraphService(profiles) if profiles else None
+            )
+        return cast(DependencyGraphService | None, self._service_cache[key])
+
+    def invalidate_world_graph(self) -> None:
+        """仓库档案变更后使世界层图缓存失效（下次访问时重建）。"""
+        self._service_cache.pop("repository_profiles", None)
+        self._service_cache.pop("world_graph", None)
 
     async def confirmation_service(self, llm_client: LLMClient) -> ConfirmationService:
-        profiles = await self.repository_catalog.list()
+        profiles = await self.repository_profiles()
         by_name = {p.name: p for p in profiles}
-        graph = DependencyGraphService(profiles) if profiles else None
+        graph = await self.world_graph()
         return ConfirmationService(llm_client, by_name, graph=graph)
 
     async def plan_integration_service(self, llm_client: LLMClient) -> PlanIntegrationService:
-        profiles = await self.repository_catalog.list()
-        graph = DependencyGraphService(profiles) if profiles else None
+        graph = await self.world_graph()
         return PlanIntegrationService(llm_client, graph=graph)
 
     def plan_snapshot_store(self) -> PlanSnapshotStore:
         return PlanSnapshotStore(self.database)
+
+    def plan_snapshot_requirement_reader(self):
+        """Adapt ``PlanSnapshotStore`` to the decision chain's §6.1 root port.
+
+        The chain root (E1) is the ``plan_version=1`` snapshot's requirement
+        text. Prefer that version — a later plan is a later round, not the
+        requirement this chain answered — and fall back to the latest snapshot
+        for projects whose versioning predates the convention.
+        """
+
+        from repomesh.modules.decision_chain.contracts import RequirementView
+        from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (  # noqa: E501
+            PlanSnapshotStore,
+        )
+
+        snapshots: PlanSnapshotStore = self.plan_snapshot_store()
+
+        class _RequirementReader:
+            async def get_requirement(self, project_id):
+                snapshot = await snapshots.get_by_version(project_id, 1)
+                if snapshot is None:
+                    snapshot = await snapshots.get_latest(project_id)
+                if snapshot is None:
+                    return None
+                return RequirementView(
+                    text=snapshot.requirement_text or "",
+                    plan_version=snapshot.plan_version,
+                    snapshot_id=snapshot.id,
+                )
+
+        return _RequirementReader()
+
+    def decision_chain_store(self):
+        from repomesh.modules.decision_chain import PostgresDecisionChainStore
+
+        return PostgresDecisionChainStore(self.database)
+
+    def decision_chain_event_source(self):
+        from repomesh.modules.decision_chain import PostgresDecisionEventSource
+
+        return PostgresDecisionEventSource(self.database)
+
+    @cached_service
+    def decision_chain_projection_service(self):
+        from repomesh.modules.decision_chain import (
+            DecisionChainProjectionService,
+        )
+
+        return DecisionChainProjectionService(
+            self.decision_chain_store(),
+            self.decision_chain_event_source(),
+        )
+
+    @cached_service
+    def decision_chain_trace_service(self):
+        from repomesh.modules.decision_chain import DecisionChainTraceService
+
+        return DecisionChainTraceService(
+            self.decision_chain_store(),
+            self.plan_snapshot_requirement_reader(),
+        )
+
+    @cached_service
+    def decision_chain_similarity_service(self):
+        from repomesh.modules.decision_chain import DecisionChainSimilarityService
+
+        return DecisionChainSimilarityService(self.decision_chain_store())
+
+    def decision_history_from_chain(self):
+        """Port adapter: decision-chain similarity → ``DecisionHistoryPort``.
+
+        The composition root is the only place repository_intelligence and
+        decision_chain meet over this port (AGENTS: wire adapters here, after
+        port contract tests). The adapter reads only decision_chain contracts.
+        """
+
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            DecisionHistoryFromChainStore,
+        )
+
+        return DecisionHistoryFromChainStore(self.decision_chain_similarity_service())
+
+    def decision_embedding_store(self):
+        """L3 ``decision_embeddings`` store on the ``decision_chain`` schema."""
+
+        from repomesh.modules.decision_chain import (
+            PostgresDecisionEmbeddingStore,
+        )
+
+        return PostgresDecisionEmbeddingStore(self.database)
+
+    def embedding_client(self):
+        """L3 embedding service; ``None`` disables semantic retrieval.
+
+        Any OpenAI-compatible ``/embeddings`` endpoint works (OpenAI, local
+        Ollama, SiliconFlow); the provider is ``REPOMESH_EMBEDDING_BASE_URL``.
+        """
+
+        from repomesh.integrations.llm.embeddings import make_embedding_client
+
+        settings = get_settings()
+        return make_embedding_client(
+            settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            model=settings.embedding_model,
+            timeout_seconds=settings.embedding_timeout_seconds,
+        )
+
+    @cached_service
+    def decision_chain_semantic_search_service(self):
+        """L3 read path: cosine Top-K over the project-collapsed vectors."""
+
+        from repomesh.modules.decision_chain import (
+            DecisionChainSemanticSearchService,
+        )
+
+        return DecisionChainSemanticSearchService(self.decision_embedding_store())
+
+    def decision_embedding_service(self):
+        """L3 batch refresher service (B8); ``None`` when no embedding endpoint.
+
+        The composition root builds it only when an embedding service is
+        configured — the refresher's only job is to call it.
+        """
+
+        if self.embedding_client() is None:
+            return None
+        from repomesh.modules.decision_chain import DecisionEmbeddingService
+
+        return DecisionEmbeddingService(
+            self.decision_embedding_store(),
+            self.embedding_client(),
+        )
+
+    def decision_history_vector(self):
+        """Hybrid ``DecisionHistoryPort``: semantic over structural scope.
+
+        ``None`` when semantic retrieval is not configured — the caller then
+        falls back to the structural adapter (fail-safe, Phase 4b rule).
+        """
+
+        if self.embedding_client() is None:
+            return None
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            DecisionHistoryVectorStore,
+        )
+
+        return DecisionHistoryVectorStore(
+            self.decision_chain_semantic_search_service(),
+            self.embedding_client(),
+            structural=self.decision_history_from_chain(),
+        )
 
     def usage_query_store(self) -> UsageQueryStore:
         return UsageQueryStore(self.database)
@@ -538,7 +724,11 @@ class ApplicationContainer:
 
     @cached_service
     def delivery_service(self):
-        from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
+        from repomesh.modules.delivery import (
+            DeliveryService,
+            PostgresChangeSetStore,
+            PostgresDeliveryAuditLog,
+        )
 
         validation = self.validation_snapshot_service()
         return DeliveryService(
@@ -549,6 +739,7 @@ class ApplicationContainer:
             contract_catalog=(
                 self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
+            audit=PostgresDeliveryAuditLog(self.database),
         )
 
     @cached_service
@@ -1087,7 +1278,15 @@ class ApplicationContainer:
                 self.repository_catalog,
                 self.llm_client,
                 self.requirement_analyzer(),
+                keyword_score_cap=get_settings().discovery_keyword_score_cap,
+                confirmation_concurrency=get_settings().discovery_confirmation_concurrency,
+                confirmation_supplement_cap=get_settings().discovery_confirmation_supplement_cap,
             ),
+            default_candidate_limit=get_settings().discovery_candidate_limit,
+            # L3 hybrid adapter when semantic retrieval is configured, the
+            # Phase-4b structural adapter otherwise (fail-safe by design).
+            decision_history=self.decision_history_vector()
+            or self.decision_history_from_chain(),
         )
 
     def discovery_materialization_service(self):

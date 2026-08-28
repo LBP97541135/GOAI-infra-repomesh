@@ -55,13 +55,16 @@ async def onboard_organization_repositories(
         # The fetcher owns a pooled HTTP client; release it once the scan
         # that drives hundreds of API calls has finished.
         await fetcher.aclose()
-    catalog = request.app.state.container.repository_catalog
+    container = request.app.state.container
+    catalog = container.repository_catalog
     existing = {item.url: item for item in await catalog.list()}
     results = []
+    wrote_any = False
     for profile in profiles:
         registered = existing.get(profile.url)
         if registered is None:
             await RegisterRepository(catalog).execute(profile)
+            wrote_any = True
             registered = profile
         try:
             team = await onboard_repository_agent_team(
@@ -93,6 +96,10 @@ async def onboard_organization_repositories(
                     "detail": str(error.detail),
                 }
             )
+    # New profiles reached the catalog; drop the in-process world-layer cache
+    # (M1) so confirmation/planning rebuilds rather than reads a stale graph.
+    if wrote_any:
+        container.invalidate_world_graph()
     return {"organization_id": str(body.organization_id), "repositories": results}
 
 

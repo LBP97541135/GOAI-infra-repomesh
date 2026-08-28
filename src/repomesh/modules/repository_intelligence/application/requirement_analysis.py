@@ -25,8 +25,11 @@ from repomesh.modules.repository_intelligence.application.discovery import LLMCl
 
 _logger = logging.getLogger(__name__)
 
-#: Confidence threshold below which we consider the requirement insufficient.
-_SUFFICIENCY_THRESHOLD = 0.7
+#: Default confidence threshold below which we consider the requirement
+#: insufficient. The composition root injects the configured value through
+#: ``RequirementAnalyzer``; this stays as the parse-level default so the pure
+#: parser keeps its historical behaviour when called directly (tests).
+_DEFAULT_SUFFICIENCY_THRESHOLD = 0.7
 
 
 # ---------------------------------------------------------------------------
@@ -57,16 +60,27 @@ class RequirementAnalyzer:
     ----------
     llm_client:
         Any :class:`LLMClient` implementation (DeepSeek or test double).
+    sufficiency_threshold:
+        Confidence below which the analysis is treated as insufficient even
+        when the model says otherwise (fail-closed). Injected from
+        ``REPOMESH_DISCOVERY_ANALYSIS_CONFIDENCE_THRESHOLD`` at the
+        composition root; the default matches the historical constant.
     """
 
-    def __init__(self, llm_client: LLMClient) -> None:
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        *,
+        sufficiency_threshold: float = 0.7,
+    ) -> None:
         self._llm = llm_client
+        self._threshold = sufficiency_threshold
 
     def analyze(self, requirement: str) -> RequirementAnalysis:
         """Return a :class:`RequirementAnalysis` for *requirement*."""
         messages = _build_analysis_prompt(requirement)
         raw = self._llm.chat(messages, temperature=0.0)
-        return _parse_analysis(raw)
+        return _parse_analysis(raw, threshold=self._threshold)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +141,9 @@ def _extract_json_object(text: str) -> str:
     return text[first_brace : last_brace + 1]
 
 
-def _parse_analysis(raw: str) -> RequirementAnalysis:
+def _parse_analysis(
+    raw: str, *, threshold: float = _DEFAULT_SUFFICIENCY_THRESHOLD
+) -> RequirementAnalysis:
     """Parse the LLM response into a :class:`RequirementAnalysis`."""
 
     try:
@@ -148,7 +164,7 @@ def _parse_analysis(raw: str) -> RequirementAnalysis:
 
     sufficient = bool(data.get("sufficient", True))
     # Cross-check: if confidence is below threshold, force insufficient.
-    if confidence < _SUFFICIENCY_THRESHOLD:
+    if confidence < threshold:
         sufficient = False
 
     missing_dimensions = [

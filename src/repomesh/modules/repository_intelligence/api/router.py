@@ -16,6 +16,7 @@ from repomesh.modules.repository_intelligence.application import (
     HandoffDocError,
     IssueIntakeActorNotFound,
     IssueIntakeDenied,
+    IssueIntakeKeyMismatch,
     RegisterRepository,
     RepositoryDiscoveryService,
     ScanRegistration,
@@ -380,6 +381,11 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
         raise HTTPException(status_code=404, detail=str(error)) from error
     except IssueIntakeDenied as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except IssueIntakeKeyMismatch as error:
+        # The key already names a different requirement. 409 rather than 422:
+        # the request is well-formed; it collides with an operation the server
+        # already has on record.
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -399,7 +405,7 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     "/repositories", response_model=RepositoryView, status_code=201, dependencies=[ACTION_TOKEN]
 )
 async def register_repository(
-    body: RepositoryCreate, catalog: CatalogDependency
+    body: RepositoryCreate, catalog: CatalogDependency, request: Request
 ) -> RepositoryProfile:
     # Same egress guard as the scan endpoints (build_scan_fetcher): the
     # catalog row is later cloned out-of-process (git_worktree), so a host
@@ -417,6 +423,10 @@ async def register_repository(
         auto_card=_build_auto_card(body.auto_card),
     )
     await RegisterRepository(catalog).execute(profile)
+    # The in-process world-layer cache (M1) is keyed off the catalog; a manual
+    # registration changes the catalog, so the cache must be dropped before the
+    # next confirmation/planning call reads a stale world graph.
+    request.app.state.container.invalidate_world_graph()
     return profile
 
 
@@ -468,7 +478,9 @@ async def identify_repository_url(url: str) -> UrlIdentification:
 
 
 @router.post("/repositories/scan-org", response_model=OrgScanResult, dependencies=[ACTION_TOKEN])
-async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) -> OrgScanResult:
+async def scan_organization(
+    body: OrgScanRequest, catalog: CatalogDependency, request: Request
+) -> OrgScanResult:
     """Batch-scan all repos under a GitHub/GitLab organization.
 
     Fetches file trees, dependency files, and commits for every repo,
@@ -496,6 +508,10 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
         # request ends so a busy API process does not leak connections.
         await fetcher.aclose()
 
+    # A successful scan registered new profiles; drop the in-process world
+    # layer cache (M1) so the next confirmation/planning call rebuilds it.
+    request.app.state.container.invalidate_world_graph()
+
     return OrgScanResult(
         org_url=url,
         total_scanned=outcome.total_scanned,
@@ -508,7 +524,7 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
 
 @router.post("/repositories/scan-repo", response_model=RepoScanResult, dependencies=[ACTION_TOKEN])
 async def scan_single_repository(
-    body: RepoScanRequest, catalog: CatalogDependency
+    body: RepoScanRequest, catalog: CatalogDependency, request: Request
 ) -> RepoScanResult:
     """Scan one repository from its URL and register it.
 
@@ -538,6 +554,10 @@ async def scan_single_repository(
         # Same pooled-client release as scan-org; a 400 from
         # require_single_repo_url must not leak the fetcher either.
         await fetcher.aclose()
+
+    # Same cache invalidation as scan-org (M1): the world layer graph is a
+    # pure projection of the catalog and must not outlive a catalog change.
+    request.app.state.container.invalidate_world_graph()
 
     return RepoScanResult(
         repo_url=url,
@@ -606,7 +626,6 @@ def _confirmation_summary_to_view(
         required=[ConfirmationResultView.model_validate(r) for r in summary.required],
         maybe=[ConfirmationResultView.model_validate(r) for r in summary.maybe],
         excluded=[ConfirmationResultView.model_validate(r) for r in summary.excluded],
-        supplemented_repos=summary.supplemented_repos,
         final_repos=summary.final_repos,
     )
 
@@ -686,7 +705,6 @@ def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
         required=[_to_result(r) for r in view.required],
         maybe=[_to_result(r) for r in view.maybe],
         excluded=[_to_result(r) for r in view.excluded],
-        supplemented_repos=view.supplemented_repos,
     )
 
 

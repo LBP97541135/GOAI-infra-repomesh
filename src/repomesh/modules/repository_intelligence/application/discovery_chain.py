@@ -48,10 +48,14 @@ from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
     ConfirmationService,
     ConfirmationSummary,
+    GraphConflict,
     RepositoryPlan,
+    SupplementEvidence,
+    SupplementObservation,
 )
 from repomesh.modules.repository_intelligence.application.dependency_graph import (
     DependencyGraphService,
+    GraphEdge,
 )
 from repomesh.modules.repository_intelligence.application.discovery import (
     LLMClient,
@@ -68,6 +72,7 @@ from repomesh.modules.repository_intelligence.contracts import (
     GUI_STEP_OF,
     DiscoveryApprovalCommand,
     DiscoveryStepCommand,
+    IntegratedPlan,
     classification_fingerprint,
     effective_tiers,
     tier_of,
@@ -75,7 +80,11 @@ from repomesh.modules.repository_intelligence.contracts import (
 from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (
     PlanSnapshotStore,
 )
-from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
+from repomesh.modules.repository_intelligence.ports import (
+    DecisionHistoryPort,
+    RepositoryCatalog,
+    SimilarDecisionSheet,
+)
 from repomesh.shared.domain import DomainError, new_id
 from repomesh.shared.events import ActorType, EventEnvelope
 
@@ -185,6 +194,7 @@ class DiscoveryTarget:
     project_id: UUID
     plan_version: int
     requirement_text: str
+    discovery_version: int
     discovery: dict[str, Any]
 
 
@@ -202,10 +212,24 @@ class DiscoveryPipeline:
         catalog: RepositoryCatalog,
         llm_client: LLMClient | None,
         analyzer: RequirementAnalyzer | None = None,
+        *,
+        keyword_score_cap: float = 0.99,
+        confirmation_concurrency: int = 1,
+        confirmation_supplement_cap: int = 0,
     ) -> None:
         self._catalog = catalog
         self._llm = llm_client
         self._analyzer = analyzer
+        #: Ceiling for the keyword-fallback score, injected from settings at
+        #: the composition root and passed through to the scoring service.
+        self._keyword_score_cap = keyword_score_cap
+        #: Bounded parallelism for the confirmation LLM calls — a global
+        #: rate-limit approximation, not a per-issue licence to flood the
+        #: provider. Injected from ``REPOMESH_CONFIRMATION_CONCURRENCY``.
+        self._confirmation_concurrency = confirmation_concurrency
+        #: Cap for the Project Manager's graph pre-supplement (first-degree
+        #: neighbours added to the confirmation list). ``0`` disables it.
+        self._confirmation_supplement_cap = confirmation_supplement_cap
 
     def _require_llm(self) -> LLMClient:
         if self._llm is None:
@@ -259,7 +283,11 @@ class DiscoveryPipeline:
         # The catalog read is the only await; the scoring, which may call the
         # model, goes to a thread.
         profiles = await self._catalog.list()
-        service = RepositoryDiscoveryService(self._catalog, llm_client=self._llm)
+        service = RepositoryDiscoveryService(
+            self._catalog,
+            llm_client=self._llm,
+            keyword_score_cap=self._keyword_score_cap,
+        )
         outcome = await asyncio.to_thread(
             service.score,
             profiles,
@@ -276,6 +304,7 @@ class DiscoveryPipeline:
                 "matched_terms": list(item.matched_terms),
                 "rationale": item.rationale,
                 "is_entry_point": item.is_entry_point,
+                "low_signal": item.low_signal,
             }
             for item in outcome.candidates
             if item.repository_id in by_id
@@ -287,6 +316,7 @@ class DiscoveryPipeline:
         requirement: str,
         candidates: list[dict[str, Any]],
         *,
+        history_context: str | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> ConfirmationSummary:
         llm = self._require_llm()
@@ -314,11 +344,26 @@ class DiscoveryPipeline:
             for item in candidates
             if str(item.get("repository_name", "")) in by_name
         }
+        # PM's graph pre-supplement: first-degree neighbours of the candidates
+        # join the confirmation list with the edge evidence that brought them
+        # in. Deterministic — same catalog, same list — so re-runs stay stable.
+        supplements = (
+            _supplement_candidates(graph, names, self._confirmation_supplement_cap)
+            if graph is not None
+            else []
+        )
+        supplement_evidence = {
+            item.repository: item for item in supplements
+        }
+        full_names = names + [item.repository for item in supplements]
         return await asyncio.to_thread(
             lambda: service.confirm(
-                names,
+                full_names,
                 requirement,
                 discovery_evidence=evidence,
+                supplement_evidence=supplement_evidence,
+                history_context=history_context,
+                concurrency=self._confirmation_concurrency,
                 on_progress=on_progress,
             )
         )
@@ -331,12 +376,67 @@ class DiscoveryPipeline:
         return await asyncio.to_thread(service.integrate, requirement, summary)
 
 
+def _supplement_candidates(
+    graph: DependencyGraphService,
+    names: list[str],
+    cap: int,
+) -> list[SupplementEvidence]:
+    """The Project Manager's graph pre-supplement (deterministic).
+
+    For each candidate, take its first-degree neighbours in both directions
+    (whom I depend on + who depends on me), excluding repos already in the
+    list. ``confirmed`` edges win over ``declared``; the result is ordered by
+    candidate order (stable sort) so a re-run produces the same list. Each
+    entry carries the edge evidence that brought it in — the RM sees why it
+    was called in, and the block records it for the audit trail.
+
+    First-degree only, never recursive: a supplemented repo's own neighbours
+    do not cascade, or a dense cluster would flood the confirmation list.
+    """
+
+    if cap <= 0:
+        return []
+    known = set(names)
+    collected: dict[str, SupplementEvidence] = {}
+    for name in names:
+        # Whom do I depend on (I may need to change them too)?
+        for edge in graph.forward_dependencies(name):
+            repo = edge.producer
+            if repo == name or repo in known or repo in collected:
+                continue
+            collected[repo] = SupplementEvidence(
+                repository=repo,
+                via=name,
+                confidence=edge.confidence,
+                mechanism=str(edge.mechanism),
+                match_reason=edge.match_reason,
+            )
+        # Who depends on me (they break if my API changes)?
+        for edge in graph.reverse_dependencies(name):
+            repo = edge.consumer
+            if repo == name or repo in known or repo in collected:
+                continue
+            collected[repo] = SupplementEvidence(
+                repository=repo,
+                via=name,
+                confidence=edge.confidence,
+                mechanism=str(edge.mechanism),
+                match_reason=edge.match_reason,
+            )
+    supplements = list(collected.values())
+    # confirmed (hard evidence) first; the sort is stable, so candidates
+    # earlier in the list keep their priority within the same confidence.
+    supplements.sort(key=lambda ev: 0 if ev.confidence == "confirmed" else 1)
+    return supplements[:cap]
+
+
 def _result_to_dict(result: ConfirmationResult) -> dict[str, Any]:
     """The ConfirmationResultView shape, produced once.
 
-    Same field names the ``/confirmation`` endpoint already publishes: the read
-    model projects this block straight through, so writing a second spelling
-    here would give the panel two vocabularies for one fact.
+    Field names are aligned one-to-one with ``ConfirmationResultView``
+    (``api/models.py:263``) — the read model projects this block straight
+    through, so a second spelling here would give the panel two vocabularies
+    for one fact. Keep both sides in sync.
     """
 
     return {
@@ -357,6 +457,8 @@ def _result_to_dict(result: ConfirmationResult) -> dict[str, Any]:
             }
         ),
         "missing_dependencies": list(result.missing_dependencies),
+        "is_supplemented": result.is_supplemented,
+        "graph_conflict": result.graph_conflict,
     }
 
 
@@ -381,6 +483,78 @@ def _result_from_dict(payload: dict[str, Any]) -> ConfirmationResult:
         plan_summary=str(payload.get("plan_summary", "")),
         plan=plan,
         missing_dependencies=list(payload.get("missing_dependencies") or ()),
+        is_supplemented=bool(payload.get("is_supplemented", False)),
+        graph_conflict=bool(payload.get("graph_conflict", False)),
+    )
+
+
+def _supplement_to_dict(evidence: SupplementEvidence) -> dict[str, Any]:
+    return {
+        "repository": evidence.repository,
+        "via": evidence.via,
+        "confidence": evidence.confidence,
+        "mechanism": evidence.mechanism,
+        "match_reason": evidence.match_reason,
+    }
+
+
+def _supplement_from_dict(payload: dict[str, Any]) -> SupplementEvidence:
+    return SupplementEvidence(
+        repository=str(payload.get("repository", "")),
+        via=str(payload.get("via", "")),
+        confidence=str(payload.get("confidence", "declared")),
+        mechanism=str(payload.get("mechanism", "")),
+        match_reason=str(payload.get("match_reason", "")),
+    )
+
+
+def _conflict_to_dict(conflict: GraphConflict) -> dict[str, Any]:
+    return {
+        "repository": conflict.repository,
+        "status": conflict.status,
+        "via": list(conflict.via),
+        "edges": [
+            {
+                "producer": edge.producer,
+                "consumer": edge.consumer,
+                "confidence": edge.confidence,
+                "mechanism": str(edge.mechanism),
+                "match_reason": edge.match_reason,
+            }
+            for edge in conflict.edges
+        ],
+    }
+
+
+def _conflict_from_dict(payload: dict[str, Any]) -> GraphConflict:
+    return GraphConflict(
+        repository=str(payload.get("repository", "")),
+        status=str(payload.get("status", "EXCLUDED")),
+        via=tuple(str(v) for v in (payload.get("via") or ())),
+        edges=tuple(
+            GraphEdge(
+                producer=str(edge.get("producer", "")),
+                consumer=str(edge.get("consumer", "")),
+                confidence=str(edge.get("confidence", "declared")),
+                mechanism=edge.get("mechanism", "SOURCE"),
+                match_reason=str(edge.get("match_reason", "")),
+            )
+            for edge in (payload.get("edges") or ())
+        ),
+    )
+
+
+def _observation_to_dict(observation: SupplementObservation) -> dict[str, Any]:
+    return {
+        "repository": observation.repository,
+        "via": observation.via,
+    }
+
+
+def _observation_from_dict(payload: dict[str, Any]) -> SupplementObservation:
+    return SupplementObservation(
+        repository=str(payload.get("repository", "")),
+        via=str(payload.get("via", "")),
     )
 
 
@@ -429,7 +603,18 @@ def summary_in_force(classification: dict[str, Any]) -> ConfirmationSummary:
         required=buckets["required"],
         maybe=buckets["maybe"],
         excluded=buckets["excluded"],
-        supplemented_repos=list(classification.get("supplemented_repos") or ()),
+        supplements=[
+            _supplement_from_dict(item)
+            for item in (classification.get("supplements") or ())
+        ],
+        conflicts=[
+            _conflict_from_dict(item)
+            for item in (classification.get("conflicts") or ())
+        ],
+        observations=[
+            _observation_from_dict(item)
+            for item in (classification.get("observations") or ())
+        ],
     )
 
 
@@ -443,11 +628,21 @@ class DiscoveryChainService:
         directory: AgentPrincipalReader,
         audit: DiscoveryAuditLog,
         pipeline: DiscoveryPipeline,
+        *,
+        default_candidate_limit: int = 10,
+        decision_history: DecisionHistoryPort | None = None,
     ) -> None:
         self._snapshots = snapshots
         self._directory = directory
         self._audit = audit
         self._pipeline = pipeline
+        #: Step-1 candidate cap when the command does not say; injected from
+        #: ``REPOMESH_DISCOVERY_CANDIDATE_LIMIT`` at the composition root.
+        self._default_candidate_limit = default_candidate_limit
+        #: Phase 4b: similar historical decision chains injected into the
+        #: confirmation prompt. ``None`` (unwired) simply means no history —
+        #: retrieval is an enhancement, never a blocker.
+        self._decision_history = decision_history
 
     # -------------------------------------------------- subject and target
 
@@ -479,6 +674,7 @@ class DiscoveryChainService:
             project_id=draft.project_id,
             plan_version=draft.plan_version,
             requirement_text=draft.requirement_text or "",
+            discovery_version=draft.discovery_version,
             discovery=dict(draft.discovery or {}),
         )
 
@@ -486,7 +682,16 @@ class DiscoveryChainService:
 
     async def _commit(self, target: DiscoveryTarget, block: dict[str, Any]) -> None:
         block["schema_version"] = DISCOVERY_SCHEMA_VERSION
-        await self._snapshots.set_discovery(target.snapshot_id, block)
+        # The version read when the target was built is the optimistic-lock
+        # guard: if the block moved since (a second tab's approval, another
+        # worker), the conditional UPDATE matches nothing and the write is
+        # refused with PlanSnapshotVersionConflict (409) instead of silently
+        # clobbering the other writer's work (v0.4 §4).
+        await self._snapshots.set_discovery(
+            target.snapshot_id,
+            block,
+            expected_version=target.discovery_version,
+        )
 
     @staticmethod
     def _downstream_of(step: str) -> tuple[str, ...]:
@@ -522,6 +727,7 @@ class DiscoveryChainService:
         actor_id: UUID,
         project_id: UUID,
         payload: dict[str, Any],
+        organization_id: UUID | None = None,
     ) -> None:
         await self._audit.append(
             EventEnvelope(
@@ -532,10 +738,68 @@ class DiscoveryChainService:
                 aggregate_id=project_id,
                 aggregate_version=1,
                 correlation_id=new_id(),
+                organization_id=organization_id,
                 project_id=project_id,
                 payload=payload,
             )
         )
+
+    async def _organization_of(self, project_id: UUID) -> UUID | None:
+        """The L1 namespace for an event: the issue creator's workspace.
+
+        Authorization already happened in the step gate; this derivation is
+        the same rule every other write uses (issue intake v0.3 §1.2) and never
+        trusts anything the request body said. ``None`` when the creator is no
+        longer resolvable — the event then carries no L1 rather than a guessed
+        one (contract v0.1 §10 rule 7).
+        """
+
+        return await _issue_organization(
+            self._directory, self._snapshots, project_id
+        )
+
+    async def _history_context(
+        self,
+        target: DiscoveryTarget,
+        items: list[dict[str, Any]],
+        *,
+        query_text: str | None = None,
+    ) -> str | None:
+        """Similar historical decision chains, rendered for the RM prompt.
+
+        Phase 4b injection: the confirmation prompt cites what other projects
+        decided on the same repositories as *reference evidence*. Retrieval is
+        an enhancement, never a blocker — a missing port, an unresponsive
+        store or an unresolvable organization all yield ``None`` and the
+        classification proceeds exactly as before. ``query_text`` (the
+        requirement in force) feeds the L3 semantic ranking when the wired
+        adapter supports it; structural adapters ignore it.
+        """
+
+        port = self._decision_history
+        if port is None:
+            return None
+        repository_ids = _candidate_repository_ids(items)
+        if not repository_ids:
+            return None
+        try:
+            organization_id = await self._organization_of(target.project_id)
+            if organization_id is None:
+                return None
+            sheets = await port.find_similar(
+                organization_id=organization_id,
+                project_id=target.project_id,
+                repository_ids=repository_ids,
+                query_text=query_text,
+            )
+            return _format_history_context(sheets)
+        except Exception:  # noqa: BLE001 - history is an enhancement, not a gate
+            _logger.warning(
+                "similar decision history unavailable; classification "
+                "proceeds without it",
+                exc_info=True,
+            )
+            return None
 
     def _replayed(self, block: dict[str, Any], step: str, key: str) -> bool:
         """Same key on the same step → the earlier result stands (§4.4).
@@ -661,10 +925,17 @@ class DiscoveryChainService:
     ) -> None:
         block = dict(target.discovery)
         requirement = _requirement_in_force(block, target.requirement_text)
+        # ``None`` from the panel inherits the configured cap; the resolved
+        # number is what the block records and what actually ran.
+        limit = (
+            command.limit
+            if command.limit is not None
+            else self._default_candidate_limit
+        )
         record: dict[str, Any] = {
             "items": [],
             "llm_used": False,
-            "limit": command.limit,
+            "limit": limit,
             "entry_point": command.entry_point,
             "idempotency_key": command.idempotency_key,
             "ran_at": _now(),
@@ -673,7 +944,7 @@ class DiscoveryChainService:
         }
         try:
             items, llm_used = await self._pipeline.score_candidates(
-                requirement, limit=command.limit, entry_point=command.entry_point
+                requirement, limit=limit, entry_point=command.entry_point
             )
         except Exception as error:  # noqa: BLE001 - recorded, then surfaced
             record["error"] = _summarise_error(error)
@@ -717,11 +988,23 @@ class DiscoveryChainService:
         block = dict(target.discovery)
         requirement = _requirement_in_force(block, target.requirement_text)
         items = list((block.get("candidates") or {}).get("items") or ())
+        # Phase 4b: similar historical decision chains as reference evidence
+        # in the confirmation prompt. Fail-safe by design — a history miss
+        # must never stand between the issue and its classification. The
+        # requirement in force feeds the L3 semantic ranking (query_text).
+        history_context = await self._history_context(
+            target, items, query_text=requirement
+        )
         record: dict[str, Any] = {
             "required": [],
             "maybe": [],
             "excluded": [],
-            "supplemented_repos": [],
+            # Block shape is identical whether the run succeeds or fails — the
+            # ``error`` field carries the state, so consumers never branch on
+            # which lists exist.
+            "supplements": [],
+            "conflicts": [],
+            "observations": [],
             "adjustments": [],
             "idempotency_key": command.idempotency_key,
             "ran_at": _now(),
@@ -730,17 +1013,39 @@ class DiscoveryChainService:
         }
         try:
             summary = await self._pipeline.classify(
-                requirement, items, on_progress=on_progress
+                requirement,
+                items,
+                on_progress=on_progress,
+                history_context=history_context,
             )
         except Exception as error:  # noqa: BLE001 - recorded, then surfaced
             record["error"] = _summarise_error(error)
             block["classification"] = record
+            # Symmetric with the success path: a failed classification voids
+            # its downstream steps too. The void is what stops a stale
+            # approval (the plan() gate reads the block, not the record's
+            # error field) from releasing a plan built on a classification
+            # that no longer stands.
+            await self._void_downstream(
+                block,
+                "classification",
+                actor_id=command.created_by_agent_id,
+                project_id=target.project_id,
+            )
             await self._commit(target, block)
             raise
         record["required"] = [_result_to_dict(r) for r in summary.required]
         record["maybe"] = [_result_to_dict(r) for r in summary.maybe]
         record["excluded"] = [_result_to_dict(r) for r in summary.excluded]
-        record["supplemented_repos"] = list(summary.supplemented_repos)
+        record["supplements"] = [
+            _supplement_to_dict(item) for item in summary.supplements
+        ]
+        record["conflicts"] = [
+            _conflict_to_dict(item) for item in summary.conflicts
+        ]
+        record["observations"] = [
+            _observation_to_dict(item) for item in summary.observations
+        ]
         block["classification"] = record
         await self._void_downstream(
             block,
@@ -749,6 +1054,13 @@ class DiscoveryChainService:
             project_id=target.project_id,
         )
         await self._commit(target, block)
+        await self._audit_event(
+            "ClassificationDecided",
+            actor_id=command.created_by_agent_id,
+            project_id=target.project_id,
+            organization_id=await self._organization_of(target.project_id),
+            payload=_classification_decided_payload(block["classification"]),
+        )
 
     async def plan(self, command: DiscoveryStepCommand) -> tuple[DiscoveryTarget, bool]:
         target = await self.target(command.issue_id)
@@ -757,6 +1069,15 @@ class DiscoveryChainService:
         block = target.discovery
         if not block.get("classification"):
             raise DiscoveryPreconditionFailed("no classification for this issue")
+        if (block.get("classification") or {}).get("error"):
+            # The classification's own record says it failed. Approving a
+            # failed tiering (or replaying an approval recorded before the
+            # failure voided it) must not release a plan — the block no longer
+            # holds a repository set anybody reviewed.
+            raise DiscoveryPreconditionFailed(
+                "the last classification failed; re-run it before generating "
+                "a plan"
+            )
         if (block.get("approval") or {}).get("state") != "approved":
             # The contract's one hard gate (§0.1 rule 1): approval is not
             # advisory, and a plan built from an unapproved classification is
@@ -806,6 +1127,13 @@ class DiscoveryChainService:
         record["contract_count"] = len(integrated.contracts)
         block["plan"] = record
         await self._commit(target, block)
+        await self._audit_event(
+            "IntegrationDecided",
+            actor_id=command.created_by_agent_id,
+            project_id=target.project_id,
+            organization_id=await self._organization_of(target.project_id),
+            payload=_integration_decided_payload(integrated),
+        )
 
     # ------------------------------------------------------------ approval
 
@@ -885,7 +1213,181 @@ class DiscoveryChainService:
                 "reason": command.reason,
             },
         )
+        await self._audit_event(
+            "ConfirmationDecided",
+            actor_id=actor.id,
+            project_id=target.project_id,
+            organization_id=actor.organization_id,
+            payload=_confirmation_decided_payload(block),
+        )
         return target, False
+
+
+def _candidate_repository_ids(items: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Repository slugs the current candidates touch (§6.5 Phase 4b scope).
+
+    The same names the decision chain stores as ``affected_repository_ids``,
+    so they match directly. Deterministic, de-duplicated, first-seen order.
+    """
+
+    return tuple(
+        dict.fromkeys(
+            str(item["repository_name"])
+            for item in items
+            if str(item.get("repository_name", "")).strip()
+        )
+    )
+
+
+def _format_history_context(sheets: list[SimilarDecisionSheet]) -> str | None:
+    """Render similar historical decisions as reference evidence (§6.5).
+
+    Deterministic over the sheets: one line per collapsed project's latest
+    decision — step, status, business date, and the affected repos with the
+    effective tier recorded at approval time when the sheet carries one.
+    Reference evidence only: the confirmation prompt tells the RM to treat it
+    as precedent, never as a substitute for this requirement's own evidence.
+    """
+
+    if not sheets:
+        return None
+    lines = [
+        "## Similar Historical Decisions",
+        "Other projects previously decided on repositories in your candidate "
+        "list. Treat them as precedent to calibrate your verdict — this "
+        "requirement's own evidence above is what decides.",
+    ]
+    for index, sheet in enumerate(sheets, start=1):
+        payload = sheet.payload_summary or {}
+        tiers = payload.get("effective_tiers") or {}
+        if isinstance(tiers, dict):
+            affected = ", ".join(
+                f"{repo} ({tiers.get(repo, sheet.status)})"
+                for repo in sheet.affected_repository_ids
+            )
+        else:
+            affected = ", ".join(sheet.affected_repository_ids)
+        when = (
+            f"{sheet.business_time:%Y-%m-%d}"
+            if sheet.business_time is not None
+            else "unknown date"
+        )
+        lines.append(
+            f"{index}. {sheet.step} / {sheet.status} · "
+            f"{when} · decision {sheet.decision_id} · "
+            f"repos: {affected}"
+        )
+    return "\n".join(lines)
+
+
+def _affected_repositories(classification: dict[str, Any]) -> list[str]:
+    """The decision's impact surface, frozen at decision time (决策③).
+
+    Kept repositories — the tiering in force, INCLUDING the approver's edits —
+    plus graph-supplemented names: the set a later phase will actually touch.
+    Excluded names stay out, they are decisions *not* to touch something.
+    Order follows the effective tiering then the supplement list, de-duplicated.
+    """
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for row in effective_tiers(classification):
+        if row["tier"] in ("required", "maybe") and row["repository"] not in seen:
+            names.append(row["repository"])
+            seen.add(row["repository"])
+    for item in classification.get("supplements") or ():
+        name = str(item.get("repository", ""))
+        if name not in seen:
+            names.append(name)
+            seen.add(name)
+    return names
+
+
+def _classification_decided_payload(classification: dict[str, Any]) -> dict[str, Any]:
+    """Contract v0.1 §3.2 — ``ClassificationDecided`` payload.
+
+    Summary only: the tiering lists, the evidence fingerprint the approver
+    will later be bound to, and the impact snapshot. The full block stays in
+    the snapshot, the single source of truth (§10 rule 2).
+    """
+
+    return {
+        "schema_version": 1,
+        "occurred_at": _now(),
+        "classification": {
+            "required": [
+                str(item.get("repository", ""))
+                for item in classification.get("required") or ()
+            ],
+            "maybe": [
+                str(item.get("repository", ""))
+                for item in classification.get("maybe") or ()
+            ],
+            "excluded": [
+                str(item.get("repository", ""))
+                for item in classification.get("excluded") or ()
+            ],
+            "effective_tiers": {
+                row["repository"]: row["tier"].upper()
+                for row in effective_tiers(classification)
+            },
+            "evidence_version": classification_fingerprint(classification),
+            "supplemented_repository_ids": [
+                str(item.get("repository", ""))
+                for item in classification.get("supplements") or ()
+            ],
+        },
+        "affected_repository_ids": _affected_repositories(classification),
+    }
+
+
+def _integration_decided_payload(plan: IntegratedPlan) -> dict[str, Any]:
+    """Contract v0.1 §3.2 — ``IntegrationDecided`` payload.
+
+    Batch summaries and contract names only — the engineering spec and the
+    DAG stay in the plan snapshot (never copied into the event).
+    """
+
+    return {
+        "schema_version": 1,
+        "occurred_at": _now(),
+        "execution_batches": [
+            {"index": index, "repository_ids": list(batch)}
+            for index, batch in enumerate(plan.execution_batches)
+        ],
+        "contracts": [
+            f"{contract.producer}->{contract.consumer}:{contract.interface}"
+            for contract in plan.contracts
+        ],
+        "affected_repository_ids": [
+            repository
+            for batch in plan.execution_batches
+            for repository in batch
+        ],
+    }
+
+
+def _confirmation_decided_payload(block: dict[str, Any]) -> dict[str, Any]:
+    """Contract v0.1 §3.2 — ``ConfirmationDecided`` payload.
+
+    The approval record plus the adjustments that rode in with it. Reads the
+    committed block so the payload always describes what the snapshot holds.
+    """
+
+    classification = block.get("classification") or {}
+    approval = block.get("approval") or {}
+    return {
+        "schema_version": 1,
+        "occurred_at": approval.get("decided_at") or _now(),
+        "approval": {
+            "state": approval.get("state"),
+            "decided_by_agent_id": approval.get("decided_by_agent_id"),
+            "reason": approval.get("reason"),
+        },
+        "adjustments": list(classification.get("adjustments") or ()),
+        "evidence_version": approval.get("evidence_version"),
+        "affected_repository_ids": _affected_repositories(classification),
+    }
 
 
 def _compose_requirement(

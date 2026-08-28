@@ -82,7 +82,9 @@ async def test_discovery_returns_ranked_evidence() -> None:
         )
     )
 
-    results = await RepositoryDiscoveryService(catalog).discover("Add payment checkout flow")
+    results = await RepositoryDiscoveryService(catalog).discover(
+        "Add payment checkout flow", limit=5
+    )
 
     assert len(results) == 1
     assert results[0].matched_terms == ("checkout", "payment")

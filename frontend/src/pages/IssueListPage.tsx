@@ -42,6 +42,14 @@ function IssueRow({ item, onOpen }: { item: IssueListItemView; onOpen: (item: Is
           {item.pending_decision_count} 项待决策
         </span>
       )}
+      {/* §2.3：需求已落库、尚未物化成执行计划——Org Leader 的下一个动作是驱动
+          发现链并物化。与 phase_note「计划 vN 待物化」同一分支派生，行内徽标让
+          它在列表里一眼可扫。 */}
+      {item.pending_planning && (
+        <span className="mt-0.5 flex-none rounded-hard border border-amber px-2 py-px text-[11px] text-amber">
+          待处理
+        </span>
+      )}
       {/* §2.1：paused 独立徽标，不改写 Open/Closed 归属；null ≠ active，故有值才渲染 */}
       {item.operational_status === "paused" && (
         <span className="mt-0.5 flex-none rounded-hard border border-salmon px-2 py-px text-[11px] text-salmon">

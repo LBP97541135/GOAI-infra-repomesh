@@ -167,3 +167,12 @@ class DiscoveryEvidence:
     score: float
     rationale: str
     is_entry_point: bool = False
+    low_signal: bool = False
+    """The scored profile has no signal a scorer could lean on.
+
+    Scanned profiles reuse the scan's own verdict (``AutoCard.low_signal``:
+    name/dirs/deps/commits scored for business signal); unscanned profiles
+    are low-signal when the facade (description/topics/languages) is empty.
+    The score is then a guess — panels should say so rather than present it
+    as a well-supported verdict.
+    """

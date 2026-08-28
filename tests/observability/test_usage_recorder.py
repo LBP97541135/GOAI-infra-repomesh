@@ -133,7 +133,15 @@ async def test_full_queue_drops_without_blocking(database: Database) -> None:
 
 
 async def test_query_summary_and_issues_aggregate(database: Database) -> None:
-    now = datetime.now(UTC)
+    # Pin to local noon: the daily aggregation groups by *local* date, so a
+    # naive ``now`` running near local midnight would split the fixture's
+    # now-1..4h offsets across two days and break ``len(daily) == 1``.
+    now = (
+        datetime.now()
+        .astimezone()
+        .replace(hour=12, minute=0, second=0, microsecond=0)
+        .astimezone(UTC)
+    )
     issue_a, issue_b = uuid4(), uuid4()
     async with database.transaction() as session:
         session.add_all(

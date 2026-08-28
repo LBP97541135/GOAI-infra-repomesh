@@ -676,7 +676,6 @@ async def test_replan_regenerates_docs_for_affected_repos() -> None:
         ],
         maybe=[],
         excluded=[],
-        supplemented_repos=[],
     )
     bridge = _make_bridge(recorder)
 

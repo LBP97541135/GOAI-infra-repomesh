@@ -63,6 +63,22 @@ function TierRow({
       <div className="flex flex-wrap items-center gap-2">
         <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-cream">{tier.repository}</span>
 
+        {/* 图预扩充 / 冲突复核标记（契约 §2.2）：只在为真时渲染——服务端恒发 false
+            的字段按假处理，不在这儿猜缺省语义。蓝色=不是评分来的，红色=排除建议复核 */}
+        {detail?.is_supplemented && (
+          <span className="rounded-hard border border-bluegray px-1.5 py-px text-[10.5px] text-bluegray">
+            图扩充
+          </span>
+        )}
+        {detail?.graph_conflict && (
+          <span
+            className="rounded-hard border border-salmon px-1.5 py-px text-[10.5px] text-salmon"
+            title="模型判排除，但图上有已确认依赖边连到保留仓——见下方「复核建议」"
+          >
+            需复核
+          </span>
+        )}
+
         {/* 服务端已生效的档：下拉是**待提交的草稿**，两者不同时必须能同时看见，
             否则用户分不清「已经是这样」与「我刚改成这样」 */}
         <span className={`rounded-hard border px-1.5 py-px text-[10.5px] ${TIER_SKIN[tier.tier]}`}>
@@ -183,11 +199,64 @@ export function DiscoveryApproval({
         </div>
       )}
 
-      {classification.supplemented_repos.length > 0 && (
-        <p className="mt-2 text-[11px] text-tx3">
-          模型补充进来的仓库（不在候选评分里）：
-          <span className="font-mono text-tx2"> {classification.supplemented_repos.join("、")}</span>
-        </p>
+      {/* 图预扩充证据（契约 §2.2）：PM 调图把一阶邻居拉进确认名单，每条都带证据——
+          via 是拉它进来的候选仓，confidence 是图边的不是 LLM 的。 */}
+      {classification.supplements.length > 0 && (
+        <div className="mt-2 border-t border-line pt-2">
+          <div className="microlabel pb-1">图预扩充（不在候选评分里）</div>
+          {classification.supplements.map((s) => (
+            <div key={s.repository} className="mb-1 last:mb-0">
+              <p className="text-[11px] text-tx2">
+                <span className="font-mono text-bluegray">{s.repository}</span>
+                <span className="text-tx3">
+                  {" "}
+                  经 {s.via} 的 {s.mechanism}（图边 {s.confidence}）带入
+                </span>
+              </p>
+              <p className="pl-3 text-[10.5px] text-tx3">依据：{s.match_reason}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 图与模型的分歧（契约 §2.2）：模型判排除、图上却有已确认边连到保留仓。
+          这是复核建议不是报错——改不改档仍走行内下拉，系统不代劳。 */}
+      {classification.conflicts.length > 0 && (
+        <div className="mt-2 border-t border-line pt-2">
+          <div className="microlabel pb-1 text-salmon">图与模型分歧 · 复核建议</div>
+          {classification.conflicts.map((c) => (
+            <div key={c.repository} className="mb-1.5 last:mb-0">
+              <p className="text-[11px] leading-[1.6] text-tx2">
+                <span className="font-mono text-salmon">{c.repository}</span> 被模型判为排除，
+                但图上存在已确认依赖边连到保留仓{" "}
+                <span className="font-mono text-tx">{c.via.join("、")}</span>——这张排除建议复核
+                （是否改档走行内下拉）。
+              </p>
+              {c.edges.map((e, i) => (
+                <p key={i} className="pl-3 font-mono text-[10.5px] leading-[1.6] text-tx3">
+                  {e.producer} → {e.consumer} · {e.mechanism}（{e.confidence}）· {e.match_reason}
+                </p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* 低信任观察名单（契约 §2.2）：模型口述过、但既不在确认名单里也没有图边背书。
+          不自动纳入；要纳入请用行内下拉手工改档（adjustments 本就支持加没人确认过的仓）。 */}
+      {classification.observations.length > 0 && (
+        <div className="mt-2 border-t border-line pt-2">
+          <div className="microlabel pb-1">低信任观察名单</div>
+          <p className="pb-1 text-[10.5px] text-tx3">
+            模型在确认时口述过这些仓，无图边背书、不在确认名单里——不自动纳入。
+          </p>
+          {classification.observations.map((o) => (
+            <p key={o.repository} className="text-[11px] text-tx2">
+              <span className="font-mono text-tx">{o.repository}</span>
+              <span className="text-tx3"> · 由 {o.via} 报告</span>
+            </p>
+          ))}
+        </div>
       )}
 
       {/* 改档留痕与 LLM 原判并存（§2.2）：抹掉这段就看不出「模型说什么、人改成什么」 */}

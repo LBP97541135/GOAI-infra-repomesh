@@ -67,6 +67,9 @@ export interface IssueListItemView {
   active_round_id: string | null;
   latest_round_id: string | null;
   pending_decision_count: number;
+  /** §2.3：需求已落库但尚未物化成执行计划（无任何轮次）——Org Leader 的
+   *  下一步是驱动发现链并物化。与 phase_note「计划 vN 待物化」同一分支派生。 */
+  pending_planning: boolean;
   repository_count: number;
   team_count: number;
   /** §2.1：paused **不影响** state，前端以独立徽标呈现 */
@@ -950,6 +953,10 @@ export interface DiscoveryCandidateItem {
   /** **原样透传，读模型不摘要不截断**（§3.1 诚实条款），前端同样不许摘要 */
   rationale: string;
   is_entry_point: boolean;
+  /** **低信号自述**：被评仓库除名字外没有可倚仗的信号（已扫描仓取扫描的
+   *  `AutoCard.low_signal` 判定；未扫描仓 facade 全空）。此时分数是猜测——
+   *  面板显示「低信号」徽章，**禁止把猜测分数当有据判定呈现**（§3.1 诚实条款）。 */
+  low_signal: boolean;
 }
 
 /** §2.2 `candidates` 直投影（GUI 步 2 / 管线 Step 1）。 */
@@ -977,7 +984,12 @@ export interface ConfirmationRepositoryPlanView {
 }
 
 /** `repository_intelligence/api/models.py:255` 既有形状，§2.2 直接复用。
- *  `status` 是**大写字符串**（不是枚举类型），值域见 DiscoveryTierStatus。 */
+ *  `status` 是**大写字符串**（不是枚举类型），值域见 DiscoveryTierStatus。
+ *
+ *  本批追加两个**恒可下发**的布尔（契约 §2.2 勘正）：
+ *   - `is_supplemented`：该仓是 PM 调图预补充进确认名单的，非候选评分产物；
+ *   - `graph_conflict`：模型判 EXCLUDED、但图上有一条已确认依赖边把它连到保留仓。
+ *  两者缺省语义由契约定死（非真即不渲染），服务端**不省略**恒发 false。 */
 export interface ConfirmationResultView {
   repository: string;
   status: DiscoveryTierStatus;
@@ -986,6 +998,44 @@ export interface ConfirmationResultView {
   plan_summary: string;
   plan: ConfirmationRepositoryPlanView | null;
   missing_dependencies: string[];
+  is_supplemented: boolean;
+  graph_conflict: boolean;
+}
+
+/** §2.2 `classification.supplements`：图预补充的证据明细，每仓一条（契约 §2.2）。
+ *  `confidence` 是**图边**的置信度（`confirmed` / `declared`），不是 LLM 的；
+ *  `via` 是拉它进来的候选仓；`mechanism` 是 forward/reverse_dependencies。 */
+export interface SupplementEvidenceView {
+  repository: string;
+  via: string;
+  confidence: string;
+  mechanism: string;
+  match_reason: string;
+}
+
+/** §2.2 `GraphConflictView.edges[].item`：触发复核的那条已确认图边原文。 */
+export interface GraphConflictEdgeView {
+  producer: string;
+  consumer: string;
+  confidence: string;
+  mechanism: string;
+  match_reason: string;
+}
+
+/** §2.2 `classification.conflicts`：图与模型的分歧清单（复核建议，非报错）。
+ *  `status` 是模型原判（实践中恒 EXCLUDED）；`via` 是图边指向的被保留仓。 */
+export interface GraphConflictView {
+  repository: string;
+  status: string;
+  via: string[];
+  edges: GraphConflictEdgeView[];
+}
+
+/** §2.2 `classification.observations`：低信任观察名单——模型口述、无图边背书、
+ *  不在确认名单里的仓。摆给审批人看，要纳入走 adjustments，不自动补充。 */
+export interface SupplementObservationView {
+  repository: string;
+  via: string;
 }
 
 /** §2.2 `classification.adjustments`：审批人改档的留痕，与 LLM 原判**并存**。
@@ -999,12 +1049,18 @@ export interface DiscoveryAdjustmentRecord {
 }
 
 /** §2.2 `classification` 直投影（GUI 步 3 上半 / 管线 Step 2）。
- *  三档列表保留 **LLM 原始分档**；生效分档见 §3.1 `effective_tiers`。 */
+ *  三档列表保留 **LLM 原始分档**；生效分档见 §3.1 `effective_tiers`。
+ *
+ *  `supplements` / `conflicts` / `observations` 是本批（图预补充 + 复核）新增：
+ *  图预补充的证据明细、图与模型的分歧清单、低信任观察名单（契约 §2.2）。
+ */
 export interface DiscoveryClassificationBlock {
   required: ConfirmationResultView[];
   maybe: ConfirmationResultView[];
   excluded: ConfirmationResultView[];
-  supplemented_repos: string[];
+  supplements: SupplementEvidenceView[];
+  conflicts: GraphConflictView[];
+  observations: SupplementObservationView[];
   adjustments: DiscoveryAdjustmentRecord[];
   ran_at: string;
   by_agent_id: string;
@@ -1163,10 +1219,10 @@ export interface DiscoveryAnalysisRequest {
 }
 
 /** §4.3 Step 1 候选评分。需求文本取 `analyzed_requirement`，不收。
- *  `limit` / `entry_point` **均可选**（实施定死）：`limit` 缺省 10、范围 1..50，
- *  `entry_point` 缺省 null。**前端不送，交服务端缺省**——硬编一个就是第二份缺省
- *  （同 repositoryScan.ts 不送 max_workers 的取舍）。
- *  与既有脚本入口 `POST /discovery` 的缺省 5 **有意不同**，两处各自独立、不统一。 */
+ *  `limit` / `entry_point` **均可选**（实施定死）：`limit` 缺省取服务端配置
+ *  `REPOMESH_DISCOVERY_CANDIDATE_LIMIT`（范围 1..50），`entry_point` 缺省 null。
+ *  **前端不送，交服务端缺省**——硬编一个就是第二份缺省（同 repositoryScan.ts
+ *  不送 max_workers 的取舍）。脚本入口 `POST /discovery` 走自己的请求体，互不干扰。 */
 export interface DiscoveryCandidatesRequest {
   created_by_agent_id: string;
   idempotency_key: string;
@@ -1465,6 +1521,7 @@ export interface LogEntry {
 export interface LogEntriesResponse {
   logs: LogEntry[];
   next_cursor: string | null;
+}
 
 /* ── 平台就绪与 Coding Agent 探测（迁移 3：main 装机向导的读面）─────────────
    两个端点均无鉴权（后端 platform_setup.py 只给 onboard 挂了管理员判定）。 */

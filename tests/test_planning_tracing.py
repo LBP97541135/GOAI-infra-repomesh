@@ -192,7 +192,6 @@ def test_integration_fallback_is_marked_on_span(span_exporter) -> None:
         ],
         maybe=[],
         excluded=[],
-        supplemented_repos=[],
     )
     service = PlanIntegrationService(_FakeLLM("this is not json at all"))
 
@@ -206,7 +205,7 @@ def test_integration_fallback_is_marked_on_span(span_exporter) -> None:
 async def test_discovery_span_marks_keyword_fallback(span_exporter) -> None:
     service = RepositoryDiscoveryService(_FakeCatalog(), llm_client=None)
 
-    await service.discover("Add discount support")
+    await service.discover("Add discount support", limit=5)
 
     (span,) = _spans_named(span_exporter, "planning.discovery")
     attrs = dict(span.attributes or {})

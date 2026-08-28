@@ -56,9 +56,16 @@ from repomesh.modules.collaboration import (
     SendCollaborationMessage,
 )
 from repomesh.modules.context.infrastructure import PostgresContextStore
+from repomesh.modules.decision_chain import (
+    DecisionChainProjectionService,
+    DecisionChainProjector,
+    PostgresDecisionChainStore,
+    PostgresDecisionEventSource,
+)
 from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
+    PostgresDeliveryAuditLog,
     PostgresSCMCommandStore,
     PostgresSCMObservationStore,
     PostgresSCMPollCursorStore,
@@ -98,7 +105,7 @@ from repomesh.modules.task_orchestration import PostgresTaskStore, TaskOrchestra
 from repomesh.modules.task_orchestration.contracts import TaskAssignmentPublisher
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
-from repomesh.settings import get_settings
+from repomesh.settings import Settings, get_settings
 from repomesh_runner.telemetry import setup_tracing
 
 
@@ -236,6 +243,7 @@ def build_default_container() -> ApplicationContainer:
             collaboration,
             task_publisher,
             checkpoint_service,
+            PostgresDeliveryAuditLog(database),
         )
         task_report_gateway = tasks
         inbound = ProcessMatrixTaskReport(
@@ -258,6 +266,7 @@ def build_default_container() -> ApplicationContainer:
             require_governance=settings.delivery_auto_enabled,
             require_validation=settings.delivery_auto_enabled,
             validation_reader=validation,
+            audit=PostgresDeliveryAuditLog(database),
         )
         observations = SCMObservationService(PostgresSCMObservationStore(database))
         commands = SCMCommandService(PostgresSCMCommandStore(database))
@@ -322,6 +331,7 @@ def build_default_container() -> ApplicationContainer:
             require_governance=True,
             require_validation=True,
             validation_reader=validation,
+            audit=PostgresDeliveryAuditLog(database),
         )
         commands = SCMCommandService(PostgresSCMCommandStore(database))
         # Revert conflicts need a Worker to repair them; without AgentTeams the
@@ -389,6 +399,18 @@ def build_default_container() -> ApplicationContainer:
         *background_services,
         TraceIngester(TraceStore(database), _trace_source(settings)),
     )
+    # Decision-chain projection subscribes to the five chain events; drain is
+    # idempotent (event_id unique) and incremental (the source skips projected
+    # ids), so the interval loop is safe to run continuously.
+    background_services = (
+        *background_services,
+        DecisionChainProjector(
+            DecisionChainProjectionService(
+                PostgresDecisionChainStore(database),
+                PostgresDecisionEventSource(database),
+            )
+        ),
+    )
     return ApplicationContainer(
         database=database,
         agent_directory=agent_directory,
@@ -421,8 +443,33 @@ def build_default_container() -> ApplicationContainer:
     )
 
 
+_PUBLIC_DEV_ACTION_TOKEN = "console-dev-token"
+
+
+def _guard_deployment_defaults(settings: Settings) -> None:
+    """Fail fast when a non-development environment keeps the public default
+    agent action token.
+
+    ``console-dev-token`` is the shared default across compose.yaml, the
+    frontend build args and the dev scripts, and it is embedded in the built
+    frontend bundle. Fine as a development convenience; in staging or
+    production it means every write endpoint is protected by a publicly-known
+    credential, so the process refuses to start rather than serve with it.
+    """
+
+    if settings.environment not in {"staging", "production"}:
+        return
+    if settings.agent_action_token == _PUBLIC_DEV_ACTION_TOKEN:
+        raise RuntimeError(
+            "REPOMESH_AGENT_ACTION_TOKEN is still the public default "
+            f"'{_PUBLIC_DEV_ACTION_TOKEN}'; set a real token for the "
+            f"{settings.environment} environment"
+        )
+
+
 def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     settings = get_settings()
+    _guard_deployment_defaults(settings)
     setup_tracing(settings.otlp_endpoint, service_name=settings.otlp_service_name)
     application = FastAPI(
         title=settings.app_name,

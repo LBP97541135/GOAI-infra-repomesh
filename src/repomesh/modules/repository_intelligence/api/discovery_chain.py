@@ -60,6 +60,9 @@ from repomesh.modules.repository_intelligence.contracts import (
     DiscoveryApprovalCommand,
     DiscoveryStepCommand,
 )
+from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (
+    PlanSnapshotVersionConflict,
+)
 from repomesh.modules.repository_intelligence.ports import (
     RuntimeProjectionConflict,
     RuntimeProjectionUnavailable,
@@ -273,6 +276,12 @@ def _translate(error: Exception) -> HTTPException:
         # have told them to file a bug and wait instead.
         return HTTPException(status_code=500, detail=str(error))
     if isinstance(error, DiscoveryPreconditionFailed | DiscoveryEvidenceStale):
+        return HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, PlanSnapshotVersionConflict):
+        # The discovery block moved since this request's trigger read it (the
+        # step the caller aimed at already committed, or another client wrote
+        # the same block first). The snapshot never gets silently overwritten;
+        # read the projection and decide whether the step still needs doing.
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, AgentHierarchyViolation):
         # The repository-team provisioner's honest refusal: the repository's

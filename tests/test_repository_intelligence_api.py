@@ -95,7 +95,6 @@ def _integration_payload() -> dict:
             "required": [with_repo("A", []), with_repo("B", ["A"])],
             "maybe": [],
             "excluded": [],
-            "supplemented_repos": [],
             "final_repos": ["A", "B"],
         },
     }

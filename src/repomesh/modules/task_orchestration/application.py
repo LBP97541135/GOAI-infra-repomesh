@@ -1,6 +1,7 @@
 import hashlib
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -55,7 +56,13 @@ from repomesh.modules.task_orchestration.domain import (
     TaskDenied,
     TaskNotFound,
 )
-from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
+from repomesh.modules.task_orchestration.ports import (
+    ExecutionPlanStore,
+    TaskAuditLog,
+    TaskStore,
+)
+from repomesh.shared.domain import new_id
+from repomesh.shared.events import ActorType, EventEnvelope
 from repomesh.shared.idempotency import command_fingerprint
 
 _logger = logging.getLogger(__name__)
@@ -223,6 +230,7 @@ class TaskOrchestrator:
         collaboration: CollaborationGateway,
         publisher: TaskAssignmentPublisher | None = None,
         checkpoints: ProjectCheckpointGateway | None = None,
+        audit: TaskAuditLog | None = None,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
@@ -230,6 +238,7 @@ class TaskOrchestrator:
         self._collaboration = collaboration
         self._publisher = publisher
         self._checkpoints = checkpoints or TopologyAwareCheckpointFallback(topologies)
+        self._audit = audit
 
     async def assign(
         self,
@@ -289,8 +298,49 @@ class TaskOrchestrator:
             idempotency_key=key,
             request_fingerprint=fingerprint,
         )
+        await self._emit_tasks_planned(task)
         await self._deliver_assignment(task, key)
         return task.to_view()
+
+    async def _emit_tasks_planned(self, task: Task) -> None:
+        """Contract decision-chain v0.1 §3.2 — one event per created task.
+
+        Emitted only on the fresh-create path: a replay (same idempotency key)
+        returns the stored task without a second event, and the projection is
+        idempotent on ``event_id`` anyway (§3.3).
+        """
+
+        if self._audit is None:
+            return
+        await self._audit.append(
+            EventEnvelope(
+                event_type="TasksPlanned",
+                actor_type=ActorType.AGENT,
+                actor_id=str(task.assigned_by_agent_id),
+                aggregate_type="Task",
+                aggregate_id=task.id,
+                aggregate_version=task.version,
+                correlation_id=new_id(),
+                organization_id=task.organization_id,
+                project_id=task.project_id,
+                task_id=task.id,
+                payload={
+                    "schema_version": 1,
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "task": {
+                        "task_id": str(task.id),
+                        "repository_id": str(task.repository_id),
+                        "title": task.title,
+                        "parent_task_id": (
+                            str(task.parent_task_id) if task.parent_task_id else None
+                        ),
+                    },
+                    # §2.1: task 直接挂在 integration 决策之后（chain 顺序
+                    # classification → confirmation → integration → task → pr）。
+                    "upstream_step": "integration",
+                },
+            )
+        )
 
     async def _deliver_assignment(
         self, task: Task, key: str, *, dispatch_attempt: str | None = None

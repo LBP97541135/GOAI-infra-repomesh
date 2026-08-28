@@ -2,6 +2,18 @@ from typing import Protocol
 from uuid import UUID
 
 from repomesh.modules.task_orchestration.domain import ExecutionPlan, Task
+from repomesh.shared.events import EventEnvelope
+
+
+class TaskAuditLog(Protocol):
+    """Decision-chain audit sink (contract decision-chain v0.1 §3).
+
+    One ``TasksPlanned`` event per created task. Module code depends on this
+    port only; the concrete writer is wired at the composition root.
+    """
+
+    async def append(self, event: EventEnvelope) -> None: ...
+
 
 
 class TaskStore(Protocol):

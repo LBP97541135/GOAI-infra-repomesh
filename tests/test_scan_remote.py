@@ -429,18 +429,21 @@ async def test_discovery_scenario_one_with_entry_point() -> None:
 
     results = await service.discover(
         "改订单结算逻辑",
+        limit=5,
         entry_point="order-service",
     )
 
-    # Entry point must be present with confidence=1.0.
+    # The entry point lands even though no scorer named it — presence is
+    # guaranteed by instruction. The score is 0.0 on purpose: nothing was
+    # measured, so nothing is claimed (no forced 1.0).
     entry = [r for r in results if r.is_entry_point]
     assert len(entry) == 1
-    assert entry[0].score == 1.0
+    assert entry[0].score == 0.0
 
-    # Other repos ranked below entry.
+    # Other repos keep their natural model scores and rank above the floor.
     non_entry = [r for r in results if not r.is_entry_point]
     assert len(non_entry) >= 1
-    assert non_entry[0].score < 1.0
+    assert non_entry[0].score > entry[0].score
 
 
 @pytest.mark.asyncio
@@ -465,7 +468,7 @@ async def test_discovery_scenario_two_without_entry_point() -> None:
     mock = _MockLLMClient(llm_response)
     service = RepositoryDiscoveryService(catalog, llm_client=mock)
 
-    results = await service.discover("加微信支付")
+    results = await service.discover("加微信支付", limit=5)
 
     # No entry point.
     assert not any(r.is_entry_point for r in results)
@@ -488,15 +491,173 @@ async def test_discovery_entry_point_in_llm_results() -> None:
     mock = _MockLLMClient(llm_response)
     service = RepositoryDiscoveryService(catalog, llm_client=mock)
 
-    results = await service.discover("test", entry_point="order-service")
+    results = await service.discover("test", limit=5, entry_point="order-service")
 
-    # order-service should be forced to 1.0 and marked as entry point.
+    # order-service keeps its model score — no forced 1.0 — and is marked as
+    # the entry point with its rationale intact.
     all_profiles = await catalog.list()
     order_profile = next(p for p in all_profiles if p.name == "order-service")
     order = next(r for r in results if r.repository_id == order_profile.id)
-    assert order.score == 1.0
+    assert order.score == 0.7
     assert order.is_entry_point is True
-    assert order.rationale == "User-specified entry point"
+    assert order.rationale == "Some match"
+
+
+@pytest.mark.asyncio
+async def test_discovery_entry_point_survives_the_cut() -> None:
+    """The entry point is a floor: it lands even when the N cut drops it.
+
+    It displaces the weakest scored candidate only when the list is at
+    capacity — the user's explicit pick overriding a weaker signal, which is
+    the point of naming an entry point at all.
+    """
+
+    import json
+
+    catalog = InMemoryRepositoryCatalog()
+    for i in range(6):
+        await catalog.add(
+            RepositoryProfile(name=f"repo-{i}", url="...", description=f"topic {i}")
+        )
+    llm_response = json.dumps(
+        [
+            {"repository": f"repo-{i}", "confidence": 0.9 - i * 0.1, "rationale": f"match {i}"}
+            for i in range(5)  # top five; the user's repo-5 is absent from the model
+        ]
+    )
+    service = RepositoryDiscoveryService(catalog, llm_client=_MockLLMClient(llm_response))
+    results = await service.discover("anything", entry_point="repo-5", limit=3)
+
+    by_id = {p.id: p.name for p in await catalog.list()}
+    names = [by_id[r.repository_id] for r in results]
+    assert "repo-5" in names  # user pick is present despite the cut
+    assert len(results) == 3  # and the cap still holds
+    assert names[0] == "repo-0"  # strongest natural score still ranks first
+
+
+@pytest.mark.asyncio
+async def test_discovery_low_signal_empty_facade() -> None:
+    """A profile with nothing beyond its name is flagged low-signal."""
+
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(RepositoryProfile(name="mystery", url="..."))
+    await catalog.add(
+        RepositoryProfile(name="described", url="...", description="clear purpose")
+    )
+    results = await RepositoryDiscoveryService(catalog).discover(
+        "mystery described", limit=5
+    )
+    by_id = {p.id: p.name for p in await catalog.list()}
+    flags = {
+        by_id[r.repository_id]: r.low_signal for r in results
+    }
+    assert flags["mystery"] is True
+    assert flags["described"] is False
+
+
+@pytest.mark.asyncio
+async def test_discovery_low_signal_reuses_scan_verdict() -> None:
+    """A scanned profile's verdict (AutoCard.low_signal), not the facade, rules."""
+
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(
+            name="card-flagged", url="...", auto_card=AutoCard(low_signal=True)
+        )
+    )
+    await catalog.add(
+        RepositoryProfile(
+            name="card-rich",
+            url="...",
+            auto_card=AutoCard(
+                deps=("payment-sdk",), recent_commits=("feat: add gateway",)
+            ),
+        )
+    )
+    results = await RepositoryDiscoveryService(catalog).discover(
+        "card-flagged card-rich", limit=5
+    )
+    by_id = {p.id: p.name for p in await catalog.list()}
+    flags = {by_id[r.repository_id]: r.low_signal for r in results}
+    assert flags["card-flagged"] is True
+    assert flags["card-rich"] is False
+
+
+@pytest.mark.asyncio
+async def test_discovery_keyword_idf_prefers_rare_terms() -> None:
+    """IDF weighting: a match on a rare term outranks one on generic
+    vocabulary, even at the same match count.
+
+    Naive counting would tie "order" and "payment" (one requirement term
+    each); IDF sees "order" in three repositories and "payment" in one, so
+    the discriminating term carries more of the requirement's weight.
+    """
+
+    catalog = InMemoryRepositoryCatalog()
+    for name, description in [
+        ("order-service", "order service"),
+        ("order-management", "order management"),
+        ("order-tracking", "order tracking"),
+        ("payment-gateway", "payment gateway"),
+        ("content-site", "content website"),
+    ]:
+        await catalog.add(
+            RepositoryProfile(name=name, url="...", description=description)
+        )
+
+    results = await RepositoryDiscoveryService(catalog).discover(
+        "order payment", limit=5
+    )
+    by_id = {p.id: p.name for p in await catalog.list()}
+    scores = {by_id[r.repository_id]: r.score for r in results}
+    assert scores["payment-gateway"] > scores["order-service"]
+    assert len(results) == 4  # the three order-* repos plus payment-gateway
+
+
+@pytest.mark.asyncio
+async def test_discovery_keyword_score_cap() -> None:
+    """The keyword-fallback ceiling is injectable, not a hardcoded 0.99."""
+
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(name="checkout", url="...", description="payment checkout")
+    )
+    service = RepositoryDiscoveryService(catalog, keyword_score_cap=0.8)
+    results = await service.discover("payment checkout", limit=5)
+    assert results[0].score == 0.8
+
+
+@pytest.mark.asyncio
+async def test_discovery_llm_drops_unknown_repo_with_log(caplog) -> None:
+    """A model-named repo outside the catalog is dropped — with a trace.
+
+    Silent dropping makes the panel show "fewer candidates than the model
+    produced" with no way to know why; the warn log is the observability
+    contract for hallucinated or mistyped names.
+    """
+
+    import json
+    import logging
+
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(name="real-service", url="...", description="real")
+    )
+    llm_response = json.dumps(
+        [
+            {"repository": "real-service", "confidence": 0.8, "rationale": "real"},
+            {"repository": "ghost-service", "confidence": 0.9, "rationale": "hallucinated"},
+        ]
+    )
+    service = RepositoryDiscoveryService(catalog, llm_client=_MockLLMClient(llm_response))
+    with caplog.at_level(
+        logging.WARNING,
+        logger="repomesh.modules.repository_intelligence.application.discovery",
+    ):
+        results = await service.discover("anything", limit=5)
+
+    assert len(results) == 1  # only the real repo survives
+    assert "ghost-service" in caplog.text  # and the drop is on record
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +741,7 @@ class TestDiscoverWithKeywords:
         # Use a requirement that matches the repo name and deps for fallback.
         results = await service.discover(
             "payment stripe integration",
+            limit=5,
             keywords=["payment", "stripe"],
         )
         assert len(results) > 0

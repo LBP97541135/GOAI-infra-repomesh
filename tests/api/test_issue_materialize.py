@@ -332,6 +332,15 @@ def test_materialize_builds_the_teams_and_starts_the_round(
         assert str(row.execution_plan_id) == body["plan_id"]
         assert row.plan_version == 1
 
+        # §2.3: with the draft consumed into an execution plan, the issue is no
+        # longer "pending planning" — the badge the intake showed is off. The
+        # round count stays at the pre-materialize value here because the
+        # execution-plan row is written by the execution plane, not by this
+        # endpoint; the stub starter only records that a plan would start.
+        detail = client.get(f"/api/v1/issues/{issue_id}", headers=HEADERS).json()
+        assert detail["pending_planning"] is False
+        assert detail["round_count"] == 0
+
 
 # ---------------------------------------------------------------------------
 # The verification commands the console never supplied (A-19)

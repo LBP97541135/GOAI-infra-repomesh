@@ -261,7 +261,9 @@ class DiscoveryMaterializationService:
             "repositories": list(outcome.repositories),
             "skipped_repos": list(result.skipped_repos),
         }
-        await self._snapshots.set_discovery(draft.id, block)
+        await self._snapshots.set_discovery(
+            draft.id, block, expected_version=draft.discovery_version
+        )
         _logger.info(
             "Materialised issue %s into plan %s (%d task(s), %d team(s))",
             command.issue_id, outcome.plan_id, len(outcome.task_ids), outcome.team_count,
@@ -303,7 +305,9 @@ class DiscoveryMaterializationService:
             "at": _now(),
             "error": str(error)[:500] or error.__class__.__name__,
         }
-        await self._snapshots.set_discovery(draft.id, block)
+        await self._snapshots.set_discovery(
+            draft.id, block, expected_version=draft.discovery_version
+        )
 
     # ------------------------------------------------------------- replay
 

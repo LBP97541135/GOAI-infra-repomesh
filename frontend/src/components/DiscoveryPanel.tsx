@@ -175,6 +175,10 @@ function CandidateRow({ item, llmUsed }: { item: DiscoveryCandidateItem; llmUsed
         {item.is_entry_point && (
           <span className="rounded-hard border border-amber px-1.5 py-px text-[10.5px] text-amber">入口仓</span>
         )}
+        {/* 低信号 = 服务端自述「除名字外没有可倚仗的信号」，分数是猜测不是判定 */}
+        {item.low_signal && (
+          <span className="rounded-hard border border-line px-1.5 py-px text-[10.5px] text-tx3">低信号</span>
+        )}
         {/* 这里**没有**「catalog 未解析」分支：§2.2 定死本块的 repository_id 不可为 null
             （不在 catalog 的候选评分阶段就被过滤了）。§5.4 计划纸面的节点是另一回事，
             那边的 null 由 PlanDagPanel 如实留痕，两处不要互相搬结论。 */}

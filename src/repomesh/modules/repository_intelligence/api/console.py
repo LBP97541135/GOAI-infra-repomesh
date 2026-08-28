@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from repomesh.modules.repository_intelligence.application import ScanRegistration
 
@@ -157,6 +157,23 @@ async def _scan_with_fetcher(
         await fetcher.aclose()  # type: ignore[attr-defined]
 
 
+async def _scan_and_invalidate(
+    container: object,
+    scan: Callable[[], Awaitable[ScanRegistration]],
+) -> ScanRegistration:
+    """Run a scan, then drop the in-process world-layer cache (M1).
+
+    The world layer graph is a pure projection of the catalog: a scan that
+    registered new profiles must not leave confirmation/planning reading a
+    stale graph. Only a *successful* scan invalidates — a failed one wrote
+    nothing, and the cache stays warm.
+    """
+
+    outcome = await scan()
+    container.invalidate_world_graph()  # type: ignore[attr-defined]
+    return outcome
+
+
 async def _drive(
     record: ScanTaskRecord, scan: Callable[[], Awaitable[ScanRegistration]]
 ) -> None:
@@ -233,7 +250,7 @@ def server_scan_credentials() -> tuple[str, str]:
     dependencies=[ACTION_TOKEN],
 )
 async def console_scan_organization(
-    body: ConsoleOrgScanRequest, catalog: CatalogDependency
+    body: ConsoleOrgScanRequest, catalog: CatalogDependency, request: Request
 ) -> ScanTaskView:
     """Start an organization scan; poll ``scan-tasks/{id}`` for the counts.
 
@@ -257,6 +274,7 @@ async def console_scan_organization(
         gitlab_token=gitlab_token,
     )
     max_workers = body.max_workers
+    container = request.app.state.container
 
     record = _start(
         kind="organization",
@@ -266,12 +284,15 @@ async def console_scan_organization(
         total=0,
         scan=lambda task: _scan_with_fetcher(
             fetcher,
-            lambda: perform_org_scan(
-                url,
-                fetcher,
-                catalog,
-                max_workers=max_workers,
-                on_progress=_progress_reporter(task),
+            lambda: _scan_and_invalidate(
+                container,
+                lambda: perform_org_scan(
+                    url,
+                    fetcher,
+                    catalog,
+                    max_workers=max_workers,
+                    on_progress=_progress_reporter(task),
+                ),
             ),
         ),
     )
@@ -285,7 +306,7 @@ async def console_scan_organization(
     dependencies=[ACTION_TOKEN],
 )
 async def console_scan_repository(
-    body: ConsoleRepoScanRequest, catalog: CatalogDependency
+    body: ConsoleRepoScanRequest, catalog: CatalogDependency, request: Request
 ) -> ScanTaskView:
     """Start a single-repository scan; poll ``scan-tasks/{id}`` for the counts.
 
@@ -303,6 +324,7 @@ async def console_scan_repository(
         gitlab_token=gitlab_token,
     )
     await require_single_repo_url(url, fetcher)
+    container = request.app.state.container
 
     record = _start(
         kind="repository",
@@ -310,7 +332,10 @@ async def console_scan_repository(
         total=1,
         scan=lambda _task: _scan_with_fetcher(
             fetcher,
-            lambda: perform_repo_scan(url, fetcher, catalog),
+            lambda: _scan_and_invalidate(
+                container,
+                lambda: perform_repo_scan(url, fetcher, catalog),
+            ),
         ),
     )
     return _as_view(record)

@@ -10,6 +10,7 @@ from repomesh.api.scm_reconciliation import router as scm_reconciliation_router
 from repomesh.api.scm_webhook import router as scm_webhook_router
 from repomesh.api.worker_mcp import router as worker_mcp_router
 from repomesh.modules.agent_runtime.api.router import router as agent_runtime_router
+from repomesh.modules.decision_chain.api.router import router as decision_chain_router
 from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
 from repomesh.modules.identity_access.api import router as identity_console_router
@@ -53,5 +54,9 @@ api_router.include_router(rooms_router, prefix="/api/v1")
 api_router.include_router(grid_router, prefix="/api/v1")
 api_router.include_router(identity_console_router, prefix="/api/v1")
 api_router.include_router(observability_router, prefix="/api/v1")
+# Contract decision-chain-v0.1 §6: the trace API the audit walkthrough reads.
+# A GET-only read, token-protected like the observability console — it is an
+# audit surface, not one of the contract's public reads.
+api_router.include_router(decision_chain_router, prefix="/api/v1")
 api_router.include_router(scm_webhook_router, prefix="/api/v1")
 api_router.include_router(scm_reconciliation_router, prefix="/api/v1")

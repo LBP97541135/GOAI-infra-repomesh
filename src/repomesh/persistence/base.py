@@ -21,6 +21,7 @@ BUSINESS_SCHEMAS = (
     "review_validation",
     "change_control",
     "delivery",
+    "decision_chain",
     "observability",
     "identity_access",
 )

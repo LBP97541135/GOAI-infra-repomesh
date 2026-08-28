@@ -99,8 +99,12 @@ class DiscoveryStepCommand:
     answers: tuple[tuple[str, str], ...] = ()
     #: Step 0 only: record "continue, ignoring N questions" without re-running.
     force_continue: bool = False
-    #: Step 1 only.
-    limit: int = 10
+    #: Step 1 only. ``None`` inherits the composition-root default
+    #: (``REPOMESH_DISCOVERY_CANDIDATE_LIMIT``); the panel never sends its
+    #: own, script callers may. Resolved by the chain service before the
+    #: block records it, so the read model always shows the number that
+    #: actually ran.
+    limit: int | None = None
     entry_point: str | None = None
 
 
@@ -152,7 +156,14 @@ def classification_fingerprint(classification: dict[str, Any] | None) -> str:
     payload = json.dumps(
         {
             "tiers": pairs,
-            "supplemented_repos": sorted(classification.get("supplemented_repos") or ()),
+            # The supplemented set, spelled once (``supplements[].repository``)
+            # — derived deterministically so the fingerprint stays stable.
+            "supplemented_repos": sorted(
+                {
+                    str(s.get("repository", ""))
+                    for s in (classification.get("supplements") or ())
+                }
+            ),
         },
         ensure_ascii=False,
         sort_keys=True,

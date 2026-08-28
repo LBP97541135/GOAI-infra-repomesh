@@ -21,6 +21,7 @@ from .handoff_docs import (
 from .issue_intake import (
     IssueIntakeActorNotFound,
     IssueIntakeDenied,
+    IssueIntakeKeyMismatch,
     IssueIntakeService,
 )
 from .plan_integration import (
@@ -60,6 +61,7 @@ __all__ = [
     "IntegratedPlan",
     "IssueIntakeActorNotFound",
     "IssueIntakeDenied",
+    "IssueIntakeKeyMismatch",
     "IssueIntakeService",
     "LLMClient",
     "PlanIntegrationService",

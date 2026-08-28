@@ -12,6 +12,8 @@ Design principles:
 
 from __future__ import annotations
 
+import logging
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import permutations
@@ -24,6 +26,8 @@ from repomesh.modules.repository_intelligence.domain import (
     Mechanism,
     RepositoryProfile,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +77,17 @@ class DependencyGraphService:
         profiles: list[RepositoryProfile],
         registry: ServiceRegistry | None = None,
     ) -> None:
+        started = time.perf_counter()
         self._registry = registry or build_service_registry(profiles)
         self._edges: list[GraphEdge] = self._build_edges(profiles)
         self._forward: dict[str, list[GraphEdge]] = self._index_forward()
         self._reverse: dict[str, list[GraphEdge]] = self._index_reverse()
+        _logger.info(
+            "graph_build profile_count=%d edge_count=%d duration_ms=%.1f",
+            len(profiles),
+            len(self._edges),
+            (time.perf_counter() - started) * 1000,
+        )
 
     # ------------------------------------------------------------------
     # Public queries

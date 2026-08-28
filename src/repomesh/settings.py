@@ -101,6 +101,30 @@ class Settings(BaseSettings):
             "REPOMESH_MODEL",
         ),
     )
+    #: L3 semantic retrieval (decision-chain RAG). The endpoint must speak the
+    #: OpenAI-compatible ``POST /embeddings`` shape — OpenAI, a local Ollama
+    #: (``http://localhost:11434/v1``) and SiliconFlow all do. Unset base URL
+    #: disables semantic retrieval: the pipeline falls back to the structural
+    #: similarity hits (fail-safe, same spirit as Phase 4b's "no history").
+    embedding_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "REPOMESH_EMBEDDING_BASE_URL",
+            "REPOMESH_EMBEDDING_URL",
+        ),
+    )
+    embedding_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "REPOMESH_EMBEDDING_API_KEY",
+            "REPOMESH_EMBEDDING_KEY",
+        ),
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        validation_alias=AliasChoices("REPOMESH_EMBEDDING_MODEL"),
+    )
+    embedding_timeout_seconds: float = Field(default=30.0, ge=1.0)
     github_app_id: int | None = None
     github_app_private_key_file: Path | None = None
     github_app_private_key_base64: SecretStr | None = None
@@ -130,6 +154,29 @@ class Settings(BaseSettings):
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)
     scm_command_dispatch_interval_seconds: int = Field(default=5, ge=1)
+    #: Requirement-sufficiency gate. The model's self-reported confidence must
+    #: clear this bar or the analysis counts as insufficient regardless of
+    #: what the model claims (fail-closed; the model's "yes" is never trusted
+    #: below this confidence).
+    discovery_analysis_confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+    #: Default candidate-list size for the discovery step — the top-N cut
+    #: after ranking. The panel omits ``limit`` and inherits this; script
+    #: callers may pass their own.
+    discovery_candidate_limit: int = Field(default=10, ge=1, le=50)
+    #: Ceiling for the keyword-fallback score, kept below 1.0 so a model
+    #: verdict reaching full confidence stays distinguishable from
+    #: term-frequency arithmetic.
+    discovery_keyword_score_cap: float = Field(default=0.99, ge=0.0, le=1.0)
+    #: Bounded parallelism for the confirmation (细筛) LLM calls. This is a
+    #: global rate-limit approximation — several issues confirming at once
+    #: must stay under the provider's RPM/TPM, so the per-issue value should
+    #: be conservative, not aggressive.
+    discovery_confirmation_concurrency: int = Field(default=4, ge=1, le=16)
+    #: Cap for the Project Manager's graph pre-supplement: how many
+    #: first-degree dependency neighbours may join the confirmation list
+    #: beyond the scored candidates. ``0`` disables the supplement. The value
+    #: is a starting point — track the recorded supplement counts and adjust.
+    discovery_confirmation_supplement_cap: int = Field(default=5, ge=0, le=50)
 
 
 @lru_cache
