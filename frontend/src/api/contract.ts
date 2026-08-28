@@ -770,7 +770,10 @@ export interface CollaborationMessageView {
   kind: string;
   subject: string;
   body: string;
-  sender_agent_id: string;
+  /** 房间时间线条目可能**没有**发送者 principal：Matrix 发送者没能映射到任何
+   *  注册主体时这里是 null（裁决 D-4，服务端 `_timeline_message_item` 如实透传）。
+   *  此时 `sender_name` 兜的是原始 Matrix handle——「未解析的发送者，如实呈现它自己」。 */
+  sender_agent_id: string | null;
   sender_name: string | null;
   recipient_agent_id: string;
   recipient_name: string | null;
