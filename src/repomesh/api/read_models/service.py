@@ -2204,16 +2204,32 @@ def _agent_runtime_fields(snapshot: RuntimeSnapshot) -> dict:
     The controller exposes no start timestamp, and DesiredRuntimeState is what
     we asked for rather than what is observed — passing it off as an observation
     would be fabrication.
+
+    ``kind`` says who runs this member: "container" when the controller
+    confirms it owns one, "external" when it confirms it does not, and null
+    when the probe never asked (the manager probe carries no such field).
     """
 
-    return {
-        "phase": snapshot.phase,
-        "runtime_kind": snapshot.runtime_kind,
+    addressing = {
         "matrix_user_id": snapshot.matrix_user_id,
         "room_id": snapshot.room_id,
         "message": snapshot.message,
         "awake": None,
         "uptime_seconds": None,
+    }
+    if snapshot.container_managed is False:
+        # phase and runtime_kind are container lifecycle words, and the
+        # controller keeps emitting them for a member whose container it will
+        # never start: an unset phase comes back "Pending", which reads as
+        # "wait, it is coming up". For a confirmed external member those two
+        # columns have no subject at all, so they are null here rather than
+        # the controller's defaults.
+        return {"kind": "external", "phase": None, "runtime_kind": None, **addressing}
+    return {
+        "kind": "container" if snapshot.container_managed else None,
+        "phase": snapshot.phase,
+        "runtime_kind": snapshot.runtime_kind,
+        **addressing,
     }
 
 

@@ -373,6 +373,87 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     assert by_name["repomesh-leader-a-api"]["team_id"] == team.id
 
 
+@pytest.mark.asyncio
+async def test_a_confirmed_external_member_is_never_given_a_container_phase() -> None:
+    """W-C3 AC-06: containerManaged:false makes lifecycle words a lie.
+
+    The controller answers "Pending" for a worker whose container it has no
+    intention of ever starting, so an operator reading the roster waits for a
+    boot that cannot happen. All three kinds are asserted in one test because
+    the external row's silence only means something next to a managed row that
+    still reports everything it observes.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    topology_view = _topology(project_id, repository_id)
+    team = topology_view.repository_teams[0]
+    manager = _principal(
+        AgentRole.ORGANIZATION_LEADER,
+        "console-demo-org-leader",
+        agent_id=topology_view.organization_leader_id,
+    )
+    external = _principal(
+        AgentRole.REPOSITORY_LEADER,
+        "repomesh-leader-external",
+        agent_id=team.leader_agent_id,
+        repository_id=repository_id,
+    )
+    managed = _principal(
+        AgentRole.WORKER,
+        "repomesh-worker-managed",
+        agent_id=team.worker_agent_ids[0],
+        repository_id=repository_id,
+    )
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        repositories=StubProfiles(_profile("repomesh-e2e-api", repository_id)),
+        agents=StubRoster(manager, external, managed),
+        topology=StubTopology({project_id: topology_view}),
+        runtime=StubRuntime(
+            {
+                "repomesh-worker-managed": RuntimeSnapshot(
+                    phase="Running",
+                    runtime_kind="openclaw",
+                    container_managed=True,
+                ),
+                "repomesh-leader-external": RuntimeSnapshot(
+                    phase="Pending",
+                    matrix_user_id="@repomesh-leader-external:local",
+                    room_id="!team:local",
+                    container_managed=False,
+                ),
+            }
+        ),
+    )
+
+    payload = await service.list_agents()
+
+    runtimes = {item["agentteams_resource_name"]: item["runtime"] for item in payload["agents"]}
+    assert runtimes["repomesh-worker-managed"]["kind"] == "container"
+    assert runtimes["repomesh-worker-managed"]["phase"] == "Running"
+    assert runtimes["repomesh-worker-managed"]["runtime_kind"] == "openclaw"
+    # The manager probe never asks containerManaged: that is unknown, not external.
+    assert runtimes["console-demo-org-leader"]["kind"] is None
+    assert runtimes["console-demo-org-leader"]["phase"] == "Running"
+
+    row = runtimes["repomesh-leader-external"]
+    assert row["kind"] == "external"
+    assert row["phase"] is None
+    assert row["runtime_kind"] is None
+    # The point of the row, stated as bluntly as it can be: whatever container
+    # word the controller sent, none of it reaches the console.
+    assert "Pending" not in row.values()
+    # Addressing survives — where to reach this member is a fact about the
+    # member, not about a container.
+    assert row["matrix_user_id"] == "@repomesh-leader-external:local"
+    assert row["room_id"] == "!team:local"
+
+
 # ------------------------------------------------------------------------ §4.4
 
 

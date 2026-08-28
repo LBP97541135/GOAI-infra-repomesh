@@ -1137,6 +1137,7 @@ class ApplicationContainer:
                     matrix_user_id=ref.matrix_user_id,
                     room_id=ref.room_id,
                     message=ref.message,
+                    container_managed=ref.container_managed,
                 )
 
             async def manager(self, name: str):

@@ -194,6 +194,12 @@ class RuntimeSnapshot:
     message: str | None = None
     ready_workers: int | None = None
     total_workers: int | None = None
+    container_managed: bool | None = None
+    """Whether the controller runs this resource's container, as it reports it.
+
+    Three-valued on purpose, mirroring ``WorkerRuntimeRef``: None is "the probe
+    did not ask" (the manager and team probes never do), not "external".
+    """
 
 
 class RuntimeProbe(Protocol):
