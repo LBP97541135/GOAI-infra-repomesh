@@ -27,6 +27,7 @@ from repomesh.modules.capability_management import (
     ResolveAgentCapabilities,
 )
 from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
+from repomesh.modules.collaboration.contracts import CollaborationGateway
 from repomesh.modules.collaboration.ports import CollaborationMessageStore
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
@@ -42,7 +43,12 @@ from repomesh.modules.observability.infrastructure.trace_ingest import TraceStor
 from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
-from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
+from repomesh.modules.project.contracts import (
+    ProjectAgentTopologyView,
+    ProjectTopologyReader,
+    TeamDecompositionMode,
+    TeamDecompositionModeReader,
+)
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
@@ -66,8 +72,11 @@ from repomesh.modules.specification.ports import SpecificationStore
 from repomesh.modules.task_orchestration import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    LeaderDecisionLane,
     ObserveExecutionPlan,
     PostgresExecutionPlanStore,
+    PostgresLeaderAssignmentStore,
+    ReadLeaderAssignment,
 )
 from repomesh.modules.task_orchestration.contracts import (
     PublishedTaskPackage,
@@ -76,7 +85,11 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskReportGateway,
     TaskView,
 )
-from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
+from repomesh.modules.task_orchestration.ports import (
+    ExecutionPlanStore,
+    LeaderAssignmentStore,
+    TaskStore,
+)
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import get_settings
@@ -105,6 +118,31 @@ def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReade
             return topology.to_view() if topology else None
 
     return _Adapter()
+
+
+class StaticTeamDecompositionModeReader:
+    """Every team decomposes server-side, whatever the topology says.
+
+    The production ``TeamDecompositionModeReader`` until the project module
+    persists a real per-team mode and sets it from the formal
+    materialize/adoption use case (adjudication D-2, PR 5.5B). Until then the
+    honest answer for every team is ``SERVER``: no team in any installation has
+    an adopted external Repository Leader, so anything else would be a guess
+    dressed as a fact.
+
+    It lives in the composition root rather than in either module because it is
+    an adapter, and this reader in particular is a *placeholder* adapter — the
+    kind that must be visibly one line in the wiring, not a class inside a
+    module that a reader could mistake for the real projection.
+    """
+
+    def __init__(self, mode: TeamDecompositionMode = TeamDecompositionMode.SERVER) -> None:
+        self._mode = mode
+
+    async def decomposition_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> TeamDecompositionMode:
+        return self._mode
 
 
 def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMessenger:
@@ -1578,6 +1616,55 @@ class ApplicationContainer:
         return HandoffDocService(self.handoff_doc_store())
 
     @cached_service
+    def leader_assignment_store(self) -> LeaderAssignmentStore:
+        return PostgresLeaderAssignmentStore(self.database)
+
+    @cached_service
+    def team_decomposition_mode_reader(self) -> TeamDecompositionModeReader:
+        """Who decomposes each team's repository tasks (adjudication D-2).
+
+        One placeholder today; see ``StaticTeamDecompositionModeReader``. It is
+        a named service rather than an inline construction so that replacing it
+        with the project module's real projection is a one-line change here and
+        nowhere else.
+        """
+
+        return StaticTeamDecompositionModeReader()
+
+    @cached_service
+    def leader_assignment_reader(self) -> ReadLeaderAssignment:
+        """The read behind ``GET /agent-actions/leader/assignments/{taskId}``."""
+
+        return ReadLeaderAssignment(
+            self.leader_assignment_store(),
+            self.task_store,
+            self.agent_directory,
+            self.team_decomposition_mode_reader(),
+        )
+
+    @cached_service
+    def collaboration_gateway(self) -> CollaborationGateway | None:
+        """The composed collaboration sender, or None without a messenger.
+
+        Built here the way ``project_checkpoint_service`` builds its own: the
+        gateway is assembled in ``bootstrap.app`` for the TaskOrchestrator and
+        never handed to the container, so a container-side caller composes it
+        from the same five collaborators rather than reaching for a global.
+        """
+
+        if self.agent_team_messenger is None:
+            return None
+        from repomesh.modules.collaboration import SendCollaborationMessage
+
+        return SendCollaborationMessage(
+            self.agent_directory,
+            self.project_topology_store,
+            PolicyAuthorizationGateway(),
+            self.collaboration_message_store,
+            self.agent_team_messenger,
+        )
+
+    @cached_service
     def execution_plan_advancer(self) -> AdvanceExecutionPlan | None:
         assigner = self.task_assignment_gateway()
         if assigner is None:
@@ -1600,6 +1687,20 @@ class ApplicationContainer:
             # The one-shot ``handle`` is superseded by ``handle_batch``.
             on_batch_deliver = self.plan_delivery_finalizer().handle_batch
             delivery_state = self.delivery_state_adapter()
+        # Wiring the lane does not switch any team into leader mode: the mode
+        # reader above answers SERVER for every team, so batch assignment takes
+        # the same path it always has. It is wired anyway so the seam is a real
+        # one in production and not something only tests ever reach.
+        collaboration = self.collaboration_gateway()
+        leader_lane = (
+            LeaderDecisionLane(
+                modes=self.team_decomposition_mode_reader(),
+                assignments=self.leader_assignment_store(),
+                collaboration=collaboration,
+            )
+            if collaboration is not None
+            else None
+        )
         return AdvanceExecutionPlan(
             self.execution_plan_store(),
             self.task_store,
@@ -1608,6 +1709,7 @@ class ApplicationContainer:
             on_plan_completed=completion_handler,
             delivery_state=delivery_state,
             on_batch_deliver=on_batch_deliver,
+            leader_lane=leader_lane,
         )
 
     def delivery_state_adapter(self):

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
+from repomesh.api.leader_actions import router as leader_actions_router
 from repomesh.api.platform_setup import router as platform_setup_router
 from repomesh.api.read_models import grid_router, issues_router, rooms_router
 from repomesh.api.read_models import router as delivery_read_model_router
@@ -39,6 +40,11 @@ api_router.include_router(console_repositories_router, prefix="/api/v1")
 # model's issues_router, which registers GETs only.
 api_router.include_router(issue_discovery_router, prefix="/api/v1")
 api_router.include_router(agent_runtime_router, prefix="/api/v1")
+# Adjudication D-1: the leader's decision surface shares the /agent-actions
+# face and credential mechanism with agent_runtime's start-worker-task, and is
+# path-disjoint from it. It drives task_orchestration, which is why it is not
+# registered from the agent_runtime module that owns the neighbouring path.
+api_router.include_router(leader_actions_router, prefix="/api/v1")
 api_router.include_router(delivery_router, prefix="/api/v1")
 api_router.include_router(human_control_router, prefix="/api/v1")
 api_router.include_router(deliveries_router, prefix="/api/v1")
