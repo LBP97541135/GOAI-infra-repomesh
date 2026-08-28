@@ -1,6 +1,6 @@
 # Module Ownership Map
 
-This map is the source of truth for team ownership. RepoMesh currently has fifteen business
+This map is the source of truth for team ownership. RepoMesh currently has sixteen business
 modules. Each module also has a machine-readable `module.toml`; its `status` field distinguishes
 active modules from planned boundaries. Replace the provisional team labels with GitHub teams
 when the repository moves into an organization.
@@ -21,6 +21,7 @@ when the repository moves into an organization.
 | Delivery | quality-delivery | ChangeSets, Push/PR, SCM approval facts, CI gates, merge order, rollback | code generation and internal review content |
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
+| Recovery Management | platform | unified failure projection, human recovery decisions, durable recovery operations | source-module failure truth, arbitrary command execution |
 | Runtime | runtime-integrations | planned runtime-neutral contracts, cross-plane execution policy and gateway schemas | coding run state, CLI process execution, concrete AgentTeams or vendor adapters |
 
 ## Runtime component and integration ownership

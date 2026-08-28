@@ -1,8 +1,10 @@
 import base64
 import logging
+import socket
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -30,6 +32,10 @@ from repomesh.integrations.agentteams.task_publishing import (
 )
 from repomesh.integrations.coding_agents.mock import MockCodingAgent, MockScenario
 from repomesh.integrations.llm import make_llm_client
+from repomesh.integrations.recovery import (
+    RecoverySourceProjector,
+    UnifiedRecoveryActionHandlers,
+)
 from repomesh.integrations.scm import (
     ChangeSetSCMCoordinator,
     CIReworkTaskCreator,
@@ -52,6 +58,7 @@ from repomesh.integrations.scm.github_auth import (
     private_key_file_loader,
 )
 from repomesh.modules.agent_directory.infrastructure import PostgresAgentDirectory
+from repomesh.modules.agent_runtime import PostgresWorkerRecoveryStore
 from repomesh.modules.collaboration import (
     CollaborationDeliveryRetryWorker,
     PostgresCollaborationMessageStore,
@@ -103,6 +110,10 @@ from repomesh.modules.project.infrastructure import (
     PostgresHumanReviewRequestStore,
     PostgresProjectCheckpointDecisionStore,
     PostgresProjectTopologyStore,
+)
+from repomesh.modules.recovery_management import (
+    PostgresRecoveryCaseStore,
+    RecoveryActionExecutor,
 )
 from repomesh.modules.repository_intelligence.infrastructure import PostgresRepositoryCatalog
 from repomesh.modules.review_validation import (
@@ -297,7 +308,29 @@ def build_default_container(
     task_store = PostgresTaskStore(database)
     collaboration_store = PostgresCollaborationMessageStore(database)
     repository_catalog = PostgresRepositoryCatalog(database)
-    background_services = ()
+    recovery_case_store = PostgresRecoveryCaseStore(database)
+    worker_recovery_projection_store = PostgresWorkerRecoveryStore(database)
+    delivery_conflict_projection_store = PostgresDeliveryConflictCaseStore(database)
+    background_services = (
+        RecoverySourceProjector(
+            recovery_case_store,
+            worker_recovery_projection_store,
+            delivery_conflict_projection_store,
+            task_store,
+            delivery=DeliveryService(PostgresChangeSetStore(database)),
+            reviews=human_review_store,
+            topologies=topology_store,
+        ),
+        RecoveryActionExecutor(
+            recovery_case_store,
+            UnifiedRecoveryActionHandlers(
+                recovery_case_store,
+                worker_recovery_projection_store,
+                delivery_conflict_projection_store,
+            ).handlers(),
+            owner=f"{socket.gethostname()}:{uuid4()}",
+        ),
+    )
     task_report_gateway = None
     if messenger is not None:
         collaboration = SendCollaborationMessage(
@@ -518,13 +551,9 @@ def build_default_container(
     )
     container_holder: dict[str, ApplicationContainer] = {}
     if settings.worker_recovery_enabled:
-        import socket
-        from uuid import uuid4
-
         from repomesh.integrations.runner.recovery import WorkerRecoveryCoordinator
         from repomesh.modules.agent_runtime import (
             PostgresWorkerExecutionReservationStore,
-            PostgresWorkerRecoveryStore,
             WorkerRecoveryDecision,
             WorkerRecoveryReconciler,
         )

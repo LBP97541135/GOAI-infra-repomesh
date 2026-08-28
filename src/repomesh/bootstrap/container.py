@@ -1282,6 +1282,12 @@ class ApplicationContainer:
 
         return PostgresDeliveryConflictCaseStore(self.database)
 
+    @cached_service
+    def recovery_case_store(self):
+        from repomesh.modules.recovery_management import PostgresRecoveryCaseStore
+
+        return PostgresRecoveryCaseStore(self.database)
+
     def delivery_conflict_task_gateway(self):
         from repomesh.integrations.scm import DeliveryConflictTaskCreator
 

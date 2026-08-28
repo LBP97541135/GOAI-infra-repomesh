@@ -594,6 +594,7 @@ class ChangeSetSCMCoordinator:
             if conflict_kind is not None and self._conflict_cases is not None:
                 case = await self._conflict_cases.ensure(
                     change_set_id=change_set_id,
+                    organization_id=current.organization_id,
                     project_id=current.project_id,
                     repository_id=candidate.repository_id,
                     candidate_head_sha=candidate.commit_sha,

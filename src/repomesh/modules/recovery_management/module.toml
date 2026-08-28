@@ -1,0 +1,5 @@
+name = "recovery_management"
+owner = "platform"
+status = "active"
+schema = "recovery_management"
+responsibilities = ["unified recovery cases", "human recovery decisions", "recovery operations"]

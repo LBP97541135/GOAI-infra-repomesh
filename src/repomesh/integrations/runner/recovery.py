@@ -70,7 +70,16 @@ class WorkerRecoveryCoordinator:
         ):
             return WorkerRecoveryDecision.NO_ACTION
         same_worker_healthy = await self._health.healthy(operation.failed_worker_id)
-        if operation.native_session_id and same_worker_healthy:
+        if operation.decision is WorkerRecoveryDecision.RESUME and not (
+            operation.native_session_id and same_worker_healthy
+        ):
+            await self._escalate(operation, "requested_session_resume_is_unavailable")
+            return WorkerRecoveryDecision.ESCALATE
+        if (
+            operation.decision is not WorkerRecoveryDecision.REASSIGN
+            and operation.native_session_id
+            and same_worker_healthy
+        ):
             if operation.reason == "input_required":
                 await self._escalate(operation, "runner_input_required")
                 return WorkerRecoveryDecision.ESCALATE

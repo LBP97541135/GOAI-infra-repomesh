@@ -205,6 +205,42 @@ class PostgresWorkerRecoveryStore:
                 or 0
             )
 
+    async def list_all(self) -> tuple[WorkerRecoveryOperation, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(WorkerRecoveryOperationRecord).order_by(
+                        WorkerRecoveryOperationRecord.created_at
+                    )
+                )
+            ).all()
+            return tuple(self._domain(record) for record in records)
+
+    async def retry(
+        self, operation_id: UUID, decision: WorkerRecoveryDecision
+    ) -> WorkerRecoveryOperation:
+        if decision not in {
+            WorkerRecoveryDecision.RESUME,
+            WorkerRecoveryDecision.REASSIGN,
+        }:
+            raise ValueError("Worker recovery retry must request resume or reassign")
+        async with self._database.transaction() as session:
+            record = await session.scalar(
+                select(WorkerRecoveryOperationRecord)
+                .where(WorkerRecoveryOperationRecord.id == operation_id)
+                .with_for_update()
+            )
+            if record is None:
+                raise KeyError("Worker recovery operation does not exist")
+            record.state = WorkerRecoveryState.PENDING.value
+            record.decision = decision.value
+            record.lease_owner = None
+            record.lease_expires_at = None
+            record.error_code = None
+            record.updated_at = datetime.now(UTC)
+            record.finished_at = None
+            return self._domain(record)
+
     @staticmethod
     def _domain(record: WorkerRecoveryOperationRecord) -> WorkerRecoveryOperation:
         return WorkerRecoveryOperation(

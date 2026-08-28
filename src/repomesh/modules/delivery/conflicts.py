@@ -29,6 +29,7 @@ class DeliveryConflictCaseStatus(StrEnum):
 class DeliveryConflictCase:
     id: UUID
     change_set_id: UUID
+    organization_id: UUID
     project_id: UUID
     repository_id: UUID
     candidate_head_sha: str
@@ -58,6 +59,7 @@ class DeliveryConflictCaseRecord(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
     change_set_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    organization_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     repository_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     candidate_head_sha: Mapped[str] = mapped_column(String(64), index=True)
@@ -78,7 +80,8 @@ class PostgresDeliveryConflictCaseStore:
         self._database = database
 
     async def ensure(
-        self, *, change_set_id: UUID, project_id: UUID, repository_id: UUID,
+        self, *, change_set_id: UUID, organization_id: UUID, project_id: UUID,
+        repository_id: UUID,
         candidate_head_sha: str, kind: DeliveryConflictKind,
         expected_base_sha: str, observed_base_sha: str, detail: str,
     ) -> DeliveryConflictCase:
@@ -100,7 +103,8 @@ class PostgresDeliveryConflictCaseStore:
                         record.updated_at = now
                         return self._domain(record)
                 created = DeliveryConflictCaseRecord(
-                    id=uuid4(), change_set_id=change_set_id, project_id=project_id,
+                    id=uuid4(), change_set_id=change_set_id,
+                    organization_id=organization_id, project_id=project_id,
                     repository_id=repository_id, candidate_head_sha=candidate_head_sha,
                     kind=kind.value, expected_base_sha=expected_base_sha,
                     observed_base_sha=observed_base_sha, detail=detail[:2000],
@@ -168,6 +172,17 @@ class PostgresDeliveryConflictCaseStore:
             ).all()
             return tuple(self._domain(record) for record in records)
 
+    async def list_all(self) -> tuple[DeliveryConflictCase, ...]:
+        async with self._database.transaction() as session:
+            records = (
+                await session.scalars(
+                    select(DeliveryConflictCaseRecord).order_by(
+                        DeliveryConflictCaseRecord.detected_at
+                    )
+                )
+            ).all()
+            return tuple(self._domain(record) for record in records)
+
     @staticmethod
     def _active_statement(change_set_id, repository_id):
         return select(DeliveryConflictCaseRecord).where(
@@ -179,7 +194,8 @@ class PostgresDeliveryConflictCaseStore:
     @staticmethod
     def _domain(record) -> DeliveryConflictCase:
         return DeliveryConflictCase(
-            id=record.id, change_set_id=record.change_set_id, project_id=record.project_id,
+            id=record.id, change_set_id=record.change_set_id,
+            organization_id=record.organization_id, project_id=record.project_id,
             repository_id=record.repository_id, candidate_head_sha=record.candidate_head_sha,
             kind=DeliveryConflictKind(record.kind), expected_base_sha=record.expected_base_sha,
             observed_base_sha=record.observed_base_sha, detail=record.detail,

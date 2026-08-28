@@ -17,6 +17,7 @@ from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
 from repomesh.modules.identity_access.api import router as identity_console_router
 from repomesh.modules.observability.api.router import router as observability_router
+from repomesh.modules.recovery_management.api import router as recovery_case_router
 from repomesh.modules.repository_intelligence.api.console import (
     router as console_repositories_router,
 )
@@ -59,5 +60,6 @@ api_router.include_router(rooms_router, prefix="/api/v1")
 api_router.include_router(grid_router, prefix="/api/v1")
 api_router.include_router(identity_console_router, prefix="/api/v1")
 api_router.include_router(observability_router, prefix="/api/v1")
+api_router.include_router(recovery_case_router, prefix="/api/v1")
 api_router.include_router(scm_webhook_router, prefix="/api/v1")
 api_router.include_router(scm_reconciliation_router, prefix="/api/v1")

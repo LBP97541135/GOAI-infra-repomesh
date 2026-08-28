@@ -110,6 +110,7 @@ async def test_unmergeable_case_is_idempotent_and_has_one_repair_task(tmp_path) 
     cases = PostgresDeliveryConflictCaseStore(database)
     values = dict(
         change_set_id=uuid4(), project_id=uuid4(), repository_id=uuid4(),
+        organization_id=uuid4(),
         candidate_head_sha="a" * 40, kind=DeliveryConflictKind.CONTENT_CONFLICT,
         expected_base_sha="b" * 40, observed_base_sha="c" * 40,
         detail="SCM reports the pull request is not mergeable",

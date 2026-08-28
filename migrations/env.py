@@ -39,6 +39,11 @@ from repomesh.modules.project.infrastructure import (
     ProjectRepositoryTeamRecord,
     TopologyPolicyDraftRecord,
 )
+from repomesh.modules.recovery_management.infrastructure import (
+    RecoveryCaseRecord,
+    RecoveryDecisionRecord,
+    RecoveryOperationRecord,
+)
 from repomesh.modules.repository_intelligence.infrastructure.models import (
     PlanSnapshotRecord,
     RepositoryRecord,
@@ -84,6 +89,9 @@ _REGISTERED_MODELS = (
     RepositoryRecord,
     PlanSnapshotRecord,
     ValidationSnapshotRecord,
+    RecoveryCaseRecord,
+    RecoveryDecisionRecord,
+    RecoveryOperationRecord,
     SCMObservationRecord,
     SCMPollCursorRecord,
     SCMCommandRecord,
