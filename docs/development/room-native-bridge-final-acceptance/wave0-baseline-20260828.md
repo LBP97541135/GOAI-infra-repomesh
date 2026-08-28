@@ -50,7 +50,13 @@
 
 ```text
 W-0   基线提交      [波次0·主脑] 状态: 本提交
-W-A1  PR 5.5A+B    [波次1·A线]  状态: 待领取   baseline: ____
+W-A1  PR 5.5A+B    [波次1·A线]  5.5A 段已验收合入: baseline e3eec185, 合入 41b5decb
+      v2 路由: GET /api/v1/runtime/v2/external-members/{id}/binding?role=… + PUT 同前缀;
+      role 必填 query、真相源=directory、org leader 双 409;并修了 R0 一格之遥的缺陷
+      (ExternalWorkerProjection 硬编码 worker skills → leader 必 409)。记账风险:
+      ①leaderName 为空时 leader 身份守卫 fail-open;②skills 修复未经真机,E1 做只读核验;
+      ③PR 8 侧 BINDING_PATH 仍 v1 硬编码 + enrollment v2 解析全归 PR 8。
+      5.5B 段进行中(迁移 0037 以 down_revision=20260828_0038 入链;链序=合并序,与编号序不同)
 W-B1  PR 7 核心纵切 [波次1·B线]  状态: 已验收合入  baseline: e3eec185  合入: 91b2e85e/492e715f/2b882089
       已裁决偏差: ①malformed REPOMESH_RUNNER_WORKER_TOKENS 在 leader 面答 401+ERROR 日志
       (冻结 enum 无 server-fault 码;与 agent_runtime 的 503 不一致,W-A2 重审);
