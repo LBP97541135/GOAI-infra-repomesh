@@ -26,6 +26,7 @@
 | `20260828_0037`(文件 `20260828_0037_team_decomposition_mode.py`) | PR 5.5B | project topology 持久化 `decomposition_mode` |
 | `20260828_0038`(文件 `20260828_0038_leader_decision.py`) | PR 7 | leader plan provenance / DAG / review phase·revision·findings |
 | `20260828_0039`(文件 `20260828_0039_room_timeline.py`) | PR 9 | `room_timeline_messages` |
+| `20260828_0040`(W-B1 验收时追加预留) | W-A2(PR 7 完整状态机) | leader plan provenance / DAG / review revision / findings(0038 只建了本切片写的 `leader_assignments`) |
 
 规则(编排计划 §4):topic branch 开发期 `down_revision` 一律指向自己检出时的链尾
 (当前 `20260827_0036`),各自独立可测;合并时 integration owner 只重写 `down_revision`
@@ -50,7 +51,10 @@
 ```text
 W-0   基线提交      [波次0·主脑] 状态: 本提交
 W-A1  PR 5.5A+B    [波次1·A线]  状态: 待领取   baseline: ____
-W-B1  PR 7 核心纵切 [波次1·B线]  状态: 待领取   baseline: ____
+W-B1  PR 7 核心纵切 [波次1·B线]  状态: 已验收合入  baseline: e3eec185  合入: 91b2e85e/492e715f/2b882089
+      已裁决偏差: ①malformed REPOMESH_RUNNER_WORKER_TOKENS 在 leader 面答 401+ERROR 日志
+      (冻结 enum 无 server-fault 码;与 agent_runtime 的 503 不一致,W-A2 重审);
+      ②to_wire 对超 maxLength 的 title/workerName 截断(有损,记账)
 W-C1  V1→PR6       [波次1·C线]  状态: 待领取   baseline: ____(依赖 E0a,已备)
 W-A2  PR 7 完整集成 [波次2·A线]  状态: 排队
 W-B2  PR 8         [波次2·B线]  状态: 排队
