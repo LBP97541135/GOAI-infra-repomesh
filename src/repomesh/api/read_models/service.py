@@ -1003,6 +1003,11 @@ class DeliveryReadModelService:
         unresolved senders.
         """
 
+        resolved_name = (
+            await self._agent_name(entry.sender_agent_id)
+            if entry.sender_agent_id is not None
+            else None
+        )
         return {
             # The Matrix event id is this message's whole identity; there is no
             # ``collaboration.messages`` row behind it to borrow a UUID from.
@@ -1011,11 +1016,10 @@ class DeliveryReadModelService:
             "subject": None,
             "body": entry.body,
             "sender_agent_id": entry.sender_agent_id,
-            "sender_name": (
-                await self._agent_name(entry.sender_agent_id) or entry.sender_matrix_user_id
-                if entry.sender_agent_id is not None
-                else entry.sender_matrix_user_id
-            ),
+            # The raw handle also covers a resolved principal the registry no
+            # longer names: a known id with an unknown name is still a sender
+            # we can show honestly.
+            "sender_name": resolved_name or entry.sender_matrix_user_id,
             "sender_matrix_user_id": entry.sender_matrix_user_id,
             "recipient_agent_id": None,
             "recipient_name": None,
