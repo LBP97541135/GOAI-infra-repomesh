@@ -51,6 +51,7 @@ from repomesh.modules.project.contracts import (
     TeamDecompositionMode,
     TeamDecompositionModeReader,
 )
+from repomesh.modules.project.infrastructure import PersistedTeamDecompositionModeReader
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
@@ -123,19 +124,19 @@ def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReade
 
 
 class StaticTeamDecompositionModeReader:
-    """Every team decomposes server-side, whatever the topology says.
+    """One answer for every team, whatever the topology says.
 
-    The production ``TeamDecompositionModeReader`` until the project module
-    persists a real per-team mode and sets it from the formal
-    materialize/adoption use case (adjudication D-2, PR 5.5B). Until then the
-    honest answer for every team is ``SERVER``: no team in any installation has
-    an adopted external Repository Leader, so anything else would be a guess
-    dressed as a fact.
+    Was the production ``TeamDecompositionModeReader`` while the project module
+    had nowhere to persist a per-team mode; since PR 5.5B that job belongs to
+    ``PersistedTeamDecompositionModeReader``, which reads the adopted mode off
+    the topology row (adjudication D-2, revision 0037), and the wiring below
+    uses it.
 
-    It lives in the composition root rather than in either module because it is
-    an adapter, and this reader in particular is a *placeholder* adapter — the
-    kind that must be visibly one line in the wiring, not a class inside a
-    module that a reader could mistake for the real projection.
+    Kept because it is the honest reader for a container assembled without a
+    topology store to read through, and because "every team decomposes
+    server-side" is worth being able to state in one line in a test. It is no
+    longer wired anywhere by default, and a deployment that reached for it
+    again would be turning off adoption for every project at once.
     """
 
     def __init__(self, mode: TeamDecompositionMode = TeamDecompositionMode.SERVER) -> None:
@@ -1645,13 +1646,16 @@ class ApplicationContainer:
     def team_decomposition_mode_reader(self) -> TeamDecompositionModeReader:
         """Who decomposes each team's repository tasks (adjudication D-2).
 
-        One placeholder today; see ``StaticTeamDecompositionModeReader``. It is
-        a named service rather than an inline construction so that replacing it
-        with the project module's real projection is a one-line change here and
-        nowhere else.
+        The project module's own projection over the persisted topology, as of
+        PR 5.5B: the mode is a row, written by the adoption pass and read here
+        without asking the controller anything. Teams nobody adopted answer
+        ``SERVER``, which is every team in an installation that has not
+        provisioned an external Repository Leader — so switching the placeholder
+        out for this changes no behavior anywhere that has not opted in through
+        adoption, which is the whole of D-2.
         """
 
-        return StaticTeamDecompositionModeReader()
+        return PersistedTeamDecompositionModeReader(self.project_topology_store)
 
     @cached_service
     def leader_assignment_reader(self) -> ReadLeaderAssignment:
@@ -1709,10 +1713,12 @@ class ApplicationContainer:
             # The one-shot ``handle`` is superseded by ``handle_batch``.
             on_batch_deliver = self.plan_delivery_finalizer().handle_batch
             delivery_state = self.delivery_state_adapter()
-        # Wiring the lane does not switch any team into leader mode: the mode
-        # reader above answers SERVER for every team, so batch assignment takes
-        # the same path it always has. It is wired anyway so the seam is a real
-        # one in production and not something only tests ever reach.
+        # Wiring the lane does not switch any team into leader mode: the reader
+        # above answers per team from the persisted topology, and only a team
+        # whose external Repository Leader the adoption pass adopted says
+        # LEADER. Every other team -- every team at all, in an installation
+        # that has provisioned no external leader -- takes the path it always
+        # has.
         collaboration = self.collaboration_gateway()
         leader_lane = (
             LeaderDecisionLane(

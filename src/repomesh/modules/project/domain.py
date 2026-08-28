@@ -18,6 +18,7 @@ from repomesh.modules.project.contracts import (
     ProjectOperationalStatus,
     ProjectTeamRuntimeStatus,
     RepositoryTeamView,
+    TeamDecompositionMode,
 )
 from repomesh.modules.project.errors import (
     ProjectTopologyConflict,
@@ -169,6 +170,13 @@ class RepositoryTeam:
     runtime_status: ProjectTeamRuntimeStatus = ProjectTeamRuntimeStatus.PENDING
     room_id: str | None = None
     leader_room_id: str | None = None
+    #: Who decomposes this team's repository tasks (adjudication D-2).
+    #:
+    #: Defaulted to ``SERVER`` rather than required, which is the whole of D-2
+    #: expressed in one line: every construction site that existed before this
+    #: field keeps today's behavior, and ``LEADER`` is something the adoption
+    #: path below has to go out of its way to say.
+    decomposition_mode: TeamDecompositionMode = TeamDecompositionMode.SERVER
 
     def __post_init__(self) -> None:
         if not self.worker_agent_ids:
@@ -231,6 +239,33 @@ class RepositoryTeam:
             agentteams_team_name=agentteams_team_name or self.agentteams_team_name,
         )
 
+    def with_adopted_leader(self, *, external: bool) -> "RepositoryTeam":
+        """Raise this team into leader mode when its leader runs outside the cluster.
+
+        A one-way latch, and that is the point rather than an oversight. Once a
+        team is in ``LEADER`` mode a batch parks for its Repository Leader
+        instead of being decomposed server-side, so a *silent* fall back to
+        ``SERVER`` would not restore old behavior — it would decompose and
+        dispatch work the leader was in the middle of planning, from a plan
+        nobody submitted. The inputs that could cause it are exactly the ones
+        that go wrong transiently: a controller that did not answer this pass,
+        or a worker document that came back without ``containerManaged``.
+
+        So ``external=False`` means "this pass did not observe an external
+        leader", never "this team is not a leader team". Turning a leader team
+        back into a server team is a decision with consequences for parked
+        work, and it needs its own use case and its own operator intent — not a
+        reconcile that happened to run during an outage.
+
+        Idempotent by construction: adopting an already-adopted team returns
+        the same object, which is what makes a re-run of materialize a no-op
+        here rather than a rewrite.
+        """
+
+        if not external or self.decomposition_mode is TeamDecompositionMode.LEADER:
+            return self
+        return replace(self, decomposition_mode=TeamDecompositionMode.LEADER)
+
     def to_view(self) -> RepositoryTeamView:
         return RepositoryTeamView(
             id=self.id,
@@ -242,6 +277,7 @@ class RepositoryTeam:
             runtime_status=self.runtime_status,
             room_id=self.room_id,
             leader_room_id=self.leader_room_id,
+            decomposition_mode=self.decomposition_mode,
         )
 
 

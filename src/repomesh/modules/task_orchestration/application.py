@@ -856,10 +856,12 @@ class LeaderDecisionLane:
     unrepresentable instead of a runtime check.
 
     Absent, ``AdvanceExecutionPlan`` behaves exactly as it did before this
-    lane existed — every team decomposes server-side. Present, the composition
-    root supplies a mode reader that answers ``SERVER`` for every team until
-    the project module persists real per-team modes (adjudication D-2), so
-    wiring the lane is not the same as switching any team into leader mode.
+    lane existed — every team decomposes server-side. Present, the mode reader
+    answers per team from the persisted topology (adjudication D-2, PR 5.5B):
+    ``LEADER`` only for a team whose external Repository Leader the adoption
+    pass actually adopted, ``SERVER`` for every other team and for every
+    installation that has provisioned none. Wiring the lane is still not the
+    same as switching any team into leader mode.
     """
 
     modes: TeamDecompositionModeReader
