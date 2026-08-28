@@ -27,7 +27,7 @@ from .instance_lock import InstanceLock, instance_lock_path
 from .ports import CodingSessionPort, RoomPort, WorkerBindingPort
 from .runner_consumer import GovernedRuntime, RunnerConsumer
 from .state import open_state, state_path
-from .supervisor import RoomSupervisor
+from .supervisor import LeaderRuntime, RoomSupervisor
 
 __all__ = ["CredentialResolver", "RoomNativeAgent", "StartupOutcome", "resolve_env_credential"]
 
@@ -188,6 +188,7 @@ class RoomNativeAgent:
         state_dir: Path | None = None,
         resolve_credential: CredentialResolver = resolve_env_credential,
         governed: GovernedRuntime | None = None,
+        leader: LeaderRuntime | None = None,
     ) -> None:
         self._binding_port = binding_port
         self._room_port = room_port
@@ -201,6 +202,15 @@ class RoomNativeAgent:
         consumer are not independently useful: an instance that could accept
         ``start task <id>`` but never execute it would hand the room a receipt
         for work nothing on this machine will do (J-10).
+        """
+        self._leader = leader
+        """The Repository Leader lane, or ``None`` for a member that decides nothing.
+
+        Never held beside ``governed``: one belongs to a leader and the other to
+        a worker, and the composition root builds at most one of them for any
+        enrollment. That the two cannot both arrive is AC-02's depth rather than
+        a coincidence — a leader is refused ``--workspace-root`` before anything
+        is assembled, and governed execution has no other switch.
         """
 
     async def run(self, enrollment: ExternalWorkerEnrollment) -> None:
@@ -277,6 +287,11 @@ class RoomNativeAgent:
             stack.callback(state.close)
             stack.push_async_callback(self._room_port.close)
             stack.push_async_callback(self._coding_session.close)
+            if self._leader is not None and self._leader.close is not None:
+                # The actions port holds a pool for the life of the process; the
+                # session behind the same runtime does not belong to it and was
+                # registered a line above as the conversation lane's.
+                stack.push_async_callback(self._leader.close)
             await self._room_port.start(
                 homeserver_url=enrollment.matrix_homeserver_url,
                 user_id=enrollment.matrix_user_id,
@@ -289,11 +304,13 @@ class RoomNativeAgent:
                 access_token=self._resolve_credential(enrollment.credential_refs.matrix),
             )
             _logger.info(
-                "bridge ready: worker=%s profile=%s rooms=%d governed=%s",
+                "bridge ready: member=%s role=%s profile=%s rooms=%d governed=%s leader-lane=%s",
                 enrollment.worker_name,
+                enrollment.role,
                 enrollment.coding_profile,
                 len(outcome.confirmed_room_ids),
                 "off" if self._governed is None else "on",
+                "off" if self._leader is None else "on",
             )
             supervisor = RoomSupervisor(
                 enrollment=enrollment,
@@ -302,6 +319,7 @@ class RoomNativeAgent:
                 coding_session=self._coding_session,
                 state=state,
                 governed_task=None if self._governed is None else self._governed.task_port,
+                leader_runtime=self._leader,
             )
             if self._governed is None:
                 await supervisor.serve()

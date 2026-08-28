@@ -15,15 +15,22 @@ so the batch arrives again and the turn ledger — written before the commit tha
 did not happen — is what stops a finished turn from running twice. That is the
 whole recovery story, and it is a property of this file.
 
-Four further shapes are deliberate:
+Six further shapes are deliberate:
 
-**A room message wakes work up and never authorises it.** One mention shape —
-``start task <uuid>`` — goes to RepoMesh instead of to the coding session, and
-what it carries is an id and this worker's identity. Whether the task exists,
-who may run it, and when it is finished are answered by the control plane and
-are never re-decided from what somebody typed in a room; the room gets a receipt
-or a refusal. Nothing retries the start action either, which is why the refusal
-line asks a *person* to try again.
+**A room message wakes work up and never authorises it.** Some mention shapes go
+to RepoMesh instead of to the coding session — ``start task <uuid>``, the
+platform's own dispatch, and a Repository Leader's two notices — and what they
+carry is an id and this member's identity. Whether the task exists, who may act
+on it, what phase it is in and when it is finished are answered by the control
+plane and are never re-decided from what somebody typed in a room; the room gets
+a receipt or a refusal. Nothing retries any of those actions either, which is
+why the refusal lines ask a *person* to try again.
+
+**Which shapes are read at all is the enrollment's decision, not the message's.**
+The leader notices are read only by a ``repository_leader`` and the same bytes
+stay conversation for a worker, because RepoMesh addresses those messages to the
+member it parked a round on. This is the one place in the loop where a member's
+role changes what a room message means.
 
 **One turn at a time, in arrival order.** An operator has one laptop and one
 workspace, so concurrent turns are contamination rather than throughput. PR 4's
@@ -57,8 +64,9 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from .contracts import ExternalWorkerEnrollment, RoomObservation
+from .contracts import ExternalWorkerEnrollment, LeaderDocumentInvalid, RoomObservation
 from .inbox import Inbox, Trigger
+from .leader_lane import PLAN_NOTICE, REVIEW_NOTICE, LeaderNotice, parse_leader_notice
 from .outbox import NOTE_LANE, RUN_LANE, TURN_LANE, Outbox, observation_id
 from .ports import (
     CodingSessionPort,
@@ -66,6 +74,10 @@ from .ports import (
     GovernedTaskPort,
     GovernedTaskRefused,
     GovernedTaskUnavailable,
+    LeaderActionPort,
+    LeaderActionRefused,
+    LeaderActionUnavailable,
+    LeaderCoordinationPort,
     RoomBatch,
     RoomPort,
     RoomRefused,
@@ -79,11 +91,20 @@ __all__ = [
     "GOVERNANCE_DISABLED_NOTE",
     "GOVERNANCE_REFUSED_PREFIX",
     "GOVERNANCE_UNAVAILABLE_NOTE",
+    "LEADER_DRAFT_REFUSED_NOTE",
+    "LEADER_LANE_DISABLED_NOTE",
+    "LEADER_PHASE_MOVED_TEMPLATE",
+    "LEADER_PLAN_ACCEPTED_TEMPLATE",
+    "LEADER_REFUSED_PREFIX",
+    "LEADER_REVIEW_ACCEPTED_TEMPLATE",
+    "LEADER_REWORK_SUFFIX",
+    "LEADER_UNAVAILABLE_NOTE",
     "RUN_ACCEPTED_BODY",
     "SYNC_TIMEOUT_MS",
     "TIMEOUT_NOTE",
     "TURN_TIMEOUT_SECONDS",
     "AssignmentDirective",
+    "LeaderRuntime",
     "RoomSupervisor",
     "assignment_directive",
     "governed_task_id",
@@ -144,6 +165,60 @@ log they do not have. The other three say nothing a stranger could learn from.
 The unavailable line invites a retry *by a person*, which is the only retry
 there is — nothing behind this module re-sends a start action, because a start
 that RepoMesh may have received is not safe to repeat automatically.
+"""
+
+LEADER_LANE_DISABLED_NOTE = (
+    "This bridge instance cannot submit leader decisions; it was launched conversation-only."
+)
+LEADER_UNAVAILABLE_NOTE = (
+    "I could not reach RepoMesh, so nothing was submitted. Ask me again and I will retry."
+)
+LEADER_REFUSED_PREFIX = "RepoMesh will not take that leader action: "
+LEADER_DRAFT_REFUSED_NOTE = (
+    "I would not submit the decision my own session produced, so RepoMesh has nothing from "
+    "me for this round. The reason is in this machine's log; ask me again and I will try "
+    "once more."
+)
+"""What a room hears when the Bridge refuses its own leader's draft.
+
+Canned rather than carrying the complaint, and it is the one place this lane
+differs from the governed refusal next door. RepoMesh's refusal is the control
+plane's own words about a decision it made and is safe to repeat; this refusal
+is *about a document the model wrote*, and the sentence that describes what is
+wrong with it quotes the document — a node id, a path, an assignee it invented.
+The room gets the fact and the operator gets the reason, which is the same split
+:data:`FAILURE_NOTE` makes.
+
+It ends by inviting a retry by a person, because that is the only retry there
+is: nothing here re-runs a session or re-posts a submission.
+"""
+
+LEADER_PLAN_ACCEPTED_TEMPLATE = (
+    "Repository plan accepted: revision {revision}, {tasks} worker task(s) dispatched."
+)
+LEADER_REVIEW_ACCEPTED_TEMPLATE = (
+    "Review round {revision} answered {verdict}; RepoMesh now calls this leader task {status}."
+)
+LEADER_REWORK_SUFFIX = " {count} rework task(s) created."
+LEADER_PHASE_MOVED_TEMPLATE = (
+    "RepoMesh says this round is {phase} rather than {expected}, so I submitted nothing."
+)
+"""The four things a room is told about a leader round that reached the server.
+
+Every one of them is built from the receipt's own counters and status words —
+never from the leader's product, which is the room's business only to the extent
+that RepoMesh accepted it. The phase line is the one an operator sees after a
+notice arrives twice: the round has already moved, and saying so is more useful
+than silence and more honest than planning it again.
+"""
+
+_EXPECTED_PHASE: dict[str, str] = {PLAN_NOTICE: "planning", REVIEW_NOTICE: "review_due"}
+"""Which phase each notice is only meaningful in.
+
+Both names come from the frozen ``phase`` enum. The gate they feed is what makes
+a replayed notice safe without a second ledger: RepoMesh's phase is the durable
+record of whether this round has already been decided, and it is read before any
+session is spawned or any decision posted.
 """
 
 _GOVERNED_COMMAND = re.compile(
@@ -237,6 +312,27 @@ def assignment_directive(prompt: str) -> AssignmentDirective | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class LeaderRuntime:
+    """The two halves of the Repository Leader lane, which only arrive together.
+
+    A Bridge that could read an assignment package but not decide on it, or
+    decide and not submit, would answer a notice with half a round: the leader
+    task stays open, RepoMesh waits for a verdict that is never coming, and
+    nothing in the room says why. So the decision surface and the session that
+    produces decisions for it are one value, built once by the composition root.
+
+    ``close`` is here because the actions port holds a connection pool for the
+    life of the process and the session behind it does not belong to this record
+    — it is the conversation lane's, already closed by whoever built it. A
+    runtime whose port has nothing to release leaves this ``None``.
+    """
+
+    actions: LeaderActionPort
+    session: LeaderCoordinationPort
+    close: Callable[[], Awaitable[None]] | None = None
+
+
 class _RoomTrouble(Exception):
     """A call into the room port failed in a way that waiting might fix.
 
@@ -288,6 +384,7 @@ class RoomSupervisor:
         coding_session: CodingSessionPort,
         state: BridgeState,
         governed_task: GovernedTaskPort | None = None,
+        leader_runtime: LeaderRuntime | None = None,
         sync_timeout_ms: int = SYNC_TIMEOUT_MS,
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -305,6 +402,17 @@ class RoomSupervisor:
         one that is also given this can be asked to start work RepoMesh
         governs. What is not legitimate is silence — an instance without it says
         so in the room the first time somebody asks.
+        """
+        self._leader = leader_runtime
+        """The leader lane, or ``None`` for an instance that decides nothing.
+
+        Separate from the governed pair above and never held beside it in
+        practice: the two belong to different roles, and the composition root
+        builds this one only for a ``repository_leader`` enrollment and that one
+        only for a worker given ``--workspace-root``. Optional here for the
+        reason the governed port is optional — a leader Bridge brought up with
+        the conversation stand-in can hear its room without being able to plan,
+        and it says so rather than going quiet.
         """
         self._state = state
         self._inbox = Inbox(state)
@@ -586,8 +694,26 @@ class RoomSupervisor:
         RepoMesh's start action against its own records, so a forged dispatch
         buys its author exactly what a forged ``start task`` does — a refusal
         from the control plane, reported into the room.
+
+        A Repository Leader's two notices are read before any of that, and only
+        by a leader. RepoMesh addresses them to the member it parked the round
+        on, so reading them anywhere else would be answering for somebody whose
+        room this also is — and a worker that tried would be refused by the
+        server anyway, one round-trip later and with a leader task left waiting.
+        The role gate is therefore the enrollment's, not the message's: the same
+        bytes are a wake-up for a leader and ordinary conversation for a worker.
         """
 
+        if self._enrollment.is_repository_leader:
+            notice = parse_leader_notice(trigger.prompt)
+            if notice is not None:
+                _logger.info(
+                    "mention %s is a RepoMesh %s notice for leader task %s",
+                    trigger.event_id,
+                    notice.action,
+                    notice.task_id,
+                )
+                return await self._decide_as_leader(trigger, notice)
         directive = assignment_directive(trigger.prompt)
         if directive is not None:
             if directive.worker_agent_id == self._enrollment.worker_agent_id:
@@ -715,6 +841,151 @@ class RoomSupervisor:
             trigger.event_id,
         )
         return _Answer("completed", RUN_LANE, (self._accepted(trigger, receipt),))
+
+    async def _decide_as_leader(self, trigger: Trigger, notice: LeaderNotice) -> _Answer:
+        """Carry one leader round out, and tell the room the one line it gets.
+
+        The exception discipline is the governed branch's, extended by one case.
+        RepoMesh's own refusal is repeated because it is the control plane's
+        words about a decision it made — ``phase_conflict`` and "you are not the
+        assignee" are different problems for whoever is watching. A control plane
+        that could not be asked gets the canned line and no automatic retry, for
+        the reason the start action does not retry either: a submission RepoMesh
+        may already have taken is not safe for a machine to repeat, and the
+        server's own idempotency is what makes a *person* asking again safe.
+
+        The extra case is a decision this Bridge refused to submit. That is not
+        a failure of the round and not RepoMesh's doing: the session produced
+        something that is not the frozen document, or is outside the
+        assignment's own envelope, and it is caught here rather than posted and
+        refused as a 409 (adjudication B2-2). The room is told the round
+        produced nothing; the sentence that says *what* was wrong quotes the
+        model's document and stays in this machine's log.
+
+        Everything lands in the note lane at position zero, which is what makes
+        a replayed turn land on the row it landed on last time — one round, one
+        line, whatever happened in it.
+        """
+
+        if self._leader is None:
+            _logger.warning(
+                "mention %s is a %s notice for leader task %s, but this instance has no "
+                "leader lane",
+                trigger.event_id,
+                notice.action,
+                notice.task_id,
+            )
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, LEADER_LANE_DISABLED_NOTE),))
+        try:
+            async with asyncio.timeout(self._turn_timeout):
+                line = await self._leader_round(self._leader, notice)
+        except TimeoutError:
+            _logger.warning(
+                "the %s round for leader task %s ran past %.0fs and was abandoned; it stays "
+                "answerable",
+                notice.action,
+                notice.task_id,
+                self._turn_timeout,
+            )
+            return _Answer("timeout", NOTE_LANE, (self._note(trigger, TIMEOUT_NOTE),))
+        except LeaderActionRefused as refusal:
+            _logger.info(
+                "RepoMesh refused the %s for leader task %s (%s): %s",
+                notice.action,
+                notice.task_id,
+                refusal.code,
+                refusal,
+            )
+            return _Answer(
+                "failed",
+                NOTE_LANE,
+                (self._note(trigger, f"{LEADER_REFUSED_PREFIX}{refusal}"),),
+            )
+        except LeaderActionUnavailable as trouble:
+            _logger.warning(
+                "RepoMesh could not be asked about leader task %s: %s", notice.task_id, trouble
+            )
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, LEADER_UNAVAILABLE_NOTE),))
+        except LeaderDocumentInvalid:
+            # The complaint names parts of the document the session wrote, so it
+            # belongs to the operator and not to the room.
+            _logger.exception(
+                "the %s session for leader task %s produced nothing submittable",
+                notice.action,
+                notice.task_id,
+            )
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, LEADER_DRAFT_REFUSED_NOTE),))
+        except Exception:
+            _logger.exception(
+                "the %s round for leader task %s failed", notice.action, notice.task_id
+            )
+            return _Answer("failed", NOTE_LANE, (self._note(trigger, FAILURE_NOTE),))
+        return _Answer("completed", NOTE_LANE, (self._note(trigger, line),))
+
+    async def _leader_round(self, lane: LeaderRuntime, notice: LeaderNotice) -> str:
+        """Read the facts, decide on them, submit the decision, say what came back.
+
+        The read comes first and it is the thing that makes a replayed notice
+        safe. A notice can arrive twice — an uncommitted cursor, a second
+        instance of the same message, a person forwarding it — and the round it
+        names may already have been decided. RepoMesh's ``phase`` is the durable
+        answer to "has this been decided", it survives this process restarting
+        because it was never this process's to keep, and consulting it before
+        anything else means a stale notice costs one GET rather than a second
+        coordination session and a submission the server would refuse.
+
+        Nothing is validated here that the session does not already validate:
+        the decision is held against the freeze and against the assignment's own
+        envelope where both halves are in hand, which is inside the coordination
+        session, and a second copy of that check would be a second thing to keep
+        true.
+
+        One submission per round and no retry anywhere behind it. The writes are
+        idempotent at the server — the leader task keys a plan, the leader task
+        and the review revision key a verdict — so the recovery on offer for an
+        ambiguous failure is the honest one: tell the room, and let a person ask
+        again.
+        """
+
+        package = await lane.actions.fetch_assignment(notice.task_id)
+        expected = _EXPECTED_PHASE[notice.action]
+        if package.phase != expected:
+            _logger.info(
+                "leader task %s is %s, not %s; the %s notice is stale and nothing is submitted",
+                notice.task_id,
+                package.phase,
+                expected,
+                notice.action,
+            )
+            return LEADER_PHASE_MOVED_TEMPLATE.format(phase=package.phase, expected=expected)
+        if notice.action == PLAN_NOTICE:
+            plan = await lane.session.plan(package)
+            plan_receipt = await lane.actions.submit_plan(notice.task_id, plan)
+            _logger.info(
+                "RepoMesh accepted plan revision %d for leader task %s",
+                plan_receipt.plan_revision,
+                notice.task_id,
+            )
+            return LEADER_PLAN_ACCEPTED_TEMPLATE.format(
+                revision=plan_receipt.plan_revision,
+                tasks=len(plan_receipt.worker_task_ids),
+            )
+        verdict = await lane.session.review(package)
+        review_receipt = await lane.actions.submit_review(notice.task_id, verdict)
+        _logger.info(
+            "RepoMesh accepted a %s verdict on round %d of leader task %s",
+            review_receipt.verdict,
+            review_receipt.review_revision,
+            notice.task_id,
+        )
+        line = LEADER_REVIEW_ACCEPTED_TEMPLATE.format(
+            revision=review_receipt.review_revision,
+            verdict=review_receipt.verdict,
+            status=review_receipt.leader_task_status,
+        )
+        if review_receipt.rework_task_ids:
+            line += LEADER_REWORK_SUFFIX.format(count=len(review_receipt.rework_task_ids))
+        return line
 
     def _accepted(self, trigger: Trigger, receipt: GovernedStartReceipt) -> RoomObservation:
         """The receipt, as the one message a room gets for it.

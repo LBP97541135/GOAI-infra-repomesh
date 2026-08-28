@@ -26,6 +26,8 @@ from repomesh_runner.profiles import get_profile
 
 from .adapters.coding_session import CODEX_PROFILE_ID, DriverCodingSession, session_root
 from .adapters.governed_task import RepoMeshGovernedTaskAdapter
+from .adapters.leader_actions import RepoMeshLeaderActionAdapter
+from .adapters.leader_session import LeaderCoordinationSession
 from .adapters.matrix import MatrixRoomAdapter
 from .adapters.memory import InertCodingSession
 from .adapters.repomesh_binding import RepoMeshBindingAdapter
@@ -52,8 +54,11 @@ from .runner_consumer import (
     runner_state_root,
 )
 from .state import BridgeState
+from .supervisor import LeaderRuntime
 
 __all__ = ["EXIT_ALREADY_RUNNING", "EXIT_OK", "EXIT_STARTUP_REFUSED", "main"]
+
+_logger = logging.getLogger(__name__)
 
 EXIT_OK = 0
 EXIT_STARTUP_REFUSED = 2
@@ -166,12 +171,17 @@ def main(
                 process_factory=process_factory,
             )
 
+        # Named rather than passed inline because the leader lane reads the same
+        # session: one codex stack, two readings of its answer (B2-1), and a
+        # second stack would be a second containment story on one machine.
+        session = build_session(enrollment)
         agent = RoomNativeAgent(
             binding_port=binding_port,
             room_port=MatrixRoomAdapter(),
-            coding_session=build_session(enrollment),
+            coding_session=session,
             state_dir=arguments.state_dir,
             governed=build_governed(enrollment),
+            leader=_build_leader_runtime(enrollment, session=session),
         )
         # Ctrl-C is how an operator stops this process, so it is a normal
         # ending, not a failure: ``asyncio.run`` has already cancelled the agent
@@ -273,6 +283,60 @@ def _governed_workspace_root(
             f"--workspace-root must name an existing directory: {root}"
         )
     return root
+
+
+def _build_leader_runtime(
+    enrollment: ExternalWorkerEnrollment, *, session: CodingSessionPort
+) -> LeaderRuntime | None:
+    """Assemble the Repository Leader lane, for the enrollments that have one.
+
+    Built from the *role* and from nothing else: there is no flag that turns
+    this on, because a leader has no other job. That is the mirror image of
+    governed execution, which no leader may have at any price
+    (:func:`_governed_workspace_root`), and between them the two roles get
+    disjoint capabilities out of one composition root rather than out of an
+    operator's command line (AC-02).
+
+    ``credentialRefs.repomesh`` is required outright, as it is for governed
+    execution and for the same reason: every leader action is authenticated as
+    this member, and RepoMesh decides what the token's owner may do. Under
+    adjudication D-6 the slot's historical name still says ``repomesh``; what it
+    holds for a leader is the external *member* token.
+
+    The lane needs the driver session's other reading, so a Bridge brought up
+    with a stand-in has no leader lane and says so in the room the first time a
+    notice arrives. That is the same answer ``--inert`` gives the conversation
+    track — an honest limitation rather than a silent one — and it is preferred
+    to refusing the invocation, because bringing a member up in its rooms before
+    the CLI is installed is a legitimate step.
+    """
+
+    if not enrollment.is_repository_leader:
+        return None
+    reference = enrollment.credential_refs.repomesh
+    if reference is None:
+        raise BridgeStartupError(
+            "a repository leader needs credentialRefs.repomesh: reading an assignment and "
+            "submitting a plan or a verdict are all authenticated as this member"
+        )
+    if not isinstance(session, DriverCodingSession):
+        _logger.warning(
+            "this instance serves a %s with no real coding session, so it can hear its "
+            "rooms but cannot plan or review",
+            enrollment.role,
+        )
+        return None
+    actions = RepoMeshLeaderActionAdapter(
+        endpoint=enrollment.repomesh_endpoint,
+        # Resolved per call, never held: the secret's lifetime is the request's,
+        # exactly as it is for preflight, for Matrix and for the start action.
+        credential=lambda: resolve_env_credential(reference),
+    )
+    return LeaderRuntime(
+        actions=actions,
+        session=LeaderCoordinationSession(session),
+        close=actions.close,
+    )
 
 
 def _build_governed_runtime(

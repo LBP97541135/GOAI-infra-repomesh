@@ -48,6 +48,7 @@ __all__ = [
     "InMemoryWorkerBindingPort",
     "LeaderActionCall",
     "ScriptedCodingSession",
+    "ScriptedLeaderSession",
     "SentMessage",
 ]
 
@@ -332,6 +333,57 @@ def _plan_refusal_code(reason: str) -> str:
     if "outside the safety envelope" in reason:
         return "plan_invalid_allowed_paths"
     return "plan_invalid_tests_removed"
+
+
+LeaderDecision = RepositoryPlanDecision | RepositoryReviewDecision
+"""What one leader turn produces, whichever half of the round asked for it."""
+
+
+class ScriptedLeaderSession:
+    """A coordination session whose decisions a caller writes in advance.
+
+    A test double, and the counterpart of :class:`ScriptedCodingSession` on the
+    other reading of the same stack. Answers are consumed in order across both
+    methods, because a round asks for exactly one decision at a time and the
+    order they come back in is the order the lane asked; an exception in the
+    script is raised instead of returned, so "the model wrote prose instead of a
+    plan" is one entry in a list rather than a subclass.
+
+    Running past the end of the script is an error rather than a default. The
+    claims this double supports are mostly negative — *this* notice produced no
+    decision, a replay asked for none — and a double that quietly invented an
+    extra answer would let a lane that decided twice look like one that decided
+    once.
+
+    ``asked`` is the record those claims are read off: what was asked for, and
+    about which leader task.
+    """
+
+    def __init__(self, *answers: "LeaderDecision | BaseException") -> None:
+        self._answers: list[LeaderDecision | BaseException] = list(answers)
+        self.asked: list[tuple[str, UUID]] = []
+        """``("plan" | "review", leader task id)`` per call, in order."""
+
+    async def plan(self, package: RepositoryAssignmentPackage) -> RepositoryPlanDecision:
+        answer = self._next("plan", package)
+        assert isinstance(answer, RepositoryPlanDecision), "the script owes a plan here"
+        return answer
+
+    async def review(self, package: RepositoryAssignmentPackage) -> RepositoryReviewDecision:
+        answer = self._next("review", package)
+        assert isinstance(answer, RepositoryReviewDecision), "the script owes a verdict here"
+        return answer
+
+    def _next(self, what: str, package: RepositoryAssignmentPackage) -> "LeaderDecision":
+        self.asked.append((what, package.leader_task_id))
+        if not self._answers:
+            raise AssertionError(
+                f"the scripted leader session was asked for a {what} it has no answer for"
+            )
+        answer = self._answers.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
 
 
 @dataclass(frozen=True, slots=True)

@@ -25,6 +25,13 @@ double has no way to express. Its two implementations are the HTTP adapter and
 the in-memory one next to it, which is what makes it a seam rather than an
 interface with a single caller.
 
+:class:`LeaderCoordinationPort` beside it is a narrower thing and is written
+down for a narrower reason: the module that sequences a leader's round has to
+call the leader's own session, and a core module may not import an adapter to
+learn the type it calls. One stack sits behind it and behind
+:class:`CodingSessionPort` alike; what this names is the other *reading* of that
+stack's answer.
+
 Two failure vocabularies meet in this package and they live in different
 modules for one reason each. The *preflight* one lives in
 :mod:`repomesh_agent_bridge.contracts`, next to the wire models that raise it:
@@ -66,6 +73,7 @@ __all__ = [
     "LeaderActionPort",
     "LeaderActionRefused",
     "LeaderActionUnavailable",
+    "LeaderCoordinationPort",
     "RoomBatch",
     "RoomBody",
     "RoomEvent",
@@ -517,4 +525,37 @@ class LeaderActionPort(Protocol):
         a terminal status in leader mode — there is no automatic roll-up — so a
         round that is never reviewed stays open rather than resolving itself.
         """
+        ...
+
+
+class LeaderCoordinationPort(Protocol):
+    """The leader's own session, read as decisions instead of as room text.
+
+    Not a second :class:`CodingSessionPort` and not a second session stack: one
+    ``DriverCodingSession`` serves both lanes, and this is the *reading* the
+    leader lane takes off it (adjudication B2-1). The two ends are what differ —
+    the prompt is a rendered fact package and the answer is a structured
+    decision — which is why the port is separate even though the process behind
+    it is the same one the conversation lane spawns.
+
+    It is a port at all so that the module which sequences a leader's round can
+    depend on the reading without importing the adapter that performs it: a core
+    module may not import an adapter to learn a type it calls, and the supervisor
+    calls both of these methods in a fixed order.
+
+    Both raise
+    :class:`~repomesh_agent_bridge.contracts.LeaderDocumentInvalid` when the
+    session did not produce a decision, when what it produced is not the
+    document the freeze describes, or when that document is outside the
+    assignment's own safety envelope. A malformed answer is refused and never
+    repaired (adjudication B2-2), so an implementation that "fixed" one would be
+    submitting a plan its leader did not write.
+    """
+
+    async def plan(self, package: RepositoryAssignmentPackage) -> RepositoryPlanDecision:
+        """Turn a ``planning`` package into this leader's Spec, DAG and tasks."""
+        ...
+
+    async def review(self, package: RepositoryAssignmentPackage) -> RepositoryReviewDecision:
+        """Turn a ``review_due`` package into this leader's evidence-based verdict."""
         ...

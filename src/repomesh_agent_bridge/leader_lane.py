@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 from .contracts import (
@@ -40,10 +41,15 @@ from .contracts import (
 )
 
 __all__ = [
+    "NOTICE_ACTIONS",
+    "PLAN_NOTICE",
+    "REVIEW_NOTICE",
+    "LeaderNotice",
     "assemble_plan_decision",
     "assemble_review_decision",
     "extract_json_object",
     "parse_leader_assignment_notice",
+    "parse_leader_notice",
     "render_fact_package",
     "render_plan_instructions",
     "render_review_instructions",
@@ -53,43 +59,92 @@ _ASSIGNMENT_ROUTE = re.compile(
     r"/api/v1/agent-actions/leader/assignments/"
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
 )
-_PLAN_ROUTE_SUFFIX = "/plan"
+
+PLAN_NOTICE = "plan"
+REVIEW_NOTICE = "review"
+NOTICE_ACTIONS: tuple[str, ...] = (PLAN_NOTICE, REVIEW_NOTICE)
+"""The two things RepoMesh wakes a Repository Leader up for.
+
+They are spelled as the last segment of the route each notice carries, because
+that is exactly what tells them apart on the wire: the two messages differ in
+their prose and in one path segment, and only the second is a contract.
+"""
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n?```", re.DOTALL)
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderNotice:
+    """A notice RepoMesh addressed to one Repository Leader."""
+
+    task_id: UUID
+    action: str
+    """``plan`` | ``review`` — one of :data:`NOTICE_ACTIONS`."""
+
+
+def parse_leader_notice(body: str) -> LeaderNotice | None:
+    """What a message tells this leader to do, or ``None`` for anything else.
+
+    RepoMesh sends a leader exactly two messages that are not conversation, and
+    both are a *second* message beside something else: the planning notice sits
+    beside the parked assignment, and the review notice beside a round whose
+    workers have all finished (``task_orchestration/application.py``). Each
+    carries the *route*, because neither a leader task nor a finished round says
+    on its own that this team decides leader-side or where the decision surface
+    is. This reads those two messages and nothing else.
+
+    It keys on the routes rather than on the prose. The URL is the contract and
+    the sentences around it are not: a reworded notice must not stop waking the
+    lane, and a message that happens to mention a leader task without naming a
+    decision endpoint must not start one. Two refusals follow from the same
+    reasoning, and both are declines rather than guesses — a body naming several
+    different leader tasks, and a body naming both endpoints, because there is
+    no honest way to pick one of either.
+
+    Recognising a notice is a *wake-up* and never an authorisation. Whether the
+    task exists, whether this member is its assignee and what phase it is really
+    in are all answered by RepoMesh when the lane goes and asks; nothing decided
+    here is trusted by anything that follows.
+    """
+
+    task_ids: set[UUID] = set()
+    actions: set[str] = set()
+    for match in _ASSIGNMENT_ROUTE.finditer(body):
+        task_ids.add(UUID(match.group(1)))
+        if (action := _action_after(body, match.end())) is not None:
+            actions.add(action)
+    if len(task_ids) != 1 or len(actions) != 1:
+        return None
+    return LeaderNotice(task_ids.pop(), actions.pop())
 
 
 def parse_leader_assignment_notice(body: str) -> UUID | None:
     """The leader task a "submit your repository plan" notice is about, or None.
 
-    RepoMesh parks a leader-mode batch and then sends the leader a second
-    message beside the assignment itself — the one that carries the *route*,
-    because a leader task alone does not say that this team plans leader-side or
-    where the decision surface is (``task_orchestration/application.py``). This
-    reads that message.
-
-    It keys on the routes rather than on the prose. The URL is the contract and
-    the sentences around it are not: a reworded notice must not stop waking the
-    lane, and a message that happens to mention a leader task without telling it
-    to plan must not start one. So the test is specific — the body has to name
-    the plan endpoint — and a body naming several different leader tasks is
-    declined rather than guessed at, because there is no honest way to pick one.
-
-    Recognising a notice is a *wake-up* and never an authorisation. Whether the
-    task exists, whether this member is its assignee and what phase it is in are
-    all answered by RepoMesh when the lane goes and asks; nothing decided here
-    is trusted by anything that follows.
+    The planning half of :func:`parse_leader_notice`, kept as its own name
+    because "is this the notice that starts a plan" is a question worth asking
+    on its own — and because reading a review notice as a planning one would be
+    the worst available answer: a leader would plan a round it was asked to
+    judge.
     """
 
-    matches = _ASSIGNMENT_ROUTE.finditer(body)
-    task_ids: set[UUID] = set()
-    plan_route_seen = False
-    for match in matches:
-        task_ids.add(UUID(match.group(1)))
-        if body[match.end() :].startswith(_PLAN_ROUTE_SUFFIX):
-            plan_route_seen = True
-    if not plan_route_seen or len(task_ids) != 1:
-        return None
-    return task_ids.pop()
+    notice = parse_leader_notice(body)
+    return notice.task_id if notice is not None and notice.action == PLAN_NOTICE else None
+
+
+def _action_after(body: str, end: int) -> str | None:
+    """Which decision endpoint a matched route names, if it names one at all.
+
+    A notice quotes both the read and the write, and only the write says what
+    the leader is being woken for; the bare ``GET`` line is deliberately not an
+    action.
+    """
+
+    tail = body[end:]
+    for action in NOTICE_ACTIONS:
+        if tail.startswith(f"/{action}"):
+            return action
+    return None
 
 
 def render_fact_package(package: RepositoryAssignmentPackage) -> str:
