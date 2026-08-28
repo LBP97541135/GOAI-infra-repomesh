@@ -559,7 +559,10 @@ async def test_respond_denies_every_tool_request(tmp_path) -> None:
     outcome = await session.respond(_turn())
 
     answer = next(frame for frame in sent_frames(process) if frame.get("id") == 90)
-    assert answer["result"] == {"decision": "denied"}
+    # codex's own word for a refusal, captured live (C-8a); "denied" was
+    # refused on the wire and reached the model as a *failed* approval, which
+    # this track's whole guarantee depends on not happening.
+    assert answer["result"] == {"decision": "decline"}
     assert outcome.status == "completed"
     assert outcome.denied_tool_requests == 1
     assert len(outcome.observations) == 1
