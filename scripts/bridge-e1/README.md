@@ -91,8 +91,14 @@ RepoMesh 目录决定，调用方说了不算）。
 ### 步骤 4 —— 让 Team 存在
 
 `GET binding` 会拒绝「不属于任何 Team」的成员（`ResolveExternalMemberBinding`），
-而 Team 必须在六个 worker 资源都存在之后才建得起来。所以这一步夹在中间：
-走 materialize（`ReconcileProjectAgentTopology`），或直接 `agt create team`。
+而 Team 必须在六个 worker 资源都存在之后才建得起来。所以这一步夹在中间。
+
+**Team 只由 materialize 的正式拓扑 reconcile 建立/采用（`ReconcileProjectAgentTopology`），
+不走 `agt create team` 旁路**（主脑裁决 W-E1-D2）：验收标准 §5 禁止脚本代替产品链业务步骤，
+建团正是产品链的一步；且 reconcile 对既有 Team 做逐字段奇偶性核对（A-8 adopt），手工建的
+Team 与投影稍有出入就是 409，错误会记在操作者头上。由此 R8 预检分两段读：materialize
+**前**只有 controller 半边可核（资源存在 / 名字逐字相符 / containerManaged:false / skills），
+binding 半边预期「不属于 Team」失败属知情；materialize **后**再跑一次，六行全绿才算 R8 过。
 Team 名与 room 号见 §4。
 
 ### 步骤 5 —— 取 binding（GET）
