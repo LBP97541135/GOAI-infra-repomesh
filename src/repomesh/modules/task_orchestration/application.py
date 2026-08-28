@@ -333,7 +333,21 @@ class TaskOrchestrator:
         *,
         idempotency_key: str,
         origin: TaskOrigin = TaskOrigin.PLANNED,
+        deliver: bool = True,
     ) -> TaskView:
+        """Write the task row and, unless told otherwise, announce it.
+
+        ``deliver=False`` stops after the row: no task package, no room
+        message. The caller announces it with :meth:`deliver_assignment` once
+        everything that announcement implies exists — which for a Worker task
+        means its execution permit. See that method for what the old
+        single-call shape cost when the two were one act (defect S-1).
+
+        Both branches below honour the flag, the replay branch included: a
+        replay whose first attempt died before writing the permit must not
+        re-announce a task that still has none.
+        """
+
         key = idempotency_key.strip()
         if not key:
             raise ValueError("idempotency_key is required")
@@ -342,7 +356,8 @@ class TaskOrchestrator:
             task, previous_fingerprint = existing
             if fingerprint != previous_fingerprint:
                 raise TaskConflict("idempotency key was used for a different task")
-            await self._deliver_assignment(task, key)
+            if deliver:
+                await self._deliver_assignment(task, key)
             return task.to_view()
 
         assigner = await self._required_agent(command.assigned_by_agent_id)
@@ -385,8 +400,46 @@ class TaskOrchestrator:
             idempotency_key=key,
             request_fingerprint=fingerprint,
         )
-        await self._deliver_assignment(task, key)
+        if deliver:
+            await self._deliver_assignment(task, key)
         return task.to_view()
+
+    async def deliver_assignment(self, task_id: UUID) -> None:
+        """Announce a task that has already been written (defect S-1).
+
+        The second half of a dispatch split in two: the task package reaches
+        the store and the room is told. A caller that must write an execution
+        permit for the task assigns with ``deliver=False``, writes the permit,
+        and then calls this — in that order, because the permit is the document
+        the Worker's preflight reads. Announcing first loses the dispatch
+        outright: a Bridge sitting in the room calls back the instant the
+        message lands, ``materialize`` finds no approved specification and
+        raises ``SpecificationNotFound``, and the Bridge refuses without
+        retrying by design. The task then sits blocked with its permit frozen
+        behind it and nothing left for an operator to press. Reproduced live
+        twice before the split.
+
+        The key is the task's *original* assignment key, read back from the
+        store, for the reason :meth:`redispatch` reads it back: the publisher
+        bakes ``idempotency_key`` into ``meta.json`` and hashes that into the
+        package's content hash, so a fresh key would be refused as conflicting
+        content. Every row :meth:`assign` writes has one; a row without one
+        cannot be published under any key this method could invent, and says so
+        rather than guessing.
+
+        Idempotency is the delivery path's own — ``key:publication`` for the
+        package, the dispatch key for the room message — so a caller that runs
+        this twice tells the room once.
+        """
+
+        task = await self._required_task(task_id)
+        key = await self._tasks.assignment_key(task.id)
+        if key is None:
+            raise TaskConflict(
+                f"task {task.id} has no recorded assignment key, so its task "
+                "package cannot be published"
+            )
+        await self._deliver_assignment(task, key)
 
     async def _deliver_assignment(
         self, task: Task, key: str, *, dispatch_attempt: str | None = None
@@ -767,13 +820,27 @@ class DecomposeRepositoryTask:
                     )
             return views
 
-        # Falling through with an in-flight task this key owns is the point
-        # (defect A-10). ``assign`` recognises the key, returns the row it
-        # already wrote instead of a second one, and — crucially — re-runs the
-        # delivery that failed the first time: the task package upload and the
-        # room message. Short-circuiting here, which is what the old
-        # unconditional ``in_flight`` return did, left a Worker task nobody had
-        # published and nobody had told, and no retry could reach it.
+        # Two defects meet in the three calls below, and the order is what
+        # settles both.
+        #
+        # A-10 is why this falls through at all. A replay under a key that owns
+        # an in-flight task must not stop here: ``assign`` recognises the key
+        # and returns the row it already wrote instead of a second one,
+        # ``_ensure_specification`` finds or completes the permit, and
+        # ``deliver_assignment`` re-runs the delivery that failed the first
+        # time — the package upload and the room message. Short-circuiting,
+        # which is what the old unconditional ``in_flight`` return did, left a
+        # Worker task nobody had published and nobody had told, and no retry
+        # could reach it. The replay story survives the split intact; only its
+        # last step moved out of ``assign``.
+        #
+        # S-1 is why the delivery is now a third call rather than the tail of
+        # the first. The permit is the document a Worker's preflight reads, so
+        # the room may not learn of a task whose permit is not yet on disk: an
+        # online Bridge calls back the instant the message lands, preflight
+        # raises ``SpecificationNotFound``, and the Bridge refuses without
+        # retrying by design — the dispatch is simply lost. Write the row,
+        # write the permit, then say so.
         worker_task = await self._assigner.assign(
             AssignTaskCommand(
                 organization_id=task.organization_id,
@@ -791,8 +858,10 @@ class DecomposeRepositoryTask:
             # title-equality judgement had the same effect by accident, since
             # the title is copied down verbatim; here it is stated.
             origin=task.origin,
+            deliver=False,
         )
         await self._ensure_specification(worker_task, tests=tests, test_paths=test_paths, key=key)
+        await self._assigner.deliver_assignment(worker_task.id)
         return (worker_task,)
 
     async def _ensure_specification(
@@ -1695,8 +1764,13 @@ class SubmitRepositoryPlan:
                 ),
                 idempotency_key=key,
                 origin=task.origin,
+                # Row, permit, then the room — never the room first. See
+                # ``TaskOrchestrator.deliver_assignment`` for what a message
+                # that outruns its permit costs (defect S-1).
+                deliver=False,
             )
             await self._author_permit(worker_task, draft, key=key)
+            await self._assigner.deliver_assignment(worker_task.id)
             worker_task_ids.append(worker_task.id)
 
         receipt = PlanReceipt(
@@ -2030,8 +2104,12 @@ class SubmitRepositoryReview:
                 ),
                 idempotency_key=key,
                 origin=TaskOrigin.REWORK,
+                # A repair is announced only once its own permit exists, for
+                # the same reason the plan's tasks are (defect S-1).
+                deliver=False,
             )
             await self._author_rework_permit(assignment, worker_task, key=key)
+            await self._assigner.deliver_assignment(worker_task.id)
             created.append(worker_task.id)
         return tuple(created)
 

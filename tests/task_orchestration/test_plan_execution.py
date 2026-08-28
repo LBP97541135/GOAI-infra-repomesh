@@ -92,10 +92,12 @@ class RecordingAssigner:
         *,
         idempotency_key: str,
         origin: TaskOrigin = TaskOrigin.PLANNED,
+        deliver: bool = True,
     ):
         self.commands.append((command, idempotency_key))
         if existing := await self._tasks.get_by_idempotency_key(idempotency_key):
-            self._deliver(idempotency_key)
+            if deliver:
+                self._deliver(idempotency_key)
             return existing[0].to_view()
         task = Task(
             organization_id=command.organization_id,
@@ -114,8 +116,22 @@ class RecordingAssigner:
             idempotency_key=idempotency_key,
             request_fingerprint="sha256:test",
         )
-        self._deliver(idempotency_key)
+        if deliver:
+            self._deliver(idempotency_key)
         return task.to_view()
+
+    async def deliver_assignment(self, task_id: UUID) -> None:
+        """The announcement half of a dispatch split in two (defect S-1).
+
+        Keyed the way the real gateway keys it: the task's *original*
+        assignment key, read back from the same store. So a test that marks a
+        key undeliverable still breaks the delivery of the task that key
+        created, whichever half of the split now runs it.
+        """
+
+        key = await self._tasks.assignment_key(task_id)
+        assert key is not None, "a row this assigner wrote always has its key"
+        self._deliver(key)
 
     def _deliver(self, idempotency_key: str) -> None:
         if idempotency_key in self.unpublishable:

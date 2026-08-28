@@ -362,7 +362,7 @@ class DeliveryStatePort(Protocol):
 
 
 class TaskAssignmentGateway(Protocol):
-    """Assign a task to an agent.
+    """Assign a task to an agent, and tell its room the task exists.
 
     ``origin`` is deliberately a keyword of the call and not a field of
     AssignTaskCommand: the command is hashed into ``request_fingerprint`` and
@@ -372,6 +372,18 @@ class TaskAssignmentGateway(Protocol):
     of a request's identity — it follows from which caller builds the task, and
     the callers own disjoint idempotency-key namespaces (``ci-rework:...`` vs.
     the plan's key prefix), so one key can never mean two different origins.
+
+    **Dispatch and announcement are two calls, not one** (defect S-1). Writing
+    the task row and telling the room about it used to be a single act, which
+    put the room message ahead of anything the caller still had to write for
+    that task — and for a Worker task the caller writes the execution permit.
+    A Bridge sitting in the room calls back the moment the message lands, its
+    preflight finds no approved specification, and by design it refuses without
+    retrying: the dispatch is lost outright. So a caller with a permit to write
+    assigns with ``deliver=False``, writes the permit, then calls
+    :meth:`deliver_assignment`. ``deliver`` defaults to true so that a caller
+    with nothing to write between the two — a leader task, a CI rework — keeps
+    the single-call shape it always had, byte for byte.
     """
 
     async def assign(
@@ -380,7 +392,10 @@ class TaskAssignmentGateway(Protocol):
         *,
         idempotency_key: str,
         origin: TaskOrigin = TaskOrigin.PLANNED,
+        deliver: bool = True,
     ) -> TaskView: ...
+
+    async def deliver_assignment(self, task_id: UUID) -> None: ...
 
 
 class RedispatchScope(StrEnum):

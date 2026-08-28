@@ -771,6 +771,7 @@ class RecordingAssigner:
         *,
         idempotency_key: str,
         origin: TaskOrigin = TaskOrigin.PLANNED,
+        deliver: bool = True,
     ) -> TaskView:
         self.commands.append((command, idempotency_key))
         if existing := await self._tasks.get_by_idempotency_key(idempotency_key):
@@ -791,6 +792,9 @@ class RecordingAssigner:
             task, idempotency_key=idempotency_key, request_fingerprint="sha256:test"
         )
         return task.to_view()
+
+    async def deliver_assignment(self, task_id: UUID) -> None:
+        """Nothing to announce: this recorder never delivered in the first place."""
 
 
 class ExecutionEnvironment:

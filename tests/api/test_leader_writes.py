@@ -164,6 +164,10 @@ class RecordingOrchestrator:
         self.assigned: list[tuple[str, AssignTaskCommand, TaskOrigin]] = []
         self.permits: list[tuple[UUID, tuple[str, ...], tuple[str, ...]]] = []
         self.reports: list[ReportTaskCommand] = []
+        #: Task ids announced, in order. The endpoint tests care that the
+        #: announcement happens at all; the ordering proof against the permit
+        #: lives in ``tests/task_orchestration/test_dispatch_ordering.py``.
+        self.announced: list[UUID] = []
 
     async def assign(
         self,
@@ -171,6 +175,7 @@ class RecordingOrchestrator:
         *,
         idempotency_key: str,
         origin: TaskOrigin = TaskOrigin.PLANNED,
+        deliver: bool = True,
     ) -> TaskView:
         existing = await self._tasks.get_by_idempotency_key(idempotency_key)
         if existing is not None:
@@ -192,6 +197,9 @@ class RecordingOrchestrator:
         await self._tasks.add(task, idempotency_key=idempotency_key, request_fingerprint="fp")
         self.assigned.append((idempotency_key, command, origin))
         return task.to_view()
+
+    async def deliver_assignment(self, task_id: UUID) -> None:
+        self.announced.append(task_id)
 
     async def ensure_approved(
         self,
