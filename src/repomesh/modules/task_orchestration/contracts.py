@@ -589,6 +589,75 @@ class WorkerRosterEntryView:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerEvidenceView:
+    """What one worker task produced, frozen at the moment review opened.
+
+    A snapshot, not a live read (adjudication A-6). A verdict has to be
+    attributable to the facts it was given: a leader that approved two green
+    runs must not be recorded as having approved whatever those tasks look
+    like after a later redispatch rewrote their evidence.
+
+    Every nullable field here is nullable because the Runner genuinely does not
+    always produce it — a run that failed before committing has no ``commit_sha``,
+    a task whose ``result_summary`` is prose rather than a Runner document has
+    no structured evidence at all. ``diff_stat`` is nullable for a stronger
+    reason: nothing in this system produces one (the Runner's result carries no
+    diffstat and the delivery read model hardcodes ``None``), so it is here to
+    be honestly absent rather than to be filled in later by a guess.
+    """
+
+    worker_task_id: UUID
+    worker_agent_id: UUID
+    status: TaskStatus
+    run_id: UUID | None
+    commit_sha: str | None
+    changed_files: tuple[str, ...]
+    test_results: tuple[TaskTestResultView, ...]
+    diff_stat: str | None = None
+    summary: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderReviewEvidenceView:
+    """The immutable package one review round is judged against."""
+
+    review_revision: int
+    worker_evidence: tuple[WorkerEvidenceView, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedPlanView:
+    """The leader's accepted product, kept verbatim beside what it created.
+
+    ``decision`` is the submitted document exactly as it arrived. The server
+    persists the leader's Engineering Spec and DAG and never rewrites them, so
+    the stored copy *is* the wire copy — which is also what makes the plan
+    attributable to the leader rather than to a server that reformatted it.
+
+    ``fingerprint`` is what makes a repeat submission decidable. Identical is
+    the same plan and answers 200 with ``receipt``; anything else is a second
+    plan for a key that already has one, and the contract says that is a
+    refusal rather than a silent replacement.
+    """
+
+    fingerprint: str
+    plan_revision: int
+    worker_task_ids: tuple[UUID, ...]
+    decision: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AcceptedReviewView:
+    """One accepted verdict, keyed in its assignment by the revision it judged."""
+
+    fingerprint: str
+    verdict: str
+    review_revision: int
+    leader_task_status: str
+    rework_task_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class LeaderAssignmentView:
     """The persisted record of a batch parked for an external leader.
 
@@ -597,6 +666,12 @@ class LeaderAssignmentView:
     facts that must not drift (the envelope, the roster) and the phase; the
     repository task's own text is *not* copied here, because the task row is
     its source of truth and a second copy could only ever disagree with it.
+
+    Everything after ``worker_roster`` is the state machine's own memory, and
+    all of it is defaulted so that the record batch assignment writes is
+    unchanged: a freshly parked assignment is a planning assignment with no
+    plan, no evidence and no verdicts, which is exactly what those defaults
+    say.
     """
 
     leader_task_id: UUID
@@ -607,6 +682,22 @@ class LeaderAssignmentView:
     phase: LeaderAssignmentPhase
     safety_envelope: LeaderSafetyEnvelopeView
     worker_roster: tuple[WorkerRosterEntryView, ...]
+    #: The round the *next* review verdict is judged against. 1 while the first
+    #: round is planned and executed; incremented by ``request_rework``, which
+    #: is the only thing that opens another round.
+    review_revision: int = 1
+    accepted_plan: AcceptedPlanView | None = None
+    review_evidence: LeaderReviewEvidenceView | None = None
+    #: Accepted verdicts, by the revision each judged. A collection rather than
+    #: one slot because ``request_rework`` opens a second round and round 1's
+    #: receipt must stay replayable after it does.
+    accepted_reviews: tuple[AcceptedReviewView, ...] = ()
+
+    def accepted_review(self, review_revision: int) -> AcceptedReviewView | None:
+        return next(
+            (item for item in self.accepted_reviews if item.review_revision == review_revision),
+            None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -662,22 +753,29 @@ class RepositoryAssignmentPackage:
     def to_wire(self) -> dict[str, object]:
         """The frozen ``repository-assignment-package.v1`` document.
 
-        ``reviewEvidence`` is ``null`` here because this producer can only
-        reach ``planning``/``executing``, where the contract's first frozen
-        invariant *requires* null. A phase this method cannot honestly answer
-        for raises rather than emitting a null the invariant forbids — the
-        slice that reaches ``review_due`` has to come here and say what the
-        evidence is.
+        ``reviewEvidence`` is the contract's first frozen invariant made
+        executable: null in ``planning``/``executing``, non-null in
+        ``review_due``/``closed``. It is derived from the phase rather than from
+        whether the field happens to be populated, so a package can never say
+        "here is the evidence" about a round that has not finished, nor hide
+        evidence from a round that has — a review verdict may only ever be
+        based on the package's own evidence, and this is where that is true.
+
+        A ``review_due``/``closed`` assignment with no stored evidence is a
+        broken invariant rather than a thinner package, and raises: the frozen
+        schema declares ``workerEvidence`` as ``minItems: 1``, so there is no
+        honest document to emit for it.
         """
 
         assignment = self.assignment
-        if assignment.phase not in {
-            LeaderAssignmentPhase.PLANNING,
-            LeaderAssignmentPhase.EXECUTING,
-        }:
-            raise NotImplementedError(
-                f"assignment package for phase {assignment.phase.value} needs review "
-                "evidence, which this producer does not assemble yet"
+        shows_evidence = assignment.phase in {
+            LeaderAssignmentPhase.REVIEW_DUE,
+            LeaderAssignmentPhase.CLOSED,
+        }
+        if shows_evidence and assignment.review_evidence is None:
+            raise LeaderActionRefused(
+                LeaderActionErrorCode.PHASE_CONFLICT,
+                "this assignment is in a review phase but carries no evidence package",
             )
         advisory: dict[str, object] = {"authoritative": False}
         if self.advisory_discovery_evidence:
@@ -718,5 +816,178 @@ class RepositoryAssignmentPackage:
                 "testCommands": list(assignment.safety_envelope.test_commands),
             },
             "advisoryContext": advisory,
-            "reviewEvidence": None,
+            "reviewEvidence": (
+                _review_evidence_wire(assignment.review_evidence) if shows_evidence else None
+            ),
+        }
+
+
+def _review_evidence_wire(evidence: "LeaderReviewEvidenceView | None") -> dict[str, object]:
+    """The frozen ``reviewEvidence`` object, omitting what does not exist.
+
+    ``diffStat`` and ``summary`` are optional in the schema and typed as
+    strings, so a missing one is left out rather than emitted as ``null``:
+    ``null`` would fail the schema, and inventing a diff stat nothing in this
+    system computes would be worse than either.
+    """
+
+    assert evidence is not None  # noqa: S101 - guarded by the caller's phase check
+    items: list[dict[str, object]] = []
+    for item in evidence.worker_evidence:
+        wire: dict[str, object] = {
+            "workerTaskId": str(item.worker_task_id),
+            "workerAgentId": str(item.worker_agent_id),
+            "status": item.status.value,
+            "runId": str(item.run_id) if item.run_id is not None else None,
+            "commitSha": item.commit_sha,
+            "changedFiles": list(item.changed_files),
+            "testResults": [
+                {"command": result.command, "exitCode": result.exit_code}
+                for result in item.test_results
+            ],
+        }
+        if item.diff_stat:
+            wire["diffStat"] = item.diff_stat
+        if item.summary:
+            wire["summary"] = item.summary
+        items.append(wire)
+    return {"reviewRevision": evidence.review_revision, "workerEvidence": items}
+
+
+# ---------------------------------------------------------------------------
+# The two writes: what a leader submits, and what it gets back
+# ---------------------------------------------------------------------------
+
+PLAN_DECISION_SCHEMA_VERSION = "repomesh.leader-actions.plan-decision.v1"
+REVIEW_DECISION_SCHEMA_VERSION = "repomesh.leader-actions.review-decision.v1"
+PLAN_RECEIPT_SCHEMA_VERSION = "repomesh.leader-actions.plan-receipt.v1"
+REVIEW_RECEIPT_SCHEMA_VERSION = "repomesh.leader-actions.review-receipt.v1"
+
+#: The one provenance a leader product may claim (frozen invariant 5). A
+#: server-authored plan cannot carry it honestly, which is the whole point of
+#: requiring it.
+LEADER_PROVENANCE_SOURCE = "leader-codex-session"
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderProvenanceView:
+    """Where a leader product came from, as the leader states it."""
+
+    source: str
+    session_thread_id: str
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderWorkerTaskDraft:
+    """One worker task the leader wants created, before the server clamps it."""
+
+    node_id: str
+    assignee_worker_agent_id: UUID
+    title: str
+    instruction: str
+    allowed_paths: tuple[str, ...]
+    tests: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryPlanDecision:
+    """Request body of ``POST .../plan``, parsed but not yet validated.
+
+    ``from_wire`` does shape, ``SubmitRepositoryPlan`` does judgement. The split
+    matters because the two answer with different codes: a body that is not the
+    frozen document at all cannot be told apart from any other malformed request
+    and is a 422 from the framework, while a well-formed plan that breaks an
+    invariant is a 409 carrying the frozen code that names which one.
+
+    ``raw`` is the document exactly as submitted, kept so the accepted plan can
+    be persisted verbatim and fingerprinted without re-serialising it through
+    a shape this class might one day round-trip imperfectly.
+    """
+
+    engineering_spec_summary: str
+    engineering_spec_markdown: str
+    nodes: tuple[str, ...]
+    edges: tuple[tuple[str, str], ...]
+    worker_tasks: tuple[LeaderWorkerTaskDraft, ...]
+    provenance: LeaderProvenanceView
+    raw: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class PlanReceipt:
+    """200 response of ``POST .../plan``."""
+
+    leader_task_id: UUID
+    plan_revision: int
+    worker_task_ids: tuple[UUID, ...]
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "schemaVersion": PLAN_RECEIPT_SCHEMA_VERSION,
+            "leaderTaskId": str(self.leader_task_id),
+            "planRevision": self.plan_revision,
+            "workerTaskIds": [str(task_id) for task_id in self.worker_task_ids],
+        }
+
+
+class LeaderReviewVerdict(StrEnum):
+    """The three ways a review round can end (frozen wire enum)."""
+
+    APPROVE = "approve"
+    REQUEST_REWORK = "request_rework"
+    ESCALATE = "escalate"
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderReviewFinding:
+    """One thing the leader found. ``rework_instruction`` makes it actionable."""
+
+    worker_task_id: UUID
+    note: str
+    rework_instruction: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RepositoryReviewDecision:
+    """Request body of ``POST .../review``, parsed but not yet validated."""
+
+    verdict: LeaderReviewVerdict
+    summary: str
+    findings: tuple[LeaderReviewFinding, ...]
+    provenance: LeaderProvenanceView
+    raw: dict[str, object]
+
+    @property
+    def rework_findings(self) -> tuple[LeaderReviewFinding, ...]:
+        return tuple(finding for finding in self.findings if finding.rework_instruction)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewReceipt:
+    """200 response of ``POST .../review``.
+
+    ``leader_task_status`` is the contract's frozen verdict-to-outcome mapping
+    rather than a re-read of the task row, and for ``request_rework`` the two
+    are deliberately not the same thing: the row stays exactly as open as it
+    was (``Task.report`` accepts only blocked/succeeded/failed, so there is no
+    honest transition to make), and the receipt reports ``in_progress`` because
+    that is what the contract froze the verdict to mean — this round is not
+    finished and new work is in flight.
+    """
+
+    leader_task_id: UUID
+    verdict: LeaderReviewVerdict
+    review_revision: int
+    leader_task_status: str
+    rework_task_ids: tuple[UUID, ...]
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "schemaVersion": REVIEW_RECEIPT_SCHEMA_VERSION,
+            "leaderTaskId": str(self.leader_task_id),
+            "verdict": self.verdict.value,
+            "reviewRevision": self.review_revision,
+            "leaderTaskStatus": self.leader_task_status,
+            "reworkTaskIds": [str(task_id) for task_id in self.rework_task_ids],
         }

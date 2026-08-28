@@ -18,12 +18,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
 from repomesh.modules.task_orchestration.contracts import (
+    AcceptedPlanView,
+    AcceptedReviewView,
     ExecutionPlanStatus,
     LeaderAssignmentPhase,
     LeaderAssignmentView,
+    LeaderReviewEvidenceView,
     LeaderSafetyEnvelopeView,
     TaskOrigin,
     TaskStatus,
+    TaskTestResultView,
+    WorkerEvidenceView,
     WorkerRosterEntryView,
 )
 from repomesh.modules.task_orchestration.domain import (
@@ -139,6 +144,22 @@ class LeaderAssignmentRecord(Base):
     safety_envelope: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT)
     worker_roster: Mapped[list[dict[str, object]]] = mapped_column(JSON_DOCUMENT)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: The state machine's memory, added by revision 0040. Documents rather
+    #: than tables for the reason the envelope and roster already are: nothing
+    #: queries inside them. They are read back whole, by the key above, to
+    #: decide one assignment's next transition and to replay one receipt.
+    review_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1", default=1
+    )
+    accepted_plan: Mapped[dict[str, object] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True, default=None
+    )
+    review_evidence: Mapped[dict[str, object] | None] = mapped_column(
+        JSON_DOCUMENT, nullable=True, default=None
+    )
+    accepted_reviews: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON_DOCUMENT, nullable=False, server_default="[]", default=list
+    )
 
 
 def _encode_leader_assignment(assignment: LeaderAssignmentView) -> dict[str, object]:
@@ -162,11 +183,64 @@ def _encode_leader_assignment(assignment: LeaderAssignmentView) -> dict[str, obj
             }
             for entry in assignment.worker_roster
         ],
+        "review_revision": assignment.review_revision,
+        "accepted_plan": (
+            None
+            if assignment.accepted_plan is None
+            else {
+                "fingerprint": assignment.accepted_plan.fingerprint,
+                "plan_revision": assignment.accepted_plan.plan_revision,
+                "worker_task_ids": [
+                    str(task_id) for task_id in assignment.accepted_plan.worker_task_ids
+                ],
+                "decision": assignment.accepted_plan.decision,
+            }
+        ),
+        "review_evidence": (
+            None
+            if assignment.review_evidence is None
+            else {
+                "review_revision": assignment.review_evidence.review_revision,
+                "worker_evidence": [
+                    {
+                        "worker_task_id": str(item.worker_task_id),
+                        "worker_agent_id": str(item.worker_agent_id),
+                        "status": item.status.value,
+                        "run_id": str(item.run_id) if item.run_id is not None else None,
+                        "commit_sha": item.commit_sha,
+                        "changed_files": list(item.changed_files),
+                        "test_results": [
+                            {
+                                "command": result.command,
+                                "exit_code": result.exit_code,
+                                "summary": result.summary,
+                            }
+                            for result in item.test_results
+                        ],
+                        "diff_stat": item.diff_stat,
+                        "summary": item.summary,
+                    }
+                    for item in assignment.review_evidence.worker_evidence
+                ],
+            }
+        ),
+        "accepted_reviews": [
+            {
+                "fingerprint": item.fingerprint,
+                "verdict": item.verdict,
+                "review_revision": item.review_revision,
+                "leader_task_status": item.leader_task_status,
+                "rework_task_ids": [str(task_id) for task_id in item.rework_task_ids],
+            }
+            for item in assignment.accepted_reviews
+        ],
     }
 
 
 def _decode_leader_assignment(record: LeaderAssignmentRecord) -> LeaderAssignmentView:
     envelope = record.safety_envelope
+    plan = record.accepted_plan
+    evidence = record.review_evidence
     return LeaderAssignmentView(
         leader_task_id=record.leader_task_id,
         organization_id=record.organization_id,
@@ -187,6 +261,61 @@ def _decode_leader_assignment(record: LeaderAssignmentRecord) -> LeaderAssignmen
             )
             for entry in record.worker_roster
         ),
+        # ``or`` rather than a bare read on each: a row written before revision
+        # 0040 carries None in columns the model declares NOT NULL, and a
+        # pre-0040 assignment is by definition one with no plan, no evidence
+        # and no verdicts — which is what these defaults say.
+        review_revision=record.review_revision or 1,
+        accepted_plan=(
+            None
+            if plan is None
+            else AcceptedPlanView(
+                fingerprint=str(plan["fingerprint"]),
+                plan_revision=int(plan["plan_revision"]),
+                worker_task_ids=tuple(UUID(str(item)) for item in plan["worker_task_ids"]),
+                decision=dict(plan["decision"]),
+            )
+        ),
+        review_evidence=(
+            None
+            if evidence is None
+            else LeaderReviewEvidenceView(
+                review_revision=int(evidence["review_revision"]),
+                worker_evidence=tuple(
+                    WorkerEvidenceView(
+                        worker_task_id=UUID(str(item["worker_task_id"])),
+                        worker_agent_id=UUID(str(item["worker_agent_id"])),
+                        status=TaskStatus(str(item["status"])),
+                        run_id=(
+                            UUID(str(item["run_id"])) if item["run_id"] is not None else None
+                        ),
+                        commit_sha=item["commit_sha"],
+                        changed_files=tuple(item["changed_files"]),
+                        test_results=tuple(
+                            TaskTestResultView(
+                                command=str(result["command"]),
+                                exit_code=int(result["exit_code"]),
+                                summary=str(result.get("summary") or ""),
+                            )
+                            for result in item["test_results"]
+                        ),
+                        diff_stat=item["diff_stat"],
+                        summary=item["summary"],
+                    )
+                    for item in evidence["worker_evidence"]
+                ),
+            )
+        ),
+        accepted_reviews=tuple(
+            AcceptedReviewView(
+                fingerprint=str(item["fingerprint"]),
+                verdict=str(item["verdict"]),
+                review_revision=int(item["review_revision"]),
+                leader_task_status=str(item["leader_task_status"]),
+                rework_task_ids=tuple(UUID(str(task)) for task in item["rework_task_ids"]),
+            )
+            for item in (record.accepted_reviews or ())
+        ),
     )
 
 
@@ -199,6 +328,11 @@ class InMemoryLeaderAssignmentStore:
 
     async def get(self, leader_task_id: UUID) -> LeaderAssignmentView | None:
         return self.assignments.get(leader_task_id)
+
+    async def save(self, assignment: LeaderAssignmentView) -> None:
+        if assignment.leader_task_id not in self.assignments:
+            raise TaskConflict("leader assignment does not exist")
+        self.assignments[assignment.leader_task_id] = assignment
 
 
 class PostgresLeaderAssignmentStore:
@@ -243,6 +377,23 @@ class PostgresLeaderAssignmentStore:
         async with self._database.transaction() as session:
             record = await session.get(LeaderAssignmentRecord, leader_task_id)
             return _decode_leader_assignment(record) if record is not None else None
+
+    async def save(self, assignment: LeaderAssignmentView) -> None:
+        """Write a transition onto the row that already exists.
+
+        Rewrites the whole record rather than patching the changed columns:
+        every caller holds a full ``LeaderAssignmentView`` it derived from the
+        stored one, so a partial update could only ever create a row that is a
+        blend of two states.
+        """
+
+        async with self._database.transaction() as session:
+            record = await session.get(LeaderAssignmentRecord, assignment.leader_task_id)
+            if record is None:
+                raise TaskConflict("leader assignment does not exist")
+            record.phase = assignment.phase.value
+            for column, value in _encode_leader_assignment(assignment).items():
+                setattr(record, column, value)
 
 
 class InMemoryTaskStore:

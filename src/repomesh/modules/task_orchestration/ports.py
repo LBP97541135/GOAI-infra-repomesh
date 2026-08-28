@@ -67,3 +67,22 @@ class LeaderAssignmentStore(Protocol):
     async def ensure(self, assignment: LeaderAssignmentView) -> LeaderAssignmentView: ...
 
     async def get(self, leader_task_id: UUID) -> LeaderAssignmentView | None: ...
+
+    async def save(self, assignment: LeaderAssignmentView) -> None:
+        """Persist a state-machine transition of an assignment that exists.
+
+        Deliberately *not* ``ensure`` with different words. ``ensure`` protects
+        the parked record from being rewritten by a replay of batch assignment,
+        which is why it keeps the first write; this one exists to move the phase
+        forward, accept a plan, snapshot evidence or record a verdict, and every
+        one of those is a second write that must land.
+
+        Safe without a version column because the guard is one layer up and is
+        stronger than optimistic locking would be here: a transition is only
+        taken after the phase has been checked, and the writes a transition
+        performs — worker tasks through the assigner, verdicts under a
+        fingerprint — are each independently idempotent. Two concurrent
+        identical submissions therefore converge on the same rows and the same
+        receipt rather than racing for a version.
+        """
+        ...
