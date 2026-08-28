@@ -7,18 +7,24 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from repomesh.modules.agent_runtime.application import ExecuteCodingRun
 from repomesh.modules.agent_runtime.application.external_worker import (
+    ProvisionExternalMember,
     ProvisionExternalWorker,
+    ResolveExternalMemberBinding,
     ResolveExternalWorkerBinding,
 )
 from repomesh.modules.agent_runtime.contracts import (
+    ExternalMemberBindingQuery,
     ExternalWorkerBindingQuery,
     ExternalWorkerRefused,
+    ProvisionExternalMemberCommand,
     ProvisionExternalWorkerCommand,
     StartAssignedWorkerTaskCommand,
     UnknownExternalWorker,
+    parse_external_member_role,
 )
 from repomesh.modules.agent_runtime.ports import CodingRunRequest
 from repomesh.modules.agent_runtime.ports.agent_team import (
+    ExternalMemberProvisioner,
     ExternalWorkerProvisioner,
     WorkerBindingReader,
     WorkerControlPlaneUnavailable,
@@ -126,6 +132,72 @@ async def external_worker_binding(worker_agent_id: UUID, request: Request) -> di
     except WorkerControlPlaneUnavailable as error:
         # The controller merely did not answer -- unlike the refusals above,
         # a retry may well outlast this, so it is a 503 rather than a 409.
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return binding.to_wire()
+
+
+@router.get("/runtime/v2/external-members/{member_agent_id}/binding", response_model=None)
+async def external_member_binding(
+    member_agent_id: UUID,
+    request: Request,
+    role: Annotated[str, Query(alias="role")],
+) -> dict[str, object]:
+    """v2 Bridge preflight: the ``repomesh.agent-bridge.binding.v2`` document.
+
+    A sibling of the v1 preflight above, not a replacement for it, and the path
+    says so. v1's route, request and response body are byte-for-byte what they
+    were: a worker-form Bridge running against v1 documents stays valid
+    indefinitely (v2 README), and a deployed one must never discover that the
+    endpoint it has always called started answering a longer document. Two
+    versions, two paths, and no content negotiation to get wrong.
+
+    What v2 adds is ``role``, and it adds it in both directions.
+
+    *In the response*, confirmed from RepoMesh's own agent directory: a
+    Repository Leader may now be bound at all (adjudication D-11), and the
+    allowed rooms it is given are its own — the Team room and the leader DM,
+    never a worker's.
+
+    *In the request*, as the ``role`` query parameter: the role the Bridge's
+    enrollment claims. It is required, because an optional check is one a
+    caller can decline to be checked by, and it is deliberately a plain string
+    rather than an enum the framework validates. ``organization_leader`` is a
+    real RepoMesh role that this contract cannot express, so a Bridge naming it
+    has asked a coherent question and gets the coherent answer — 409, the same
+    as an Organization Leader found in the directory — instead of a 422 that
+    would split one refusal across two status codes.
+
+    Everything else is the v1 endpoint's, including the credential (a worker
+    token may read only its own binding; the environment variable keeps its
+    historical name under D-6) and the status table: 404 for a principal
+    RepoMesh does not know, 409 for facts that do not add up to a binding, 503
+    for a control plane that is unconfigured or silent, and 500, untranslated,
+    for anything nobody classified.
+    """
+
+    authenticated = _authorize_runner(request)
+    if authenticated is not None and authenticated != member_agent_id:
+        raise HTTPException(
+            status_code=403, detail="an external member credential may only read its own binding"
+        )
+    container = request.app.state.container
+    control_plane: WorkerBindingReader | None = container.external_worker_binding_control_plane()
+    if control_plane is None:
+        raise HTTPException(status_code=503, detail="AgentTeams control plane is not configured")
+    try:
+        binding = await ResolveExternalMemberBinding(
+            container.agent_directory, control_plane
+        ).execute(
+            ExternalMemberBindingQuery(
+                member_agent_id=member_agent_id,
+                enrolled_role=parse_external_member_role(role),
+            )
+        )
+    except UnknownExternalWorker as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ExternalWorkerRefused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except WorkerControlPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return binding.to_wire()
 
@@ -293,6 +365,58 @@ async def provision_external_worker(
     except WorkerControlPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return worker.to_wire()
+
+
+@router.put("/runtime/v2/external-members/{member_agent_id}", response_model=None)
+async def provision_external_member(
+    member_agent_id: UUID,
+    request: Request,
+    body: ExternalWorkerProvisionRequest | None = None,
+) -> dict[str, object]:
+    """Make one registered principal an external *member* (adjudication D-11).
+
+    The sibling of the route above, under the same rule the two preflights
+    follow: the v1 entry point keeps refusing everything that is not a worker,
+    and the ability to provision a Repository Leader arrives on a new path
+    instead of changing what an old one accepts. An operator who has been
+    PUTting to ``/runtime/external-workers/{id}`` gets the same answers today as
+    yesterday, including the 409 for a leader.
+
+    The request is still nothing but the path id, and for the reason it always
+    was: every fact about the resulting resource belongs to somebody who is not
+    the caller. Notably including the *role* — it is read from the agent
+    directory, and preflight's whole job later is to confirm that RepoMesh and
+    the enrollment agree about it, which a caller-stated role here would make
+    circular. So the body model is v1's, unchanged and still ``extra=forbid``:
+    there is nothing to add to a request that has no fields.
+
+    The response is v1's receipt plus ``role``, and still carries no
+    ``schemaVersion``: this answers the human who pressed the button, and the
+    document a Bridge binds to is the versioned one preflight returns.
+
+    Same guard (a local administrator's session), same idempotency key (derived
+    from the agent alone, so provisioning through either path twice is one
+    controller side effect), same status table — with ``organization_leader``
+    joining the 409s rather than becoming a new code: RepoMesh has the
+    principal, and it is refusing it.
+    """
+
+    await _authorize_administrator(request)
+    container = request.app.state.container
+    provisioner: ExternalMemberProvisioner | None = container.external_member_provisioner()
+    if provisioner is None:
+        raise HTTPException(status_code=503, detail="AgentTeams control plane is not configured")
+    try:
+        member = await ProvisionExternalMember(container.agent_directory, provisioner).execute(
+            ProvisionExternalMemberCommand(member_agent_id=member_agent_id)
+        )
+    except UnknownExternalWorker as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ExternalWorkerRefused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except WorkerControlPlaneUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return member.to_wire()
 
 
 async def _authorize_administrator(request: Request) -> None:

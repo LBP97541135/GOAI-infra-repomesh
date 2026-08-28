@@ -16,8 +16,15 @@ import json
 import re
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
+
+from repomesh.modules.agent_runtime.contracts import (
+    ExternalMemberBindingView,
+    ExternalMemberRefused,
+    ExternalMemberRole,
+)
 
 V1_ROOT = Path(__file__).parents[2] / "contracts" / "agent-bridge" / "v1"
 V2_ROOT = Path(__file__).parents[2] / "contracts" / "agent-bridge" / "v2"
@@ -154,6 +161,87 @@ def test_worker_and_leader_fixtures_are_distinct_identities() -> None:
     assert worker["teamName"] == leader["teamName"]
     assert set(worker["allowedRoomIds"]) != set(leader["allowedRoomIds"])
     assert set(worker["allowedRoomIds"]) & set(leader["allowedRoomIds"])
+
+
+# ---------------------------------------------------------------------------
+# The producer emits the canonical fixtures, byte for byte (PR 5.5A)
+#
+# Same move as ``test_agent_bridge_v1_contract.make_binding``: the binding
+# document under test is what ``to_wire()`` produces, not a hand-kept copy of
+# it. A schema and a dataclass compared only through a third payload can drift
+# apart with every test green — the payload simply gets edited to match
+# whichever side moved. Here the frozen fixture is the assertion and RepoMesh's
+# own producer is the thing under test, so a server that started answering
+# something else fails against the contract rather than against a copy of it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "role"),
+    [
+        ("binding.worker.json", ExternalMemberRole.WORKER),
+        ("binding.repository-leader.json", ExternalMemberRole.REPOSITORY_LEADER),
+    ],
+)
+def test_the_producer_emits_the_canonical_binding(name: str, role: ExternalMemberRole) -> None:
+    doc = fixture(name)
+    produced = ExternalMemberBindingView(
+        role=role,
+        organization_id=UUID(doc["organizationId"]),
+        team_name=doc["teamName"],
+        member_agent_id=UUID(doc["workerAgentId"]),
+        member_name=doc["workerName"],
+        matrix_user_id=doc["matrixUserId"],
+        allowed_room_ids=tuple(doc["allowedRoomIds"]),
+    ).to_wire()
+
+    assert produced == doc
+
+
+def test_the_producer_stamps_the_frozen_schema_version(binding_v2: dict[str, Any]) -> None:
+    """The constant the endpoint sends, against the one the schema declares."""
+
+    produced = ExternalMemberBindingView(
+        role=ExternalMemberRole.WORKER,
+        organization_id=UUID("00000000-0000-0000-0000-000000000001"),
+        team_name="pricing-repo-team",
+        member_agent_id=UUID("00000000-0000-0000-0000-000000000002"),
+        member_name="pricing-codex-worker",
+        matrix_user_id="@pricing-codex-worker:matrix.example.org",
+        allowed_room_ids=("!team-pricing:matrix.example.org",),
+    ).to_wire()
+
+    assert_fixture_matches_schema(binding_v2, produced)
+    assert produced["schemaVersion"] == binding_v2["properties"]["schemaVersion"]["const"]
+    assert produced["role"] in binding_v2["properties"]["role"]["enum"]
+
+
+def test_the_producer_cannot_be_built_with_the_malformed_room_fixture() -> None:
+    """The invalid binding fixture, refused by the code that would emit it.
+
+    The room pattern is checked on construction rather than trusted, so a
+    binding that could not validate cannot exist: the Bridge would abort startup
+    on a malformed answer either way, and refusing here names the bad room
+    instead of leaving a consumer to guess.
+    """
+
+    doc = fixture("binding.invalid-room.malformed-room-id.json")
+    with pytest.raises(ExternalMemberRefused):
+        ExternalMemberBindingView(
+            role=ExternalMemberRole.REPOSITORY_LEADER,
+            organization_id=UUID(doc["organizationId"]),
+            team_name=doc["teamName"],
+            member_agent_id=UUID(doc["workerAgentId"]),
+            member_name=doc["workerName"],
+            matrix_user_id=doc["matrixUserId"],
+            allowed_room_ids=tuple(doc["allowedRoomIds"]),
+        )
+
+
+def test_the_producer_role_enum_matches_the_frozen_one() -> None:
+    """Python's enum and the schema's, machine-checked rather than assumed."""
+
+    assert tuple(role.value for role in ExternalMemberRole) == ROLES
 
 
 # ---------------------------------------------------------------------------

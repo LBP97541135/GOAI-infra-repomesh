@@ -31,6 +31,26 @@ class TeamRole(StrEnum):
     WORKER = "worker"
 
 
+class ExternalMemberRole(StrEnum):
+    """The two RepoMesh roles a Bridge may serve, spelled as the wire spells them.
+
+    Frozen in ``contracts/agent-bridge/v2/*.schema.json`` as the ``role`` enum
+    (adjudication D-11). Deliberately *not* ``AgentRole``: that enum has a third
+    member, and the whole point of this one is that ``organization_leader`` is
+    not representable — the Organization Leader stays on the AgentTeams Manager,
+    so a document describing an external one cannot be built, only refused.
+
+    Lives beside ``TeamRole`` rather than in ``contracts`` because a port needs
+    it (``ExternalMemberProvisioner`` below picks an AgentTeams projection by
+    role) and ``contracts`` already imports from here, never the other way
+    round. ``contracts`` re-exports it, so consumers keep importing one name
+    from one place.
+    """
+
+    WORKER = "worker"
+    REPOSITORY_LEADER = "repository_leader"
+
+
 @dataclass(frozen=True, slots=True)
 class McpServerProjection:
     name: str
@@ -230,6 +250,32 @@ class ExternalWorkerProvisioner(Protocol):
     """
 
     async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef: ...
+
+
+class ExternalMemberProvisioner(Protocol):
+    """``ExternalWorkerProvisioner`` once the member may be a Repository Leader.
+
+    One added argument, and it is the one fact the adapter cannot derive from a
+    name: which role's AgentTeams projection to ask for. It matters because the
+    controller *compares* an existing worker against the one being requested —
+    a repository leader registered by the ordinary project path carries
+    ``("code-review", "planning")``, so provisioning it with a worker's
+    ``("coding",)`` would answer 409 about skills and send an operator hunting a
+    mismatch that this call created.
+
+    Defaulted to ``WORKER`` so the v1 path keeps calling ``provision(name,
+    idempotency_key=...)`` unchanged and every existing implementation still
+    satisfies the narrower protocol above; only the v2 external-member path
+    passes a role, and only a repository leader changes what is sent.
+    """
+
+    async def provision(
+        self,
+        name: str,
+        *,
+        idempotency_key: str,
+        role: ExternalMemberRole = ExternalMemberRole.WORKER,
+    ) -> WorkerRuntimeRef: ...
 
 
 class AgentTeamMessenger(Protocol):

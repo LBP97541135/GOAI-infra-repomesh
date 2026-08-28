@@ -58,6 +58,7 @@ from repomesh.modules.agent_directory.contracts import AgentPrincipalReader, Age
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     DesiredRuntimeState,
+    ExternalMemberRole,
     ManagerProjection,
     ManagerRuntime,
     TeamRuntimeRef,
@@ -133,6 +134,15 @@ _SKILLS: dict[AgentRole, tuple[str, ...]] = {
     AgentRole.ORGANIZATION_LEADER: ("planning", "coordination"),
     AgentRole.REPOSITORY_LEADER: ("code-review", "planning"),
     AgentRole.WORKER: ("coding",),
+}
+
+#: The wire role a Bridge is bound under, back to the directory role whose
+#: projection the controller already holds. Total by construction — the enum has
+#: no third member — so external provisioning reaches ``_SKILLS`` by the same key
+#: the ordinary project path uses, rather than by a constant beside it.
+_AGENT_ROLES: dict[ExternalMemberRole, AgentRole] = {
+    ExternalMemberRole.WORKER: AgentRole.WORKER,
+    ExternalMemberRole.REPOSITORY_LEADER: AgentRole.REPOSITORY_LEADER,
 }
 
 
@@ -364,14 +374,37 @@ class ExternalWorkerProjection:
         self._worker_runtime = worker_runtime
         self._worker_task_control_url = worker_task_control_url
 
-    async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
+    async def provision(
+        self,
+        name: str,
+        *,
+        idempotency_key: str,
+        role: ExternalMemberRole = ExternalMemberRole.WORKER,
+    ) -> WorkerRuntimeRef:
+        """Ask the controller for this member's projection with one field flipped.
+
+        ``role`` picks the skills, and only the skills — everything else about
+        an external member is what the ordinary path already sends. It has a
+        default because the v1 provisioning path has no role to pass and must
+        keep sending exactly what it sent before; ``ExternalMemberRole.WORKER``
+        reproduces the previous constant.
+
+        It is not cosmetic. ``ensure_worker`` compares an existing worker
+        against the one being requested, and a repository leader carries
+        ``("code-review", "planning")`` wherever the ordinary project path
+        registered it — so provisioning that same principal with a worker's
+        ``("coding",)`` answers 409 about skills. That is the R0 failure mode
+        one field over: a Repository Leader who parses v2 fine and still cannot
+        be provisioned.
+        """
+
         return await self._control_plane.ensure_worker(
             with_task_control(
                 WorkerProjection(
                     name=name,
                     model=self._model,
                     runtime=self._worker_runtime,
-                    skills=_SKILLS[AgentRole.WORKER],
+                    skills=_SKILLS[_AGENT_ROLES[role]],
                     state=DesiredRuntimeState.RUNNING,
                     container_managed=False,
                 ),

@@ -51,12 +51,15 @@ from repomesh.modules.agent_directory.contracts import (
 )
 from repomesh.modules.agent_directory.infrastructure import InMemoryAgentDirectory
 from repomesh.modules.agent_runtime.application.external_worker import (
+    ProvisionExternalMember,
     ProvisionExternalWorker,
     ResolveExternalWorkerBinding,
 )
 from repomesh.modules.agent_runtime.contracts import (
+    ExternalMemberRefused,
     ExternalWorkerBindingQuery,
     ExternalWorkerRefused,
+    ProvisionExternalMemberCommand,
     ProvisionExternalWorkerCommand,
     UnknownExternalWorker,
 )
@@ -1159,6 +1162,73 @@ async def test_the_external_projection_differs_in_exactly_one_field() -> None:
     ).execute(ProvisionExternalWorkerCommand(worker_agent_id=worker.id))
 
     assert external_plane.workers == [replace(managed, container_managed=False)]
+
+
+@pytest.mark.asyncio
+async def test_the_external_leader_projection_also_differs_in_exactly_one_field() -> None:
+    """The same parity argument for a Repository Leader (PR 5.5A).
+
+    This is the one that would have been silently wrong. A leader carries
+    ``("code-review", "planning")`` wherever the ordinary path registered it,
+    so an external provisioning that sent a worker's ``("coding",)`` would make
+    the controller answer 409 about *skills* — a Repository Leader that parses
+    v2 fine and still cannot be provisioned, which is the R0 risk one field
+    over. Asserting equality against the managed projection is what makes the
+    role argument load-bearing rather than decorative.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    leader, _, project_id = await _repository_principals(directory, store)
+
+    managed_plane = RecordingControlPlane()
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        managed_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **_RUNTIMES,
+        worker_task_control_url=TASK_CONTROL,
+    ).project(project_id)
+    managed = next(
+        projection
+        for projection in managed_plane.workers
+        if projection.name == leader.agentteams_resource_name
+    )
+    assert managed.skills == ("code-review", "planning")
+
+    external_plane = ExternalControlPlane()
+    view = await ProvisionExternalMember(
+        directory, _external_projection(external_plane, task_control=TASK_CONTROL)
+    ).execute(ProvisionExternalMemberCommand(member_agent_id=leader.id))
+
+    assert external_plane.workers == [replace(managed, container_managed=False)]
+    assert view.role.value == "repository_leader"
+    assert external_plane.keys == [f"external-worker:{leader.id}:agentteams"]
+
+
+@pytest.mark.asyncio
+async def test_an_organization_leader_cannot_be_made_an_external_member() -> None:
+    """The one role D-11 keeps refusing, refused before the controller is touched."""
+
+    organization_leader = AgentPrincipalView(
+        id=uuid4(),
+        organization_id=uuid4(),
+        role=AgentRole.ORGANIZATION_LEADER,
+        leader_agent_id=None,
+        repository_id=None,
+        responsibility_paths=(),
+        agentteams_resource_name="repomesh-manager-acme",
+        status=AgentPrincipalStatus.ACTIVE,
+    )
+
+    control_plane = ExternalControlPlane()
+    with pytest.raises(ExternalMemberRefused, match="organization_leader"):
+        await ProvisionExternalMember(
+            StubDirectory(organization_leader), _external_projection(control_plane)
+        ).execute(ProvisionExternalMemberCommand(member_agent_id=organization_leader.id))
+
+    assert control_plane.workers == []
 
 
 @pytest.mark.asyncio

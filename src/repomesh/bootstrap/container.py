@@ -15,6 +15,8 @@ from repomesh.modules.agent_runtime.contracts import ExternalWorkerRefused
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
     AgentTeamMessenger,
+    ExternalMemberProvisioner,
+    ExternalMemberRole,
     ExternalWorkerProvisioner,
     WorkerBindingReader,
     WorkerControlPlaneUnavailable,
@@ -528,6 +530,18 @@ class ApplicationContainer:
         )
 
     def external_worker_provisioner(self) -> ExternalWorkerProvisioner | None:
+        """The v1 name for the adapter below, kept for the v1 route that asks by it.
+
+        One adapter, two names, because there is one AgentTeams resource per
+        principal and provisioning it twice under two spellings is exactly what
+        a second adapter would make possible. The narrower type is the honest
+        one for this caller: the v1 route has no role to pass and must not
+        acquire the ability to.
+        """
+
+        return self.external_member_provisioner()
+
+    def external_member_provisioner(self) -> ExternalMemberProvisioner | None:
         """The provisioning half of ADR 0004, with the integration's errors translated.
 
         ``ExternalWorkerProjection``, the same class the preflight reads
@@ -571,8 +585,14 @@ class ApplicationContainer:
             worker_task_control_url=settings.worker_task_control_url,
         )
 
-        class _ExternalWorkerProvisioner:
-            async def provision(self, name: str, *, idempotency_key: str) -> WorkerRuntimeRef:
+        class _ExternalMemberProvisioner:
+            async def provision(
+                self,
+                name: str,
+                *,
+                idempotency_key: str,
+                role: ExternalMemberRole = ExternalMemberRole.WORKER,
+            ) -> WorkerRuntimeRef:
                 from repomesh.integrations.agentteams import (  # noqa: PLC0415
                     AgentTeamsConflict,
                     AgentTeamsError,
@@ -580,7 +600,9 @@ class ApplicationContainer:
                 )
 
                 try:
-                    return await projection.provision(name, idempotency_key=idempotency_key)
+                    return await projection.provision(
+                        name, idempotency_key=idempotency_key, role=role
+                    )
                 except AgentTeamsConflict as error:
                     raise ExternalWorkerRefused(str(error)) from error
                 except AgentTeamsResponseError as error:
@@ -590,7 +612,7 @@ class ApplicationContainer:
                 except AgentTeamsError as error:
                     raise WorkerControlPlaneUnavailable(str(error)) from error
 
-        return _ExternalWorkerProvisioner()
+        return _ExternalMemberProvisioner()
 
     async def start(self) -> None:
         for service in self.background_services:
