@@ -28,8 +28,10 @@ git worktree list
 Organization Manager 汇总那一跳撞出一个此前从未暴露的缺陷(§2)。**下一个动作是修
 D-M7-1**,而不是接着往 E1 走——六实例会把这条路径乘以三。
 
-**活体环境仍在运行,没有拆**(§7.1 是现场账面)。**要从零重建它,照 §7.6 的完整命令配方**
-——本轮的 seed 与链驱动脚本都在会被清掉的 scratchpad 里,配方因此写进了这份文档。
+⚠️ **活体环境已经没了**(交接写完后进程被后台任务收尾带走,一次性库随之消失,详见 §7.1)。
+**证据全部完好**,判定与取证不受影响;**要继续 M7 收尾或往 E1 走,先照 §7.6 的完整命令配方
+把环境重建起来**——本轮的 seed 与链驱动脚本都在会被清掉的 scratchpad 里,配方因此写进了
+这份文档。
 
 ---
 
@@ -198,10 +200,11 @@ V1 无害(服务端发给 worker,身份不同),**M7 下 leader Bridge 就是这�
 
 ## 5. 下一步(顺序建议)
 
-1. **修 D-M7-1**(§2)。带 interface 行为测试;修完在**当前活体环境**上直接复验:
-   leader 任务已 succeeded,但 `collaboration.messages` 里那条 `task_report` 仍是 `failed`
-   ——重试或重跑一轮 review 即可验证投递是否恢复。
-2. **重跑一次 M7 收尾**,确认 `Leader → Manager` 汇总真的落进 manager 的房间(AC-05 取证)。
+1. **修 D-M7-1**(§2)。带 interface 行为测试——这一步**不需要活体**,`send_task` 的
+   双集合解析用 memory adapter 就能钉死,是先做它的另一个理由。
+2. **重建环境(§7.6)并重跑一轮 M7 收尾**,确认 `Leader → Manager` 汇总真的落进 manager
+   的房间(AC-05 取证)。原活体库已不可恢复(§7.1),所以这轮是从 §7.6 步骤 1 起。
+   重建时可直接复用 controller 里既有的 `repomesh-preflight-team` 与 Matrix 房间历史。
 3. **E1 六实例 soak**(`scripts/bridge-e1/README.md` 11 步;先把 §3.1/§3.2 两条补进 runbook)。
 4. **E0b**(隔离环境短开 delivery,三仓白名单)。
 5. **V2/Q3b**:门禁 #10 六前置显式核验;PASS 结论用验收标准 §8 推荐原文;
@@ -221,25 +224,38 @@ V1 无害(服务端发给 worker,身份不同),**M7 下 leader Bridge 就是这�
 
 ---
 
-## 7. 环境、凭据与现场(**活体仍在运行,未拆**)
+## 7. 环境、凭据与现场(**活体已散,证据完好**)
 
-> **要从零重建这套环境,直接读 §7.6 的完整命令配方**;§7.1–§7.5 是当前现场的账面与
+> **要重建这套环境,直接读 §7.6 的完整命令配方**;§7.1–§7.5 是散场时的账面与
 > 几条必须知情的事实。本轮所有 seed / 链驱动脚本都在会被清掉的 scratchpad 里,
 > 所以配方写在这份 tracked 文档中(同 PR 4 交接 §7.5 的理由)。
 
-### 7.1 进程与端口
+### 7.1 现场散场记录(接手请按此对账,别照旧 PID 去找)
 
-| 项 | 值 |
+交接初稿写完后,**跑 Bridge 的那个后台任务收尾时把子进程一并带走了**,一次性 postgres
+(`--rm`)随之消失。散场后逐项实测:
+
+| 项 | 散场后状态 |
 |---|---|
-| 一次性 postgres | 容器 `repomesh-e2e-pg` @`127.0.0.1:15547`(`--rm`,停即消失);**本轮重建过一次**,原因见 §7.4 |
-| controller forwarder | 容器 `repomesh-controller-forwarder` @`127.0.0.1:18090`(用完删) |
-| RepoMesh 后端 | uvicorn @`127.0.0.1:8077`,**PID 对 `22804` / `31788`** |
-| 前端 | vite @`127.0.0.1:5281`(避开他线 5280),配置 `.claude/launch.json` 的 `m8-frontend` |
-| leader Bridge | PID `26252`(`output/bridge-team/m7-live/pids/preflight-leader.pid`) |
-| worker Bridge | PID `19924`(同上 `preflight-worker.pid`) |
+| leader / worker Bridge | ❌ **已退出**,`m7-live/pids/` 已被清空(原 PID 26252 / 19924,**已失效,勿再引用**) |
+| RepoMesh 后端 uvicorn @8077 | ❌ **已退出**(原 PID 对 22804 / 31788) |
+| 一次性 postgres @15547 | ⚠️ 容器名仍在,但**是新起的空库**:schema 与 `alembic_version=20260828_0039` 在,**业务表全空**(tasks / 拓扑 / timeline 均 0 行)——**M7 的活体库状态已不可恢复** |
+| controller forwarder @18090 | ✅ 仍在 |
+| `agentteams-controller`(18080 Matrix) | ✅ 仍在,**Matrix 房间历史与 controller 资源都还在**(重建时可直接复用 `repomesh-preflight-team`) |
+| 前端 vite @5281 | ✅ 仍在 |
 
-**拆环境**:Bridge 用 `scripts/bridge-e1/stop_members.ps1`(读同一批 PID 文件);
-后端**两个 PID 都要杀**;最后 `docker rm -f repomesh-e2e-pg repomesh-controller-forwarder`。
+**证据不受影响,全部完好**:`output/bridge-team/m7-evidence/`(15 件,含判定、房间流、
+任务表、提交 diff、leader Bridge 全量日志)、`m8-evidence/`(11 件,含三张前端截图),
+以及 worktree 里那个真提交 `6d9172c`
+(`D:/Project4work/.repomesh-v1-live/workspaces/w/a0e3bce95e320f852c36/…`)。
+**所有判定结论都基于这些已落盘的证据,不依赖进程是否还活着。**
+
+**教训**:长时间运行的活体进程不要挂在会被收尾的后台任务下;要么前台起、要么用
+`start_members.ps1` 之外的托管方式,并**定期回抽 PID 存活**。
+
+**正常拆环境的顺序**(供下次用):Bridge 用
+`scripts/bridge-e1/stop_members.ps1 -Members … -PidDir … -Subset …`;后端**两个 PID 都要杀**;
+最后 `docker rm -f repomesh-e2e-pg repomesh-controller-forwarder`。
 ⚠️ **`pkill -f` 杀不掉这些进程**。他线端口 5432/55432/8080/3000/5280/8100 全程未碰。
 
 ### 7.2 后端启动 env(本轮定型,比 E0a 配方多三项)
