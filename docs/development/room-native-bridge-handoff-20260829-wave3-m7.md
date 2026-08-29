@@ -14,7 +14,7 @@
 ## 0. 从这里开始(接手第一屏)
 
 ```bash
-git -C <repo> log --oneline -3     # 头仍是 44ebc91a,本轮没有代码提交
+git -C <repo> log --oneline -3     # 本轮只有这份 docs 提交,代码零改动
 git -C <repo> status --short       # M/?? 都是他线的,别动;`.claude/` 见 §7
 git worktree list
 
@@ -28,7 +28,8 @@ git worktree list
 Organization Manager 汇总那一跳撞出一个此前从未暴露的缺陷(§2)。**下一个动作是修
 D-M7-1**,而不是接着往 E1 走——六实例会把这条路径乘以三。
 
-**活体环境仍在运行,没有拆**(§7)。
+**活体环境仍在运行,没有拆**(§7.1 是现场账面)。**要从零重建它,照 §7.6 的完整命令配方**
+——本轮的 seed 与链驱动脚本都在会被清掉的 scratchpad 里,配方因此写进了这份文档。
 
 ---
 
@@ -222,6 +223,10 @@ V1 无害(服务端发给 worker,身份不同),**M7 下 leader Bridge 就是这�
 
 ## 7. 环境、凭据与现场(**活体仍在运行,未拆**)
 
+> **要从零重建这套环境,直接读 §7.6 的完整命令配方**;§7.1–§7.5 是当前现场的账面与
+> 几条必须知情的事实。本轮所有 seed / 链驱动脚本都在会被清掉的 scratchpad 里,
+> 所以配方写在这份 tracked 文档中(同 PR 4 交接 §7.5 的理由)。
+
 ### 7.1 进程与端口
 
 | 项 | 值 |
@@ -292,6 +297,244 @@ REPOMESH_RUNNER_WORKSPACE_ROOT=D:/Project4work/.repomesh-v1-live/workspaces
 
 M7 用手写 plan 打 plan bridge 是 smoke 的合法做法;**V2 不行**——终局验收的 plan 必须
 来自真实发现链(验收标准 §5)。
+
+### 7.6 从零复现本轮环境的完整命令配方
+
+> **这套配方必须留在这里**:本轮用的 seed / 链驱动脚本都在 scratchpad,会被清掉;
+> `output/` 整个是 gitignored。照此可从零重建 M8 + M7 的活体环境。
+> 与 PR 4 交接 §7.5 的关系:那份是「后端 + 单 Worker」的最小配方,这份是它的超集
+> (多了 external leader、leader-actions token、发现链与两个 Bridge)。
+> **三条环境坑全程适用**:`MSYS_NO_PATHCONV=1`、控制面与 Bridge 同跑 Windows 宿主、
+> **5432 活体库谱系不符不得触碰**。他线端口 5432/55432/8080/3000/5280/8100 勿动。
+
+#### 步骤 1 — 平台栈与一次性库
+
+```bash
+# Docker 引擎(第 6 次 socket 损坏的修法见 §8.1;冷启动也可能撞)
+docker ps                                  # agentteams-controller 应在跑,18080 已发布
+
+# 一次性 postgres(--rm,停即消失;绝不用 5432)
+docker run --rm -d --name repomesh-e2e-pg \
+  -e POSTGRES_PASSWORD=e2e -p 127.0.0.1:15547:5432 postgres:17-alpine
+sleep 6 && docker exec repomesh-e2e-pg pg_isready -U postgres
+
+REPOMESH_DATABASE_URL="postgresql+asyncpg://postgres:e2e@127.0.0.1:15547/postgres" \
+  .venv/Scripts/python.exe -m alembic upgrade head        # 期望 head = 20260828_0039
+
+# controller forwarder(后端跑宿主时必需;controller 8090 未发布到宿主。用完删)
+NET=$(docker inspect agentteams-controller --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}')
+docker run -d --name repomesh-controller-forwarder --network "$NET" \
+  -p 127.0.0.1:18090:8090 --entrypoint sh \
+  alpine/socat:latest -c "socat TCP-LISTEN:8090,fork,reuseaddr TCP:agentteams-controller:8090"
+```
+
+#### 步骤 2 — 凭据(全部写进 gitignored 的 `output/bridge-team/secrets/`)
+
+```bash
+# controller API token —— 栈每次重启都会轮转,必须重取
+docker exec agentteams-controller sh -c 'cat "$AGENTTEAMS_AUTH_TOKEN_FILE"' | tr -d '\r' \
+  > output/bridge-team/secrets/controller-token.txt
+# appservice as_token —— 取任何成员 Matrix token 的钥匙
+docker exec agentteams-controller sh -c 'printf %s "$AGENTTEAMS_MATRIX_APPSERVICE_AS_TOKEN"' \
+  > output/bridge-team/secrets/appservice-as-token.txt
+
+# 逐身份铸 Matrix token(appservice login)。<user> 依次取:
+#   admin                        → 服务端发信身份(§3.1,必须 ≠ 任何 Bridge 成员)
+#   repomesh-preflight-leader    → leader Bridge
+#   repomesh-preflight-probe     → worker Bridge
+AS=$(cat output/bridge-team/secrets/appservice-as-token.txt | tr -d '\r\n')
+curl -s -X POST -H "Authorization: Bearer $AS" -H "Content-Type: application/json" \
+  -d '{"type":"m.login.application_service","identifier":{"type":"m.id.user","user":"<user>"}}' \
+  http://127.0.0.1:18080/_matrix/client/v3/login
+```
+
+**服务端身份的选取判据**(§3.1):必须已 join 全部授权房间,且不等于任何 Bridge 成员。
+本轮选 `@admin`,因为它已在团队房与 leader DM 里(共 63 个房间)。换环境时先核:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:18080/_matrix/client/v3/joined_rooms
+```
+
+**external 成员 token**(D-6,`REPOMESH_RUNNER_WORKER_TOKENS` 的值)人工铸随机值,
+写成 `{"<leaderAgentId>":"<tok>","<workerAgentId>":"<tok>"}` 存
+`secrets/runner-worker-tokens.json`。**leader 也必须有一条**,否则 leader-actions 全 401。
+
+#### 步骤 3 — seed(admin + 仓库 + 三个 principal,**不种拓扑**)
+
+约 40 行脚本,要点(拓扑留给产品建,原因见 §7.4):
+
+- 用 `repomesh.bootstrap.app.build_default_container()`(**不是** `ApplicationContainer()`,
+  后者要 10 个位置参数);收尾 `await container.close()`。
+- admin:`container.local_account_service().bootstrap_admin(user, pass, display)`
+  ——仅当账户表为空时可用。本轮用 `v1admin`。
+- 仓库:`container.repository_catalog.add(RepositoryProfile(id=…, name="pricing-fixture",
+  url="D:/Project4work/.repomesh-v1-live/fixture-pricing",
+  test_commands=("python scripts/run_tests.py",), test_paths=("tests/**",)))`。
+  `RepositoryProfile` 接受显式 `id`。
+- principal:`container.agent_directory.add(p, idempotency_key=…,
+  request_fingerprint=command_fingerprint(p), events=(registered_event(p),))` 直写
+  (与 tracked 的 `scripts/bridge-e1/seed_members.py` 同型,可照抄其 `registered_event`)。
+- **id 必须钉死**(后面每一步都以它们为键):
+
+  | 角色 | agent id | `agentteams_resource_name` |
+  |---|---|---|
+  | organization_leader | `22222222-0000-4000-8000-000000000002` | `repomesh-preflight-manager` |
+  | repository_leader | `33333333-0000-4000-8000-000000000003` | `repomesh-preflight-leader` |
+  | worker | `4d1e6f00-0000-4000-8000-000000000004` | `repomesh-preflight-probe` |
+
+  organization/repository id:`11111111-0000-4000-8000-000000000001` /
+  `42cf099f-fadc-4222-95ab-bbd4770f7fdc`。
+  **worker 的 id 必须是 `4d1e6f00-…-0004`**——`session_root()` 由它派生,钉住才能落在
+  已登录 codex 的 `CODEX_HOME` 上(PR 4 §7.5 的省一次登录手法)。
+- `singleton_key` 按 `CreateAgent._singleton_key` 的公式:org leader
+  `organization:{org}:leader`、repo leader `repository:{repo}:leader`、worker `None`。
+- **仓库级角色的 `responsibility_paths` 不能为空**(记账 3):leader 给 `("**",)`,
+  worker 给该仓的责任路径(本轮 `("src/**","tests/**")`)。
+
+夹具仓 `D:/Project4work/.repomesh-v1-live/fixture-pricing` 需处于**未修复**状态
+(`calculate_total` 直接 `return subtotal`,自带测试必失败),worker 的活就是修它。
+
+#### 步骤 4 — 后端(env 全表见 §7.2)
+
+```bash
+CTL=$(cat output/bridge-team/secrets/controller-token.txt | tr -d '\r\n')
+AT=$(cat output/bridge-team/secrets/admin-matrix-token.txt | tr -d '\r\n')
+WT=$(cat output/bridge-team/secrets/runner-worker-tokens.json | python -c "import json,sys;print(json.dumps(json.load(sys.stdin)))")
+
+MSYS_NO_PATHCONV=1 \
+REPOMESH_DATABASE_URL="postgresql+asyncpg://postgres:e2e@127.0.0.1:15547/postgres" \
+REPOMESH_AGENTTEAMS_CONTROLLER_URL="http://127.0.0.1:18090" \
+REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN="$CTL" \
+REPOMESH_AGENTTEAMS_MATRIX_URL="http://127.0.0.1:18080" \
+REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN="$AT" \
+REPOMESH_RUNNER_CONTROL_TOKEN="live-runner-token" \
+REPOMESH_RUNNER_WORKER_TOKENS="$WT" \
+REPOMESH_AGENT_ACTION_TOKEN="m8-console-token" \
+REPOMESH_RUNNER_WORKSPACE_ROOT="D:/Project4work/.repomesh-v1-live/workspaces" \
+nohup .venv/Scripts/python.exe -m uvicorn repomesh.bootstrap.app:create_app \
+  --factory --host 127.0.0.1 --port 8077 > <log> 2>&1 &
+```
+
+后端会继承 `.env`(LLM key 从那里来);`.env` 无 `REPOMESH_DELIVERY_*`,delivery 保持关闭。
+
+#### 步骤 5 — 前端(可选,M8 取证与 AC-06 实走要)
+
+`.claude/launch.json` 已含 `m8-frontend`:vite 跑 **5281**(避开他线 5280),
+`REPOMESH_API_TARGET=http://127.0.0.1:8077`,**`VITE_API_TOKEN` 必须等于
+`REPOMESH_AGENT_ACTION_TOKEN`**。登录用 seed 的 admin 账户。
+**本库无 Issue 行时**,Room 页可直接走 `#/issues/<project_id>/rooms/<room_id>`。
+
+#### 步骤 6 — 两个 Bridge(**必须在派活之前起来**,§3.2)
+
+```bash
+# 6.1 花名册:output/bridge-team/m7-live/members.m7.json
+#     两名成员 subsets:["m7"];leader 无 workspaceRoot(CLI 会拒),
+#     worker 的 workspaceRoot 必须 == 后端 REPOMESH_RUNNER_WORKSPACE_ROOT
+
+# 6.2 取 binding v2(成员须已属 Team;本轮复用既有 repomesh-preflight-team)
+GET /api/v1/runtime/v2/external-members/{agentId}/binding?role={worker|repository_leader}
+#   → 存成 bindings/binding.<key>.json;核对 containerManaged:false 与 allowedRoomIds
+
+# 6.3 生成 enrollment(身份字段一律取自 binding,不取自花名册)
+.venv/Scripts/python.exe scripts/bridge-e1/make_enrollments.py \
+  --members output/bridge-team/m7-live/members.m7.json \
+  --bindings output/bridge-team/m7-live/bindings \
+  --out output/bridge-team/m7-live/enrollments --subset m7
+
+# 6.4 D-10 复制 auth.json —— 必须在首次 ensure_ready 之前
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bridge-e1/copy_codex_auth.ps1 \
+  -Members output/bridge-team/m7-live/members.m7.json -Subset m7 \
+  -SourceCodexHome "$LOCALAPPDATA\repomesh-agent-bridge\sessions\4d1e6f00-0000-4000-8000-000000000004\codex-home"
+
+# 6.5 env 文件(四个变量,名字由 enrollment 的 env: locator 决定)
+#   E1_PREFLIGHT_LEADER_MATRIX_TOKEN / E1_PREFLIGHT_LEADER_REPOMESH_TOKEN
+#   E1_PREFLIGHT_WORKER_MATRIX_TOKEN / E1_PREFLIGHT_WORKER_REPOMESH_TOKEN
+
+# 6.6 起进程(每成员一个;PID 写进 pids/)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bridge-e1/start_members.ps1 \
+  -Members output/bridge-team/m7-live/members.m7.json \
+  -EnrollmentDir output/bridge-team/m7-live/enrollments \
+  -EnvFile output/bridge-team/m7-live/m7-members.env \
+  -PidDir output/bridge-team/m7-live/pids -LogDir output/bridge-team/m7-live/logs -Subset m7
+```
+
+起好的判据(各自日志里恰好一行,两侧的开关是镜像的):
+
+```text
+bridge ready: member=repomesh-preflight-leader role=repository_leader profile=codex rooms=2 governed=off leader-lane=on
+bridge ready: member=repomesh-preflight-probe  role=worker            profile=codex rooms=2 governed=on  leader-lane=off
+```
+
+`rooms=2` 两侧含义不同:leader 是「团队房 + leader DM」,worker 是「团队房 + worker DM」。
+
+**R8 只读预检**(可随时跑,两 GET/成员):
+
+```bash
+E1_CONTROLLER_TOKEN=… E1_PREFLIGHT_LEADER_REPOMESH_TOKEN=… E1_PREFLIGHT_WORKER_REPOMESH_TOKEN=… \
+  .venv/Scripts/python.exe scripts/bridge-e1/preflight_bindings.py \
+  --members output/bridge-team/m7-live/members.m7.json --subset m7
+```
+
+skills 那条 FAIL 是良性的,见记账 2。
+
+#### 步骤 7 — 发现链(**产品路径,顺序不可跳**)
+
+全部打 `Authorization: Bearer <REPOMESH_AGENT_ACTION_TOKEN>`;
+`created_by_agent_id` 一律是 **organization leader**。
+
+```text
+POST /api/v1/issues                                   {requirement_text, created_by_agent_id, idempotency_key}
+POST /api/v1/issues/{id}/discovery/analysis           {created_by_agent_id, idempotency_key}          # LLM
+POST /api/v1/issues/{id}/discovery/candidates         {…, limit}                                      # 打目录评分
+POST /api/v1/issues/{id}/discovery/classification     {…}                                             # LLM,每候选一次
+POST /api/v1/issues/{id}/discovery/approval           {decided_by_agent_id, decision:"approved",
+                                                       evidence_version, idempotency_key}
+POST /api/v1/issues/{id}/discovery/plan               {…}                                             # LLM 集成
+POST /api/v1/issues/{id}/discovery/materialize        {…}   ← 唯一会 reconcile + 采用外部 leader 的一步
+```
+
+要点:
+
+- **进度真相是 `GET /api/v1/issues/{id}/discovery` 的 `step_state`(`idle`/`running`/`done`)
+  + `running_task_id`**,不是 `…/discovery/tasks/{task_id}`(进程内、重启即失、只报进度)。
+  同一 issue 有步骤在跑时其余步骤一律 409。
+- `evidence_version` 取自该投影的**顶层** `classification_evidence_version`(不在
+  `classification` 块里);对不上是 409。
+- `project_id` **由 idempotency key 派生**,不能指定;拓扑由
+  `CreateAutomaticProjectTopology` 从**长期 agent 目录**解析,因此会复用步骤 3 种的三个
+  principal,并采用 controller 里既有的 Team。
+- materialize 之后核 `SELECT decomposition_mode FROM project.repository_agent_teams;`
+  应为 **`leader`**;任务表应**只有一条 leader 任务、无 worker 子任务**。
+
+随后是自动的:leader Bridge 收 plan notice → GET 包 → codex 出计划 → POST `/plan` →
+worker task 派发 → worker 自动接单 → 受治理执行 → leader 收 review notice → POST `/review`
+(**当前会 500,D-M7-1**)。
+
+#### 步骤 8 — 取证与拆环境
+
+```bash
+# 读模型(前端同源代理走的就是这些)
+GET /api/v1/rooms/{room_id}/stream?limit=100     # room_id 需 urlencode(含 ! 与 :)
+GET /api/v1/console/agents                       # runtime.kind = external/container/null
+GET /api/v1/console/teams
+GET /api/v1/issues/{project_id}/rooms
+
+# 库内对账(只读)
+SELECT decomposition_mode FROM project.repository_agent_teams;
+SELECT id,status,assignee_agent_id,parent_task_id,result_summary FROM task_orchestration.tasks;
+SELECT kind,status,subject,recipient_agent_id FROM collaboration.messages ORDER BY created_at;
+SELECT room_id,count(*) FROM collaboration.room_timeline_messages GROUP BY room_id;
+
+# 拆环境(顺序:Bridge → 后端 → 容器)
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/bridge-e1/stop_members.ps1 \
+  -Members output/bridge-team/m7-live/members.m7.json \
+  -PidDir output/bridge-team/m7-live/pids -Subset m7
+powershell -NoProfile -Command "Stop-Process -Id <uvicorn 父>,<uvicorn 子> -Force"
+docker rm -f repomesh-e2e-pg repomesh-controller-forwarder
+```
+
+⚠️ **`pkill -f` 杀不掉 nohup 起的 python**;uvicorn 是**父子 PID 对**,两个都要杀
+(只杀子留孤儿,杀父连坐子)。
 
 ---
 
