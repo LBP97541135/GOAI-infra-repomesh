@@ -1347,6 +1347,7 @@ class ApplicationContainer:
             self.project_topology_provisioner(),
             self.plan_execution_bridge(),
             self.topology_runtime_projector(),
+            self.external_member_readiness_gate(),
         )
 
     def issue_intake_service(self):
@@ -1947,6 +1948,33 @@ class ApplicationContainer:
 
         return ExternalMemberReadinessStore(
             ttl_seconds=get_settings().external_readiness_ttl_seconds
+        )
+
+    def external_member_readiness_gate(self):
+        """The join materialize refuses on, and the console's precheck reads.
+
+        Three dependencies, one per layer of "is this member there": the
+        directory says who it is, ``external_worker_binding_control_plane`` says
+        whether RepoMesh runs its body, and the lease store says whether the
+        body RepoMesh does not run is running now. Only the last holds state,
+        and it is the cached one above; this is rebuilt per call because it has
+        none of its own.
+
+        The control plane is passed exactly as it comes, ``None`` included. A
+        deployment without one cannot tell an external member from a managed
+        one, and the gate is written to refuse rather than guess — substituting
+        anything here would be the composition root deciding a question the
+        module already answered.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            RequireExternalMembersReady,
+        )
+
+        return RequireExternalMembersReady(
+            self.agent_directory,
+            self.external_worker_binding_control_plane(),
+            self.external_member_readiness_store(),
         )
 
     def runner_gateway(self):

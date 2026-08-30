@@ -27,6 +27,15 @@ assigns nobody anything.
 reason is passed through verbatim rather than reworded. A panel that says
 "blocked" where the server said which checkpoint and which evidence version has
 thrown away the only part the operator can act on.
+
+*The plan's external members are not running.* AC-03. A member whose body is a
+CLI on somebody's laptop (ADR 0004) can be provisioned, bound and roomed and
+still be a process nobody started, and a round dispatched to one writes its
+tasks into rooms nothing is reading — with no button anywhere that delivers
+them again. So the last thing checked before work is created is whether the
+members exist as processes, and the refusal names each one rather than
+summarising them: the remedy is per member, and it is somebody walking to a
+machine.
 """
 
 from __future__ import annotations
@@ -41,6 +50,7 @@ from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import AgentPrincipalReader
 from repomesh.modules.project.contracts import (
+    ProjectAgentTopologyView,
     ProjectTopologyProvisioner,
     ProjectTopologyReader,
 )
@@ -59,6 +69,8 @@ from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store
     PlanSnapshotStore,
 )
 from repomesh.modules.repository_intelligence.ports import (
+    ExternalMemberReadinessGate,
+    MemberReadinessFact,
     PlanMaterializer,
     RepositoryCatalog,
     TopologyRuntimeProjector,
@@ -74,6 +86,45 @@ class DiscoveryNotMaterialisable(DiscoveryPreconditionFailed):
     branch, and a named type so the reason can be tested for rather than
     matched as a string.
     """
+
+
+class ExternalMembersNotReady(Exception):
+    """The plan's local CLI members are not running → a structured 409 (AC-03).
+
+    Deliberately *not* a :class:`DiscoveryNotMaterialisable`, which is where
+    every other refusal on this path lives. Those are sentences: the operator
+    reads one and knows what to press. This one is a list — which member, in
+    which role, why RepoMesh believes it is absent — and a client has to render
+    a row each and offer to start each. Flattening it into a string would be the
+    same loss the checkpoint refusal's docstring warns about, one level worse:
+    there the operator can at least read the sentence, here they would have to
+    parse it.
+
+    The summary is the exception's own message, so the sentence a log line
+    carries and the one the refusal body carries cannot drift apart.
+    """
+
+    def __init__(self, facts: tuple[MemberReadinessFact, ...]) -> None:
+        super().__init__(f"{len(facts)} local CLI members are not ready")
+        self.facts = facts
+
+
+def member_readiness_wire(fact: MemberReadinessFact) -> dict[str, str]:
+    """One member of a readiness refusal, in the shape §8 publishes it.
+
+    Shared by the receipt this module writes, the 409 the API layer raises and
+    the precheck it serves, so the row an operator reads back and the body they
+    were refused with cannot come to disagree. Field by field rather than a
+    serialisation of the fact, because a fact is an internal type and this is
+    the wire.
+    """
+
+    return {
+        "agentId": str(fact.agent_id),
+        "role": fact.role,
+        "status": fact.status,
+        "reason": fact.reason,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +220,7 @@ class DiscoveryMaterializationService:
         provisioner: ProjectTopologyProvisioner,
         materializer: PlanMaterializer,
         runtime: TopologyRuntimeProjector,
+        readiness_gate: ExternalMemberReadinessGate,
     ) -> None:
         self._snapshots = snapshots
         self._directory = directory
@@ -177,6 +229,7 @@ class DiscoveryMaterializationService:
         self._provisioner = provisioner
         self._materializer = materializer
         self._runtime = runtime
+        self._readiness_gate = readiness_gate
 
     async def materialize(
         self, command: MaterializeIssueCommand
@@ -228,6 +281,16 @@ class DiscoveryMaterializationService:
             await self._record_failure(draft, block, command, prefix, fingerprint, error)
             raise
 
+        # The processes, before the work. Placed after the projection because
+        # that is what makes the members' AgentTeams documents exist to be asked
+        # about, and before the materializer because a task assigned to a Bridge
+        # nobody started is a task that never moves and that no button
+        # re-delivers (AC-03).
+        blocking = await self._blocking_members(topology, repositories)
+        if blocking:
+            await self._record_block(draft, block, command, prefix, fingerprint, blocking)
+            raise ExternalMembersNotReady(blocking)
+
         try:
             result = await self._materializer.materialize(
                 plan=plan,
@@ -267,6 +330,90 @@ class DiscoveryMaterializationService:
             command.issue_id, outcome.plan_id, len(outcome.task_ids), outcome.team_count,
         )
         return outcome
+
+    # ------------------------------------------------- external member gate
+
+    async def _blocking_members(
+        self, topology: ProjectAgentTopologyView, repositories: tuple[str, ...]
+    ) -> tuple[MemberReadinessFact, ...]:
+        """This round's external members that are not running, as facts.
+
+        Scoped to the teams the plan actually assigns to. A project may hold
+        teams for repositories this round never names — an earlier round's, or
+        an operator's — and refusing because somebody else's CLI is down would
+        be a gate nobody could clear by doing the work in front of them.
+
+        The Organization Leader is excluded without a rule saying so: it belongs
+        to no repository team. Which is the right answer for D-11's reason — it
+        stays on the AgentTeams Manager and runs no Bridge — and it is worth
+        naming here because a future member-set built from the directory instead
+        would have to exclude it deliberately.
+        """
+
+        profiles = await self._catalog.list()
+        planned = {profile.id for profile in profiles if profile.name in repositories}
+        members = tuple(
+            agent_id
+            for team in topology.repository_teams
+            if team.repository_id in planned
+            for agent_id in (team.leader_agent_id, *team.worker_agent_ids)
+        )
+        facts = await self._readiness_gate.check(members)
+        return tuple(fact for fact in facts if fact.status != "ready")
+
+    async def _record_block(
+        self,
+        draft: Any,
+        block: dict[str, Any],
+        command: MaterializeIssueCommand,
+        prefix: str,
+        fingerprint: str,
+        blocking: tuple[MemberReadinessFact, ...],
+    ) -> None:
+        """``blocked``, and deliberately not ``failed``.
+
+        The two look alike from outside — both are refusals that leave the round
+        open — and the difference is entirely in what the other two halves of
+        §8's idempotency do with them.
+
+        :meth:`_prefix` lends a refused receipt's prefix to a retry under a new
+        key, because a failed attempt may have left half-written rows keyed on
+        it for the retry to land on and finish. A gate block leaves nothing of
+        the sort *of its own*: it happens before the materializer is called at
+        all, and the only stage that did run — the runtime projection — keys its
+        writes per agent and per team, never on this prefix.
+
+        Which is why the ``prefix`` written here is carried rather than minted.
+        A block can land on a round that is already carrying a failed attempt's
+        debt, and this receipt is what the next attempt reads: dropping the
+        prefix at that point would orphan the rows the failure left. Lending
+        after a pure block, meanwhile, costs nothing for the reason just given.
+        The two together are why :meth:`_prefix` treats ``blocked`` exactly as
+        it treats ``failed``.
+
+        :meth:`_replay` hands back only a ``materialized`` receipt, so a retry
+        under the *same* key runs the whole path again rather than replaying a
+        refusal — which is exactly AC-03's remedy, start the missing member and
+        press the button again, with no machinery added for it.
+
+        The members are copied out through :func:`member_readiness_wire`, the
+        same function the refusal body uses, so the row read back later and the
+        body the operator was refused with say the same thing. ``at`` is when
+        the gate answered, and it is the field that makes the list mean
+        anything: a lease is a claim about *now*, so a receipt without a time is
+        a list of members with no statement about when they were absent.
+        """
+
+        block["materialization"] = {
+            "idempotency_key": command.idempotency_key,
+            "prefix": prefix,
+            "plan_fingerprint": fingerprint,
+            "status": "blocked",
+            "by_agent_id": str(command.created_by_agent_id),
+            "at": _now(),
+            "blocking_members": [member_readiness_wire(fact) for fact in blocking],
+        }
+        await self._snapshots.set_discovery(draft.id, block)
 
     # ------------------------------------------------------------ failures
 
@@ -360,10 +507,22 @@ class DiscoveryMaterializationService:
         with rows describing the plan that was replaced — a conflict the
         operator cannot act on. The fingerprint is the guard, and a plan that
         has moved on simply gets its own prefix.
+
+        A ``blocked`` receipt lends on the same terms, and it is an *inherited*
+        obligation rather than one of its own. A block creates nothing keyed on
+        the prefix — :meth:`_record_block` says why — so lending after a pure
+        block costs nothing. But a block can land on a round that was already
+        carrying somebody else's debt: a failed attempt writes ``disc-A``, the
+        retry under key B inherits it and is then refused by the readiness gate,
+        which overwrites the receipt. Reading only ``failed`` here would drop
+        ``disc-A`` at that point, and the next attempt would materialise under a
+        fresh prefix while A's rows sat orphaned — a second execution plan
+        racing the first, which is the exact duplicate this method exists to
+        prevent. So both refusals lend, and the fingerprint guards both.
         """
 
         receipt = block.get("materialization") or {}
-        if receipt.get("status") != "failed":
+        if receipt.get("status") not in ("failed", "blocked"):
             return f"disc-{key}"
         if receipt.get("plan_fingerprint") != fingerprint:
             return f"disc-{key}"
@@ -456,6 +615,8 @@ class DiscoveryMaterializationService:
 __all__ = [
     "DiscoveryMaterializationService",
     "DiscoveryNotMaterialisable",
+    "ExternalMembersNotReady",
     "IssueMaterialization",
     "MaterializeIssueCommand",
+    "member_readiness_wire",
 ]

@@ -38,12 +38,17 @@ role on file, and that the capabilities it reports are the ones its role is
 allowed to have — a leader that reports a code workspace, or a worker that
 reports no governed lane, is not the process this principal is on file as. All
 of it happens before anything is written, so a refused report leaves no row.
+
+:class:`RequireExternalMembersReady` is the reader that gives the lease its
+point. The console's status board merely renders it; this is what materialization
+asks before it turns a plan into somebody's task, and the only place an answer
+of "no" stops something from happening.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -53,6 +58,10 @@ from uuid import UUID
 from repomesh.modules.agent_directory.contracts import AgentPrincipalReader, AgentPrincipalView
 from repomesh.modules.agent_runtime.application.external_worker import MEMBER_ROLES
 from repomesh.modules.agent_runtime.contracts import ExternalMemberRole, UnknownExternalWorker
+from repomesh.modules.agent_runtime.ports.agent_team import (
+    WorkerBindingReader,
+    WorkerControlPlaneUnavailable,
+)
 
 
 class ReadinessRefused(RuntimeError):
@@ -471,4 +480,139 @@ class ReportExternalMemberReadiness:
             status=status,
             expires_at=expires_at,
             renew_after_seconds=self._store.renew_after_seconds,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalMemberReadinessFact:
+    """What the materialize gate is told about one external member.
+
+    Plain strings rather than this module's enums, and that is the type's whole
+    job: it crosses into ``repository_intelligence``, which declares the shape
+    it consumes as a protocol and must not import this module to read four
+    fields it passes through to a refusal body. Nothing is lost in the
+    flattening — both values are their enums' own spelling, so a console reading
+    this and a console polling the readiness list see one vocabulary.
+    """
+
+    agent_id: UUID
+    role: str
+    status: str
+    reason: str
+
+
+#: What a lease that exists means to the operator reading a refusal, one phrase
+#: per derived status. A mapping rather than a branch each: ``reason`` is a
+#: field every reported member carries, and the only thing that differs between
+#: the statuses is the sentence.
+_LEASE_REASONS: dict[ExternalMemberReadinessStatus, str] = {
+    ExternalMemberReadinessStatus.READY: "the readiness lease is current",
+    ExternalMemberReadinessStatus.STALE: "the readiness lease expired without a renewal",
+    ExternalMemberReadinessStatus.OFFLINE: "the member stopped reporting readiness",
+}
+
+#: The one member state that is not a lease at all, and the only one whose
+#: remedy is simply to launch the CLI.
+_NO_REPORT = "no readiness report"
+
+
+class RequireExternalMembersReady:
+    """May this round hand out work? Three sources, joined per member (AC-03).
+
+    The directory says who the member is, the AgentTeams control plane says
+    whether RepoMesh runs its body, and the lease says whether the body RepoMesh
+    does *not* run is running. Only the third is a live fact, and it is
+    worthless without the second: a lease is absent both for a managed member
+    that never reports one and for an external member whose CLI is down, and
+    those two are opposite verdicts.
+
+    So ``containerManaged`` decides who is in the answer at all, and it decides
+    it the way :class:`ResolveExternalMemberBinding` does — a confirmed
+    ``False`` and nothing else. A managed member, an unknown one, a member the
+    controller has no document for: none of them is a member whose liveness this
+    class claims to know, so none of them appears (AC-04). Absence says nothing,
+    which is the only honest thing to say about a process somebody else runs.
+
+    A member id with no directory principal is not defended against. The ids
+    arrive from a project topology's own teams or from the directory's own
+    listing, so a missing principal is a broken invariant rather than a state
+    worth a message.
+    """
+
+    def __init__(
+        self,
+        directory: AgentPrincipalReader,
+        control_plane: WorkerBindingReader | None,
+        store: ExternalMemberReadinessStore,
+    ) -> None:
+        self._directory = directory
+        self._control_plane = control_plane
+        self._store = store
+
+    async def check(
+        self, member_ids: Sequence[UUID]
+    ) -> tuple[ExternalMemberReadinessFact, ...]:
+        """One fact per external member, in the order they were asked about.
+
+        The whole table is read once, before the per-member loop, so every fact
+        in one answer derives from a single reading of the clock. Asking the
+        store per member would let a refusal say a member was ready and the one
+        after it stale on the strength of the microseconds between two reads.
+
+        An unconfigured control plane is a refusal rather than an empty answer,
+        for the reason the binding endpoints give theirs: without it there is no
+        way to tell a managed fleet from an external one that is entirely down,
+        and one of those two readings starts work nobody will pick up. In
+        practice it is unreachable from materialization — the runtime projection
+        runs first and already needs the controller — and it is spelled anyway
+        because "unreachable" is a claim about today's call order.
+        """
+
+        if not member_ids:
+            return ()
+        if self._control_plane is None:
+            raise WorkerControlPlaneUnavailable(
+                "the AgentTeams control plane is not configured, so no member can be "
+                "confirmed as an external one"
+            )
+
+        leases = {view.member_agent_id: view for view in await self._store.snapshot()}
+        facts = []
+        for member_id in member_ids:
+            principal = await self._directory.get_view(member_id)
+            worker = await self._control_plane.get_worker(principal.agentteams_resource_name)
+            if worker is None or worker.container_managed is not False:
+                continue
+            facts.append(
+                self._fact(member_id, MEMBER_ROLES[principal.role], leases.get(member_id))
+            )
+        return tuple(facts)
+
+    @staticmethod
+    def _fact(
+        member_id: UUID,
+        role: ExternalMemberRole,
+        lease: ExternalMemberReadinessView | None,
+    ) -> ExternalMemberReadinessFact:
+        """The member's lease as a fact, or its absence as ``offline``.
+
+        The role is the directory's, never the lease's. A refusal that offers
+        "start this member" has to name what to start, and a leader's Bridge and
+        a worker's are launched differently — reading it off the report would
+        let a member that has not reported at all go unnamed, and one that has
+        decide how it is described.
+        """
+
+        if lease is None:
+            return ExternalMemberReadinessFact(
+                agent_id=member_id,
+                role=role.value,
+                status=ExternalMemberReadinessStatus.OFFLINE.value,
+                reason=_NO_REPORT,
+            )
+        return ExternalMemberReadinessFact(
+            agent_id=member_id,
+            role=role.value,
+            status=lease.status.value,
+            reason=_LEASE_REASONS[lease.status],
         )
