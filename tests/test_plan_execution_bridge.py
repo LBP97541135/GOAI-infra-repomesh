@@ -199,12 +199,23 @@ class StubTopologyReader:
 class StubCatalog:
     """Returns a list of RepositoryProfile with name → id mapping."""
 
-    def __init__(self, name_to_id: dict[str, UUID]) -> None:
+    def __init__(
+        self,
+        name_to_id: dict[str, UUID],
+        *,
+        test_paths: tuple[str, ...] = (),
+    ) -> None:
         self._name_to_id = name_to_id
+        self._test_paths = test_paths
 
     async def list(self) -> list:
         return [
-            RepositoryProfile(name=name, url=f"https://github.com/test/{name}", id=rid)
+            RepositoryProfile(
+                name=name,
+                url=f"https://github.com/test/{name}",
+                id=rid,
+                test_paths=self._test_paths,
+            )
             for name, rid in self._name_to_id.items()
         ]
 
@@ -800,7 +811,12 @@ class RecordingAssigner:
 class ExecutionEnvironment:
     """Bridge wired to the real execution plan services through in-memory stores."""
 
-    def __init__(self, repository_names: list[str]) -> None:
+    def __init__(
+        self,
+        repository_names: list[str],
+        *,
+        test_paths: tuple[str, ...] = (),
+    ) -> None:
         self.organization_id = uuid4()
         self.project_id = uuid4()
         self.organization_leader_id = uuid4()
@@ -874,7 +890,10 @@ class ExecutionEnvironment:
                 repository_teams=tuple(teams),
             )
         )
-        self.catalog = StubCatalog(dict(zip(repository_names, self.repository_ids, strict=True)))
+        self.catalog = StubCatalog(
+            dict(zip(repository_names, self.repository_ids, strict=True)),
+            test_paths=test_paths,
+        )
         self.directory = FakeAgentDirectory(tuple(principals))
         self.tasks = InMemoryTaskStore()
         self.plans = InMemoryExecutionPlanStore()
@@ -1241,6 +1260,19 @@ async def test_materialize_stores_the_verification_commands_on_the_planned_task(
     stored = await environment.plans.get(result.plan_id)
     assert stored is not None
     assert stored.batches[0][0].tests == ("python scripts/run_tests.py",)
+
+
+async def test_materialize_stores_catalog_test_paths_on_the_planned_task() -> None:
+    """The production starter must not drop the catalog's write permit."""
+
+    environment = ExecutionEnvironment(["ts-a"], test_paths=("tests/**",))
+
+    result = await environment.materialize([["ts-a"]])
+
+    assert result.plan_id is not None
+    stored = await environment.plans.get(result.plan_id)
+    assert stored is not None
+    assert stored.batches[0][0].test_paths == ("tests/**",)
 
 
 async def test_materialize_is_idempotent_for_the_same_prefix() -> None:
