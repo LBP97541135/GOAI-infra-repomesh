@@ -11,6 +11,7 @@ that production relies on.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -167,8 +168,14 @@ async def test_query_summary_and_issues_aggregate(database: Database) -> None:
         (2, 2),
         (None, 1),
     ]
-    assert len(summary["daily"]) == 1
-    assert summary["daily"][0]["calls"] == 4
+    # The four rows straddle a UTC midnight whenever the suite runs within
+    # four hours of 00:00 UTC, so the expected buckets follow the seeded clock.
+    expected_daily = Counter(
+        (now - timedelta(hours=h)).date().isoformat() for h in (1, 2, 3, 4)
+    )
+    assert [(d["date"], d["calls"]) for d in summary["daily"]] == sorted(
+        expected_daily.items()
+    )
 
     issues = await store.issues()
     assert [str(i["issue_id"]) for i in issues] == [str(issue_a), str(issue_b)]
