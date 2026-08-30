@@ -15,14 +15,21 @@
     CommandLine, which is the only thing on Windows that sees the full argument
     list.
 
+    -Subset selects by roster tag and -Only selects one member by key: stopping
+    a single failed member is what recovery looks like, and it is what the Local
+    Launcher issues so that no kill is ever aimed at a member it has not itself
+    confirmed the identity of.
+
 .EXAMPLE
     ./stop_members.ps1 -Members members.json -PidDir out\pids -Subset m7
+    ./stop_members.ps1 -Members members.json -PidDir out\pids -Only alpha-worker
     ./stop_members.ps1 -Members members.json -PidDir out\pids -Sweep
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Members,
     [Parameter(Mandatory = $true)][string]$PidDir,
     [string]$Subset,
+    [string]$Only,
     [switch]$Sweep
 )
 
@@ -34,6 +41,12 @@ if ($Subset) {
     $selected = @($roster.members | Where-Object { $_.subsets -contains $Subset })
     if ($selected.Count -eq 0) {
         throw "no roster member is tagged '$Subset'"
+    }
+}
+if ($Only) {
+    $selected = @($selected | Where-Object { $_.key -eq $Only })
+    if ($selected.Count -eq 0) {
+        throw "no roster member has the key '$Only'"
     }
 }
 
