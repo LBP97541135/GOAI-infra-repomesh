@@ -3,9 +3,14 @@ import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from opentelemetry import trace as _otel_trace
+
 from repomesh.modules.capability_management.contracts import AgentCapabilityBundle
 from repomesh.modules.specification.contracts import CodingAgentPackage
 from repomesh_runner.contracts import RunnerTask
+from repomesh_runner.telemetry import SpanAttributes
+
+_tracer = _otel_trace.get_tracer("repomesh")
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -29,6 +34,8 @@ class RunnerContextMaterializer:
         task: RunnerTask,
         package: CodingAgentPackage,
         capabilities: AgentCapabilityBundle,
+        *,
+        snapshot_id=None,
     ) -> MaterializedRunnerContext:
         if task.workspace is None:
             raise ValueError("context materialization requires a prepared workspace")
@@ -47,23 +54,48 @@ class RunnerContextMaterializer:
         for skill in capabilities.skills:
             if skill.local_path is None:
                 raise ValueError(f"skill {skill.id} has no reviewed local wrapper")
-            source = (self._capability_root / skill.local_path).resolve()
-            if not source.is_relative_to(self._capability_root) or not source.is_file():
-                raise ValueError(f"skill wrapper not found: {skill.id}")
-            self._write(
-                workspace,
-                f".repomesh/skills/{skill.id}/SKILL.md",
-                source.read_text(encoding="utf-8"),
-                files,
-            )
+            with _tracer.start_as_current_span(f"skill.mount.{skill.id}") as span:
+                span.set_attribute(SpanAttributes.SKILL_ID, skill.id)
+                span.set_attribute(SpanAttributes.SKILL_VERSION, skill.version or "unversioned")
+                source = (self._capability_root / skill.local_path).resolve()
+                if not source.is_relative_to(self._capability_root) or not source.is_file():
+                    span.set_attribute(SpanAttributes.OUTCOME, "wrapper_missing")
+                    raise ValueError(f"skill wrapper not found: {skill.id}")
+                self._write(
+                    workspace,
+                    f".repomesh/skills/{skill.id}/SKILL.md",
+                    source.read_text(encoding="utf-8"),
+                    files,
+                )
+                span.set_attribute(SpanAttributes.OUTCOME, "mounted")
 
+        # Manifest v2: each skill carries its registry-resolved version so a
+        # run's skill provenance is reconstructible. `legacySkillIds` keeps the
+        # v1 flat list so older readers degrade instead of breaking.
+        skill_entries = [
+            {
+                "id": skill.id,
+                "version": skill.version,
+                "contentHash": next(
+                    (
+                        content_hash
+                        for path, content_hash in files
+                        if path == f".repomesh/skills/{skill.id}/SKILL.md"
+                    ),
+                    None,
+                ),
+            }
+            for skill in capabilities.skills
+        ]
         manifest = {
-            "schemaVersion": "repomesh.context-manifest.v1",
+            "schemaVersion": "repomesh.context-manifest.v2",
             "bundleId": str(task.context_bundle.bundle_id),
             "bundleVersion": task.context_bundle.version,
             "contentHash": task.context_bundle.content_hash,
             "codingPackageHash": package.content_hash,
-            "skills": [skill.id for skill in capabilities.skills],
+            "snapshotId": str(snapshot_id) if snapshot_id is not None else None,
+            "skills": skill_entries,
+            "legacySkillIds": [skill.id for skill in capabilities.skills],
             "files": [
                 {"path": path, "contentHash": content_hash} for path, content_hash in sorted(files)
             ],

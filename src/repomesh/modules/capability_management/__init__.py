@@ -1,3 +1,9 @@
+from .application import (
+    AgentCapabilityNotFound,
+    RegistryCapabilityAssembler,
+    ResolveAgentCapabilities,
+    seed_preset_skills,
+)
 from .contracts import (
     AgentCapabilityBundle,
     CapabilityAccess,
@@ -15,6 +21,7 @@ __all__ = [
     "CapabilityKind",
     "CapabilitySource",
     "PresetCapabilityAssembler",
+    "RegistryCapabilityAssembler",
     "ResolveAgentCapabilities",
+    "seed_preset_skills",
 ]
-from .application import AgentCapabilityNotFound, ResolveAgentCapabilities

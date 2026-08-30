@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 
 from repomesh.modules.agent_runtime.contracts import StartAssignedWorkerTaskCommand
+from repomesh.modules.capability_management.mcp_guard import McpDegradedRefused
 from repomesh.settings import get_settings
 
 router = APIRouter(tags=["worker-mcp"])
@@ -39,14 +40,29 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(arguments, dict):
         return _error(request_id, -32602, "tool arguments must be an object")
     try:
-        started = await request.app.state.container.worker_execution_service().execute(
-            StartAssignedWorkerTaskCommand(
-                task_id=UUID(str(arguments["task_id"])),
-                worker_agent_id=UUID(str(arguments["worker_agent_id"])),
-                adapter_id=str(arguments.get("adapter_id") or "claude-code"),
-                base_revision=str(arguments.get("base_revision") or "main"),
-                task_features=frozenset(arguments.get("task_features") or ()),
-            )
+        container = request.app.state.container
+        guard_result = await container.mcp_call_guard().call_gated(
+            server_id="repomesh-task-control",
+            operation="repomesh.start_assigned_task",
+            invoke=lambda: container.worker_execution_service().execute(
+                StartAssignedWorkerTaskCommand(
+                    task_id=UUID(str(arguments["task_id"])),
+                    worker_agent_id=UUID(str(arguments["worker_agent_id"])),
+                    adapter_id=str(arguments.get("adapter_id") or "claude-code"),
+                    base_revision=str(arguments.get("base_revision") or "main"),
+                    task_features=frozenset(arguments.get("task_features") or ()),
+                )
+            ),
+            args=arguments,
+        )
+        started = guard_result  # invoke returned the StartedWorkerTask directly
+    except McpDegradedRefused as error:
+        return _result(
+            request_id,
+            {
+                "content": [{"type": "text", "text": str(error)}],
+                "isError": True,
+            },
         )
     except (KeyError, TypeError, ValueError) as error:
         return _result(

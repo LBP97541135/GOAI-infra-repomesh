@@ -11,6 +11,7 @@ NAMING_CONVENTION = {
 
 BUSINESS_SCHEMAS = (
     "agent_directory",
+    "capability_management",
     "repository_intelligence",
     "project",
     "specification",

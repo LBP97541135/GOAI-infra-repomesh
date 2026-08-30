@@ -48,6 +48,13 @@ class SpanAttributes:
     ATTEMPT = "repomesh.attempt"
     ADAPTER = "repomesh.adapter"
     WORKER_AGENT_ID = "repomesh.worker_agent_id"
+    # Capability governance (skill registry + MCP guard) attributes.
+    TOOL_NAME = "repomesh.tool_name"
+    MCP_SERVER = "repomesh.mcp_server"
+    SKILL_ID = "repomesh.skill_id"
+    SKILL_VERSION = "repomesh.skill_version"
+    OUTCOME = "repomesh.outcome"
+    LATENCY_MS = "repomesh.latency_ms"
 
 
 def tracing_enabled() -> bool:

@@ -26,8 +26,11 @@ from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
 from repomesh.modules.capability_management import (
     PresetCapabilityAssembler,
+    RegistryCapabilityAssembler,
     ResolveAgentCapabilities,
 )
+from repomesh.modules.capability_management.infrastructure import SkillRegistryService
+from repomesh.modules.capability_management.mcp_guard import McpCallGuard, McpPolicy
 from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
 from repomesh.modules.collaboration.contracts import AuthorizedRoom, CollaborationGateway
 from repomesh.modules.collaboration.ports import (
@@ -397,6 +400,33 @@ class ApplicationContainer:
         return PresetCapabilityAssembler()
 
     @cached_service
+    def skill_registry_service(self) -> SkillRegistryService:
+        return SkillRegistryService(self.database)
+
+    @cached_service
+    def agent_capability_assembler(self) -> RegistryCapabilityAssembler:
+        return RegistryCapabilityAssembler(self.skill_registry_service())
+
+    @cached_service
+    def mcp_call_guard(self) -> "McpCallGuard":
+        registry = self.skill_registry_service()
+
+        async def policy_provider(server_id: str) -> "McpPolicy | None":
+            record = await registry.get_mcp_policy(server_id)
+            if record is None:
+                return None
+            return McpPolicy(
+                id=record.id,
+                timeout_seconds=record.timeout_seconds,
+                max_retries=record.max_retries,
+                retryable_only_reads=record.retryable_only_reads,
+                degraded_block_writes=record.degraded_block_writes,
+                required_task_features=tuple(record.required_task_features),
+            )
+
+        return McpCallGuard(policy_provider=policy_provider)
+
+    @cached_service
     def local_account_service(self):
         return LocalAccountService(
             PostgresLocalAccountStore(self.database),
@@ -545,7 +575,7 @@ class ApplicationContainer:
         )
 
     def agent_capabilities(self) -> ResolveAgentCapabilities:
-        return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
+        return ResolveAgentCapabilities(self.agent_directory, self.agent_capability_assembler())
 
     def native_agent_registration(self):
         from repomesh.integrations.agentteams import RegisterNativeAgent
@@ -681,6 +711,28 @@ class ApplicationContainer:
     async def start(self) -> None:
         for service in self.background_services:
             await service.start()
+        await self._seed_capability_registry()
+
+    async def _seed_capability_registry(self) -> None:
+        """Idempotent first-boot seed: preset skills as promoted 1.0.0 + MCP policies.
+
+        A seed failure must not keep the platform down — capability governance
+        degrades to "registry empty", and the next boot retries. That is why
+        this is logged, not raised.
+        """
+
+        from repomesh.modules.capability_management import seed_preset_skills
+        from repomesh.modules.capability_management.infrastructure import seed_mcp_policies
+
+        try:
+            await seed_preset_skills(self.skill_registry_service())
+            await seed_mcp_policies(self.skill_registry_service())
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "capability registry seeding failed; governance falls back to empty registry"
+            )
 
     async def is_agentteams_ready(self) -> bool:
         if not self.agentteams_required:

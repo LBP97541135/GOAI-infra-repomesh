@@ -14,6 +14,7 @@ from repomesh.api.scm_reconciliation import router as scm_reconciliation_router
 from repomesh.api.scm_webhook import router as scm_webhook_router
 from repomesh.api.worker_mcp import router as worker_mcp_router
 from repomesh.modules.agent_runtime.api.router import router as agent_runtime_router
+from repomesh.modules.capability_management.api import router as capability_governance_router
 from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
 from repomesh.modules.identity_access.api import router as identity_console_router
@@ -33,6 +34,7 @@ api_router = APIRouter()
 api_router.include_router(dynamic_plan_router)
 api_router.include_router(health_router)
 api_router.include_router(platform_setup_router)
+api_router.include_router(capability_governance_router)
 api_router.include_router(platform_credentials_router)
 api_router.include_router(platform_bootstrap_router)
 api_router.include_router(worker_mcp_router)

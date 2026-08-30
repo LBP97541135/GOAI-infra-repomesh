@@ -10,6 +10,12 @@ from repomesh.modules.agent_runtime.execution_reservation import (
     WorkerExecutionReservationRecord,
 )
 from repomesh.modules.agent_runtime.recovery import WorkerRecoveryOperationRecord
+from repomesh.modules.capability_management.infrastructure import (
+    McpServerPolicyRecord,
+    SkillEvaluationRecord,
+    SkillSnapshotRecord,
+    SkillVersionRecord,
+)
 from repomesh.modules.collaboration.infrastructure import (
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
