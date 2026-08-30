@@ -69,9 +69,9 @@ pytestmark = [
 ]
 
 #: The revision that has every table *except* room_timeline_messages.
-REVISION_BEFORE = "20260828_0040"
+REVISION_BEFORE = "20260830_0048"
 #: The revision under test.
-REVISION_UNDER_TEST = "20260828_0039"
+REVISION_UNDER_TEST = "20260830_0049"
 #: PostgreSQL's ``undefined_table`` SQLSTATE.
 UNDEFINED_TABLE = "42P01"
 

@@ -22,7 +22,7 @@ target, and the regeneration path writes a *new* ``id`` for the same triple
 before superseding the old rows. Declaring uniqueness the model does not
 declare would turn a supported regeneration into an IntegrityError.
 
-Revision ID: 20260827_0036
+Revision ID: 20260830_0045
 Revises: 20260816_0035
 """
 
@@ -34,8 +34,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260827_0036"
-down_revision: str | None = "20260816_0035"
+revision: str = "20260830_0045"
+down_revision: str | None = "20260830_0044"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -40,8 +40,8 @@ assignment in ``planning`` — the only phase the previous slice could reach —
 that is a row with no plan, no evidence and no verdicts. The defaults say
 exactly that, so there is nothing to compute per row.
 
-Revision ID: 20260828_0040
-Revises: 20260828_0037
+Revision ID: 20260830_0048
+Revises: 20260830_0047
 Create Date: 2026-08-28
 
 The chain runs 0036 → 0038 → 0037 → 0040: revision order is merge order, and
@@ -57,8 +57,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260828_0040"
-down_revision: str | None = "20260828_0037"
+revision: str = "20260830_0048"
+down_revision: str | None = "20260830_0047"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

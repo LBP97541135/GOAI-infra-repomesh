@@ -69,9 +69,9 @@ pytestmark = [
 ]
 
 #: The revision that has every table *except* leader_assignments.
-REVISION_BEFORE = "20260827_0036"
+REVISION_BEFORE = "20260830_0045"
 #: The revision under test.
-REVISION_UNDER_TEST = "20260828_0038"
+REVISION_UNDER_TEST = "20260830_0046"
 #: PostgreSQL's ``undefined_table`` SQLSTATE.
 UNDEFINED_TABLE = "42P01"
 

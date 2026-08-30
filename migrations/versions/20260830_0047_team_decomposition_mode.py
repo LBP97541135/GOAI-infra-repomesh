@@ -31,8 +31,8 @@ a database one -- a CHECK constraint cannot see the previous value -- so it is
 stated here only so that whoever reads this column next knows the write side is
 monotonic by intent.
 
-Revision ID: 20260828_0037
-Revises: 20260828_0038
+Revision ID: 20260830_0047
+Revises: 20260830_0046
 Create Date: 2026-08-28
 
 The revision number is *lower* than its parent, and that is not a mistake: the
@@ -48,8 +48,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260828_0037"
-down_revision: str | None = "20260828_0038"
+revision: str = "20260830_0047"
+down_revision: str | None = "20260830_0046"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

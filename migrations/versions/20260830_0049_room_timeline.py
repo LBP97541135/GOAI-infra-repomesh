@@ -42,8 +42,8 @@ The composite index mirrors the model's ``ix_room_timeline_messages_room_id``:
 the only read is "one room, in ``(occurred_at, event_id)`` order", and it is
 made on every console poll, so it must never sort the table.
 
-Revision ID: 20260828_0039
-Revises: 20260828_0040
+Revision ID: 20260830_0049
+Revises: 20260830_0048
 
 The chain runs 0036 -> 0038 -> 0037 -> 0040 -> 0039: revision order is merge
 order, and the numbers were reserved per work order in the wave-0 baseline
@@ -60,8 +60,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260828_0039"
-down_revision: str | None = "20260828_0040"
+revision: str = "20260830_0049"
+down_revision: str | None = "20260830_0048"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

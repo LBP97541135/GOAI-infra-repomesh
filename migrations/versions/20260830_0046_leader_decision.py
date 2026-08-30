@@ -30,8 +30,8 @@ columns -- accepted plan provenance, the submitted DAG, review revision and
 findings -- are NOT created here, because nothing writes them yet. They belong
 to the revision that adds the code that does.
 
-Revision ID: 20260828_0038
-Revises: 20260827_0036
+Revision ID: 20260830_0046
+Revises: 20260830_0045
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "20260828_0038"
-down_revision: str | None = "20260827_0036"
+revision: str = "20260830_0046"
+down_revision: str | None = "20260830_0045"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
