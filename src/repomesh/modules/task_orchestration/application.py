@@ -2307,10 +2307,12 @@ class RedispatchRound:
         plans: ExecutionPlanStore,
         tasks: TaskStore,
         dispatcher: TaskRedispatchGateway,
+        assignments: LeaderAssignmentStore | None = None,
     ) -> None:
         self._plans = plans
         self._tasks = tasks
         self._dispatcher = dispatcher
+        self._assignments = assignments
 
     async def execute(
         self,
@@ -2331,8 +2333,32 @@ class RedispatchRound:
         # on file is the problem. Only the ones that may be sent back to work:
         # a CANCELLED or SUPERSEDED task is a decision, not a bad result, and
         # ``Task.redo`` refuses it, so it must not be queued here either.
+        review_rounds: dict[UUID, LeaderAssignmentView] = {}
+        if scope is RedispatchScope.RERUN and self._assignments is not None:
+            for task in (*pending, *settled):
+                assignment = await self._assignments.get(task.id)
+                if assignment is not None and assignment.phase in {
+                    LeaderAssignmentPhase.REVIEW_DUE,
+                    LeaderAssignmentPhase.CLOSED,
+                }:
+                    review_rounds[task.id] = assignment
+
+        # A leader-mode parent is the stable identity of the accepted plan. A
+        # stale planning notice cannot reopen it: the Bridge reads the durable
+        # assignment phase first and discards that notice once the assignment
+        # has moved past ``planning``. Re-running the parent would therefore
+        # leave an ASSIGNED leader task nobody can finish. Keep that task and
+        # its accepted plan settled; the workers are the results being redone,
+        # and the assignment is moved to a fresh review round below.
+        if review_rounds:
+            pending = [task for task in pending if task.id not in review_rounds]
         redoable = (
-            [task for task in settled if task.status in _REDOABLE_TASK_STATUSES]
+            [
+                task
+                for task in settled
+                if task.status in _REDOABLE_TASK_STATUSES
+                and task.id not in review_rounds
+            ]
             if scope is RedispatchScope.RERUN
             else []
         )
@@ -2353,6 +2379,22 @@ class RedispatchRound:
                 f"({len(settled)} task(s)); a finished round is history, not "
                 "unfinished work — ask for scope=rerun if a result on file is "
                 "the thing that is wrong"
+            )
+
+        # Reset before telling any Worker. A very fast report must see
+        # ``executing`` and be allowed to open review_due; doing this after the
+        # messages would leave a race where every Worker finished against the
+        # old closed assignment and no review notice was emitted. The phase
+        # guard makes an ambiguous retry converge: once this save lands, the
+        # same request observes EXECUTING and does not increment again.
+        for assignment in review_rounds.values():
+            await self._assignments.save(  # type: ignore[union-attr]
+                replace(
+                    assignment,
+                    phase=LeaderAssignmentPhase.EXECUTING,
+                    review_revision=assignment.review_revision + 1,
+                    review_evidence=None,
+                )
             )
 
         dispatched: list[UUID] = []

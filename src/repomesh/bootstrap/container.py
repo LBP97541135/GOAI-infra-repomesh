@@ -1682,7 +1682,12 @@ class ApplicationContainer:
             return None
         from repomesh.modules.task_orchestration.application import RedispatchRound
 
-        return RedispatchRound(self.execution_plan_store(), self.task_store, dispatcher)
+        return RedispatchRound(
+            self.execution_plan_store(),
+            self.task_store,
+            dispatcher,
+            self.leader_assignment_store(),
+        )
 
     def project_task_reader(self):
         """Expose task views through the TaskOrchestrator public read port."""
