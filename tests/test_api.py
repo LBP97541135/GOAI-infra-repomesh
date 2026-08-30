@@ -480,6 +480,43 @@ def _register_and_discover(
         )
         assert created.status_code == 201
 
+        repository_id = created.json()["id"]
+        updated = client.patch(
+            f"/api/v1/repositories/{repository_id}/verification",
+            headers=headers,
+            json={
+                "test_commands": ["  python scripts/run_tests.py  ", ""],
+                "test_paths": [" tests/** "],
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["test_commands"] == ["python scripts/run_tests.py"]
+        assert updated.json()["test_paths"] == ["tests/**"]
+
+        replayed = client.patch(
+            f"/api/v1/repositories/{repository_id}/verification",
+            headers=headers,
+            json={
+                "test_commands": ["python scripts/run_tests.py"],
+                "test_paths": ["tests/**"],
+            },
+        )
+        assert replayed.status_code == 200
+        assert replayed.json() == updated.json()
+
+        missing = client.patch(
+            f"/api/v1/repositories/{uuid4()}/verification",
+            headers=headers,
+            json={"test_commands": [], "test_paths": []},
+        )
+        assert missing.status_code == 404
+
+        unauthorized = client.patch(
+            f"/api/v1/repositories/{repository_id}/verification",
+            json={"test_commands": [], "test_paths": []},
+        )
+        assert unauthorized.status_code == 401
+
         discovered = client.post(
             "/api/v1/discovery",
             headers=headers,

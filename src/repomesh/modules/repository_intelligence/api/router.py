@@ -18,7 +18,9 @@ from repomesh.modules.repository_intelligence.application import (
     IssueIntakeDenied,
     RegisterRepository,
     RepositoryDiscoveryService,
+    RepositoryNotFound,
     ScanRegistration,
+    UpdateRepositoryVerification,
     identify_url_type,
     register_scanned_profiles,
     render_markdown,
@@ -77,6 +79,7 @@ from .models import (
     RepoScanRequest,
     RepoScanResult,
     RepositoryCreate,
+    RepositoryVerificationUpdate,
     RepositoryView,
     RequirementAnalysisRequest,
     RequirementAnalysisView,
@@ -351,6 +354,28 @@ async def register_repository(
 @router.get("/repositories", response_model=list[RepositoryView])
 async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfile]:
     return await catalog.list()
+
+
+@router.patch(
+    "/repositories/{repository_id}/verification",
+    response_model=RepositoryView,
+    dependencies=[ACTION_TOKEN],
+)
+async def update_repository_verification(
+    repository_id: UUID,
+    body: RepositoryVerificationUpdate,
+    catalog: CatalogDependency,
+) -> RepositoryProfile:
+    """Replace the verification command/path pair used by future dispatches."""
+
+    try:
+        return await UpdateRepositoryVerification(catalog).execute(
+            repository_id,
+            test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
+            test_paths=tuple(item.strip() for item in body.test_paths if item.strip()),
+        )
+    except RepositoryNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.get("/repositories/url-type", response_model=UrlIdentification)

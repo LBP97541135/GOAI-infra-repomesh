@@ -381,6 +381,10 @@ export interface ConsoleRepositoryView {
   description: string;
   topics: string[];
   languages: string[];
+  /** 操作者声明的正式验证命令；空数组表示尚未配置，不能由前端猜测。 */
+  test_commands: string[];
+  /** 验证命令读取/写入的测试路径，与命令作为一个配置对维护。 */
+  test_paths: string[];
   profiled_at: string;
   /** 拓扑派生：该仓库被多少 team 驻扎 */
   resident_team_count: number;
@@ -389,6 +393,17 @@ export interface ConsoleRepositoryView {
   active_task_count: number;
   last_delivery_at: string | null;
   teams: Array<{ team_id: string; issue_id: string; runtime_status: TeamRuntimeStatus }>;
+}
+
+/** `PATCH /repositories/{id}/verification` 的完整替换请求。 */
+export interface RepositoryVerificationUpdate {
+  test_commands: string[];
+  test_paths: string[];
+}
+
+/** 更新端点只需由调用方消费这三个回显字段。 */
+export interface RepositoryVerificationView extends RepositoryVerificationUpdate {
+  id: string;
 }
 
 /** §4.2。`runtime_status`（拓扑记录的**建团结果**，历史事实）与 `runtime.phase`

@@ -29,7 +29,13 @@ from .plan_integration import (
     PlanIntegrationService,
     TaskNode,
 )
-from .registration import RegisterRepository, ScanRegistration, register_scanned_profiles
+from .registration import (
+    RegisterRepository,
+    RepositoryNotFound,
+    ScanRegistration,
+    UpdateRepositoryVerification,
+    register_scanned_profiles,
+)
 from .requirement_analysis import RequirementAnalysis, RequirementAnalyzer
 from .scan import infer_languages, infer_name, scan_repo
 from .scan_remote import (
@@ -59,11 +65,13 @@ __all__ = [
     "LLMClient",
     "PlanIntegrationService",
     "RegisterRepository",
+    "RepositoryNotFound",
     "RepositoryDiscoveryService",
     "RepositoryPlan",
     "RequirementAnalysis",
     "RequirementAnalyzer",
     "ScanRegistration",
+    "UpdateRepositoryVerification",
     "TaskNode",
     "TopoResult",
     "build_doc_content",

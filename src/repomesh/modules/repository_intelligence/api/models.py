@@ -38,6 +38,13 @@ class RepositoryCreate(BaseModel):
     auto_card: AutoCardCreate | None = None
 
 
+class RepositoryVerificationUpdate(BaseModel):
+    """Complete, retry-safe replacement of operator-owned verification data."""
+
+    test_commands: list[str] = Field(default_factory=list)
+    test_paths: list[str] = Field(default_factory=list)
+
+
 class IssueIntakeCreate(BaseModel):
     """Contract v0.3 §1.2. No title on purpose: it derives from
     requirement_text — accepting it would create a second source of truth.

@@ -33,6 +33,15 @@ async def test_postgres_repository_transaction_and_outbox() -> None:
         await RegisterRepository(catalog).execute(profile)
 
         assert await catalog.get(profile.id) == profile
+        updated = await catalog.update_verification(
+            profile.id,
+            test_commands=("python scripts/run_tests.py",),
+            test_paths=("tests/**",),
+        )
+        assert updated is not None
+        assert updated.test_commands == ("python scripts/run_tests.py",)
+        assert updated.test_paths == ("tests/**",)
+        assert await catalog.get(profile.id) == updated
         assert any(
             message.payload.get("url") == profile.url
             for message in await outbox.pending()

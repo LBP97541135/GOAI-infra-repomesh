@@ -38,6 +38,8 @@ import type {
   OrganizationsResponse,
   PlanSnapshotView,
   RepositoryPlanView,
+  RepositoryVerificationUpdate,
+  RepositoryVerificationView,
   RollbackReceipt,
   RollbackRequest,
   RollbackScopeView,
@@ -149,6 +151,18 @@ export function createApiClient(config: ApiClientConfig) {
      *  本端点**没有 runtime 块**，故无 with_runtime 参数，实测 0.3s 返回。 */
     listConsoleRepositories: () =>
       request<ConsoleRepositoriesResponse>(config, "GET", `/console/repositories`),
+
+    /** 仓库验证配置是操作者事实，不由扫描器或计划模型猜测；完整替换使重试幂等。 */
+    updateRepositoryVerification: (
+      repositoryId: string,
+      payload: RepositoryVerificationUpdate,
+    ) =>
+      request<RepositoryVerificationView>(
+        config,
+        "PATCH",
+        `/repositories/${encodeURIComponent(repositoryId)}/verification`,
+        payload,
+      ),
 
     /** §4.2。`withRuntime: false` 时 runtime 字段常在、值恒 null（契约 §7.3 勘正），
      *  且不发任何 Controller 请求（实测 0.10s vs 默认 true 的 2.12s）——
