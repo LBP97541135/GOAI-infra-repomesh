@@ -849,6 +849,11 @@ class PostgresChangeSetStore:
                         for check in item.ci_checks
                     ],
                     "required_approvals": item.required_approvals,
+                    "plan_id": str(item.plan_id) if item.plan_id else None,
+                    "run_id": str(item.run_id) if item.run_id else None,
+                    "worker_agent_id": (
+                        str(item.worker_agent_id) if item.worker_agent_id else None
+                    ),
                     "reviews": [
                         {
                             "review_id": review.review_id,
@@ -940,6 +945,13 @@ class PostgresChangeSetStore:
                     for check in item.get("ci_checks", ())
                 ),
                 required_approvals=int(item.get("required_approvals", 0)),
+                plan_id=UUID(str(item["plan_id"])) if item.get("plan_id") else None,
+                run_id=UUID(str(item["run_id"])) if item.get("run_id") else None,
+                worker_agent_id=(
+                    UUID(str(item["worker_agent_id"]))
+                    if item.get("worker_agent_id")
+                    else None
+                ),
                 reviews=tuple(
                     ReviewObservation(
                         review_id=str(review["review_id"]),

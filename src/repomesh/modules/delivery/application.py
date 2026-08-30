@@ -31,6 +31,7 @@ from .contracts import (
     PrepareChangeSetCommand,
     PullRequestObservationCommand,
     RecordCandidateRevisionCommand,
+    RecordCandidateTraceabilityCommand,
     RecordedSCMObservation,
     RecordGovernanceDecisionCommand,
     RecordMergeRequestedCommand,
@@ -352,6 +353,9 @@ class DeliveryService:
                 merge_order=order[item.repository_id],
                 required_checks=tuple(name.strip().lower() for name in item.required_checks),
                 required_approvals=item.required_approvals,
+                plan_id=item.plan_id,
+                run_id=item.run_id,
+                worker_agent_id=item.worker_agent_id,
             )
             for item in command.candidates
         )
@@ -380,6 +384,23 @@ class DeliveryService:
     async def get_by_idempotency_key(self, key: str) -> ChangeSetView | None:
         existing = await self._store.get_by_idempotency_key(key)
         return existing[0].to_view() if existing is not None else None
+
+    async def record_candidate_traceability(
+        self, command: RecordCandidateTraceabilityCommand
+    ) -> ChangeSetView:
+        """Idempotently bind plan/run/worker provenance to one candidate."""
+
+        return await self._update_repository(
+            command.change_set_id,
+            command.repository_id,
+            lambda item: item.attach_traceability(
+                task_id=command.task_id,
+                commit_sha=command.commit_sha,
+                plan_id=command.plan_id,
+                run_id=command.run_id,
+                worker_agent_id=command.worker_agent_id,
+            ),
+        )
 
     async def append_candidates(
         self, command: AppendCandidatesCommand, *, idempotency_key: str
@@ -416,6 +437,9 @@ class DeliveryService:
                 merge_order=order[item.repository_id],
                 required_checks=tuple(name.strip().lower() for name in item.required_checks),
                 required_approvals=item.required_approvals,
+                plan_id=item.plan_id,
+                run_id=item.run_id,
+                worker_agent_id=item.worker_agent_id,
             )
             for item in fresh
         )
@@ -818,7 +842,14 @@ class DeliveryService:
 
     @staticmethod
     def _fingerprint(command: PrepareChangeSetCommand) -> str:
-        payload = json.dumps(asdict(command), default=str, sort_keys=True, separators=(",", ":"))
+        raw = asdict(command)
+        # Provenance can be back-filled after a stranded publish without
+        # changing the frozen delivery candidate or its idempotency identity.
+        for candidate in raw["candidates"]:
+            candidate.pop("plan_id", None)
+            candidate.pop("run_id", None)
+            candidate.pop("worker_agent_id", None)
+        payload = json.dumps(raw, default=str, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
 
 

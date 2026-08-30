@@ -650,20 +650,11 @@ class ChangeSetSCMCoordinator:
     def _reconciled_pull_request_body(
         change_set: ChangeSetView, candidate: RepositoryDeliveryView
     ) -> str:
-        """The same traceability section as the finalizer, over a shorter chain.
+        """Render the provenance the owning application froze on the candidate.
 
-        Both paths render through ``render_delivery_pull_request_body``, so a
-        reviewer finds the ids under the same labels wherever the pull request
-        came from. What differs is how much of the chain exists here: the
-        reconciler starts from ``DeliveryService.list_active()`` and a
-        ``ChangeSetView`` carries no route back to its execution plan. The only
-        link is the ChangeSet's idempotency key
-        (``execution-plan:<plan>:delivery``), which the store writes but no port
-        reads back for a change set id -- and the run and worker ids hang off
-        the plan's tasks, which this side must not go query (ruling D-9).
-
-        So plan, run and worker are simply absent rather than guessed, and the
-        notes say why.
+        The reconciler never queries task orchestration. Plan delivery supplies
+        and persists the plan/run/worker ids before SCM publication, so this
+        recovery path can use the shared renderer without weakening D-9.
         """
 
         return render_delivery_pull_request_body(
@@ -674,13 +665,15 @@ class ChangeSetSCMCoordinator:
                 task_id=candidate.task_id,
                 branch_name=candidate.branch_name,
                 commit_sha=candidate.commit_sha,
+                plan_id=candidate.plan_id,
+                run_id=candidate.run_id,
+                worker_agent_id=candidate.worker_agent_id,
             ),
             headline="Automated RepoMesh delivery, completed by reconciliation.",
             notes=(
                 "The candidate branch was published but its pull request never opened.",
-                "The delivery reconciler finished the publish; the originating execution",
-                "plan is not reachable from a ChangeSet, so the plan, run and worker ids",
-                "are omitted and this description carries only verified facts.",
+                "The delivery reconciler finished the publish from provenance frozen",
+                "on the ChangeSet candidate by the owning plan-delivery application.",
             ),
         )
 

@@ -495,10 +495,15 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
     assert [item.repository_id for item in change_set.repositories] == [
         first_repository_id
     ]
+    assert len(adapter.updates) == 1
+    assert f"- plan: `{plan.id}`" in adapter.updates[0][2]
+    assert f"- run: `{first_run_id}`" in adapter.updates[0][2]
+    assert f"- worker_agent: `{first_worker.assignee_agent_id}`" in adapter.updates[0][2]
 
     # Replaying the same batch must not open a duplicate pull request.
     await finalizer.handle_batch(plan)
     assert len(adapter.pull_requests) == 1
+    assert len(adapter.updates) == 2
 
     # Batch 1 appends to the SAME ChangeSet, ordered after batch 0.
     advanced = replace(plan, current_batch_index=1)
@@ -508,12 +513,12 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
     assert len(change_set.repositories) == 2
     # Batch-by-batch: after the second batch, sibling links cover both PRs
     # and the back-filled body records the batch execution order.
-    assert len(adapter.updates) == 2
+    assert len(adapter.updates) == 4
     traceability = {
         "api": (first_worker, first_run_id),
         "web": (second_worker, second_run_id),
     }
-    for repository, _, body in adapter.updates:
+    for repository, _, body in adapter.updates[-2:]:
         worker, run_id = traceability[repository.name]
         assert "execution order: batch 2" in body
         assert "## Sibling PRs in this ChangeSet" in body

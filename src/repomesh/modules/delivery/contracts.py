@@ -209,6 +209,22 @@ class RepositoryCandidateInput:
     depends_on: tuple[UUID, ...] = ()
     required_checks: tuple[str, ...] = ()
     required_approvals: int = 0
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecordCandidateTraceabilityCommand:
+    """Attach owning-application provenance to a frozen delivery candidate."""
+
+    change_set_id: UUID
+    repository_id: UUID
+    task_id: UUID
+    commit_sha: str
+    plan_id: UUID
+    run_id: UUID | None
+    worker_agent_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +371,9 @@ class RepositoryDeliveryView:
     ci_checks: tuple[CICheckObservationView, ...]
     required_approvals: int
     reviews: tuple[ReviewObservationView, ...]
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,9 +458,9 @@ class DeliveryTraceability:
     acceptance evidence would then rest on a cross-module query rather than on
     what the delivering application actually knew.
 
-    The three optional ids are the ones a caller can honestly be without: the
-    reconciliation path starts from a ``ChangeSetView``, which carries no route
-    back to its execution plan, and a Runner may report no run id at all.
+    The three optional ids allow legacy or non-Runner callers to remain honest.
+    Plan delivery persists the complete chain on each ChangeSet candidate so
+    reconciliation never has to query task orchestration for it.
     """
 
     issue_id: UUID

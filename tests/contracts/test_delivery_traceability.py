@@ -106,6 +106,7 @@ def test_both_delivery_paths_render_the_same_traceability_lines() -> None:
     task_id = uuid4()
     worker_agent_id = uuid4()
     run_id = uuid4()
+    plan_id = uuid4()
     candidate = RepositoryDeliveryView(
         repository_id=repository_id,
         task_id=task_id,
@@ -124,6 +125,9 @@ def test_both_delivery_paths_render_the_same_traceability_lines() -> None:
         ci_checks=(),
         required_approvals=0,
         reviews=(),
+        plan_id=plan_id,
+        run_id=run_id,
+        worker_agent_id=worker_agent_id,
     )
     now = datetime.now(UTC)
     change_set = ChangeSetView(
@@ -144,7 +148,7 @@ def test_both_delivery_paths_render_the_same_traceability_lines() -> None:
         updated_at=now,
     )
     plan = ExecutionPlanView(
-        id=uuid4(),
+        id=plan_id,
         organization_id=change_set.organization_id,
         project_id=issue_id,
         created_by_agent_id=change_set.created_by_agent_id,
@@ -167,8 +171,11 @@ def test_both_delivery_paths_render_the_same_traceability_lines() -> None:
     assert _labels(reconciled) == [
         "- issue",
         "- change_set",
+        "- plan",
         "- repository",
         "- task",
+        "- run",
+        "- worker_agent",
         "- branch",
         "- commit",
     ]
@@ -188,4 +195,4 @@ def test_both_delivery_paths_render_the_same_traceability_lines() -> None:
     # they share the generator, and this fails the moment one stops.
     assert set(_bullets(reconciled)) < set(_bullets(primary))
     assert "completed by reconciliation" in reconciled
-    assert "plan, run and worker ids" in reconciled
+    assert "plan, run and worker ids" not in reconciled

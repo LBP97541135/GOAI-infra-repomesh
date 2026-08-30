@@ -15,6 +15,7 @@ from repomesh.modules.delivery.contracts import (
     AppendCandidatesCommand,
     DeliveryTraceability,
     PrepareChangeSetCommand,
+    RecordCandidateTraceabilityCommand,
     RepositoryCandidateInput,
     RepositoryDeliveryView,
     render_delivery_pull_request_body,
@@ -162,6 +163,7 @@ class PlanDeliveryFinalizer:
             ),
             idempotency_key=idempotency_key,
         )
+        await self._record_traceability(change_set.id, candidates)
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
             if candidate.pull_request_number is not None:
                 continue
@@ -240,6 +242,7 @@ class PlanDeliveryFinalizer:
                 ),
                 idempotency_key=f"{idempotency_key}:b{batch_index}",
             )
+        await self._record_traceability(change_set.id, candidates)
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
             if (
                 candidate.pull_request_number is not None
@@ -327,6 +330,7 @@ class PlanDeliveryFinalizer:
                     task_id=worker.id,
                 )
             branch = f"repomesh/{str(plan.id)[:8]}/{str(planned.repository_id)[:8]}"
+            worker_provenance = _WorkerProvenance.of(worker)
             candidates.append(
                 RepositoryCandidateInput(
                     repository_id=planned.repository_id,
@@ -337,10 +341,13 @@ class PlanDeliveryFinalizer:
                     depends_on=tuple(earlier_repositories),
                     required_checks=self._policy.required_checks,
                     required_approvals=self._policy.required_approvals,
+                    plan_id=plan.id,
+                    run_id=worker_provenance.run_id,
+                    worker_agent_id=worker_provenance.worker_agent_id,
                 )
             )
             workspaces[planned.repository_id] = workspace
-            provenance[planned.repository_id] = _WorkerProvenance.of(worker)
+            provenance[planned.repository_id] = worker_provenance
             # The last undeclared read is gone (A-18): test results are now part
             # of TaskEvidenceView, so this reads the producer's parse like every
             # other field above instead of re-opening the free-text summary.
@@ -466,10 +473,15 @@ class PlanDeliveryFinalizer:
             for item in sorted(current.repositories, key=lambda item: item.merge_order)
             if item.pull_request_number is not None
         ]
-        if len(published) < 2:
+        if not published:
             return
-        sibling_section = self._sibling_links(
-            current, [(item.repository_id, item.pull_request_number) for item in published]
+        sibling_section = (
+            self._sibling_links(
+                current,
+                [(item.repository_id, item.pull_request_number) for item in published],
+            )
+            if len(published) > 1
+            else ""
         )
         for candidate in published:
             repository_id = candidate.repository_id
@@ -483,6 +495,26 @@ class PlanDeliveryFinalizer:
                 await self._coordinator.add_change_set_label(
                     change_set_id, repository_id
                 )
+
+    async def _record_traceability(
+        self, change_set_id: UUID, candidates: list[RepositoryCandidateInput]
+    ) -> None:
+        """Persist the owning application's complete chain before SCM replay."""
+
+        for candidate in candidates:
+            if candidate.plan_id is None or candidate.worker_agent_id is None:
+                continue
+            await self._delivery.record_candidate_traceability(
+                RecordCandidateTraceabilityCommand(
+                    change_set_id=change_set_id,
+                    repository_id=candidate.repository_id,
+                    task_id=candidate.task_id,
+                    commit_sha=candidate.commit_sha,
+                    plan_id=candidate.plan_id,
+                    run_id=candidate.run_id,
+                    worker_agent_id=candidate.worker_agent_id,
+                )
+            )
 
     @staticmethod
     def _sibling_links(change_set, published: list[tuple[UUID, int | None]]) -> str:

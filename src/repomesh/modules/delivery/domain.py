@@ -314,6 +314,9 @@ class RepositoryDelivery:
     ci_check_run_id: str | None = None
     ci_summary: str | None = None
     merge_sha: str | None = None
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
 
     def __post_init__(self) -> None:
         for value, label in ((self.commit_sha, "commit_sha"), (self.base_sha, "base_sha")):
@@ -336,6 +339,32 @@ class RepositoryDelivery:
             status=RepositoryDeliveryStatus.PR_OPEN,
             pull_request_number=number,
             pull_request_url=url.strip(),
+        )
+
+    def attach_traceability(
+        self,
+        *,
+        task_id: UUID,
+        commit_sha: str,
+        plan_id: UUID,
+        run_id: UUID | None,
+        worker_agent_id: UUID,
+    ) -> "RepositoryDelivery":
+        """Persist the chain supplied by the owning plan-delivery application."""
+
+        if task_id != self.task_id:
+            raise DeliveryConflict("traceability task does not match candidate task")
+        if commit_sha.strip().lower() != self.commit_sha:
+            raise DeliveryConflict("traceability commit does not match candidate commit")
+        values = (plan_id, run_id, worker_agent_id)
+        current = (self.plan_id, self.run_id, self.worker_agent_id)
+        if any(value is not None for value in current) and current != values:
+            raise DeliveryConflict("candidate traceability is already bound differently")
+        return replace(
+            self,
+            plan_id=plan_id,
+            run_id=run_id,
+            worker_agent_id=worker_agent_id,
         )
 
     def observe_ci(
@@ -476,6 +505,9 @@ class RepositoryDelivery:
             ci_checks=tuple(item.to_view() for item in self.ci_checks),
             required_approvals=self.required_approvals,
             reviews=tuple(item.to_view() for item in self.reviews),
+            plan_id=self.plan_id,
+            run_id=self.run_id,
+            worker_agent_id=self.worker_agent_id,
         )
 
 
