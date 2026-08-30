@@ -20,6 +20,47 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
 
+  agentteams-controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The vendored controller links SQLite through kine; its no-cgo build path
+      # does not compile. Ubuntu runners default to CGO_ENABLED=1, but the
+      # dependency is stated here rather than inherited.
+      CGO_ENABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: components/agentteams/agentteams-controller/go.mod
+          cache-dependency-path: components/agentteams/agentteams-controller/go.sum
+      - name: Controller unit tests
+        working-directory: components/agentteams/agentteams-controller
+        run: make test-unit
+
+  runner-worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOCKER_BUILDKIT: 1
+    steps:
+      - uses: actions/checkout@v4
+      # Built from the repository root: the image installs src/repomesh_runner.
+      # BuildKit picks up components/repomesh-runner/Dockerfile.dockerignore,
+      # which the root .dockerignore would otherwise override.
+      - name: Build the Runner worker image
+        run: docker build -f components/repomesh-runner/Dockerfile -t repomesh-runner:ci .
+      - name: The image carries the Runner and its validation mock
+        run: |
+          docker run --rm --entrypoint python repomesh-runner:ci \
+            -c "import repomesh_runner, httpx; print(repomesh_runner.__name__)"
+          docker run --rm --entrypoint sh repomesh-runner:ci \
+            -c "command -v repomesh-mock-agent"
+      - name: The worker does not carry the RepoMesh application
+        run: |
+          ! docker run --rm --entrypoint python repomesh-runner:ci \
+            -c "import repomesh" 2>/dev/null
+
   postgres-integration:
     runs-on: ubuntu-latest
     services:
