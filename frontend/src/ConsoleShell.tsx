@@ -13,6 +13,7 @@ import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
+import { LocalCliPage } from "./pages/LocalCliPage";
 import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
 import { ObserveHome } from "./pages/observe/ObserveHome";
 import { ObserveLogs } from "./pages/observe/ObserveLogs";
@@ -196,17 +197,28 @@ export default function ConsoleShell() {
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
-    setRoute({ nav, issueId: null, roomId: null, observeSection: null });
+    setRoute({ nav, issueId: null, roomId: null, observeSection: null, settingsSection: null });
+  };
+
+  const openLocalCli = () => {
+    window.location.hash = "#/settings/local-cli";
+    setRoute({
+      nav: "settings",
+      issueId: null,
+      roomId: null,
+      observeSection: null,
+      settingsSection: "local-cli",
+    });
   };
 
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
-    setRoute({ nav: "issues", issueId, roomId: null, observeSection: null });
+    setRoute({ nav: "issues", issueId, roomId: null, observeSection: null, settingsSection: null });
   };
 
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
-    setRoute({ nav: "issues", issueId, roomId, observeSection: null });
+    setRoute({ nav: "issues", issueId, roomId, observeSection: null, settingsSection: null });
   };
 
   /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
@@ -284,6 +296,8 @@ export default function ConsoleShell() {
         onSelectWorkspace={setWorkspaceId}
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
+        localCliActive={route.settingsSection === "local-cli"}
+        onOpenLocalCli={openLocalCli}
         onNewIssue={() => setNewIssueOpen(true)}
         onLogout={handleLogout}
         onToast={showToast}
@@ -353,7 +367,12 @@ export default function ConsoleShell() {
           ) : (
             <ObserveTrace />
           ))}
-        {route.nav === "settings" && <SettingsPage account={account} />}
+        {route.nav === "settings" &&
+          (route.settingsSection === "local-cli" ? (
+            <LocalCliPage />
+          ) : (
+            <SettingsPage account={account} />
+          ))}
       </main>
 
       <NewIssueModal

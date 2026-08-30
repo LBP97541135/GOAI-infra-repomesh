@@ -25,11 +25,23 @@
 | `make_enrollments.py` | 由 binding 应答生成六份 enrollment v2 |
 | `copy_codex_auth.ps1` | D-10：把已登录的 `auth.json` 复制进六个 codex-home |
 | `start_members.ps1` / `stop_members.ps1` | 启停（PID 文件收尾） |
+| `../start-local-cli.ps1` | 面向操作者的一键启动入口；统一 Worker workspace root 后复用 `start_members.ps1` |
 | `preflight_bindings.py` | **R8 只读对账**，任一不符 exit 非零 |
 
 产出目录（binding / enrollment / pid / log）与 env 文件**必须 gitignored**：
 建议 `output/bridge-team/e1/`（仓库根 `.gitignore` 已含 `output/`），
 或本目录下的 `out/`（本目录 `.gitignore` 已含）。
+
+完成下文步骤 1～8 后，日常启动不必再拼长命令：
+
+```powershell
+powershell -NoProfile -File .\scripts\start-local-cli.ps1
+```
+
+这个入口只拉起现有 external member 进程，不 provision、不建 Team、不写数据库。它优先使用
+`REPOMESH_RUNNER_WORKSPACE_ROOT`；未设置时使用仓库同级的 `.repomesh-e1\workspaces`，并把
+同一根传给全部 Worker。可用 `-WorkspaceRoot <控制面根>` 显式覆盖，或先加 `-DryRun` 查看
+将要执行的命令。Leader 永远不会收到 `--workspace-root`。
 
 ---
 
@@ -165,6 +177,7 @@ scripts\bridge-e1\start_members.ps1 -Members scripts\bridge-e1\members.json `
   -EnrollmentDir output\bridge-team\e1\enrollments `
   -EnvFile output\bridge-team\e1-members.env `
   -PidDir output\bridge-team\e1\pids -LogDir output\bridge-team\e1\logs `
+  -WorkspaceRoot D:\Project4work\.repomesh-e1\workspaces `
   -Subset m7 -DryRun      # 先看命令行，再去掉 -DryRun
 ```
 

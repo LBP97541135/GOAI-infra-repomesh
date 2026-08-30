@@ -10,9 +10,9 @@
     it, and that asymmetry is not a convention this script invented. The Bridge
     refuses --workspace-root for a leader outright (cli._governed_workspace_root,
     AC-02): a leader decides and does not code, so the flag is not something it
-    may be given by a copied command line. The roster enforces the same rule at
-    the other end -- a leader entry carrying workspaceRoot is rejected by
-    e1_config.
+    may be given by a copied command line. By default each worker uses the root
+    from the roster. -WorkspaceRoot deliberately overrides every worker with the
+    control plane's shared root, while leaders still receive no repository.
 
     Credentials reach each process through the environment, named by the
     enrollment's env: locators. -EnvFile loads NAME=value lines into this
@@ -32,6 +32,7 @@ param(
     [string]$LogDir,
     [string]$EnvFile,
     [string]$StateDir,
+    [string]$WorkspaceRoot,
     [string]$Subset,
     [string]$Python,
     [switch]$DryRun
@@ -86,10 +87,14 @@ foreach ($member in $selected) {
     $arguments = @("-m", "repomesh_agent_bridge", "run", "--enrollment", $enrollment)
     if ($StateDir) { $arguments += @("--state-dir", $StateDir) }
     if ($member.role -eq "worker") {
-        if (-not (Test-Path -LiteralPath $member.workspaceRoot -PathType Container)) {
-            throw "workspace root is not an existing directory: $($member.workspaceRoot)"
+        $workerWorkspaceRoot = if ($WorkspaceRoot) { $WorkspaceRoot } else { [string]$member.workspaceRoot }
+        if (-not $workerWorkspaceRoot) {
+            throw "workspace root is required for worker $($member.key)"
         }
-        $arguments += @("--workspace-root", $member.workspaceRoot)
+        if (-not $DryRun -and -not (Test-Path -LiteralPath $workerWorkspaceRoot -PathType Container)) {
+            throw "workspace root is not an existing directory: $workerWorkspaceRoot"
+        }
+        $arguments += @("--workspace-root", $workerWorkspaceRoot)
     }
 
     if ($DryRun) {

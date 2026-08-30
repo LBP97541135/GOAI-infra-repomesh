@@ -21,6 +21,7 @@ export const NAV_HASH: Record<NavKey, string> = {
  *  - logs   统一日志（Log：结构化日志查询，含按 Issue 分组视图）
  *  - alerts 在线告警（阈值规则 + 触发历史） */
 export type ObserveSection = "trace" | "usage" | "logs" | "alerts";
+export type SettingsSection = "local-cli";
 
 export const OBSERVE_SECTIONS: ReadonlyArray<ObserveSection> = [
   "trace",
@@ -38,6 +39,8 @@ export interface Route {
   roomId: string | null;
   /** nav === "observe" 时的板块子页；null = 门户总览 */
   observeSection: ObserveSection | null;
+  /** nav === "settings" 时的子页；null = 设置总览 */
+  settingsSection: SettingsSection | null;
 }
 
 /** B7：hash 可能被手改/外部粘贴出裸 `%`——decodeURIComponent 抛 URIError 的话
@@ -61,6 +64,7 @@ export function parseRoute(hash: string): Route {
       issueId: safeDecode(room[1]),
       roomId: safeDecode(room[2]),
       observeSection: null,
+      settingsSection: null,
     };
   }
 
@@ -71,7 +75,18 @@ export function parseRoute(hash: string): Route {
       issueId: safeDecode(detail[1]),
       roomId: null,
       observeSection: null,
+      settingsSection: null,
     };
+
+  if (/^\/settings\/local-cli(?:[/?]|$)/.test(h)) {
+    return {
+      nav: "settings",
+      issueId: null,
+      roomId: null,
+      observeSection: null,
+      settingsSection: "local-cli",
+    };
+  }
 
   // 观测板块子页：#/observe/usage|logs|alerts|trace（未知段回落门户）
   const observe = h.match(/^\/observe\/([^/?]+)/);
@@ -82,12 +97,19 @@ export function parseRoute(hash: string): Route {
       issueId: null,
       roomId: null,
       observeSection: OBSERVE_SECTIONS.includes(section) ? section : null,
+      settingsSection: null,
     };
   }
 
   // 未知 hash 回落到 issue 列表，不留半死路由
   const found = (Object.keys(NAV_HASH) as NavKey[]).find((k) => h.startsWith(NAV_HASH[k].slice(1)));
-  return { nav: found ?? "issues", issueId: null, roomId: null, observeSection: null };
+  return {
+    nav: found ?? "issues",
+    issueId: null,
+    roomId: null,
+    observeSection: null,
+    settingsSection: null,
+  };
 }
 
 export function readRoute(): Route {
