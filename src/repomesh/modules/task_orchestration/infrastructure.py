@@ -749,6 +749,7 @@ class PostgresExecutionPlanStore:
                     ),
                     "tests": list(planned.tests),
                     "test_paths": list(planned.test_paths),
+                    "depends_on": [str(item) for item in planned.depends_on],
                 }
                 for planned in batch
             ]
@@ -813,6 +814,9 @@ class PostgresExecutionPlanStore:
                         # Rows persisted before verification commands existed have no key.
                         tests=tuple(planned.get("tests") or ()),
                         test_paths=tuple(planned.get("test_paths") or ()),
+                        depends_on=tuple(
+                            UUID(str(item)) for item in planned.get("depends_on") or ()
+                        ),
                     )
                     for planned in batch
                 )

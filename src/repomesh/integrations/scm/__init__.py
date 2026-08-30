@@ -38,12 +38,17 @@ from .revert import (
     RevertBranch,
     RevertBranchRequest,
 )
-from .rework import CIReworkTaskCreator, RecoveryConflictTaskCreator
+from .rework import (
+    CIReworkTaskCreator,
+    DeliveryConflictTaskCreator,
+    RecoveryConflictTaskCreator,
+)
 
 __all__ = [
     "BranchPublisher",
     "ChangeSetSCMCoordinator",
     "CIReworkTaskCreator",
+    "DeliveryConflictTaskCreator",
     "RecoveryConflictTaskCreator",
     "RecoveryExecutionContext",
     "GovernedRecoveryActionHandler",

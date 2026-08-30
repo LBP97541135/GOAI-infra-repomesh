@@ -49,6 +49,10 @@ from repomesh.modules.observability.infrastructure.trace_ingest import TraceStor
 from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
+from repomesh.modules.platform_config import (
+    PostgresBootstrapOperationStore,
+    PostgresPlatformCredentialStore,
+)
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTopologyReader,
@@ -399,6 +403,14 @@ class ApplicationContainer:
             session_ttl_seconds=get_settings().local_session_ttl_seconds,
         )
 
+    @cached_service
+    def platform_credential_store(self) -> PostgresPlatformCredentialStore:
+        return PostgresPlatformCredentialStore(self.database)
+
+    @cached_service
+    def bootstrap_operation_store(self) -> PostgresBootstrapOperationStore:
+        return PostgresBootstrapOperationStore(self.database)
+
     def project_topology_creator(self):
         from repomesh.modules.project import CreateProjectAgentTopology
 
@@ -673,6 +685,9 @@ class ApplicationContainer:
     async def is_agentteams_ready(self) -> bool:
         if not self.agentteams_required:
             return True
+        return await self.is_agentteams_available()
+
+    async def is_agentteams_available(self) -> bool:
         return self.agentteams_probe is not None and await self.agentteams_probe.health()
 
     @cached_service
@@ -755,7 +770,11 @@ class ApplicationContainer:
 
     @cached_service
     def delivery_service(self):
-        from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
+        from repomesh.modules.delivery import (
+            DeliveryService,
+            PostgresChangeSetStore,
+            PostgresDeliveryConflictCaseStore,
+        )
 
         validation = self.validation_snapshot_service()
         return DeliveryService(
@@ -766,6 +785,7 @@ class ApplicationContainer:
             contract_catalog=(
                 self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
+            conflict_cases=PostgresDeliveryConflictCaseStore(self.database),
         )
 
     @cached_service
@@ -1464,6 +1484,8 @@ class ApplicationContainer:
                 self.scm_adapter,
                 command_service=self.scm_command_service(),
                 base_branch=get_settings().delivery_base_branch,
+                conflict_cases=self.delivery_conflict_case_store(),
+                conflict_tasks=self.delivery_conflict_task_gateway(),
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
@@ -1485,7 +1507,29 @@ class ApplicationContainer:
             ),
             command_service=self.scm_command_service(),
             base_branch=get_settings().delivery_base_branch,
+            conflict_cases=self.delivery_conflict_case_store(),
+            conflict_tasks=self.delivery_conflict_task_gateway(),
         )
+
+    @cached_service
+    def delivery_conflict_case_store(self):
+        from repomesh.modules.delivery import PostgresDeliveryConflictCaseStore
+
+        return PostgresDeliveryConflictCaseStore(self.database)
+
+    @cached_service
+    def recovery_case_store(self):
+        from repomesh.modules.recovery_management import PostgresRecoveryCaseStore
+
+        return PostgresRecoveryCaseStore(self.database)
+
+    def delivery_conflict_task_gateway(self):
+        from repomesh.integrations.scm import DeliveryConflictTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return DeliveryConflictTaskCreator(tasks, self.topology_reader())
 
     def ci_rework_task_gateway(self):
         """Route a failed delivery candidate back to the repository Worker.
@@ -1705,6 +1749,19 @@ class ApplicationContainer:
     @cached_service
     def execution_plan_observer(self) -> ObserveExecutionPlan:
         return ObserveExecutionPlan(self.execution_plan_store(), self.task_store)
+
+    @cached_service
+    def dynamic_plan_revision_service(self):
+        from repomesh.modules.task_orchestration import (
+            DynamicPlanRevisionService,
+            PostgresExecutionPlanRevisionStore,
+        )
+
+        return DynamicPlanRevisionService(
+            self.execution_plan_store(),
+            PostgresExecutionPlanRevisionStore(self.database),
+            self.topology_reader(),
+        )
 
     def handoff_doc_store(self) -> PostgresHandoffDocStore:
         return PostgresHandoffDocStore(self.database)
@@ -1931,12 +1988,14 @@ class ApplicationContainer:
 
     def runner_gateway(self):
         from repomesh.integrations.runner.gateway import RunnerControlGateway
+        from repomesh.modules.task_orchestration import PostgresTaskAssignmentStore
 
         advancer = self.execution_plan_advancer()
         return RunnerControlGateway(
             PostgresRunnerGatewayStore(self.database),
             self.task_store,
             advancer.on_task_terminal if advancer is not None else None,
+            PostgresTaskAssignmentStore(self.database),
         )
 
     def worker_task_dispatcher(self):
@@ -1960,8 +2019,12 @@ class ApplicationContainer:
             StartWorkerTaskExecution,
         )
         from repomesh.integrations.workspace import GitWorktreeManager
+        from repomesh.modules.agent_runtime import PostgresWorkerExecutionReservationStore
         from repomesh.modules.context.application import PublishContextBundle
-        from repomesh.modules.task_orchestration import TaskExecutionState
+        from repomesh.modules.task_orchestration import (
+            PostgresTaskAssignmentStore,
+            TaskExecutionState,
+        )
 
         states = TaskExecutionState(self.agent_directory, self.task_store)
         execution = StartWorkerTaskExecution(
@@ -1982,6 +2045,12 @@ class ApplicationContainer:
             states,
             self.task_report_gateway,
             dispatches=PostgresRunnerGatewayStore(self.database),
+            reservations=PostgresWorkerExecutionReservationStore(self.database),
+            reservation_lease_seconds=(
+                settings.worker_execution_reservation_lease_seconds
+            ),
+            reservation_wait_seconds=settings.worker_execution_reservation_wait_seconds,
+            assignments=PostgresTaskAssignmentStore(self.database),
         )
 
     async def close(self) -> None:

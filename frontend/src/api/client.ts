@@ -54,6 +54,7 @@ import type {
   SetupStatusView,
   UrlIdentification,
 } from "./contract";
+import { browserApiToken } from "../runtimeConfig";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -108,7 +109,7 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
 export function defaultClient() {
   return createApiClient({
     baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
+    token: browserApiToken(),
   });
 }
 

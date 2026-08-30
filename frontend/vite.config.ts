@@ -1,10 +1,31 @@
+import fs from "node:fs";
+import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-export default defineConfig({
-  plugins: [react(), tailwindcss()],
-  server: {
+function generatedActionToken(): string | null {
+  const secretFile = path.resolve(import.meta.dirname, "../.secrets/platform.env");
+  if (!fs.existsSync(secretFile)) return null;
+  const line = fs
+    .readFileSync(secretFile, "utf8")
+    .split(/\r?\n/)
+    .find((entry) => entry.startsWith("REPOMESH_AGENT_ACTION_TOKEN="));
+  return line?.slice("REPOMESH_AGENT_ACTION_TOKEN=".length).trim() || null;
+}
+
+export default defineConfig(() => {
+  const actionToken = generatedActionToken();
+  return {
+    plugins: [react(), tailwindcss()],
+    // Local platform startup persists the generated action token outside the
+    // frontend tree. Inject it at transform time so the console and API always
+    // share one credential without asking the operator to copy it. Container
+    // builds do not carry this file and keep using VITE_API_TOKEN as before.
+    define: actionToken
+      ? { "import.meta.env.VITE_API_TOKEN": JSON.stringify(actionToken) }
+      : undefined,
+    server: {
     host: "127.0.0.1",
     port: 5280,
     strictPort: true,
@@ -23,5 +44,6 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-  },
+    },
+  };
 });

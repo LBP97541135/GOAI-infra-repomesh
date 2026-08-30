@@ -5,6 +5,7 @@ from uuid import UUID
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanView
 from repomesh.shared.events import EventEnvelope
 
+from .conflicts import DeliveryConflictCase
 from .contracts import ContractView, DeliveryArchiveView, ValidationEvidenceDecision
 from .domain import ChangeSet, SCMCommand, SCMObservation, SCMPollCursor
 
@@ -73,7 +74,40 @@ class SCMCommandStore(Protocol):
 
     async def get_by_idempotency_key(self, key: str) -> SCMCommand | None: ...
 
-    async def update(self, command: SCMCommand, *, expected_version: int) -> None: ...
+    async def claim_batch(
+        self,
+        *,
+        lease_owner: str,
+        lease_seconds: int,
+        max_attempts: int,
+        limit: int,
+    ) -> tuple[SCMCommand, ...]: ...
+
+    async def renew(
+        self,
+        command_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+        lease_seconds: int,
+    ) -> SCMCommand: ...
+
+    async def accept(
+        self,
+        command_id: UUID,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> SCMCommand: ...
+
+    async def fail(
+        self,
+        command_id: UUID,
+        error: str,
+        *,
+        lease_owner: str,
+        fencing_version: int,
+    ) -> SCMCommand: ...
 
     async def list_dispatchable(
         self, *, stale_before: datetime, max_attempts: int, limit: int
@@ -96,6 +130,16 @@ class ExecutionPlanStatusReader(Protocol):
 
 class DeliveryAuditLog(Protocol):
     async def append(self, event: EventEnvelope) -> None: ...
+
+
+class DeliveryConflictCasePort(Protocol):
+    async def active_for(
+        self, change_set_id: UUID, repository_id: UUID
+    ) -> DeliveryConflictCase | None: ...
+
+    async def resolve_for_revision(
+        self, change_set_id: UUID, repository_id: UUID, previous_head_sha: str
+    ) -> None: ...
 
 
 class ValidationSnapshotReader(Protocol):

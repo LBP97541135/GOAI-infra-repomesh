@@ -42,6 +42,10 @@
     "sequence": {"type": "integer", "minimum": 1},
     "occurredAt": {"type": "string", "format": "date-time"},
     "nativeSessionId": {"type": ["string", "null"], "maxLength": 500},
+    "assignmentAttemptId": {"type": ["string", "null"], "format": "uuid"},
+    "assignmentGeneration": {"type": ["integer", "null"], "minimum": 1},
+    "executionId": {"type": ["string", "null"], "format": "uuid"},
+    "executionVersion": {"type": ["integer", "null"], "minimum": 1},
     "payload": {"type": "object"}
   }
 }

@@ -13,8 +13,19 @@ from .application import (
     TaskOrchestrator,
     derive_allowed_paths,
 )
+from .assignment import (
+    AssignmentActorKind,
+    AssignmentAttemptState,
+    AssignmentReason,
+    PostgresTaskAssignmentStore,
+    TaskAssignmentAttempt,
+    TaskAssignmentAttemptRecord,
+)
 from .contracts import (
+    AppendPlanTaskInput,
+    AppendPlanTasksCommand,
     AssignTaskCommand,
+    DynamicPlanRevisionView,
     ExecutionPlanStatus,
     ExecutionPlanStatusSnapshot,
     ExecutionPlanView,
@@ -42,6 +53,11 @@ from .domain import (
     TaskNotFound,
     TaskOrchestrationError,
 )
+from .dynamic_revision import (
+    DynamicPlanRevisionService,
+    ExecutionPlanRevisionRecord,
+    PostgresExecutionPlanRevisionStore,
+)
 from .infrastructure import (
     InMemoryExecutionPlanStore,
     InMemoryLeaderAssignmentStore,
@@ -55,6 +71,11 @@ from .ports import ExecutionPlanStore, LeaderAssignmentStore, TaskStore
 __all__ = [
     "FINAL_TASK_STATUSES",
     "AdvanceExecutionPlan",
+    "AppendPlanTaskInput",
+    "AppendPlanTasksCommand",
+    "AssignmentActorKind",
+    "AssignmentAttemptState",
+    "AssignmentReason",
     "AssignTaskCommand",
     "DecomposeRepositoryTask",
     "DispatchedWorkerTaskReader",
@@ -63,6 +84,9 @@ __all__ = [
     "ExecutionPlanStatusSnapshot",
     "ExecutionPlanStore",
     "ExecutionPlanView",
+    "DynamicPlanRevisionService",
+    "DynamicPlanRevisionView",
+    "ExecutionPlanRevisionRecord",
     "InMemoryExecutionPlanStore",
     "InMemoryLeaderAssignmentStore",
     "InMemoryTaskStore",
@@ -78,7 +102,9 @@ __all__ = [
     "PlannedRepositoryTaskView",
     "ProjectTaskProgress",
     "PostgresExecutionPlanStore",
+    "PostgresExecutionPlanRevisionStore",
     "PostgresLeaderAssignmentStore",
+    "PostgresTaskAssignmentStore",
     "PostgresTaskStore",
     "ReadLeaderAssignment",
     "SubmitRepositoryPlan",
@@ -86,6 +112,8 @@ __all__ = [
     "ReportTaskCommand",
     "RepositoryAssignmentPackage",
     "TaskAssignmentGateway",
+    "TaskAssignmentAttempt",
+    "TaskAssignmentAttemptRecord",
     "TaskConflict",
     "TaskDenied",
     "TaskNotFound",

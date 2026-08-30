@@ -45,16 +45,25 @@ class SCMCommand:
     last_error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     claimed_at: datetime | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
     completed_at: datetime | None = None
 
-    def claim(self, now: datetime) -> "SCMCommand":
-        if self.status not in {SCMCommandStatus.PENDING, SCMCommandStatus.FAILED}:
+    def claim(self, now: datetime, *, owner: str, lease_expires_at: datetime) -> "SCMCommand":
+        if self.status not in {
+            SCMCommandStatus.PENDING,
+            SCMCommandStatus.FAILED,
+            SCMCommandStatus.PROCESSING,
+        }:
             raise DeliveryConflict("SCM command is not claimable")
         return replace(
             self,
             status=SCMCommandStatus.PROCESSING,
             attempts=self.attempts + 1,
             claimed_at=now,
+            lease_owner=owner,
+            lease_expires_at=lease_expires_at,
+            last_error=None,
             version=self.version + 1,
         )
 
@@ -65,6 +74,8 @@ class SCMCommand:
             self,
             status=SCMCommandStatus.ACCEPTED,
             completed_at=now,
+            lease_owner=None,
+            lease_expires_at=None,
             last_error=None,
             version=self.version + 1,
         )
@@ -76,6 +87,8 @@ class SCMCommand:
             self,
             status=SCMCommandStatus.FAILED,
             last_error=error[:2000],
+            lease_owner=None,
+            lease_expires_at=None,
             version=self.version + 1,
         )
 
@@ -93,6 +106,8 @@ class SCMCommand:
             last_error=self.last_error,
             created_at=self.created_at,
             claimed_at=self.claimed_at,
+            lease_owner=self.lease_owner,
+            lease_expires_at=self.lease_expires_at,
             completed_at=self.completed_at,
         )
 

@@ -16,6 +16,7 @@ Record release-facing changes here before the next release.
 **What's New**
 
 - **Optional AgentTeams Dashboard**: Local installation can deploy the AgentTeams Dashboard for visual Worker, Team, Human, Manager, and Matrix management. Dashboard versioning remains independent from the AgentTeams release. ([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+- **Containerized installer workspace volumes**: Non-interactive local installation accepts named Docker volumes for Manager workspace and host-share mounts, allowing a bootstrap container to drive the host Docker daemon without inventing host bind paths. ([RepoMesh bootstrap spec](../../../docs/development/execution-plane-reconciler-implementation-spec.md))
 
 **Bug Fixes**
 
@@ -36,6 +37,7 @@ Record release-facing changes here before the next release.
 **新增功能**
 
 - **可选 AgentTeams Dashboard**：本地安装可部署 AgentTeams Dashboard，用于可视化管理 Worker、Team、Human、Manager 和 Matrix；Dashboard 版本继续与 AgentTeams 版本独立。([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
+- **容器化安装器工作区卷**：非交互本地安装支持为 Manager 工作区和 host-share 使用 Docker 命名卷，使 bootstrap 容器可以驱动宿主 Docker daemon，而无需虚构宿主 bind 路径。([RepoMesh bootstrap 规范](../../../docs/development/execution-plane-reconciler-implementation-spec.md))
 
 **Bug 修复**
 

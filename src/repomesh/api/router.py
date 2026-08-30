@@ -1,8 +1,11 @@
 from fastapi import APIRouter
 
+from repomesh.api.dynamic_plan import router as dynamic_plan_router
 from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
 from repomesh.api.leader_actions import router as leader_actions_router
+from repomesh.api.platform_bootstrap import router as platform_bootstrap_router
+from repomesh.api.platform_credentials import router as platform_credentials_router
 from repomesh.api.platform_setup import router as platform_setup_router
 from repomesh.api.read_models import grid_router, issues_router, rooms_router
 from repomesh.api.read_models import router as delivery_read_model_router
@@ -15,6 +18,7 @@ from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
 from repomesh.modules.identity_access.api import router as identity_console_router
 from repomesh.modules.observability.api.router import router as observability_router
+from repomesh.modules.recovery_management.api import router as recovery_case_router
 from repomesh.modules.repository_intelligence.api.console import (
     router as console_repositories_router,
 )
@@ -26,8 +30,11 @@ from repomesh.modules.repository_intelligence.api.router import (
 )
 
 api_router = APIRouter()
+api_router.include_router(dynamic_plan_router)
 api_router.include_router(health_router)
 api_router.include_router(platform_setup_router)
+api_router.include_router(platform_credentials_router)
+api_router.include_router(platform_bootstrap_router)
 api_router.include_router(worker_mcp_router)
 api_router.include_router(repository_intelligence_router, prefix="/api/v1")
 # Shares the /console prefix with the read model's grid router and with
@@ -59,5 +66,6 @@ api_router.include_router(rooms_router, prefix="/api/v1")
 api_router.include_router(grid_router, prefix="/api/v1")
 api_router.include_router(identity_console_router, prefix="/api/v1")
 api_router.include_router(observability_router, prefix="/api/v1")
+api_router.include_router(recovery_case_router, prefix="/api/v1")
 api_router.include_router(scm_webhook_router, prefix="/api/v1")
 api_router.include_router(scm_reconciliation_router, prefix="/api/v1")

@@ -1,10 +1,15 @@
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID
 
 from repomesh.modules.delivery import DeliveryNotFound, DeliveryService, SCMCommandService
+from repomesh.modules.delivery.conflicts import (
+    DeliveryConflictKind,
+    PostgresDeliveryConflictCaseStore,
+)
 from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     CIObservationCommand,
@@ -111,6 +116,9 @@ class ChangeSetSCMCoordinator:
         branch_publisher: BranchPublisher | None = None,
         command_service: SCMCommandService | None = None,
         base_branch: str = "main",
+        conflict_cases: PostgresDeliveryConflictCaseStore | None = None,
+        conflict_tasks=None,
+        conflict_escalate: Callable[[object, str], Awaitable[None]] | None = None,
     ) -> None:
         self._delivery = delivery
         self._catalog = catalog
@@ -118,6 +126,9 @@ class ChangeSetSCMCoordinator:
         self._branch_publisher = branch_publisher
         self._command_service = command_service
         self._base_branch = base_branch.strip() or "main"
+        self._conflict_cases = conflict_cases
+        self._conflict_tasks = conflict_tasks
+        self._conflict_escalate = conflict_escalate
 
     @property
     def can_mutate(self) -> bool:
@@ -560,6 +571,62 @@ class ChangeSetSCMCoordinator:
             )
             if pull_request.head_sha != candidate.commit_sha.lower():
                 raise SCMConflict("remote PR head SHA differs from the frozen ChangeSet candidate")
+
+            if self._conflict_cases is not None:
+                active_case = await self._conflict_cases.active_for(
+                    change_set_id, candidate.repository_id
+                )
+                if (
+                    active_case is not None
+                    and active_case.candidate_head_sha != candidate.commit_sha
+                ):
+                    await self._conflict_cases.resolve_for_revision(
+                        change_set_id,
+                        candidate.repository_id,
+                        active_case.candidate_head_sha,
+                    )
+
+            conflict_kind = None
+            detail = ""
+            if pull_request.base_sha.lower() != candidate.base_sha.lower():
+                conflict_kind = DeliveryConflictKind.BASE_DRIFT
+                detail = "target branch moved after candidate validation"
+            if pull_request.mergeable is False:
+                conflict_kind = DeliveryConflictKind.CONTENT_CONFLICT
+                detail = "SCM reports the pull request is not mergeable"
+            if conflict_kind is not None and self._conflict_cases is not None:
+                case = await self._conflict_cases.ensure(
+                    change_set_id=change_set_id,
+                    organization_id=current.organization_id,
+                    project_id=current.project_id,
+                    repository_id=candidate.repository_id,
+                    candidate_head_sha=candidate.commit_sha,
+                    kind=conflict_kind,
+                    expected_base_sha=candidate.base_sha,
+                    observed_base_sha=pull_request.base_sha,
+                    detail=detail,
+                )
+                if self._conflict_tasks is not None and case.repair_task_id is None:
+                    try:
+                        repair_task_id = await self._conflict_tasks.create(
+                            current, candidate, case
+                        )
+                        await self._conflict_cases.set_repair_task(case.id, repair_task_id)
+                    except ValueError as error:
+                        if self._conflict_escalate is not None:
+                            await self._conflict_escalate(case, str(error))
+                        logger.warning(
+                            "Delivery conflict could not be assigned case=%s error=%s",
+                            case.id,
+                            type(error).__name__,
+                        )
+                logger.warning(
+                    "Delivery conflict detected change_set=%s repository=%s kind=%s",
+                    change_set_id,
+                    candidate.repository_id,
+                    conflict_kind.value,
+                )
+                continue
 
             for check in await self._adapter.list_check_runs(repository, candidate.commit_sha):
                 if not check.terminal or check.head_sha != candidate.commit_sha.lower():

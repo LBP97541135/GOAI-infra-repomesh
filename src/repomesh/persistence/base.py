@@ -23,6 +23,7 @@ BUSINESS_SCHEMAS = (
     "delivery",
     "observability",
     "identity_access",
+    "recovery_management",
 )
 PLATFORM_SCHEMA = "platform"
 ALL_SCHEMAS = (*BUSINESS_SCHEMAS, PLATFORM_SCHEMA)

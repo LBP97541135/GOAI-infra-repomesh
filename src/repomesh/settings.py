@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     app_name: str = "RepoMesh"
     environment: Literal["development", "test", "staging", "production"] = "development"
     log_level: str = "INFO"
+    supervised: bool = False
     database_url: str = "postgresql+asyncpg://repomesh:repomesh@localhost:5432/repomesh"
     local_session_ttl_seconds: int = Field(default=28800, ge=300, le=604800)
     agentteams_required: bool = False
@@ -65,6 +66,13 @@ class Settings(BaseSettings):
     mcp_gateway_tokens: tuple[str, ...] = ()
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
+    worker_execution_reservation_lease_seconds: int = Field(default=300, ge=30)
+    worker_execution_reservation_wait_seconds: int = Field(default=30, ge=1)
+    worker_recovery_enabled: bool = False
+    worker_recovery_scan_interval_seconds: int = Field(default=15, ge=5)
+    worker_recovery_grace_seconds: int = Field(default=60, ge=10)
+    worker_recovery_max_execution_attempts: int = Field(default=3, ge=1)
+    worker_recovery_max_reassignments: int = Field(default=2, ge=0)
     capability_root: Path = Path(".")
     # OTLP/HTTP collector base URL (e.g. a local AgentScope Studio). None keeps
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.
@@ -123,6 +131,8 @@ class Settings(BaseSettings):
     scm_poll_interval_seconds: int = Field(default=60, ge=5)
     scm_poll_scan_interval_seconds: int = Field(default=15, ge=5)
     scm_command_dispatch_interval_seconds: int = Field(default=5, ge=1)
+    scm_command_lease_seconds: int = Field(default=300, ge=10)
+    scm_command_lease_renew_interval_seconds: int = Field(default=60, ge=1)
 
 
 @lru_cache

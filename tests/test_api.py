@@ -36,6 +36,21 @@ def test_first_run_setup_status_and_coding_agent_probe(
             "repositories": 0,
         }
         assert "administrator" in status.json()["next_actions"]
+        dependencies = {item["id"]: item for item in status.json()["dependencies"]}
+        assert dependencies["database"] == {
+            "id": "database",
+            "state": "ready",
+            "owner": "system",
+            "remediation": "automatic",
+            "required": True,
+            "message": "managed by the RepoMesh product launcher",
+        }
+        assert dependencies["agentteams"]["state"] == "missing"
+        assert dependencies["model"]["owner"] == "user"
+        assert dependencies["model"]["state"] in {"ready", "waiting_for_user"}
+        assert dependencies["github_app"]["state"] in {"ready", "optional"}
+        assert dependencies["repositories"]["state"] == "pending_onboarding"
+        assert dependencies["repositories"]["required"] is False
 
         probes = client.get("/api/v1/setup/coding-agents")
         assert probes.status_code == 200
