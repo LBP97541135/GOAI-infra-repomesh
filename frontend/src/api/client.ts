@@ -15,9 +15,11 @@ import type {
   DiscoveryCandidatesRequest,
   DiscoveryMaterializeRequest,
   DiscoveryMaterializeResult,
+  DiscoveryReadinessView,
   DiscoveryStepRequest,
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
+  ExternalMemberReadinessResponse,
   AlertEventsResponse,
   AlertRule,
   AlertRulePayload,
@@ -58,12 +60,18 @@ import type {
 export class ApiError extends Error {
   readonly status: number;
   readonly url: string;
+  /** FastAPI `detail` 的**原件**（解析过的 JSON 值；非 JSON 体时是响应原文）。
+   *  `message` 里那份是它的字符串化版本，够显示不够消费：结构化 detail
+   *  （物化的 `external_members_not_ready`）要按字段渲染，JSON.stringify 之后
+   *  那份结构就只剩一坨字。连不上时为 null——那一次根本没有响应体。 */
+  readonly detail: unknown;
 
-  constructor(status: number, url: string, message: string) {
+  constructor(status: number, url: string, message: string, detail: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.url = url;
+    this.detail = detail;
   }
 }
 
@@ -84,21 +92,25 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
   try {
     res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch (cause) {
-    throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`);
+    throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`, null);
   }
   if (!res.ok) {
-    // FastAPI 错误体 {"detail": "<message>"}（422 时 detail 为数组）
+    // FastAPI 错误体 {"detail": "<message>"}（422 时 detail 为数组，物化就绪拒绝时为对象）
     const raw = await res.text().catch(() => "");
-    let detail = raw;
+    let detail: unknown = raw;
     try {
       const parsed = JSON.parse(raw) as { detail?: unknown };
-      if (parsed.detail !== undefined) {
-        detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail);
-      }
+      if (parsed.detail !== undefined) detail = parsed.detail;
     } catch {
       /* 非 JSON 体，原样展示 */
     }
-    throw new ApiError(res.status, url, `${method} ${path} → HTTP ${res.status}${detail ? ` · ${detail.slice(0, 200)}` : ""}`);
+    const text = typeof detail === "string" ? detail : JSON.stringify(detail);
+    throw new ApiError(
+      res.status,
+      url,
+      `${method} ${path} → HTTP ${res.status}${text ? ` · ${text.slice(0, 200)}` : ""}`,
+      detail,
+    );
   }
   return (await res.json()) as T;
 }
@@ -265,6 +277,19 @@ export function createApiClient(config: ApiClientConfig) {
      *  伪装成系统故障。 */
     postDiscoveryMaterialize: (issueId: string, payload: DiscoveryMaterializeRequest) =>
       request<DiscoveryMaterializeResult>(config, "POST", `/issues/${issueId}/discovery/materialize`, payload),
+
+    /* ── 本机 CLI 成员就绪 ──────────────────────────────────────────────── */
+
+    /** 物化前的就绪预检。**无副作用**（不消费草稿、不写回执），成员集合由服务端从
+     *  目录派生——前端不传成员名单，也不自己算谁该在场。404 = 该 issue 没有进行中的
+     *  发现轮次（此时空列表会被读成「大家都就绪」，所以服务端宁可 404）。 */
+    getDiscoveryReadiness: (issueId: string) =>
+      request<DiscoveryReadinessView>(config, "GET", `/issues/${issueId}/discovery/readiness`),
+
+    /** 全体外部成员的租约状态板（本地 CLI 页轮询）。路径里两段 v1 不是笔误：
+     *  `/api/v1` 是全站前缀，`/runtime/v1` 是 runtime 面自己的版本段。 */
+    getExternalMemberReadiness: () =>
+      request<ExternalMemberReadinessResponse>(config, "GET", `/runtime/v1/external-members/readiness`),
 
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),

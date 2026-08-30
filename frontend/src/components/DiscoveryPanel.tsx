@@ -7,12 +7,14 @@ import type {
   DiscoveryTaskView,
   DiscoveryTier,
   DiscoveryView,
+  ExternalMembersNotReadyDetail,
 } from "../api/contract";
 import type { PlanAnchor } from "../types";
 import { ApiError } from "../api/client";
 import { AuthError } from "../api/auth";
 import { fetchPolicyDraft } from "../api/humanControl";
 import {
+  externalMembersNotReady,
   fetchDiscovery,
   fetchDiscoveryTask,
   materializeDiscovery,
@@ -327,6 +329,10 @@ export function DiscoveryPanel({
    *  writeError 不是同一个位置（关掉弹窗就看不见了，那才是真的静默失败）。 */
   const [materializeOpen, setMaterializeOpen] = useState(false);
   const [materializeError, setMaterializeError] = useState<string | null>(null);
+  /** 同一次拒绝的**结构化**那一半（本机 CLI 未就绪 409）。与上面的原文并存而不是
+   *  替代它：其余 409 依旧只有原文，而这一族的每个字段都是解法的一部分，
+   *  字符串化之后就只剩一坨 JSON。两个 state 永远同生同灭。 */
+  const [materializeNotReady, setMaterializeNotReady] = useState<ExternalMembersNotReadyDetail | null>(null);
 
   /** 监管策略草稿（5-1b · F4）。**取数放在本面板而不是容器**：卡片、配置弹窗与物化
    *  弹窗三处要的是同一份，而后两者的其余入参（`effective_tiers`、`task_dag_count`）
@@ -381,6 +387,7 @@ export function DiscoveryPanel({
     setTaskLost(false);
     setMaterializeOpen(false);
     setMaterializeError(null);
+    setMaterializeNotReady(null);
     setPolicyDialogOpen(false);
     keys.current = {};
   }, [issueId]);
@@ -611,12 +618,14 @@ export function DiscoveryPanel({
   const openMaterialize = () => {
     takeKey("materialize");
     setMaterializeError(null);
+    setMaterializeNotReady(null);
     setMaterializeOpen(true);
   };
 
   const closeMaterialize = () => {
     setMaterializeOpen(false);
     setMaterializeError(null);
+    setMaterializeNotReady(null);
     dropKey("materialize");
   };
 
@@ -624,6 +633,7 @@ export function DiscoveryPanel({
     if (!agentId) return;
     setBusy("materialize");
     setMaterializeError(null);
+    setMaterializeNotReady(null);
     materializeDiscovery(issueId, { created_by_agent_id: agentId, idempotency_key: takeKey("materialize") })
       .then((result) => {
         dropKey("materialize");
@@ -639,8 +649,12 @@ export function DiscoveryPanel({
         setReload((n) => n + 1);
       })
       // 409（检查点未过 / 计划未生成…）、403、404 一律服务端 detail 原文进弹窗，
-      // 不翻译不软化——归并成一句「物化失败」会把可自助解决的前置问题伪装成故障
-      .catch((err: unknown) => setMaterializeError(errText(err)))
+      // 不翻译不软化——归并成一句「物化失败」会把可自助解决的前置问题伪装成故障。
+      // 就绪那一族多取一份结构化 detail：解法在成员行里，原文里它是一坨 JSON。
+      .catch((err: unknown) => {
+        setMaterializeNotReady(externalMembersNotReady(err));
+        setMaterializeError(errText(err));
+      })
       .finally(() => setBusy(null));
   };
 
@@ -1041,6 +1055,7 @@ export function DiscoveryPanel({
 
       <MaterializeModal
         open={materializeOpen}
+        issueId={issueId}
         planVersion={view.plan_version}
         // N 取服务端计数。integration 为 null 时不该走到这（step 4 且 done 意味着
         // 集成已落），兜底显 0 而不是编一个数
@@ -1051,6 +1066,7 @@ export function DiscoveryPanel({
         principal={approvalPrincipal(mode, principalResolving, principal)}
         submitting={busy === "materialize"}
         errorText={materializeError}
+        notReady={materializeNotReady}
         onCancel={closeMaterialize}
         onConfirm={handleMaterialize}
       />
