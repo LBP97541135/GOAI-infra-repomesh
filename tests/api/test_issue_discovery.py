@@ -59,7 +59,13 @@ CANDIDATES = json.dumps(
 )
 
 
-def _confirmation(status: str, *, reason: str = "在改动范围内") -> str:
+def _confirmation(
+    status: str,
+    *,
+    reason: str = "在改动范围内",
+    depends_on: tuple[str, ...] = (),
+    impacts: tuple[str, ...] = (),
+) -> str:
     return json.dumps(
         {
             "status": status,
@@ -68,6 +74,8 @@ def _confirmation(status: str, *, reason: str = "在改动范围内") -> str:
             "plan_summary": "调整通知模板",
             "changed_apis": ["/api/v1/notify"],
             "changed_modules": ["notify"],
+            "depends_on": list(depends_on),
+            "impacts": list(impacts),
             "risk": "low",
         },
         ensure_ascii=False,
@@ -308,7 +316,7 @@ def test_the_chain_walks_four_steps_and_lands_on_one_snapshot(
         ANALYSIS_OK,
         CANDIDATES,
         _confirmation("REQUIRED"),
-        _confirmation("MAYBE"),
+        _confirmation("MAYBE", depends_on=("ts-notify",)),
         INTEGRATION,
     ))
     try:
@@ -399,10 +407,10 @@ def test_the_chain_walks_four_steps_and_lands_on_one_snapshot(
             # scanned facts and model semantics — not from the scan alone.
             # Neither seeded repository declares a dependency on the other, so
             # the scan contributes no edge and would batch them in parallel;
-            # but the model states a contract (ts-notify → ts-order) and the
-            # matching depends_on, and contract ⇒ serialization, so that pair
-            # becomes one confirmed ``llm`` edge and the batches are two. Same
-            # rule as test_plan_integration.py's
+            # but the model states a contract (ts-notify → ts-order) grounded
+            # by ts-order's approved plan naming ts-notify in depends_on, so
+            # that pair becomes one confirmed ``llm`` edge and the batches are
+            # two. Same rule as test_plan_integration.py's
             # test_llm_depends_on_new_edge_enters_batches.
             assert final["integration"] == {
                 "task_dag_count": 2,
@@ -1028,7 +1036,11 @@ def test_an_approvers_retier_survives_as_evidence_and_reaches_the_plan(
     container = replace(application_container, llm_client=ScriptedLLM(
         ANALYSIS_OK,
         CANDIDATES,
-        _confirmation("REQUIRED"),
+        # The excluded repository's plan is discarded by design, so the edge
+        # evidence must live on the producer's side: ts-notify names ts-order
+        # in ``impacts``, which is what grounds the LLM edge after the
+        # approver promotes ts-order back into scope.
+        _confirmation("REQUIRED", impacts=("ts-order",)),
         _confirmation("EXCLUDED", reason="看起来无关"),
         INTEGRATION,
     ))
