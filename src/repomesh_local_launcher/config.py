@@ -37,8 +37,10 @@ one relative would mean two different files answering to the same config.
     A roster tag. When present the launcher sees only the members carrying it,
     so status, start and stop all mean the same set of members.
 ``rosterVersion``
-    An opaque string the Console echoes and derives its start key from (FR-10).
-    The launcher does not interpret it.
+    An opaque string the Console displays, so an operator can tell which roster
+    the members on the page came from. The launcher does not interpret it, and
+    nothing keys off it: not starting a member twice is decided by looking at
+    the machine, not by a version string.
 ``allowedOrigins``
     The exact ``Origin`` values a write may come from.
 ``port``

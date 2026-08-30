@@ -289,6 +289,26 @@ def test_start_leaves_a_running_member_alone_and_brings_the_others_up(
     assert "alpha-leader" not in host.started()
 
 
+def test_a_second_start_on_a_fleet_that_is_already_up_invokes_nothing(
+    unblocked_plane: WindowsMemberProcessPlane, host: FakeHost
+) -> None:
+    """The other half of AC-01: pressing it again produces no second Bridge.
+
+    The test above shows one member being skipped; this is the case the
+    acceptance sentence is actually about, because after a start every member is
+    that member. Only the stateful fake can say it -- the first call left real
+    PID files and real command lines on the machine, so a plane that decided
+    from anything but a fresh sweep would spawn the whole roster a second time
+    here, and the count is what shows it did not.
+    """
+    unblocked_plane.start_all()
+    after_the_first_click = len(host.invocations)
+
+    unblocked_plane.start_all()
+
+    assert len(host.invocations) == after_the_first_click
+
+
 def test_start_answers_with_the_status_from_after_the_work(
     unblocked_plane: WindowsMemberProcessPlane, host: FakeHost
 ) -> None:

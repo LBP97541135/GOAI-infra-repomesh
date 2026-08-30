@@ -155,8 +155,11 @@ def _answer(config: LauncherConfig, members: tuple[MemberProcess, ...]) -> dict[
     config, because that is what keeps FR-09's "no credential env, no token, no
     ``auth.json``, no process environment" from depending on nobody ever adding a
     field somewhere else. The env file's path is configuration this function can
-    see and deliberately does not mention. ``rosterVersion`` is here because the
-    Console derives its start key from it (FR-10); the launcher never reads it.
+    see and deliberately does not mention. ``rosterVersion`` is here to be shown
+    and to say which roster these members came from; nothing keys off it. Not
+    starting a member twice is settled by looking -- the PID file's number and
+    the command line that process answers with -- and a version string is not
+    part of that, on this side or the Console's.
     """
     return {
         "rosterVersion": config.roster_version,

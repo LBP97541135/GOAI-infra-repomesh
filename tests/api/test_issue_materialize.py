@@ -2079,9 +2079,11 @@ def test_starting_the_missing_members_lets_the_same_key_finish_the_round(
     A blocked receipt is deliberately not a failed one, and this is the
     difference in behaviour. ``_replay`` hands back only a ``materialized``
     receipt, so the same key runs the whole path again rather than replaying a
-    refusal — and ``_prefix`` lends a prefix only after a ``failed`` receipt, so
-    the round is not carrying the first attempt's key namespace for a first
-    attempt that wrote nothing.
+    refusal. ``_prefix`` draws its line elsewhere: both refusals lend, so a
+    blocked round's prefix carries into whatever comes next and the second
+    attempt repairs that round instead of racing it — and only a
+    ``materialized`` receipt, or none at all, mints a fresh namespace from the
+    caller's own key.
 
     The counters are the assertion. Both attempts answer about the same two
     teams, so equality of the response proves nothing; that the topology row is
