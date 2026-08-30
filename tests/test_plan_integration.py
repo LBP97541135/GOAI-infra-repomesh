@@ -49,7 +49,13 @@ class StubLLM:
         return self._response
 
 
-def _make_result(repo: str, status: str = "REQUIRED") -> ConfirmationResult:
+def _make_result(
+    repo: str,
+    status: str = "REQUIRED",
+    *,
+    depends_on: tuple[str, ...] = ("ts-common",),
+    impacts: tuple[str, ...] = (),
+) -> ConfirmationResult:
     return ConfirmationResult(
         repository=repo,
         status=status,
@@ -59,8 +65,8 @@ def _make_result(repo: str, status: str = "REQUIRED") -> ConfirmationResult:
         plan=RepositoryPlan(
             changed_apis=("GET /api/v1/endpoint",),
             changed_modules=("src/main",),
-            depends_on=("ts-common",),
-            impacts=(),
+            depends_on=depends_on,
+            impacts=impacts,
             risk="low",
         ),
     )
@@ -705,7 +711,10 @@ class TestGraphAssistedIntegration:
 
         plan = service.integrate(
             "requirement",
-            _make_summary(_make_result("A"), _make_result("B")),
+            _make_summary(
+                _make_result("A"),
+                _make_result("B", depends_on=("A",)),
+            ),
         )
 
         # The LLM-discovered dependency is a confirmed llm edge and therefore
@@ -713,3 +722,79 @@ class TestGraphAssistedIntegration:
         assert plan.execution_batches == [["A"], ["B"]]
         assert [e.source for e in plan.graph.edges] == ["llm"]
         assert integration_method(plan.graph) == "llm_only"
+
+    def test_ungrounded_llm_edge_does_not_serialize_parallel_consumers(self):
+        pricing = "repomesh-e2e-pricing-core"
+        billing = "repomesh-e2e-billing"
+        checkout = "repomesh-e2e-checkout"
+        graph_service = StubGraphService(
+            edges=[],
+            batches=[[pricing, billing, checkout]],
+        )
+        llm = StubLLM(
+            _llm_response(
+                task_dag=[
+                    {
+                        "repository": pricing,
+                        "instruction": "extend pricing contract",
+                        "depends_on": [],
+                    },
+                    {
+                        "repository": billing,
+                        "instruction": "render invoice precision",
+                        "depends_on": [checkout, pricing],
+                    },
+                    {
+                        "repository": checkout,
+                        "instruction": "pass currency through checkout",
+                        "depends_on": [pricing],
+                    },
+                ],
+                contracts=[
+                    {
+                        "producer": checkout,
+                        "consumer": billing,
+                        "interface": "POST /checkout",
+                        "agreement": "invented cross-consumer flow",
+                    },
+                    {
+                        "producer": pricing,
+                        "consumer": billing,
+                        "interface": "GET /pricing/rounding-rules",
+                        "agreement": "billing consumes pricing precision",
+                    },
+                    {
+                        "producer": pricing,
+                        "consumer": checkout,
+                        "interface": "POST /quote",
+                        "agreement": "checkout consumes pricing quote",
+                    },
+                ],
+            )
+        )
+        service = PlanIntegrationService(llm, graph=graph_service)
+
+        plan = service.integrate(
+            "multi-currency precision",
+            _make_summary(
+                _make_result(
+                    pricing,
+                    depends_on=(),
+                    impacts=(billing, checkout),
+                ),
+                _make_result(billing, depends_on=(pricing,)),
+                # Reproduce the weak aliases returned by the R2 confirmation
+                # model.  They are not exact approved repository identities.
+                _make_result(checkout, depends_on=("pricing-core", "billing")),
+            ),
+        )
+
+        assert plan.execution_batches == [[pricing], [billing, checkout]]
+        assert {(e.from_, e.to) for e in plan.graph.edges} == {
+            (pricing, billing),
+            (pricing, checkout),
+        }
+        assert {(c.producer, c.consumer) for c in plan.contracts} == {
+            (pricing, billing),
+            (pricing, checkout),
+        }
