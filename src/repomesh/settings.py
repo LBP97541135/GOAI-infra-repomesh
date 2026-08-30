@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     #: needs (ADR 0004 decision 6). Kept as an env document rather than a table
     #: because issuance is a deployment act this round, not a product feature.
     runner_worker_tokens: str | None = None
+    #: How long an external member's readiness report is believed for. Short on
+    #: purpose: the lease is the only evidence that a Bridge on somebody's own
+    #: machine is still running, and a long one is a promise about a process
+    #: nobody has heard from. A reporter is told to renew after a third of it,
+    #: so it may miss two reports before its lease runs out.
+    external_readiness_ttl_seconds: int = 45
     agent_action_token: str | None = None
     #: Hosts POST /repositories/scan-org may reach, comma separated. Anything
     #: else is refused before a request leaves this process.

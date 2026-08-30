@@ -1929,6 +1929,26 @@ class ApplicationContainer:
             checkpoints=self.project_checkpoint_service(),
         )
 
+    @cached_service
+    def external_member_readiness_store(self):
+        """The readiness lease table, and there is exactly one of it.
+
+        Cached for the process lifetime because the store *is* the state: a
+        factory that built a new one per request would answer an empty table to
+        every reader, and a per-request lock guards nothing. Being a process
+        singleton is also the whole extent of its durability — the leases are
+        held in memory on purpose (see ``application/readiness``), so a restart
+        empties the table and the next round of renews refills it.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            ExternalMemberReadinessStore,
+        )
+
+        return ExternalMemberReadinessStore(
+            ttl_seconds=get_settings().external_readiness_ttl_seconds
+        )
+
     def runner_gateway(self):
         from repomesh.integrations.runner.gateway import RunnerControlGateway
 
