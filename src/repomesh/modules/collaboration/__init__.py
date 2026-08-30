@@ -26,6 +26,7 @@ from .contracts import (
 )
 from .domain import (
     CollaborationConflict,
+    CollaborationDeliveryDeferred,
     CollaborationDenied,
     CollaborationError,
     CollaborationRouteUnavailable,
@@ -46,6 +47,7 @@ __all__ = [
     "ROOM_REPORT_IGNORED_REASON",
     "AuthorizedRoom",
     "CollaborationConflict",
+    "CollaborationDeliveryDeferred",
     "CollaborationDeliveryStatus",
     "CollaborationDeliveryRetryWorker",
     "CollaborationDenied",

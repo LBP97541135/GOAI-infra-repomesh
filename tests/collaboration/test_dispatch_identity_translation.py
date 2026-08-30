@@ -11,9 +11,11 @@ nothing here touches a network) through the composition root's wrapper and out
 the far side as the collaboration port's own retryable refusal.
 """
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 from test_orchestration_flow import build_flow
 
@@ -23,8 +25,13 @@ from repomesh.integrations.agentteams.control_plane import (
     AgentTeamsResponseError,
     AgentTeamsUnavailable,
 )
+from repomesh.integrations.agentteams.identity import (
+    AgentTeamsRecipientMatrixIdentityResolver,
+)
 from repomesh.integrations.agentteams.matrix import AgentTeamsMatrixClient
+from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.collaboration import (
+    CollaborationDeliveryDeferred,
     CollaborationMessageKind,
     SendCollaborationMessageCommand,
 )
@@ -48,11 +55,30 @@ class _ControlPlaneWithoutIdentity:
         return SimpleNamespace(name=name, matrix_user_id=self.matrix_user_id)
 
 
+class _ControlPlaneWithManagerIdentity:
+    """The live AgentTeams shape for an Organization Leader recipient."""
+
+    def __init__(self) -> None:
+        self.worker_lookups: list[str] = []
+        self.manager_lookups: list[str] = []
+
+    async def get_worker(self, name: str):
+        self.worker_lookups.append(name)
+        return None
+
+    async def get_manager(self, name: str):
+        self.manager_lookups.append(name)
+        return SimpleNamespace(
+            name=name,
+            matrix_user_id=f"@{name}:matrix.local",
+        )
+
+
 def _client(control_plane) -> AgentTeamsMatrixClient:
     return AgentTeamsMatrixClient(
         "http://matrix.invalid",
         "test-token",
-        control_plane=control_plane,
+        recipient_identity_resolver=AgentTeamsRecipientMatrixIdentityResolver(control_plane),
     )
 
 
@@ -69,6 +95,7 @@ async def test_a_recipient_without_a_matrix_identity_is_a_route_refusal() -> Non
             "do the thing",
             transaction_id="txn-1",
             recipient_resource_name="repomesh-worker-b-checkout",
+            recipient_role=AgentRole.WORKER,
         )
 
     # The server's own sentence, unreworded — it is the whole actionable
@@ -77,6 +104,51 @@ async def test_a_recipient_without_a_matrix_identity_is_a_route_refusal() -> Non
     # And it is still an AgentTeams refusal underneath, for anyone reading logs.
     assert isinstance(raised.value.__cause__, AgentTeamsUnavailable)
     assert control_plane.asked == ["repomesh-worker-b-checkout"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "role",
+    [AgentRole.REPOSITORY_LEADER, AgentRole.WORKER],
+)
+async def test_non_manager_recipient_roles_use_the_worker_collection(role: AgentRole) -> None:
+    control_plane = _ControlPlaneWithManagerIdentity()
+    resolver = AgentTeamsRecipientMatrixIdentityResolver(control_plane)
+
+    resolved = await resolver.resolve(role, "native-repository-member")
+
+    assert resolved is None
+    assert control_plane.worker_lookups == ["native-repository-member"]
+    assert control_plane.manager_lookups == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recipient_resource_name", "recipient_role", "error", "message"),
+    [
+        ("native-worker", None, ValueError, "recipient_role is required"),
+        (None, AgentRole.WORKER, ValueError, "recipient_resource_name is required"),
+        ("native-worker", AgentRole.WORKER, RuntimeError, "resolver is required"),
+    ],
+)
+async def test_recipient_identity_configuration_fails_closed(
+    recipient_resource_name: str | None,
+    recipient_role: AgentRole | None,
+    error: type[Exception],
+    message: str,
+) -> None:
+    client = AgentTeamsMatrixClient("http://matrix.invalid", "test-token")
+    try:
+        with pytest.raises(error, match=message):
+            await client.send_task(
+                "!room:matrix.local",
+                "do the thing",
+                transaction_id="txn-invalid-recipient",
+                recipient_resource_name=recipient_resource_name,
+                recipient_role=recipient_role,
+            )
+    finally:
+        await client.close()
 
 
 @pytest.mark.asyncio
@@ -114,9 +186,17 @@ async def test_a_reachable_recipient_is_passed_straight_through() -> None:
             self.calls: list[tuple] = []
 
         async def send_task(
-            self, room_id, body, *, transaction_id, recipient_resource_name=None
+            self,
+            room_id,
+            body,
+            *,
+            transaction_id,
+            recipient_resource_name=None,
+            recipient_role=None,
         ) -> str:
-            self.calls.append((room_id, body, transaction_id, recipient_resource_name))
+            self.calls.append(
+                (room_id, body, transaction_id, recipient_resource_name, recipient_role)
+            )
             return "$event-1"
 
         @property
@@ -131,10 +211,19 @@ async def test_a_reachable_recipient_is_passed_straight_through() -> None:
         "body",
         transaction_id="txn-1",
         recipient_resource_name="repomesh-worker-1",
+        recipient_role=AgentRole.WORKER,
     )
 
     assert event_id == "$event-1"
-    assert inner.calls == [("!room:matrix.local", "body", "txn-1", "repomesh-worker-1")]
+    assert inner.calls == [
+        (
+            "!room:matrix.local",
+            "body",
+            "txn-1",
+            "repomesh-worker-1",
+            AgentRole.WORKER,
+        )
+    ]
     # Everything that is not delivery is still the gateway's own.
     assert messenger.whoami == "@repomesh:matrix.local"
 
@@ -176,7 +265,7 @@ async def test_the_module_sees_the_refusal_and_leaves_a_failed_message() -> None
         body="Own the repository-level pricing change.",
     )
 
-    with pytest.raises(CollaborationRouteUnavailable) as raised:
+    with pytest.raises(CollaborationDeliveryDeferred) as raised:
         await collaboration.send(command, idempotency_key="a-6-dispatch")
 
     assert "Matrix identity is unavailable" in str(raised.value)
@@ -185,3 +274,66 @@ async def test_the_module_sees_the_refusal_and_leaves_a_failed_message() -> None
     failed = await collaboration._store.list_failed()
     assert len(failed) == 1
     assert failed[0][0].task_id == command.task_id
+    assert raised.value.message_id == failed[0][0].id
+
+
+@pytest.mark.asyncio
+async def test_a_repository_leader_report_resolves_its_manager_as_a_manager() -> None:
+    """D-M7-1: the final Leader -> Manager hop uses the Manager collection.
+
+    Organization Leaders are AgentTeams Manager resources, not Workers.  This
+    drives the same Collaboration -> Matrix path as the live review roll-up;
+    asking ``get_worker`` for the recipient is therefore the exact defect, not
+    a nearby adapter detail.
+    """
+
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"event_id": "$manager-report"})
+
+    control_plane = _ControlPlaneWithManagerIdentity()
+    client = AgentTeamsMatrixClient(
+        "http://matrix.invalid",
+        "test-token",
+        transport=httpx.MockTransport(handler),
+        recipient_identity_resolver=AgentTeamsRecipientMatrixIdentityResolver(
+            control_plane
+        ),
+    )
+    try:
+        (
+            organization_id,
+            repository_id,
+            project_id,
+            organization_leader,
+            repository_team,
+            _messenger,
+            collaboration,
+            _orchestrator,
+            _directory,
+            _topologies,
+        ) = await build_flow(messenger=collaboration_routed_messenger(client))
+
+        delivered = await collaboration.send(
+            SendCollaborationMessageCommand(
+                organization_id=organization_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                task_id=uuid4(),
+                sender_agent_id=repository_team.leader.id,
+                recipient_agent_id=organization_leader.id,
+                kind=CollaborationMessageKind.TASK_REPORT,
+                subject="Repository review approved",
+                body="All worker evidence passed review.",
+            ),
+            idempotency_key="d-m7-1-manager-report",
+        )
+    finally:
+        await client.close()
+
+    assert delivered.event_id == "$manager-report"
+    assert control_plane.manager_lookups == ["native-org-leader"]
+    assert control_plane.worker_lookups == []
+    assert sent[0]["m.mentions"]["user_ids"] == ["@native-org-leader:matrix.local"]

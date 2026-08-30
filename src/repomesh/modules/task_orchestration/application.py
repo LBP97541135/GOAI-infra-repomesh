@@ -12,6 +12,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.collaboration.contracts import (
+    CollaborationDeliveryDeferred,
     CollaborationGateway,
     CollaborationMessageKind,
     SendCollaborationMessageCommand,
@@ -629,21 +630,30 @@ class TaskOrchestrator:
             if command.status is TaskStatus.BLOCKED
             else CollaborationMessageKind.TASK_REPORT
         )
-        await self._collaboration.send(
-            SendCollaborationMessageCommand(
-                organization_id=task.organization_id,
-                project_id=task.project_id,
-                repository_id=task.repository_id,
-                task_id=task.id,
-                sender_agent_id=task.assignee_agent_id,
-                recipient_agent_id=task.assigned_by_agent_id,
-                kind=kind,
-                subject=f"{task.title}: {updated.status.value}",
-                body=command.summary.strip(),
-                correlation_id=task.id,
-            ),
-            idempotency_key=f"{idempotency_key}:message",
-        )
+        try:
+            await self._collaboration.send(
+                SendCollaborationMessageCommand(
+                    organization_id=task.organization_id,
+                    project_id=task.project_id,
+                    repository_id=task.repository_id,
+                    task_id=task.id,
+                    sender_agent_id=task.assignee_agent_id,
+                    recipient_agent_id=task.assigned_by_agent_id,
+                    kind=kind,
+                    subject=f"{task.title}: {updated.status.value}",
+                    body=command.summary.strip(),
+                    correlation_id=task.id,
+                ),
+                idempotency_key=f"{idempotency_key}:message",
+            )
+        except CollaborationDeliveryDeferred as error:
+            logging.getLogger(__name__).warning(
+                "task report accepted while collaboration delivery awaits retry",
+                extra={
+                    "task_id": str(task.id),
+                    "collaboration_message_id": str(error.message_id),
+                },
+            )
         if reporter.role is AgentRole.REPOSITORY_LEADER and command.status in {
             TaskStatus.BLOCKED,
             TaskStatus.FAILED,
@@ -2049,15 +2059,29 @@ class SubmitRepositoryReview:
                 if decision.verdict is LeaderReviewVerdict.APPROVE
                 else TaskStatus.BLOCKED
             )
-            await self._reporter.report(
-                ReportTaskCommand(
-                    task_id=leader_task_id,
-                    reporter_agent_id=assignment.leader_agent_id,
-                    status=reported,
-                    summary=decision.summary,
-                ),
-                idempotency_key=f"leader-review:{leader_task_id}:r{revision}:report",
-            )
+            if task.status in FINAL_TASK_STATUSES:
+                if task.status is not reported:
+                    raise LeaderActionRefused(
+                        LeaderActionErrorCode.PHASE_CONFLICT,
+                        f"the leader task has already finished as {task.status.value}, "
+                        f"so it cannot accept a {decision.verdict.value} review",
+                    )
+                # Recovery from a partial earlier attempt: the task result is
+                # immutable, but its assignment can still be review_due when
+                # reporting settled the task before the accepted review was
+                # saved.  Preserve that result and finish the pending review;
+                # reporting again with a newly generated summary would turn a
+                # recoverable retry into TaskConflict.
+            else:
+                await self._reporter.report(
+                    ReportTaskCommand(
+                        task_id=leader_task_id,
+                        reporter_agent_id=assignment.leader_agent_id,
+                        status=reported,
+                        summary=decision.summary,
+                    ),
+                    idempotency_key=f"leader-review:{leader_task_id}:r{revision}:report",
+                )
             rework_task_ids = ()
             updated = replace(assignment, phase=LeaderAssignmentPhase.CLOSED)
             status = reported.value

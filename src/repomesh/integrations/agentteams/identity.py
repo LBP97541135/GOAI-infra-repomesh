@@ -1,3 +1,4 @@
+from typing import Protocol
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -8,17 +9,43 @@ from repomesh.modules.agent_directory.contracts import (
 from repomesh.modules.agent_runtime.ports.agent_team import AgentTeamControlPlane
 
 
+class RecipientMatrixIdentityResolver(Protocol):
+    async def resolve(self, role: AgentRole, resource_name: str) -> str | None: ...
+
+
+async def _runtime_for_role(
+    control_plane: AgentTeamControlPlane,
+    role: AgentRole,
+    resource_name: str,
+):
+    if role is AgentRole.ORGANIZATION_LEADER:
+        return await control_plane.get_manager(resource_name)
+    if role in {AgentRole.REPOSITORY_LEADER, AgentRole.WORKER}:
+        return await control_plane.get_worker(resource_name)
+    raise ValueError(f"unsupported AgentTeams recipient role: {role!r}")
+
+
+class AgentTeamsRecipientMatrixIdentityResolver:
+    """Resolve a known recipient through its role's AgentTeams collection."""
+
+    def __init__(self, control_plane: AgentTeamControlPlane) -> None:
+        self._control_plane = control_plane
+
+    async def resolve(self, role: AgentRole, resource_name: str) -> str | None:
+        runtime = await _runtime_for_role(self._control_plane, role, resource_name)
+        return runtime.matrix_user_id if runtime is not None else None
+
+
 class AgentTeamsMatrixIdentityVerifier:
     def __init__(self, control_plane: AgentTeamControlPlane) -> None:
         self._control_plane = control_plane
 
     async def verify(self, profile: AgentPrincipalView, matrix_user_id: str) -> bool:
-        if profile.role is AgentRole.ORGANIZATION_LEADER:
-            runtime = await self._control_plane.get_manager(
-                profile.agentteams_resource_name
-            )
-        else:
-            runtime = await self._control_plane.get_worker(profile.agentteams_resource_name)
+        runtime = await _runtime_for_role(
+            self._control_plane,
+            profile.role,
+            profile.agentteams_resource_name,
+        )
         return runtime is not None and runtime.matrix_user_id == matrix_user_id
 
 
@@ -82,6 +109,8 @@ class AgentTeamsMatrixIdentityResolver:
         self._cache = rebuilt
 
     async def _runtime(self, profile: AgentPrincipalView):
-        if profile.role is AgentRole.ORGANIZATION_LEADER:
-            return await self._control_plane.get_manager(profile.agentteams_resource_name)
-        return await self._control_plane.get_worker(profile.agentteams_resource_name)
+        return await _runtime_for_role(
+            self._control_plane,
+            profile.role,
+            profile.agentteams_resource_name,
+        )

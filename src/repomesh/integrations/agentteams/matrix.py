@@ -3,7 +3,10 @@ from urllib.parse import quote
 
 import httpx
 
+from repomesh.modules.agent_directory.contracts import AgentRole
+
 from .control_plane import AgentTeamsResponseError, AgentTeamsUnavailable
+from .identity import RecipientMatrixIdentityResolver
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +43,7 @@ class AgentTeamsMatrixClient:
         timeout: float = 10.0,
         *,
         transport: httpx.AsyncBaseTransport | None = None,
-        control_plane=None,
+        recipient_identity_resolver: RecipientMatrixIdentityResolver | None = None,
     ) -> None:
         if not access_token.strip():
             raise ValueError("Matrix access token is required")
@@ -50,7 +53,7 @@ class AgentTeamsMatrixClient:
             timeout=timeout,
             transport=transport,
         )
-        self._control_plane = control_plane
+        self._recipient_identity_resolver = recipient_identity_resolver
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -138,6 +141,7 @@ class AgentTeamsMatrixClient:
         *,
         transaction_id: str,
         recipient_resource_name: str | None = None,
+        recipient_role: AgentRole | None = None,
     ) -> str:
         room = room_id.strip()
         message = body.strip()
@@ -149,10 +153,23 @@ class AgentTeamsMatrixClient:
         if not transaction:
             raise ValueError("transaction_id is required for idempotent Matrix delivery")
 
+        if recipient_resource_name is None and recipient_role is not None:
+            raise ValueError("recipient_resource_name is required with recipient_role")
+        if recipient_resource_name is not None and recipient_role is None:
+            raise ValueError("recipient_role is required with recipient_resource_name")
+
         recipient_matrix_id = None
-        if recipient_resource_name and self._control_plane is not None:
-            worker = await self._control_plane.get_worker(recipient_resource_name)
-            recipient_matrix_id = worker.matrix_user_id if worker else None
+        if recipient_resource_name is not None:
+            if not recipient_resource_name.strip():
+                raise ValueError("recipient_resource_name must not be blank")
+            if self._recipient_identity_resolver is None:
+                raise RuntimeError(
+                    "recipient identity resolver is required with recipient_resource_name"
+                )
+            recipient_matrix_id = await self._recipient_identity_resolver.resolve(
+                recipient_role,
+                recipient_resource_name,
+            )
             if not recipient_matrix_id:
                 raise AgentTeamsUnavailable("AgentTeams recipient Matrix identity is unavailable")
             message = f"{recipient_matrix_id} {message}"

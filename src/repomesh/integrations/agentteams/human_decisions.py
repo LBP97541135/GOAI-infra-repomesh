@@ -2,6 +2,7 @@ import json
 import logging
 
 from repomesh.modules.collaboration.contracts import (
+    CollaborationDeliveryDeferred,
     CollaborationGateway,
     CollaborationMessageKind,
     SendCollaborationMessageCommand,
@@ -59,8 +60,11 @@ class HumanDecisionCollaborationNotifier(HumanDecisionNotifier):
                 ),
                 idempotency_key=f"human-decision:{decision.id}",
             )
-        except Exception:
-            logging.getLogger(__name__).exception(
+        except CollaborationDeliveryDeferred as error:
+            logging.getLogger(__name__).warning(
                 "human decision notification persisted for background retry",
-                extra={"review_request_id": str(review.id)},
+                extra={
+                    "review_request_id": str(review.id),
+                    "collaboration_message_id": str(error.message_id),
+                },
             )

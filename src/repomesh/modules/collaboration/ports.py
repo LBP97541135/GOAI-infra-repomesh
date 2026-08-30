@@ -1,7 +1,7 @@
 from typing import Protocol
 from uuid import UUID
 
-from repomesh.modules.agent_directory.contracts import AgentPrincipalView
+from repomesh.modules.agent_directory.contracts import AgentPrincipalView, AgentRole
 from repomesh.modules.collaboration.contracts import (
     AuthorizedRoom,
     RoomTimelineCursor,
@@ -39,6 +39,7 @@ class CollaborationMessenger(Protocol):
         *,
         transaction_id: str,
         recipient_resource_name: str | None = None,
+        recipient_role: AgentRole | None = None,
     ) -> str: ...
 
 

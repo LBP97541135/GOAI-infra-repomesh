@@ -21,6 +21,7 @@ from repomesh.integrations.agentteams import (
     AgentTeamsMatrixIdentityResolver,
     AgentTeamsMatrixIdentityVerifier,
     AgentTeamsMatrixInboundPoller,
+    AgentTeamsRecipientMatrixIdentityResolver,
 )
 from repomesh.integrations.agentteams.human_decisions import (
     HumanDecisionCollaborationNotifier,
@@ -174,7 +175,9 @@ def build_default_container() -> ApplicationContainer:
         AgentTeamsMatrixClient(
             settings.agentteams_matrix_url,
             settings.agentteams_matrix_access_token,
-            control_plane=control_plane,
+            recipient_identity_resolver=AgentTeamsRecipientMatrixIdentityResolver(
+                control_plane
+            ),
         )
         if settings.agentteams_matrix_access_token
         else None

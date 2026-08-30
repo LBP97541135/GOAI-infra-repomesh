@@ -350,6 +350,56 @@ async def test_approve_settles_the_leader_task_and_advances_the_plan() -> None:
     assert round_.assignment.phase is LeaderAssignmentPhase.CLOSED
 
 
+async def test_approve_recovers_after_the_leader_task_was_already_settled() -> None:
+    """A retry must finish review after an earlier partial approval attempt.
+
+    The task report is intentionally immutable.  A previous attempt can have
+    settled it before the review assignment was committed, so recovery must
+    preserve that final result and finish the still-pending review instead of
+    reporting the task with the retry's possibly different summary.
+    """
+
+    round_ = await start_round()
+    await round_.submit_plan()
+    await round_.finish_workers()
+    before = await round_.environment.tasks.get(round_.leader_task_id)
+    assert before is not None
+    settled = before.report(TaskStatus.SUCCEEDED, "Recorded by the first attempt.")
+    await round_.environment.tasks.update(settled, expected_version=before.version)
+
+    receipt = await round_.review(
+        LeaderReviewVerdict.APPROVE,
+        summary="Approved while recovering the review assignment.",
+    )
+
+    leader_task = await round_.environment.tasks.get(round_.leader_task_id)
+    assert leader_task is not None
+    assert leader_task.status is TaskStatus.SUCCEEDED
+    assert leader_task.result_summary == "Recorded by the first attempt."
+    assert receipt.leader_task_status == "succeeded"
+    assert round_.assignment.phase is LeaderAssignmentPhase.CLOSED
+    assert len(round_.assignment.accepted_reviews) == 1
+    assert round_.advanced == [round_.leader_task_id]
+
+
+async def test_approve_refuses_an_incompatible_final_leader_task() -> None:
+    round_ = await start_round()
+    await round_.submit_plan()
+    await round_.finish_workers()
+    before = await round_.environment.tasks.get(round_.leader_task_id)
+    assert before is not None
+    settled = before.report(TaskStatus.FAILED, "The first attempt failed.")
+    await round_.environment.tasks.update(settled, expected_version=before.version)
+
+    with pytest.raises(LeaderActionRefused) as refused:
+        await round_.review(LeaderReviewVerdict.APPROVE)
+
+    assert refused.value.code is LeaderActionErrorCode.PHASE_CONFLICT
+    assert round_.assignment.phase is LeaderAssignmentPhase.REVIEW_DUE
+    assert round_.assignment.accepted_reviews == ()
+    assert round_.advanced == []
+
+
 async def test_the_delivery_gate_takes_no_candidate_before_the_leader_approves() -> None:
     """The gate is inherited, not implemented — so this is what proves it inherits.
 

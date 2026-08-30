@@ -223,3 +223,18 @@ class CollaborationRouteUnavailable(CollaborationError):
     to go until the execution plane catches up. Callers translate it as
     retryable (503), never as a 500.
     """
+
+
+class CollaborationDeliveryDeferred(CollaborationRouteUnavailable):
+    """The message is persisted as failed and may safely be retried later.
+
+    This is narrower than :class:`CollaborationRouteUnavailable`: that base
+    can also be raised before a message has a route or a durable row. This
+    subtype is emitted only after ``SendCollaborationMessage`` has stored the
+    message and marked its delivery failed, so a caller that already committed
+    its own business fact may accept that fact without losing the notification.
+    """
+
+    def __init__(self, message_id: UUID, reason: str) -> None:
+        super().__init__(reason)
+        self.message_id = message_id

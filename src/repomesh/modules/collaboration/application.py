@@ -24,6 +24,7 @@ from repomesh.modules.collaboration.contracts import (
 )
 from repomesh.modules.collaboration.domain import (
     CollaborationConflict,
+    CollaborationDeliveryDeferred,
     CollaborationDenied,
     CollaborationMessage,
     CollaborationRouteUnavailable,
@@ -147,8 +148,12 @@ class SendCollaborationMessage:
                 self._wire_payload(message),
                 transaction_id=transaction_id,
                 recipient_resource_name=recipient.agentteams_resource_name,
+                recipient_role=recipient.role,
             )
             delivered = message.delivered(event_id)
+        except CollaborationRouteUnavailable as error:
+            await self._store.update(message.failed())
+            raise CollaborationDeliveryDeferred(message.id, str(error)) from error
         except Exception:
             await self._store.update(message.failed())
             raise

@@ -6,6 +6,7 @@ from uuid import UUID
 
 from repomesh.modules.collaboration.contracts import (
     CollaborationConflict,
+    CollaborationDeliveryDeferred,
     CollaborationDeliveryStatus,
     CollaborationDenied,
     CollaborationError,
@@ -21,6 +22,7 @@ from repomesh.shared.domain import new_id
 __all__ = [
     "CollaborationConflict",
     "CollaborationDenied",
+    "CollaborationDeliveryDeferred",
     "CollaborationError",
     "CollaborationMessage",
     "CollaborationRouteUnavailable",

@@ -10,11 +10,11 @@ from repomesh.integrations.orchestration import (
     DeliveryStateAdapter,
 )
 from repomesh.integrations.scm.contracts import RepositoryRef, SCMAdapter
+from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.agent_directory.ports import AgentDirectory
 from repomesh.modules.agent_runtime.contracts import ExternalWorkerRefused
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
-    AgentTeamMessenger,
     ExternalMemberProvisioner,
     ExternalMemberRole,
     ExternalWorkerProvisioner,
@@ -30,7 +30,11 @@ from repomesh.modules.capability_management import (
 )
 from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
 from repomesh.modules.collaboration.contracts import AuthorizedRoom, CollaborationGateway
-from repomesh.modules.collaboration.ports import AuthorizedRoomReader, CollaborationMessageStore
+from repomesh.modules.collaboration.ports import (
+    AuthorizedRoomReader,
+    CollaborationMessageStore,
+    CollaborationMessenger,
+)
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import LocalAccountService, PolicyAuthorizationGateway
@@ -193,7 +197,7 @@ class StaticTeamDecompositionModeReader:
         return self._mode
 
 
-def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMessenger:
+def collaboration_routed_messenger(messenger: CollaborationMessenger) -> CollaborationMessenger:
     """Adapt the AgentTeams messenger to the refusal the collaboration port owns.
 
     ``AgentTeamsUnavailable`` is the integration's word for "the execution
@@ -229,6 +233,7 @@ def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMe
             *,
             transaction_id: str,
             recipient_resource_name: str | None = None,
+            recipient_role: AgentRole | None = None,
         ) -> str:
             try:
                 return await messenger.send_task(
@@ -236,6 +241,7 @@ def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMe
                     body,
                     transaction_id=transaction_id,
                     recipient_resource_name=recipient_resource_name,
+                    recipient_role=recipient_role,
                 )
             except AgentTeamsUnavailable as error:
                 raise CollaborationRouteUnavailable(str(error)) from error
@@ -370,7 +376,7 @@ class ApplicationContainer:
     # Process-log capture + background flush service for the unified log page.
     log_recorder: LogRecorder | None = None
     agent_team_control_plane: AgentTeamControlPlane | None = None
-    agent_team_messenger: AgentTeamMessenger | None = None
+    agent_team_messenger: CollaborationMessenger | None = None
     agentteams_probe: ReadinessProbe | None = None
     agentteams_required: bool = False
     external_resources: tuple[AsyncCloseable, ...] = ()

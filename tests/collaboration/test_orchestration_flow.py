@@ -26,6 +26,10 @@ from repomesh.modules.collaboration import (
     SendCollaborationMessage,
     SendCollaborationMessageCommand,
 )
+from repomesh.modules.collaboration.contracts import (
+    CollaborationDeliveryDeferred,
+    CollaborationRouteUnavailable,
+)
 from repomesh.modules.identity_access import PolicyAuthorizationGateway
 from repomesh.modules.project import (
     CheckpointGateDecision,
@@ -97,6 +101,24 @@ class EmptyReceiptMessenger(RecordingMessenger):
     ) -> str:
         self.deliveries.append((room_id, json.loads(body), transaction_id))
         return ""
+
+
+class UnavailableTaskReportMessenger(RecordingMessenger):
+    """Accept assignments, but defer the upward report delivery."""
+
+    async def send_task(
+        self, room_id: str, body: str, *, transaction_id: str, **kwargs
+    ) -> str:
+        if json.loads(body)["kind"] == CollaborationMessageKind.TASK_REPORT.value:
+            raise CollaborationRouteUnavailable("manager Matrix identity is unavailable")
+        return await super().send_task(
+            room_id, body, transaction_id=transaction_id, **kwargs
+        )
+
+
+class FailedDeliveryStatusStore(InMemoryCollaborationMessageStore):
+    async def update(self, message) -> None:
+        raise RuntimeError("collaboration delivery status could not be persisted")
 
 
 T0 = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
@@ -523,6 +545,105 @@ async def test_assignment_retry_recovers_failed_matrix_delivery() -> None:
     )
     assert recovered.title == "Recoverable assignment"
     assert len(messenger.deliveries) == 1
+
+
+@pytest.mark.asyncio
+async def test_report_accepts_the_fact_when_delivery_is_deferred() -> None:
+    """D-M7-1: persisted success and the caller's answer cannot disagree.
+
+    Collaboration has already stored the failed message for its retry worker.
+    Once the Task terminal fact is committed, a temporarily unavailable
+    Matrix recipient must not turn that accepted report into an exception.
+    """
+
+    messenger = UnavailableTaskReportMessenger()
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        collaboration,
+        orchestrator,
+        _,
+        _,
+    ) = await build_flow(messenger)
+    task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            assigned_by_agent_id=organization_leader.id,
+            assignee_agent_id=repository_team.leader.id,
+            title="Review repository evidence",
+            instruction="Review the completed worker round.",
+            acceptance=("Report the evidence summary",),
+        ),
+        idempotency_key="d-m7-1-assignment",
+    )
+    await orchestrator.start(task.id, agent_id=repository_team.leader.id)
+
+    reported = await orchestrator.report(
+        ReportTaskCommand(
+            task_id=task.id,
+            reporter_agent_id=repository_team.leader.id,
+            status=TaskStatus.SUCCEEDED,
+            summary="All worker evidence passed review.",
+        ),
+        idempotency_key="d-m7-1-report",
+    )
+
+    assert reported.status is TaskStatus.SUCCEEDED
+    failed = await collaboration._store.list_failed()  # noqa: SLF001
+    assert len(failed) == 1
+    assert failed[0][0].task_id == task.id
+    assert failed[0][1] == "d-m7-1-report:message"
+
+
+@pytest.mark.asyncio
+async def test_delivery_is_not_deferred_when_failed_status_cannot_be_persisted() -> None:
+    messenger = UnavailableTaskReportMessenger()
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        _,
+        _,
+        directory,
+        topologies,
+    ) = await build_flow(messenger)
+    collaboration = SendCollaborationMessage(
+        directory,
+        topologies,
+        PolicyAuthorizationGateway(),
+        FailedDeliveryStatusStore(),
+        messenger,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="collaboration delivery status could not be persisted",
+    ) as raised:
+        await collaboration.send(
+            SendCollaborationMessageCommand(
+                organization_id=organization_id,
+                project_id=project_id,
+                repository_id=repository_id,
+                task_id=uuid4(),
+                sender_agent_id=repository_team.leader.id,
+                recipient_agent_id=organization_leader.id,
+                kind=CollaborationMessageKind.TASK_REPORT,
+                subject="Repository review approved",
+                body="All worker evidence passed review.",
+            ),
+            idempotency_key="d-m7-1-failed-status-write",
+        )
+
+    assert not isinstance(raised.value, CollaborationDeliveryDeferred)
 
 
 @pytest.mark.asyncio
