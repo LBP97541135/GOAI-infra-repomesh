@@ -41,6 +41,7 @@ from repomesh_agent_bridge.adapters.memory import (
     INERT_SESSION_NOTE,
     InertCodingSession,
     InMemoryRoomPort,
+    MemoryReadinessReporter,
     ScriptedCodingSession,
 )
 from repomesh_agent_bridge.application import RoomNativeAgent
@@ -270,6 +271,10 @@ def _agent(
         binding_port=WireBindingPort(binding or binding_wire()),
         room_port=room,
         coding_session=session,
+        # A reporter that answers from memory and is never the subject here:
+        # these tests are about what reaches a room, and the default renew
+        # period outlasts every scripted round in this module.
+        readiness=MemoryReadinessReporter(),
         state_dir=tmp_path,
     )
 
