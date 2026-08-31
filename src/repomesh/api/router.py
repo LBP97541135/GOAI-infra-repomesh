@@ -13,6 +13,7 @@ from repomesh.api.scm_reconciliation import router as scm_reconciliation_router
 from repomesh.api.scm_webhook import router as scm_webhook_router
 from repomesh.api.worker_mcp import router as worker_mcp_router
 from repomesh.modules.agent_runtime.api.router import router as agent_runtime_router
+from repomesh.modules.capability_management.api import router as skill_registry_router
 from repomesh.modules.delivery.api.deliveries import router as deliveries_router
 from repomesh.modules.delivery.api.router import router as delivery_router
 from repomesh.modules.identity_access.api import router as identity_console_router
@@ -46,6 +47,7 @@ api_router.include_router(console_repositories_router, prefix="/api/v1")
 # model's issues_router, which registers GETs only.
 api_router.include_router(issue_discovery_router, prefix="/api/v1")
 api_router.include_router(agent_runtime_router, prefix="/api/v1")
+api_router.include_router(skill_registry_router, prefix="/api/v1")
 api_router.include_router(delivery_router, prefix="/api/v1")
 api_router.include_router(human_control_router, prefix="/api/v1")
 api_router.include_router(deliveries_router, prefix="/api/v1")

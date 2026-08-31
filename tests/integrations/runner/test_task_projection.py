@@ -121,6 +121,30 @@ def test_project_materialize_and_verify_context(tmp_path: Path) -> None:
     assert (tmp_path / ".repomesh/skills/self-test/SKILL.md").is_file()
 
 
+def test_projector_freezes_registry_skill_version_evidence(tmp_path: Path) -> None:
+    request, _, capabilities = scenario(tmp_path)
+    release_id, assignment_id = uuid4(), uuid4()
+    bound = replace(
+        capabilities.skills[0],
+        version="2.1.0",
+        release_id=release_id,
+        assignment_id=assignment_id,
+        content_hash=HASH_A,
+    )
+    request = replace(
+        request,
+        capabilities=replace(capabilities, skills=(bound, *capabilities.skills[1:])),
+    )
+
+    task = RunnerTaskProjector().project(request)
+
+    assert task.skills[0].skill_id == bound.id
+    assert task.skills[0].version == "2.1.0"
+    assert task.skills[0].release_id == release_id
+    assert task.skills[0].assignment_id == assignment_id
+    assert task.to_wire()["skills"][0]["version"] == "2.1.0"
+
+
 def test_tampered_skill_is_rejected_before_execution(tmp_path: Path) -> None:
     request, package, capabilities = scenario(tmp_path)
     task = RunnerTaskProjector().project(request)

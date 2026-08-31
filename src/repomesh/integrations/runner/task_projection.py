@@ -11,6 +11,7 @@ from repomesh_runner.contracts import (
     RepositoryCheckout,
     RunnerPermissionMode,
     RunnerPermissions,
+    RunnerSkillRef,
     RunnerTask,
     WorkspaceAssignment,
 )
@@ -189,6 +190,20 @@ class RunnerTaskProjector:
             assignment_generation=request.assignment_generation,
             execution_id=request.execution_id,
             execution_version=request.execution_version,
+            skills=tuple(
+                RunnerSkillRef(
+                    skill.id,
+                    skill.version,
+                    skill.release_id,
+                    skill.assignment_id,
+                    skill.content_hash,
+                )
+                for skill in request.capabilities.skills
+                if skill.version
+                and skill.release_id
+                and skill.assignment_id
+                and skill.content_hash
+            ),
         )
 
     @staticmethod

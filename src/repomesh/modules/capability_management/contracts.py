@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import AgentRole
 
@@ -34,6 +35,10 @@ class CapabilityDefinition:
     denied_operations: tuple[str, ...] = ()
     local_path: str | None = None
     conditional_on: frozenset[str] = frozenset()
+    version: str | None = None
+    release_id: UUID | None = None
+    assignment_id: UUID | None = None
+    content_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

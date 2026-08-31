@@ -50,10 +50,14 @@ class RunnerContextMaterializer:
             source = (self._capability_root / skill.local_path).resolve()
             if not source.is_relative_to(self._capability_root) or not source.is_file():
                 raise ValueError(f"skill wrapper not found: {skill.id}")
+            content = source.read_text(encoding="utf-8")
+            actual_hash = _sha256_bytes(content.encode("utf-8"))
+            if skill.content_hash is not None and actual_hash != skill.content_hash:
+                raise ValueError(f"skill wrapper content hash changed: {skill.id}")
             self._write(
                 workspace,
                 f".repomesh/skills/{skill.id}/SKILL.md",
-                source.read_text(encoding="utf-8"),
+                content,
                 files,
             )
 
@@ -63,7 +67,16 @@ class RunnerContextMaterializer:
             "bundleVersion": task.context_bundle.version,
             "contentHash": task.context_bundle.content_hash,
             "codingPackageHash": package.content_hash,
-            "skills": [skill.id for skill in capabilities.skills],
+            "skills": [
+                {
+                    "id": skill.id,
+                    "version": skill.version,
+                    "releaseId": str(skill.release_id) if skill.release_id else None,
+                    "assignmentId": str(skill.assignment_id) if skill.assignment_id else None,
+                    "contentHash": skill.content_hash,
+                }
+                for skill in capabilities.skills
+            ],
             "files": [
                 {"path": path, "contentHash": content_hash} for path, content_hash in sorted(files)
             ],

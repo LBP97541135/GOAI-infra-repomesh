@@ -24,6 +24,7 @@ from .contracts import (
     RepositoryCheckout,
     RunnerPermissionMode,
     RunnerPermissions,
+    RunnerSkillRef,
     RunnerTask,
     WorkspaceAssignment,
 )
@@ -84,6 +85,7 @@ def parse_runner_task(payload: Mapping[str, Any]) -> RunnerTask:
         ),
         execution_id=_optional_uuid(payload, "executionId", "executionId"),
         execution_version=_optional_int(payload, "executionVersion", "executionVersion"),
+        skills=_parse_skills(payload.get("skills")),
     )
 
 
@@ -144,6 +146,32 @@ def _parse_workspace(value: Any) -> WorkspaceAssignment | None:
         path=_string_field(value, "path", "workspace.path"),
         base_sha=_string_field(value, "baseSha", "workspace.baseSha"),
     )
+
+
+def _parse_skills(value: Any) -> tuple[RunnerSkillRef, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        raise WireError("skills must be an array")
+    parsed = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise WireError(f"skills[{index}] must be an object")
+        parsed.append(
+            _build(
+            f"skills[{index}]", RunnerSkillRef,
+            skill_id=_string_field(item, "skillId", f"skills[{index}].skillId"),
+            version=_string_field(item, "version", f"skills[{index}].version"),
+            release_id=_uuid_field(item, "releaseId", f"skills[{index}].releaseId"),
+            assignment_id=_uuid_field(
+                item, "assignmentId", f"skills[{index}].assignmentId"
+            ),
+            content_hash=_string_field(
+                item, "contentHash", f"skills[{index}].contentHash"
+            ),
+            )
+        )
+    return tuple(parsed)
 
 
 def _build(field: str, factory: Any, **kwargs: Any) -> Any:

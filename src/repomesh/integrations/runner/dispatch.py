@@ -56,7 +56,10 @@ class DispatchWorkerTask:
             agent_id=command.worker_agent_id,
         )
         capabilities = await self._capabilities.execute(
-            command.worker_agent_id, task_features=command.task_features
+            command.worker_agent_id,
+            task_features=command.task_features,
+            task_id=command.task_id,
+            run_id=command.run_id,
         )
         workspace = await self._workspaces.prepare(
             repository_id=command.repository_id,

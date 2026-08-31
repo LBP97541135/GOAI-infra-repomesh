@@ -129,6 +129,21 @@
     "assignmentGeneration": {"type": ["integer", "null"], "minimum": 1},
     "executionId": {"type": ["string", "null"], "format": "uuid"},
     "executionVersion": {"type": ["integer", "null"], "minimum": 1},
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skillId", "version", "releaseId", "assignmentId", "contentHash"],
+        "properties": {
+          "skillId": {"type": "string", "minLength": 1},
+          "version": {"type": "string", "minLength": 1},
+          "releaseId": {"type": "string", "format": "uuid"},
+          "assignmentId": {"type": "string", "format": "uuid"},
+          "contentHash": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
     "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 200},
     "issuedAt": {"type": "string", "format": "date-time"}
   },

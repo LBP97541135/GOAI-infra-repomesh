@@ -308,6 +308,17 @@ def _root_attributes(task: RunnerTask) -> dict[str, object]:
         attributes[SpanAttributes.REPOSITORY_ID] = str(repository_id)
     if task.worker_agent_id is not None:
         attributes[SpanAttributes.WORKER_AGENT_ID] = str(task.worker_agent_id)
+    if task.skills:
+        attributes["repomesh.skill.ids"] = tuple(skill.skill_id for skill in task.skills)
+        attributes["repomesh.skill.versions"] = tuple(
+            f"{skill.skill_id}@{skill.version}" for skill in task.skills
+        )
+        attributes["repomesh.skill.release_ids"] = tuple(
+            str(skill.release_id) for skill in task.skills
+        )
+        attributes["repomesh.skill.assignment_ids"] = tuple(
+            str(skill.assignment_id) for skill in task.skills
+        )
     return attributes
 
 

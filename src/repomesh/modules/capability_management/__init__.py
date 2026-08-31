@@ -6,6 +6,13 @@ from .contracts import (
     CapabilitySource,
 )
 from .presets import PresetCapabilityAssembler
+from .registry import (
+    PostgresSkillRegistry,
+    SkillEvaluationInput,
+    SkillRegistryConflict,
+    SkillReleaseChannel,
+    SkillVersionState,
+)
 
 __all__ = [
     "AgentCapabilityNotFound",
@@ -15,6 +22,11 @@ __all__ = [
     "CapabilityKind",
     "CapabilitySource",
     "PresetCapabilityAssembler",
+    "PostgresSkillRegistry",
+    "SkillEvaluationInput",
+    "SkillRegistryConflict",
+    "SkillReleaseChannel",
+    "SkillVersionState",
     "ResolveAgentCapabilities",
 ]
 from .application import AgentCapabilityNotFound, ResolveAgentCapabilities

@@ -300,6 +300,12 @@ class ApplicationContainer:
         return PresetCapabilityAssembler()
 
     @cached_service
+    def skill_registry(self):
+        from repomesh.modules.capability_management import PostgresSkillRegistry
+
+        return PostgresSkillRegistry(self.database, get_settings().capability_root)
+
+    @cached_service
     def local_account_service(self):
         return LocalAccountService(
             PostgresLocalAccountStore(self.database),
@@ -448,7 +454,12 @@ class ApplicationContainer:
         )
 
     def agent_capabilities(self) -> ResolveAgentCapabilities:
-        return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
+        return ResolveAgentCapabilities(
+            self.agent_directory,
+            self.capability_assembler(),
+            self.skill_registry(),
+            get_settings().capability_root,
+        )
 
     def native_agent_registration(self):
         from repomesh.integrations.agentteams import RegisterNativeAgent

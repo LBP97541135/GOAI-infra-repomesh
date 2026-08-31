@@ -124,6 +124,24 @@ class RunnerPermissions:
 
 
 @dataclass(frozen=True, slots=True)
+class RunnerSkillRef:
+    skill_id: str
+    version: str
+    release_id: UUID
+    assignment_id: UUID
+    content_hash: str
+
+    def to_wire(self) -> dict[str, str]:
+        return {
+            "skillId": self.skill_id,
+            "version": self.version,
+            "releaseId": str(self.release_id),
+            "assignmentId": str(self.assignment_id),
+            "contentHash": self.content_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class RunnerTask:
     organization_id: UUID
     project_id: UUID
@@ -147,6 +165,7 @@ class RunnerTask:
     assignment_generation: int | None = None
     execution_id: UUID | None = None
     execution_version: int | None = None
+    skills: tuple[RunnerSkillRef, ...] = ()
 
     def __post_init__(self) -> None:
         if self.attempt < 1:
@@ -213,6 +232,7 @@ class RunnerTask:
             "assignmentGeneration": self.assignment_generation,
             "executionId": str(self.execution_id) if self.execution_id else None,
             "executionVersion": self.execution_version,
+            "skills": [skill.to_wire() for skill in self.skills],
             "idempotencyKey": self.idempotency_key,
             "issuedAt": self.issued_at.isoformat(),
         }

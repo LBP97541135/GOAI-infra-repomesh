@@ -154,8 +154,10 @@ class PackagesStub:
 class CapabilitiesStub:
     def __init__(self, capabilities) -> None:
         self.capabilities = capabilities
+        self.calls = []
 
-    async def execute(self, agent_id, *, task_features):
+    async def execute(self, agent_id, *, task_features, task_id=None, run_id=None):
+        self.calls.append((agent_id, task_features, task_id, run_id))
         return self.capabilities
 
 

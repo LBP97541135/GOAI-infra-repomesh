@@ -10,6 +10,13 @@ from repomesh.modules.agent_runtime.execution_reservation import (
     WorkerExecutionReservationRecord,
 )
 from repomesh.modules.agent_runtime.recovery import WorkerRecoveryOperationRecord
+from repomesh.modules.capability_management.registry import (
+    SkillAssignmentRecord,
+    SkillEvaluationRecord,
+    SkillRecord,
+    SkillReleaseRecord,
+    SkillVersionRecord,
+)
 from repomesh.modules.collaboration.infrastructure import (
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
@@ -70,6 +77,11 @@ _REGISTERED_MODELS = (
     AgentPrincipalRecord,
     WorkerExecutionReservationRecord,
     WorkerRecoveryOperationRecord,
+    SkillRecord,
+    SkillVersionRecord,
+    SkillEvaluationRecord,
+    SkillReleaseRecord,
+    SkillAssignmentRecord,
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
     ContextObjectRecord,
