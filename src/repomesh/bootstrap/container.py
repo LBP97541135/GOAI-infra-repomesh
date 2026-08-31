@@ -1419,6 +1419,7 @@ class ApplicationContainer:
             self.project_topology_provisioner(),
             self.plan_execution_bridge(),
             self.topology_runtime_projector(),
+            self.external_member_readiness_gate(),
         )
 
     def issue_intake_service(self):
@@ -2036,6 +2037,53 @@ class ApplicationContainer:
             task_reader=self.project_task_reader(),
             handoff_docs=self.handoff_doc_service(),
             checkpoints=self.project_checkpoint_service(),
+        )
+
+    @cached_service
+    def external_member_readiness_store(self):
+        """The readiness lease table, and there is exactly one of it.
+
+        Cached for the process lifetime because the store *is* the state: a
+        factory that built a new one per request would answer an empty table to
+        every reader, and a per-request lock guards nothing. Being a process
+        singleton is also the whole extent of its durability — the leases are
+        held in memory on purpose (see ``application/readiness``), so a restart
+        empties the table and the next round of renews refills it.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            ExternalMemberReadinessStore,
+        )
+
+        return ExternalMemberReadinessStore(
+            ttl_seconds=get_settings().external_readiness_ttl_seconds
+        )
+
+    def external_member_readiness_gate(self):
+        """The join materialize refuses on, and the console's precheck reads.
+
+        Three dependencies, one per layer of "is this member there": the
+        directory says who it is, ``external_worker_binding_control_plane`` says
+        whether RepoMesh runs its body, and the lease store says whether the
+        body RepoMesh does not run is running now. Only the last holds state,
+        and it is the cached one above; this is rebuilt per call because it has
+        none of its own.
+
+        The control plane is passed exactly as it comes, ``None`` included. A
+        deployment without one cannot tell an external member from a managed
+        one, and the gate is written to refuse rather than guess — substituting
+        anything here would be the composition root deciding a question the
+        module already answered.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            RequireExternalMembersReady,
+        )
+
+        return RequireExternalMembersReady(
+            self.agent_directory,
+            self.external_worker_binding_control_plane(),
+            self.external_member_readiness_store(),
         )
 
     def runner_gateway(self):

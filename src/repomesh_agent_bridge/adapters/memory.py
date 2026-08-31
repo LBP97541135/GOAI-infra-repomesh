@@ -47,6 +47,7 @@ __all__ = [
     "InMemoryRoomPort",
     "InMemoryWorkerBindingPort",
     "LeaderActionCall",
+    "MemoryReadinessReporter",
     "ScriptedCodingSession",
     "ScriptedLeaderSession",
     "SentMessage",
@@ -384,6 +385,73 @@ class ScriptedLeaderSession:
         if isinstance(answer, BaseException):
             raise answer
         return answer
+
+
+class MemoryReadinessReporter:
+    """A readiness lease held in memory, with the reports recorded in order.
+
+    Order is what it is for. The claims the reporting design rests on are
+    sequences — the first report is made before ``bridge ready``, a renewal
+    only happens after one, the goodbye is last and happens once — and a double
+    that kept counters could not settle any of them.
+
+    ``renew_after_seconds`` is a float here and a whole number of seconds on the
+    wire. A double that could only answer in seconds would make every test of
+    the renewal loop spend one, and what those tests are about is the loop's
+    shape rather than the lease's duration; the reporter under test does nothing
+    with the number except sleep it.
+
+    ``retuned_to`` is what every renewal answers with instead, which is how a
+    deployment that changes its TTL while a fleet is running is expressed. The
+    period is the server's to choose and is returned by every call rather than
+    once at startup, so a loop that kept the first answer would be a fleet that
+    has to be restarted to learn a new one — and that is only observable against
+    a double whose two answers differ.
+
+    Failures are scripted rather than subclassed: one for the blocking first
+    report, one for the goodbye, and one positional entry per renewal — ``None``
+    meaning "answer normally" — so "the second renewal failed and the third
+    still happened" is a list rather than a class. Once the script is spent
+    every further renewal succeeds, which is the recovery the loop claims to
+    have.
+    """
+
+    def __init__(
+        self,
+        *renew_failures: BaseException | None,
+        renew_after_seconds: float = 45,
+        retuned_to: float | None = None,
+        startup_failure: BaseException | None = None,
+        shutdown_failure: BaseException | None = None,
+    ) -> None:
+        self._renew_failures = list(renew_failures)
+        self._renew_after_seconds = renew_after_seconds
+        self._retuned_to = retuned_to
+        self._startup_failure = startup_failure
+        self._shutdown_failure = shutdown_failure
+        self.calls: list[str] = []
+        """``startup`` | ``renew`` | ``shutdown`` per report, in order.
+
+        Recorded before any scripted failure is raised, so a report that was
+        attempted and refused is distinguishable from one that never happened.
+        """
+
+    async def report_startup(self) -> float:
+        self.calls.append("startup")
+        if self._startup_failure is not None:
+            raise self._startup_failure
+        return self._renew_after_seconds
+
+    async def report_renew(self) -> float:
+        self.calls.append("renew")
+        if self._renew_failures and (failure := self._renew_failures.pop(0)) is not None:
+            raise failure
+        return self._renew_after_seconds if self._retuned_to is None else self._retuned_to
+
+    async def report_shutdown(self) -> None:
+        self.calls.append("shutdown")
+        if self._shutdown_failure is not None:
+            raise self._shutdown_failure
 
 
 @dataclass(frozen=True, slots=True)

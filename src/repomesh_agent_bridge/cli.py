@@ -20,6 +20,7 @@ import logging
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from repomesh_runner.drivers.app_server import AppServerDriver
 from repomesh_runner.profiles import get_profile
@@ -30,6 +31,7 @@ from .adapters.leader_actions import RepoMeshLeaderActionAdapter
 from .adapters.leader_session import LeaderCoordinationSession
 from .adapters.matrix import MatrixRoomAdapter
 from .adapters.memory import InertCodingSession
+from .adapters.readiness import RepoMeshReadinessReporter
 from .adapters.repomesh_binding import RepoMeshBindingAdapter
 from .adapters.restricted_process import RestrictedProcessFactory
 from .application import (
@@ -143,6 +145,13 @@ def main(
             return EXIT_OK
 
         workspace_root = _governed_workspace_root(arguments, enrollment)
+        # Beside the other refusal that costs nothing: every arrangement of this
+        # process reports its own readiness, so the slot that names the
+        # credential it reports with is checked before a session, a runtime or
+        # an HTTP client exists. The reporter itself cannot be built yet — what
+        # it says about this process is which lanes were assembled — so the one
+        # thing knowable now is checked now, and the assembly happens below.
+        readiness_credential_ref = _readiness_credential_ref(enrollment)
         # One factory for both halves of the process: the coding session's turns
         # and a governed run's driver spawn through the same containment
         # boundary, and two factories would be two Low-integrity stories to keep
@@ -175,13 +184,29 @@ def main(
         # session: one codex stack, two readings of its answer (B2-1), and a
         # second stack would be a second containment story on one machine.
         session = build_session(enrollment)
+        # Named for the same kind of reason: which lanes this process came up
+        # with is exactly what it reports about itself, so the two runtimes are
+        # built before the reporter that describes them rather than beside it.
+        governed = build_governed(enrollment)
+        leader = _build_leader_runtime(enrollment, session=session)
         agent = RoomNativeAgent(
             binding_port=binding_port,
             room_port=MatrixRoomAdapter(),
             coding_session=session,
+            readiness=_build_readiness_reporter(
+                enrollment,
+                credential_ref=readiness_credential_ref,
+                # Minted here, once, and never persisted: the id names this
+                # *process*, so a restart is deliberately a different instance
+                # and the platform can tell a takeover from a renewal.
+                instance_id=uuid4(),
+                leader_lane=leader is not None,
+                governed_lane=governed is not None,
+                workspace_root=workspace_root,
+            ),
             state_dir=arguments.state_dir,
-            governed=build_governed(enrollment),
-            leader=_build_leader_runtime(enrollment, session=session),
+            governed=governed,
+            leader=leader,
         )
         # Ctrl-C is how an operator stops this process, so it is a normal
         # ending, not a failure: ``asyncio.run`` has already cancelled the agent
@@ -283,6 +308,66 @@ def _governed_workspace_root(
             f"--workspace-root must name an existing directory: {root}"
         )
     return root
+
+
+def _readiness_credential_ref(enrollment: ExternalWorkerEnrollment) -> str:
+    """The locator readiness is reported with, or the refusal for not having one.
+
+    Unconditional, unlike the two lanes: whatever a member is and whatever it
+    can do, RepoMesh refuses to materialize a team whose local CLI members it
+    cannot see, so every arrangement of this process reports — and every report
+    is authenticated as the member making it, because the endpoint refuses the
+    global control token precisely so that a report is always a *self*-report.
+
+    Split from the assembly next door so that this refusal happens where it
+    costs nothing. What the reporter says about this process is which lanes were
+    built, so it cannot be assembled until they are; but *whether this
+    enrollment could report at all* is knowable from the file alone, and an
+    invocation that was always going to be refused should not first spawn a
+    session, prepare a codex home, or open an HTTP pool nothing will close.
+    """
+
+    reference = enrollment.credential_refs.repomesh
+    if reference is None:
+        raise BridgeStartupError(
+            "credentialRefs.repomesh is required: this member reports its own readiness "
+            "with its own credential, and RepoMesh will not materialize a team whose local "
+            "CLI members it cannot see"
+        )
+    return reference
+
+
+def _build_readiness_reporter(
+    enrollment: ExternalWorkerEnrollment,
+    *,
+    credential_ref: str,
+    instance_id: UUID,
+    leader_lane: bool,
+    governed_lane: bool,
+    workspace_root: Path | None,
+) -> RepoMeshReadinessReporter:
+    """Assemble the one thing every arrangement of this process needs (FR-04).
+
+    Every fact comes from what this function's caller has already decided —
+    which lanes were built, and which directory governed runs happen under —
+    rather than from the command line a second time. The report is what the
+    platform holds this process to, so it says what was assembled, not what was
+    asked for.
+    """
+
+    return RepoMeshReadinessReporter(
+        endpoint=enrollment.repomesh_endpoint,
+        member_agent_id=enrollment.worker_agent_id,
+        # Resolved per call, never held: the secret's lifetime is the request's,
+        # exactly as it is for preflight, for Matrix and for the two actions.
+        resolve_credential=resolve_env_credential,
+        credential_ref=credential_ref,
+        instance_id=instance_id,
+        role=enrollment.role,
+        leader_lane=leader_lane,
+        governed_lane=governed_lane,
+        workspace_root=None if workspace_root is None else str(workspace_root),
+    )
 
 
 def _build_leader_runtime(

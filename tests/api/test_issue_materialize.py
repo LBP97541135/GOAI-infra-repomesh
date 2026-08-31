@@ -6,11 +6,13 @@ unapproved tiering, a blocked checkpoint, and a retry that must not build a
 second team or a second task.
 
 Nothing reaches the network. The LLM is the scripted double the chain tests
-use, and the only pieces replaced are the two that need a live AgentTeams —
-``start_plan`` (the execution plane) and the runtime projection that makes the
-teams' Matrix rooms. Everything between the endpoint and them is production
+use, and the only pieces replaced are the three that need a live AgentTeams —
+``start_plan`` (the execution plane), the runtime projection that makes the
+teams' Matrix rooms, and the controller read that says whether a member's body
+is RepoMesh's to run. Everything between the endpoint and them is production
 code: the real snapshot store, the real topology provisioning, the real
-specification service, the real checkpoint gate, the real bridge.
+specification service, the real checkpoint gate, the real bridge, and the real
+external-member readiness gate over the real lease store.
 """
 
 from __future__ import annotations
@@ -25,6 +27,13 @@ from fastapi.testclient import TestClient
 
 from repomesh.bootstrap.app import create_app
 from repomesh.bootstrap.container import ApplicationContainer
+from repomesh.modules.agent_directory.contracts import AgentRole
+from repomesh.modules.agent_runtime.application.readiness import (
+    ReadinessReportKind,
+    ReportExternalMemberReadinessCommand,
+)
+from repomesh.modules.agent_runtime.contracts import ExternalMemberRole
+from repomesh.modules.agent_runtime.ports.agent_team import WorkerRuntimeRef
 from repomesh.modules.change_orchestration import (
     ExecutionPlaneUnavailable,
     StartedExecutionPlan,
@@ -136,12 +145,46 @@ class StubRuntimeProjection:
             self._log.append(("project", project_id))
 
 
-def _with_execution_plane(monkeypatch, starter, projector=None) -> None:
-    """Stub both AgentTeams seams: the rooms, and the plane that uses them.
+class StubMemberControlPlane:
+    """The AgentTeams worker documents the readiness gate reads (ADR 0004).
 
-    They go together on purpose. A round that starts without its rooms is
-    defect B-11, so a test that stubbed only ``start_plan`` would be asserting
-    against a state the endpoint no longer allows.
+    ``containerManaged`` is the only field it looks at, and it is the whole
+    difference between the two fleets this file drives: a managed one, whose
+    bodies the controller runs and whose liveness the gate never claims, and an
+    external one, where every body is an operator's own CLI and every member has
+    to be holding a lease before a round may start.
+
+    Stubbing this rather than the gate itself keeps the production join under
+    test everywhere — the directory and the lease store stay real, so a suite
+    that passes is a suite where the real gate answered.
+
+    ``container_managed`` is a public attribute rather than a constructor-only
+    one because a fleet can change hands: the prefix-lending test below needs
+    one round the gate lets through followed by one it blocks, and flipping this
+    is the whole of that.
+    """
+
+    def __init__(self, *, container_managed: bool) -> None:
+        self.container_managed = container_managed
+
+    async def get_worker(self, name: str) -> WorkerRuntimeRef:
+        return WorkerRuntimeRef(
+            name=name, phase="Running", container_managed=self.container_managed
+        )
+
+
+def _with_execution_plane(monkeypatch, starter, projector=None) -> None:
+    """Stub the three AgentTeams seams: the rooms, the plane, the member documents.
+
+    The first two go together on purpose. A round that starts without its rooms
+    is defect B-11, so a test that stubbed only ``start_plan`` would be
+    asserting against a state the endpoint no longer allows.
+
+    The third makes this suite's fleet a *managed* one, which is what it has
+    always been: every member here is a container the controller runs, so the
+    readiness gate reports on nobody and the round proceeds (AC-04). The tests
+    that drive an external fleet override it with
+    :func:`_with_external_members`.
     """
 
     monkeypatch.setattr(
@@ -152,6 +195,75 @@ def _with_execution_plane(monkeypatch, starter, projector=None) -> None:
         "topology_runtime_projector",
         lambda _self: projector if projector is not None else StubRuntimeProjection(),
     )
+    monkeypatch.setattr(
+        ApplicationContainer,
+        "external_worker_binding_control_plane",
+        lambda _self: StubMemberControlPlane(container_managed=True),
+    )
+
+
+def _with_member_control_plane(monkeypatch, control_plane) -> None:
+    """Install one shared controller double, so a test can change its answers."""
+
+    monkeypatch.setattr(
+        ApplicationContainer,
+        "external_worker_binding_control_plane",
+        lambda _self: control_plane,
+    )
+
+
+def _with_external_members(monkeypatch) -> None:
+    """Every member of this project's teams is a local CLI RepoMesh does not run.
+
+    Applied after :func:`_with_execution_plane`, which installs the managed
+    answer this replaces.
+    """
+
+    _with_member_control_plane(monkeypatch, StubMemberControlPlane(container_managed=False))
+
+
+def _team_members(container: ApplicationContainer, project_id: str) -> tuple[UUID, ...]:
+    """Every agent the project's repository teams hold, leaders included."""
+
+    topology = _topology(container, project_id)
+    return tuple(
+        agent_id
+        for team in topology.repository_teams
+        for agent_id in (team.leader_agent_id, *team.worker_agent_ids)
+    )
+
+
+def _report_ready(container: ApplicationContainer, member_ids: tuple[UUID, ...]) -> None:
+    """Each member's Bridge reports startup, the way a launched CLI does.
+
+    Written through the real store rather than over HTTP because the report
+    endpoint authenticates as the member, and what these tests are about is the
+    gate downstream of the lease, not the credential upstream of it.
+    """
+
+    store = container.external_member_readiness_store()
+    principals = {principal.id: principal for principal in _principals(container)}
+
+    async def report() -> None:
+        for member_id in member_ids:
+            leader = principals[member_id].role is AgentRole.REPOSITORY_LEADER
+            await store.startup(
+                ReportExternalMemberReadinessCommand(
+                    member_agent_id=member_id,
+                    instance_id=uuid4(),
+                    kind=ReadinessReportKind.STARTUP,
+                    role=(
+                        ExternalMemberRole.REPOSITORY_LEADER
+                        if leader
+                        else ExternalMemberRole.WORKER
+                    ),
+                    leader_lane=leader,
+                    governed_lane=not leader,
+                    workspace_root=None if leader else ".repomesh-workspaces",
+                )
+            )
+
+    asyncio.run(report())
 
 
 def _chain_llm() -> ScriptedLLM:
@@ -196,6 +308,12 @@ def _materialize(chain: Chain, key: str = "materialize-key-1"):
         f"/api/v1/issues/{chain.issue_id}/discovery/materialize",
         json={"created_by_agent_id": chain.leader, "idempotency_key": key},
         headers=HEADERS,
+    )
+
+
+def _readiness(chain: Chain):
+    return chain.client.get(
+        f"/api/v1/issues/{chain.issue_id}/discovery/readiness", headers=HEADERS
     )
 
 
@@ -1405,7 +1523,6 @@ def test_a_repository_staffed_by_another_organization_is_a_409_not_a_500(
         CreateAgentRequest,
         ProvisionRepositoryAgentTeam,
     )
-    from repomesh.modules.agent_directory.contracts import AgentRole
 
     _configure(monkeypatch)
     _, leader_id, _, _ = _seed(application_container)
@@ -1879,3 +1996,324 @@ def test_a_new_key_also_repairs_a_round_broken_at_publish(
     # one plan key and not two.
     assert len(starter.calls) == 2
     assert starter.calls[1][1] == starter.calls[0][1]
+
+
+# ---------------------------------------------------------------------------
+# The external members' readiness gate (AC-03, AC-04)
+# ---------------------------------------------------------------------------
+
+
+def test_a_round_whose_local_cli_members_are_down_is_refused_with_the_names(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The refusal this whole feature exists for, and its actionable half.
+
+    Every member of this project's teams is an external one whose CLI nobody
+    launched. Started anyway, the round would write its tasks and dispatch them
+    into rooms no process is reading — a green console over work that will never
+    move, and no button anywhere that re-delivers it. So the gate refuses
+    *before* the materializer, and the body names each member so the operator
+    knows which machines to go start.
+
+    Three things make the refusal honest and are asserted as three: nothing was
+    started, the receipt records the block, and the draft is unconsumed so the
+    round is still there to finish.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    _with_external_members(monkeypatch)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        response = _materialize(chain, key="nobody-is-running-key")
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+
+        # Structured, not a sentence: the next action is per member.
+        assert detail["code"] == "external_members_not_ready"
+        members = _team_members(container, issue_id)
+        assert detail["message"] == f"{len(members)} local CLI members are not ready"
+        assert {row["agentId"] for row in detail["members"]} == {
+            str(member_id) for member_id in members
+        }
+        assert {row["status"] for row in detail["members"]} == {"offline"}
+        # "never launched" rather than "stopped answering": only the first is
+        # fixed by starting the process, which is the remedy being offered.
+        assert {row["reason"] for row in detail["members"]} == {"no readiness report"}
+        # Both roles are named, because a leader's Bridge and a worker's are
+        # started differently and the panel has to say which.
+        assert {row["role"] for row in detail["members"]} == {
+            "repository_leader",
+            "worker",
+        }
+
+        # Nothing was started, and the round is still open.
+        assert starter.calls == []
+        receipt = _draft_row(container, issue_id).discovery["materialization"]
+        assert receipt["status"] == "blocked"
+        assert receipt["by_agent_id"] == str(leader_id)
+        assert receipt["at"]
+        # The receipt carries no error string at all: nothing failed, and a
+        # panel reading `error` would render an empty box under a refusal that
+        # has a list to show instead.
+        assert "error" not in receipt
+        assert {row["agentId"] for row in receipt["blocking_members"]} == {
+            str(member_id) for member_id in members
+        }
+        assert _draft_row(container, issue_id).execution_plan_id is None
+        assert chain.read()["step"] == 4
+
+
+def test_starting_the_missing_members_lets_the_same_key_finish_the_round(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """AC-03's remedy: launch the CLI, press the button again, nothing forks.
+
+    A blocked receipt is deliberately not a failed one, and this is the
+    difference in behaviour. ``_replay`` hands back only a ``materialized``
+    receipt, so the same key runs the whole path again rather than replaying a
+    refusal. ``_prefix`` draws its line elsewhere: both refusals lend, so a
+    blocked round's prefix carries into whatever comes next and the second
+    attempt repairs that round instead of racing it — and only a
+    ``materialized`` receipt, or none at all, mints a fresh namespace from the
+    caller's own key.
+
+    The counters are the assertion. Both attempts answer about the same two
+    teams, so equality of the response proves nothing; that the topology row is
+    the same one, the principals are the same set, and the plane was asked
+    exactly once is what says the retry finished the round instead of building a
+    second one beside it.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    _with_external_members(monkeypatch)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        blocked = _materialize(chain, key="one-key-for-this-round")
+        assert blocked.status_code == 409, blocked.text
+        # The teams were built before the gate ran — that is the repair
+        # `_ensure_topology` makes on the way in — so the retry has something to
+        # be compared against.
+        topology_after_block = _topology(container, issue_id)
+        principals_after_block = {p.id for p in _principals(container)}
+
+        _report_ready(container, _team_members(container, issue_id))
+
+        retried = _materialize(chain, key="one-key-for-this-round")
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["status"] == "materialized"
+        assert retried.json()["team_count"] == 2
+
+        settled = _topology(container, issue_id)
+        assert settled.id == topology_after_block.id
+        assert len(settled.repository_teams) == len(topology_after_block.repository_teams)
+        assert {p.id for p in _principals(container)} == principals_after_block
+
+    assert len(starter.calls) == 1
+
+
+def test_one_member_still_down_holds_the_round_and_names_only_that_member(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A partly-launched fleet is still a refusal, and a precise one.
+
+    The over-reporting failure is the one worth guarding: a gate that answered
+    "the fleet is not ready" would send an operator round every machine, and a
+    gate that answered on the first member it found would hide the rest.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    _with_external_members(monkeypatch)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        assert _materialize(chain, key="partly-launched-key").status_code == 409
+        members = _team_members(container, issue_id)
+        _report_ready(container, members[1:])
+
+        response = _materialize(chain, key="partly-launched-key")
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+
+    assert detail["message"] == "1 local CLI members are not ready"
+    assert [row["agentId"] for row in detail["members"]] == [str(members[0])]
+    assert starter.calls == []
+
+
+def test_the_readiness_precheck_answers_the_panel_and_changes_nothing(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The advisory read the modal shows before offering the button.
+
+    Advisory is the whole of its status: a lease is a claim about *now*, so this
+    answer is already a moment old when it is rendered, and the gate inside
+    materialize stays the authority. What it must be is free of side effects —
+    a precheck that consumed a draft or wrote a receipt would make looking at
+    the panel a way to change the round — so the discovery projection is read
+    either side of the call and compared.
+
+    The flip from offline to ready is asserted too, because a canned answer
+    would satisfy every other assertion here.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    _with_execution_plane(monkeypatch, starter)
+    _with_external_members(monkeypatch)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+        # The blocked attempt is what provisions this project's teams, so the
+        # directory holds the members the precheck derives its set from.
+        assert _materialize(chain, key="precheck-round-key").status_code == 409
+        members = _team_members(container, issue_id)
+
+        before = chain.read()
+        down = _readiness(chain)
+        assert down.status_code == 200, down.text
+        body = down.json()
+        assert body["checkedAt"]
+        assert {row["agentId"] for row in body["members"]} == {
+            str(member_id) for member_id in members
+        }
+        assert {row["status"] for row in body["members"]} == {"offline"}
+
+        # Read-only: the round is exactly where it was.
+        assert chain.read() == before
+        assert _draft_row(container, issue_id).execution_plan_id is None
+        assert starter.calls == []
+
+        _report_ready(container, members)
+        up = _readiness(chain).json()
+        assert {row["status"] for row in up["members"]} == {"ready"}
+
+
+def test_a_block_between_a_failure_and_its_repair_keeps_the_lent_prefix(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """A blocked receipt must carry a lending obligation it inherited, not drop it.
+
+    The hole this closes needs three attempts and is invisible in any two of
+    them. Attempt A passes the gate and dies at publish, leaving a *failed*
+    receipt whose prefix ``disc-A`` names rows the plane already wrote. Attempt
+    B inherits ``disc-A`` — and is then refused by the readiness gate, which
+    overwrites the receipt with a *blocked* one. If ``blocked`` did not lend,
+    attempt C would compute a fresh prefix, materialise under it, and orphan the
+    ``disc-A`` rows: a second execution plan racing the first, which is exactly
+    the duplicate ``_prefix`` exists to prevent.
+
+    Lending after a *pure* block is harmless for the reason ``_record_block``
+    gives — a block creates nothing keyed on the prefix — so the rule is simply
+    that both refusals lend. What is asserted here is the inheritance: one plan
+    key across the whole sequence, and it is A's.
+    """
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    starter = StubPlanStarter()
+    # The fleet starts managed, so attempt A reaches the materializer at all.
+    control_plane = StubMemberControlPlane(container_managed=True)
+
+    class LosesTheBucketOnce:
+        """Writes the plan and its task rows, then fails the upload — A-10's shape."""
+
+        def __init__(self) -> None:
+            self.attempts = 0
+
+        async def start_plan(self, **kwargs):
+            self.attempts += 1
+            if self.attempts > 1:
+                return await starter.start_plan(**kwargs)
+            starter.calls.append(
+                (kwargs["project_id"], kwargs["idempotency_key"], kwargs["batches"])
+            )
+            raise TaskPublicationUnavailable(LIVE_S3_REFUSAL)
+
+    plane = LosesTheBucketOnce()
+    _with_execution_plane(monkeypatch, plane)
+    _with_member_control_plane(monkeypatch, control_plane)
+    container = replace(application_container, llm_client=_chain_llm())
+
+    with TestClient(create_app(container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        chain = Chain(client, issue_id, leader_id)
+        _walk_to_plan(chain)
+
+        # (A) Through the gate, and broken at publish.
+        assert _materialize(chain, key="lending-key-a").status_code == 503
+        failed = _draft_row(container, issue_id).discovery["materialization"]
+        assert failed["status"] == "failed"
+        assert failed["prefix"] == "disc-lending-key-a"
+
+        # The same members are now local CLIs, and nobody has launched one.
+        control_plane.container_managed = False
+
+        # (B) A reloaded panel's key, refused by the gate. The receipt it
+        # overwrites A's with must still name A's prefix.
+        blocked = _materialize(chain, key="lending-key-b")
+        assert blocked.status_code == 409, blocked.text
+        receipt = _draft_row(container, issue_id).discovery["materialization"]
+        assert receipt["status"] == "blocked"
+        assert receipt["idempotency_key"] == "lending-key-b"
+        assert receipt["prefix"] == "disc-lending-key-a"
+        # And it is fingerprinted, so the guard below applies to it as it does
+        # to a failed one: a replanned round still gets its own prefix.
+        assert receipt["plan_fingerprint"] == failed["plan_fingerprint"]
+
+        # (C) The members come up and a third key arrives.
+        _report_ready(container, _team_members(container, issue_id))
+        repaired = _materialize(chain, key="lending-key-c")
+        assert repaired.status_code == 200, repaired.text
+        assert repaired.json()["status"] == "materialized"
+
+        # One round, one execution plan: the repair finished A rather than
+        # starting a rival beside it.
+        row = _draft_row(container, issue_id)
+        assert str(row.execution_plan_id) == repaired.json()["plan_id"]
+
+    assert plane.attempts == 2
+    assert len(starter.calls) == 2
+    assert starter.calls[0][1] == starter.calls[1][1]
+    assert "lending-key-a" in starter.calls[0][1]
+
+
+def test_the_readiness_precheck_requires_the_action_token(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Same door as every other route on this router."""
+
+    _configure(monkeypatch)
+    _, leader_id, _, _ = _seed(application_container)
+    _with_execution_plane(monkeypatch, StubPlanStarter())
+
+    with TestClient(create_app(application_container)) as client:
+        issue_id = _create_issue(client, leader_id)
+        unauthenticated = client.get(f"/api/v1/issues/{issue_id}/discovery/readiness")
+
+    assert unauthenticated.status_code in (401, 403), unauthenticated.text
