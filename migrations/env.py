@@ -55,7 +55,10 @@ from repomesh.modules.repository_intelligence.infrastructure.models import (
     PlanSnapshotRecord,
     RepositoryRecord,
 )
-from repomesh.modules.review_validation.infrastructure import ValidationSnapshotRecord
+from repomesh.modules.review_validation.infrastructure import (
+    DatabaseBranchValidationRecord,
+    ValidationSnapshotRecord,
+)
 from repomesh.modules.specification.infrastructure import (
     SpecificationRecord,
     SpecificationVersionRecord,
@@ -74,6 +77,10 @@ from repomesh.persistence.models import (
 from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
+    SkillVersionRecord,
+    SkillEvaluationRecord,
+    SkillSnapshotRecord,
+    McpServerPolicyRecord,
     AgentPrincipalRecord,
     WorkerExecutionReservationRecord,
     WorkerRecoveryOperationRecord,
@@ -97,6 +104,7 @@ _REGISTERED_MODELS = (
     PlanSnapshotRecord,
     HandoffDocRecord,
     ValidationSnapshotRecord,
+    DatabaseBranchValidationRecord,
     RecoveryCaseRecord,
     RecoveryDecisionRecord,
     RecoveryOperationRecord,

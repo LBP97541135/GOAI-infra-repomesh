@@ -1485,11 +1485,28 @@ class ApplicationContainer:
     @cached_service
     def validation_snapshot_service(self):
         from repomesh.modules.review_validation import (
+            PostgresDatabaseBranchValidationStore,
             PostgresValidationSnapshotStore,
             ValidationSnapshotService,
         )
 
-        return ValidationSnapshotService(PostgresValidationSnapshotStore(self.database))
+        return ValidationSnapshotService(
+            PostgresValidationSnapshotStore(self.database),
+            PostgresDatabaseBranchValidationStore(self.database),
+        )
+
+    @cached_service
+    def database_branch_validation_service(self):
+        from repomesh.modules.review_validation import (
+            DatabaseBranchValidationService,
+            PostgresDatabaseBranchValidationStore,
+            UnavailableDatabaseBranchProvider,
+        )
+
+        return DatabaseBranchValidationService(
+            PostgresDatabaseBranchValidationStore(self.database),
+            UnavailableDatabaseBranchProvider(),
+        )
 
     def scm_webhook_event_store(self):
         return self.scm_observation_service()
