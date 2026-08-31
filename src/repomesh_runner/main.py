@@ -150,6 +150,7 @@ def run(environ: Mapping[str, str] = os.environ, argv: Sequence[str] | None = No
     setup_tracing(
         environ.get("REPOMESH_OTLP_ENDPOINT"),
         service_name=environ.get("REPOMESH_OTLP_SERVICE_NAME") or "repomesh-runner",
+        headers=environ.get("REPOMESH_OTLP_HEADERS"),
     )
 
     _logger.info(

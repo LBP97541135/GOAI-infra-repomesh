@@ -103,12 +103,18 @@ def traced(name: str) -> Callable[[_F], _F]:
     return decorate
 
 
-def setup_tracing(endpoint: str | None, *, service_name: str) -> bool:
+def setup_tracing(
+    endpoint: str | None, *, service_name: str, headers: str | None = None
+) -> bool:
     """Install the global TracerProvider exporting OTLP/HTTP to ``endpoint``.
 
     ``endpoint`` is the collector base URL (e.g. ``http://localhost:3000`` for a
     local AgentScope Studio); the standard ``/v1/traces`` path is appended when
-    missing. ``None`` or empty means tracing stays off and the call is a no-op.
+    missing. A full receiver path (``.../v1/traces`` or Alibaba Cloud AgentLoop's
+    ``.../apm/trace/opentelemetry``) is used as-is. ``headers`` is an optional
+    ``"k=v,k2=v2"`` string forwarded to every export request (AgentLoop requires
+    ``x-arms-license-key``, ``x-arms-project`` and ``x-cms-workspace``). ``None``
+    or empty means tracing stays off and the call is a no-op.
 
     Returns whether tracing is active. The global provider can only be installed
     once per process, so a second call (uvicorn reload, test re-entry) keeps the
@@ -128,11 +134,27 @@ def setup_tracing(endpoint: str | None, *, service_name: str) -> bool:
 
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
     provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=_traces_url(endpoint)))
+        BatchSpanProcessor(
+            OTLPSpanExporter(
+                endpoint=_traces_url(endpoint), headers=_parse_headers(headers)
+            )
+        )
     )
     trace.set_tracer_provider(provider)
     _logger.info("tracing enabled: service=%s endpoint=%s", service_name, endpoint)
     return True
+
+
+def _parse_headers(headers: str | None) -> dict[str, str] | None:
+    """Turn ``"k=v,k2=v2"`` into the header dict OTLPExporter expects."""
+    if not headers:
+        return None
+    parsed: dict[str, str] = {}
+    for pair in headers.split(","):
+        key, sep, value = pair.partition("=")
+        if sep and key.strip():
+            parsed[key.strip()] = value.strip()
+    return parsed or None
 
 
 def _traces_url(endpoint: str) -> str:

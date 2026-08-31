@@ -815,7 +815,11 @@ def _guard_deployment_defaults(settings: Settings) -> None:
 def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     settings = get_settings()
     _guard_deployment_defaults(settings)
-    setup_tracing(settings.otlp_endpoint, service_name=settings.otlp_service_name)
+    setup_tracing(
+        settings.otlp_endpoint,
+        service_name=settings.otlp_service_name,
+        headers=settings.otlp_headers,
+    )
     application = FastAPI(
         title=settings.app_name,
         version="0.1.0",

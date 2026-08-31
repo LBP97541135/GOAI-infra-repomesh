@@ -92,6 +92,9 @@ class Settings(BaseSettings):
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.
     otlp_endpoint: str | None = None
     otlp_service_name: str = "repomesh-api"
+    # OTLP exporter request headers, "k=v,k2=v2" (e.g. Alibaba Cloud AgentLoop:
+    # x-arms-license-key,x-arms-project,x-cms-workspace).
+    otlp_headers: str | None = None
     # The product exposes one default model connection. Legacy planning-specific
     # names remain aliases so existing deployments can override it independently.
     deepseek_api_key: str | None = Field(
