@@ -11,6 +11,7 @@ that production relies on.
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -133,15 +134,7 @@ async def test_full_queue_drops_without_blocking(database: Database) -> None:
 
 
 async def test_query_summary_and_issues_aggregate(database: Database) -> None:
-    # Pin to local noon: the daily aggregation groups by *local* date, so a
-    # naive ``now`` running near local midnight would split the fixture's
-    # now-1..4h offsets across two days and break ``len(daily) == 1``.
-    now = (
-        datetime.now()
-        .astimezone()
-        .replace(hour=12, minute=0, second=0, microsecond=0)
-        .astimezone(UTC)
-    )
+    now = datetime.now(UTC)
     issue_a, issue_b = uuid4(), uuid4()
     async with database.transaction() as session:
         session.add_all(
@@ -175,8 +168,14 @@ async def test_query_summary_and_issues_aggregate(database: Database) -> None:
         (2, 2),
         (None, 1),
     ]
-    assert len(summary["daily"]) == 1
-    assert summary["daily"][0]["calls"] == 4
+    # The four rows straddle a UTC midnight whenever the suite runs within
+    # four hours of 00:00 UTC, so the expected buckets follow the seeded clock.
+    expected_daily = Counter(
+        (now - timedelta(hours=h)).date().isoformat() for h in (1, 2, 3, 4)
+    )
+    assert [(d["date"], d["calls"]) for d in summary["daily"]] == sorted(
+        expected_daily.items()
+    )
 
     issues = await store.issues()
     assert [str(i["issue_id"]) for i in issues] == [str(issue_a), str(issue_b)]

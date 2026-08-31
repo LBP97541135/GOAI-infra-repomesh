@@ -65,6 +65,18 @@ _MAX_ORPHAN_RESPONSES = 64
 _TOOL_ITEM_TYPES = frozenset({"commandExecution", "fileChange"})
 _APPROVAL_METHOD_HINTS = ("approval", "permission")
 
+APPROVAL_VERDICTS: "Mapping[PermissionDecision, str]" = {
+    PermissionDecision.ALLOW: "accept",
+    PermissionDecision.DENY: "decline",
+    PermissionDecision.ESCALATE: "cancel",
+}
+"""How a permission decision is spelled on codex's approval response.
+
+Named rather than inline because it is the one part of this exchange a test can
+pin without a live codex, and the reason it needed pinning is that it was wrong
+for as long as nothing asked. See :meth:`_AppServerRun._answer_approval`.
+"""
+
 
 class _Abort(Exception):
     """Internal control-flow signal carrying the terminal status to report."""
@@ -596,10 +608,30 @@ class _AppServerRun:
     ) -> None:
         """Answer a codex approval request from the permission policy.
 
-        No approval was captured on the wire (the observed config approves
-        everything locally), so the decision vocabulary follows codex's
-        documented review decisions — ``approved`` / ``denied`` / ``abort`` —
-        and is covered by fake-process tests only.
+        The decision vocabulary is codex's, captured from codex. It used to be
+        ``approved`` / ``denied`` / ``abort``, chosen from the review decisions
+        codex documents and covered by fake-process tests only, because no
+        approval had ever been seen on the wire — the configuration this driver
+        ran under approved everything locally, so nothing ever asked.
+
+        The first deployment where something did ask (RepoMesh's Bridge, 2026-08-28)
+        showed those three words are not the ones this request takes. codex
+        answers an unknown variant by refusing the tool and telling the model the
+        approval *failed*::
+
+            failed to deserialize CommandExecutionRequestApprovalResponse:
+            unknown variant `approved`, expected one of `accept`,
+            `acceptForSession`, `acceptWithExecpolicyAmendment`,
+            `applyNetworkPolicyAmendment`, `decline`, `cancel`
+
+        which is worse than a denial, because an allow and a deny become the same
+        outcome and no client can tell. Both directions are now the captured
+        ones: ``accept`` runs the command, and ``decline`` refuses it with
+        ``Rejected("rejected by user")`` rather than a deserialization error.
+
+        ``cancel`` carries ESCALATE. It is the only variant that ends the turn
+        without deciding it, which is what escalation means here: nothing on this
+        machine may answer, so the run stops and says so.
         """
 
         item = _mapping(params.get("item"))
@@ -612,11 +644,7 @@ class _AppServerRun:
             decision = PermissionDecision.DENY
             self._notes.append(f"permission policy raised for {tool_name}: {exc}")
 
-        verdict = {
-            PermissionDecision.ALLOW: "approved",
-            PermissionDecision.DENY: "denied",
-            PermissionDecision.ESCALATE: "abort",
-        }[decision]
+        verdict = APPROVAL_VERDICTS[decision]
         self._emit(
             DriverEventKind.PERMISSION_REQUEST,
             {

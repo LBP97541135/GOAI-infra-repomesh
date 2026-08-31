@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 <img src="docs/assets/logo.svg" alt="RepoMesh — observable delivery control plane" width="820">
 
@@ -45,6 +45,21 @@ Either of these takes a fresh clone to the delivery console in your browser
 with no manual configuration. They are alternatives, not steps: both claim
 port 8100.
 
+For normal product use, run the Docker-first launcher. The host only needs a running Docker engine:
+
+```powershell
+.\scripts\start.ps1
+```
+
+```bash
+./scripts/start.sh
+```
+
+It selects free ports, creates internal credentials, installs or reuses AgentTeams, wires Matrix and
+MinIO, and starts PostgreSQL, the full execution-plane API, and the nginx console. Host Python, uv,
+Node.js, npm, and PostgreSQL are not required. Docker installation itself is not silent because it
+may require administrator privileges, virtualization changes, and a reboot.
+
 **Development launcher** — hot reload; the host needs Docker, uv and Node 20+:
 
 ```powershell
@@ -62,7 +77,7 @@ working stack — and nothing the script did not start is ever restarted,
 migrated into or stopped. `.\scripts\dev-down.ps1` / `./scripts/dev-down.sh`
 takes down only the components the launcher started, one confirmation each.
 
-**Full-stack compose** — the host needs Docker and nothing else:
+**Standalone console compose (compatibility/CI)** — Docker-only, without the full AgentTeams plane:
 
 ```bash
 docker compose --profile console up -d --build
@@ -125,13 +140,13 @@ Open `http://127.0.0.1:8000/docs`. For the full local platform, use Docker and P
 to install AgentTeams from the checked-in installer and start the containerized RepoMesh API:
 
 ~~~powershell
-.\scripts\start-platform.ps1 -InstallAgentTeams
+.\scripts\start-platform.ps1
 ~~~
 
 On Linux:
 
 ~~~bash
-./scripts/start-platform.sh --install-agentteams
+./scripts/start-platform.sh
 ~~~
 
 The full platform uses one default OpenAI-compatible model connection for both RepoMesh planning

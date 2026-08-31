@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "repomesh.leader-actions.plan-decision.v1",
+  "engineeringSpec": {
+    "summary": "Add currency to the quote contract first, then implement rounding on top of it.",
+    "markdown": "# Multi-currency quoting\n\n## Step 1 — contract\nExtend `Quote` with a `currency` field and declare the rounding-rule table (USD/EUR: 2 decimal places; JPY: 0).\n\n## Step 2 — rounding\nImplement `round_amount(amount, currency)` against the rule table and use it in quote pricing.\n\nBoth steps keep the existing USD behavior byte-identical and run the repository test command."
+  },
+  "taskDag": {
+    "nodes": [
+      {"nodeId": "contract"},
+      {"nodeId": "rounding"}
+    ],
+    "edges": [
+      {"from": "contract", "to": "rounding"}
+    ]
+  },
+  "workerTasks": [
+    {
+      "nodeId": "contract",
+      "assigneeWorkerAgentId": "00000000-0000-0000-0000-000000000002",
+      "title": "Extend the quote contract with currency and rounding rules",
+      "instruction": "Add a currency field to the Quote contract and declare the rounding-rule table: USD/EUR two decimal places, JPY zero. Keep existing USD behavior unchanged.",
+      "allowedPaths": ["src/pricing_core/contracts/", "tests/"],
+      "tests": ["python scripts/run_tests.py"]
+    },
+    {
+      "nodeId": "rounding",
+      "assigneeWorkerAgentId": "00000000-0000-0000-0000-000000000002",
+      "title": "Implement per-currency rounding",
+      "instruction": "Implement round_amount(amount, currency) against the contract's rounding-rule table and apply it in quote pricing.",
+      "allowedPaths": ["src/pricing_core/", "tests/"],
+      "tests": ["python scripts/run_tests.py"]
+    }
+  ],
+  "provenance": {
+    "source": "leader-codex-session",
+    "sessionThreadId": "thread-0192f3a1-planning",
+    "turnId": "turn-0004"
+  }
+}

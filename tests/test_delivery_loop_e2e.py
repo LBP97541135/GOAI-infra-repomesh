@@ -2,7 +2,7 @@ import json
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -183,6 +183,7 @@ async def _store_candidate(
     # ``commitSha: null``. On a SUCCEEDED worker that is a contradiction
     # delivery has to refuse, which is what the test below pins.
     commit_sha: str | None,
+    run_id: UUID | None = None,
     test_results: list | None = None,
 ) -> tuple[Task, Task]:
     actor = uuid4()
@@ -212,6 +213,7 @@ async def _store_candidate(
         result_summary=json.dumps(
             {
                 "commitSha": commit_sha,
+                "runId": str(run_id) if run_id is not None else None,
                 "baseSha": base_sha,
                 "workspacePath": str(workspace),
                 "testResults": (
@@ -239,7 +241,9 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
     first_repository_id = uuid4()
     second_repository_id = uuid4()
     tasks = InMemoryTaskStore()
-    first_leader, _ = await _store_candidate(
+    first_run_id = uuid4()
+    second_run_id = uuid4()
+    first_leader, first_worker = await _store_candidate(
         tasks,
         organization_id=organization_id,
         project_id=project_id,
@@ -248,8 +252,9 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
         workspace=first_workspace,
         base_sha=first_base,
         commit_sha=first_head,
+        run_id=first_run_id,
     )
-    second_leader, _ = await _store_candidate(
+    second_leader, second_worker = await _store_candidate(
         tasks,
         organization_id=organization_id,
         project_id=project_id,
@@ -258,6 +263,7 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
         workspace=second_workspace,
         base_sha=second_base,
         commit_sha=second_head,
+        run_id=second_run_id,
     )
     plan = ExecutionPlanView(
         id=uuid4(),
@@ -318,12 +324,34 @@ async def test_completed_two_repository_plan_reaches_reviewed_ci_green_merge(
     assert change_set.id == first_change_set.id
     assert change_set.validation_snapshot_id == first_snapshot_id
     assert all(command.draft for command in adapter.pull_requests)
+    # D-9: every published description carries the whole chain back to the
+    # Issue -- issue, change_set, plan, repository, task, run, worker_agent and
+    # commit -- assembled here because the finalizer is the only place holding
+    # all eight at once.
+    traceability = {
+        "api": (first_repository_id, first_worker, first_run_id, first_head),
+        "web": (second_repository_id, second_worker, second_run_id, second_head),
+    }
+    for command in adapter.pull_requests:
+        repository_id, worker, run_id, head = traceability[command.repository.name]
+        assert f"- issue: `{project_id}`" in command.body
+        assert f"- change_set: `{change_set.id}`" in command.body
+        assert f"- plan: `{plan.id}`" in command.body
+        assert f"- repository: `{repository_id}`" in command.body
+        assert f"- task: `{worker.id}`" in command.body
+        assert f"- run: `{run_id}`" in command.body
+        assert f"- worker_agent: `{worker.assignee_agent_id}`" in command.body
+        assert f"- commit: `{head}`" in command.body
     # Sibling PR descriptions are back-filled with links to every PR in the
-    # ChangeSet, and carry the change_id + execution order markers. handle()
-    # runs twice (create + idempotent replay), so every PR is updated twice.
+    # ChangeSet, and keep the traceability chain + execution order markers.
+    # handle() runs twice (create + idempotent replay), so every PR is updated
+    # twice.
     assert len(adapter.updates) == 4
-    for _, _, body in adapter.updates:
-        assert "change_id" in body
+    for repository, _, body in adapter.updates:
+        repository_id, worker, run_id, head = traceability[repository.name]
+        assert f"- run: `{run_id}`" in body
+        assert f"- worker_agent: `{worker.assignee_agent_id}`" in body
+        assert f"- commit: `{head}`" in body
         assert "execution order: full plan" in body
         assert "## Sibling PRs in this ChangeSet" in body
         assert "PR #1" in body and "PR #2" in body
@@ -389,7 +417,9 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
     first_repository_id = uuid4()
     second_repository_id = uuid4()
     tasks = InMemoryTaskStore()
-    first_leader, _ = await _store_candidate(
+    first_run_id = uuid4()
+    second_run_id = uuid4()
+    first_leader, first_worker = await _store_candidate(
         tasks,
         organization_id=organization_id,
         project_id=project_id,
@@ -398,8 +428,9 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
         workspace=first_workspace,
         base_sha=first_base,
         commit_sha=first_head,
+        run_id=first_run_id,
     )
-    second_leader, _ = await _store_candidate(
+    second_leader, second_worker = await _store_candidate(
         tasks,
         organization_id=organization_id,
         project_id=project_id,
@@ -408,6 +439,7 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
         workspace=second_workspace,
         base_sha=second_base,
         commit_sha=second_head,
+        run_id=second_run_id,
     )
     plan = ExecutionPlanView(
         id=uuid4(),
@@ -463,10 +495,15 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
     assert [item.repository_id for item in change_set.repositories] == [
         first_repository_id
     ]
+    assert len(adapter.updates) == 1
+    assert f"- plan: `{plan.id}`" in adapter.updates[0][2]
+    assert f"- run: `{first_run_id}`" in adapter.updates[0][2]
+    assert f"- worker_agent: `{first_worker.assignee_agent_id}`" in adapter.updates[0][2]
 
     # Replaying the same batch must not open a duplicate pull request.
     await finalizer.handle_batch(plan)
     assert len(adapter.pull_requests) == 1
+    assert len(adapter.updates) == 2
 
     # Batch 1 appends to the SAME ChangeSet, ordered after batch 0.
     advanced = replace(plan, current_batch_index=1)
@@ -476,10 +513,20 @@ async def test_handle_batch_delivers_batches_into_one_change_set_in_order(
     assert len(change_set.repositories) == 2
     # Batch-by-batch: after the second batch, sibling links cover both PRs
     # and the back-filled body records the batch execution order.
-    assert len(adapter.updates) == 2
-    for _, _, body in adapter.updates:
+    assert len(adapter.updates) == 4
+    traceability = {
+        "api": (first_worker, first_run_id),
+        "web": (second_worker, second_run_id),
+    }
+    for repository, _, body in adapter.updates[-2:]:
+        worker, run_id = traceability[repository.name]
         assert "execution order: batch 2" in body
         assert "## Sibling PRs in this ChangeSet" in body
+        # Batch 1's pull request was opened with its own run and worker ids and
+        # keeps them: the back-fill resolves provenance for every batch
+        # delivered so far, not just the one it is standing on.
+        assert f"- run: `{run_id}`" in body
+        assert f"- worker_agent: `{worker.assignee_agent_id}`" in body
     orders = {item.repository_id: item.merge_order for item in change_set.repositories}
     assert orders[second_repository_id] > orders[first_repository_id]
     second = next(

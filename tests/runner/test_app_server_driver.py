@@ -528,7 +528,9 @@ async def test_substituted_model_fails_the_run(fake_factory, tmp_path):
 
 @pytest.mark.parametrize(
     ("decision", "verdict"),
-    [(PermissionDecision.ALLOW, "approved"), (PermissionDecision.DENY, "denied")],
+    # The words are codex's, captured from a live 0.149.1 approval (C-8a); the
+    # ones that used to be here were plausible and refused on the wire.
+    [(PermissionDecision.ALLOW, "accept"), (PermissionDecision.DENY, "decline")],
 )
 async def test_approval_allow_and_deny_answer_on_the_request_id(
     fake_factory, tmp_path, decision, verdict
@@ -590,7 +592,7 @@ async def test_approval_escalate_ends_input_required(fake_factory, tmp_path):
     assert result.summary == ""
     assert "cannot be decided locally" in result.diagnostics
     answer = next(frame for frame in sent_frames(factory) if frame.get("id") == 90)
-    assert answer == {"jsonrpc": "2.0", "id": 90, "result": {"decision": "abort"}}
+    assert answer == {"jsonrpc": "2.0", "id": 90, "result": {"decision": "cancel"}}
     assert observer.of(DriverEventKind.PERMISSION_REQUEST)[0]["decision"] == "escalate"
     assert factory.process.terminated
 

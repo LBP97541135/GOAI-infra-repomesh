@@ -57,6 +57,7 @@ class AdvanceExecutionPlanStarter:
                         instruction=item.instruction,
                         acceptance=item.acceptance,
                         tests=item.tests,
+                        test_paths=item.test_paths,
                     )
                     for item in batch
                 )

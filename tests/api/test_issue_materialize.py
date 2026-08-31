@@ -1023,8 +1023,8 @@ def test_a_runtime_that_refuses_on_the_merits_answers_409_not_503(
     class Refuses:
         async def project(self, project_id: UUID) -> None:
             raise RuntimeProjectionConflict(
-                "AgentTeams HTTP 400: Worker rm-leader-b-checkout is already "
-                "a member of Team rm-team-6c503f0227a44e9280b3ab29775c0b76"
+                "AgentTeams HTTP 400: Worker repomesh-leader-b-checkout is already "
+                "a member of Team repomesh-team-6c503f0227a44e9280b3ab29775c0b76"
             )
 
     _with_execution_plane(monkeypatch, starter, Refuses())
@@ -1040,7 +1040,7 @@ def test_a_runtime_that_refuses_on_the_merits_answers_409_not_503(
         detail = response.json()["detail"]
         # The controller's words, verbatim — the actionable half.
         assert "is already a member of Team" in detail
-        assert "rm-team-6c503f0227a44e9280b3ab29775c0b76" in detail
+        assert "repomesh-team-6c503f0227a44e9280b3ab29775c0b76" in detail
         # And explicitly *not* the retry advice the 503 gives.
         assert "materialize again once AgentTeams answers" not in detail
         assert "retrying will not help" in detail

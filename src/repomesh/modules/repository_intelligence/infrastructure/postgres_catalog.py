@@ -68,6 +68,28 @@ class PostgresRepositoryCatalog:
             record = await session.get(RepositoryRecord, repository_id)
         return self._to_domain(record) if record else None
 
+    async def update_verification(
+        self,
+        repository_id: UUID,
+        *,
+        test_commands: tuple[str, ...],
+        test_paths: tuple[str, ...],
+    ) -> RepositoryProfile | None:
+        """Replace an operator-owned verification profile idempotently.
+
+        The endpoint using this method is safe to retry: it assigns the complete
+        command/path pair rather than appending to either collection.
+        """
+
+        async with self._database.transaction() as session:
+            record = await session.get(RepositoryRecord, repository_id)
+            if record is None:
+                return None
+            record.test_commands = list(test_commands)
+            record.test_paths = list(test_paths)
+            await session.flush()
+            return self._to_domain(record)
+
     @staticmethod
     def _to_domain(record: RepositoryRecord) -> RepositoryProfile:
         return RepositoryProfile(

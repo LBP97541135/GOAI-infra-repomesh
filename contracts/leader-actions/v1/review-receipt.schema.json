@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/leader-actions/v1/review-receipt.schema.json",
+  "title": "RepoMesh Review Receipt v1",
+  "description": "200 response of POST /api/v1/agent-actions/leader/assignments/{taskId}/review. Frozen verdict-to-outcome mapping (pinned by contract tests): approve -> leaderTaskStatus succeeded, reworkTaskIds empty; request_rework -> leaderTaskStatus in_progress, reworkTaskIds non-empty (the new revision worker tasks, created idempotently per review revision); escalate -> leaderTaskStatus blocked, reworkTaskIds empty. Idempotent resubmission of the same decision against the same reviewRevision returns this same document with 200.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "leaderTaskId", "verdict", "reviewRevision", "leaderTaskStatus", "reworkTaskIds"],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.leader-actions.review-receipt.v1"},
+    "leaderTaskId": {"type": "string", "format": "uuid"},
+    "verdict": {"type": "string", "enum": ["approve", "request_rework", "escalate"]},
+    "reviewRevision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The review round this decision was accepted against; part of the idempotent identity."
+    },
+    "leaderTaskStatus": {
+      "type": "string",
+      "enum": ["succeeded", "in_progress", "blocked"],
+      "description": "Resulting leader task status; values are RepoMesh TaskStatus strings."
+    },
+    "reworkTaskIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "format": "uuid"}
+    }
+  }
+}

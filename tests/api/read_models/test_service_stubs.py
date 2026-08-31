@@ -21,6 +21,7 @@ from repomesh.modules.collaboration.contracts import (
     CollaborationDeliveryStatus,
     CollaborationMessageKind,
     CollaborationMessageView,
+    RoomTimelineEntryView,
 )
 from repomesh.modules.delivery.contracts import (
     MERGE_GATE_GOVERNANCE_MISSING_REASON,
@@ -178,6 +179,7 @@ def _service(
     specifications=None,
     runtime=None,
     probe_concurrency=None,
+    room_timeline=None,
 ):
     empty = _Empty()
     return DeliveryReadModelService(
@@ -194,6 +196,7 @@ def _service(
         runner_events=runner_events if runner_events is not None else empty,
         messages=messages if messages is not None else empty,
         observations=observations if observations is not None else empty,
+        room_timeline=room_timeline,
         runtime=runtime,
         probe_concurrency=probe_concurrency,
     )
@@ -581,6 +584,25 @@ class StubMessages:
             if seen is None or item.created_at > seen:
                 latest[item.task_id] = item.created_at
         return latest
+
+
+class StubRoomTimeline:
+    """What ``collaboration`` recorded from the room itself (v0.2 §5.2 + PR 9).
+
+    Sorted here the way the real read use case sorts, so a test that feeds
+    entries out of order is testing the merge rather than the stub.
+    """
+
+    def __init__(self, *entries: RoomTimelineEntryView) -> None:
+        self.entries = entries
+
+    async def for_room(self, room_id: str):
+        return tuple(
+            sorted(
+                (entry for entry in self.entries if entry.room_id == room_id),
+                key=lambda entry: (entry.occurred_at, entry.event_id),
+            )
+        )
 
 
 class StubObservations:

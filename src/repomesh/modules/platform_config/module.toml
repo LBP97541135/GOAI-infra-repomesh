@@ -1,0 +1,5 @@
+name = "platform_config"
+owner = "platform"
+status = "active"
+schema = "platform"
+responsibilities = ["encrypted deployment credentials", "credential status summaries", "durable platform bootstrap operations"]

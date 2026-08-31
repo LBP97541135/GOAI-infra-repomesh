@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "repomesh.leader-actions.review-decision.v1",
+  "verdict": "request_rework",
+  "summary": "The rounding implementation hardcodes the currency table instead of reading it from the contract; a new zero-decimal currency would round incorrectly without a contract change being reflected.",
+  "findings": [
+    {
+      "workerTaskId": "00000000-0000-0000-0000-0000000000b2",
+      "note": "round_amount duplicates the rounding-rule table locally instead of consuming the contract's table.",
+      "reworkInstruction": "Read the rounding-rule table from the quote contract; delete the local copy; add a test that a table-only contract change alters rounding behavior."
+    }
+  ],
+  "provenance": {
+    "source": "leader-codex-session",
+    "sessionThreadId": "thread-0192f3a1-review",
+    "turnId": "turn-0010"
+  }
+}

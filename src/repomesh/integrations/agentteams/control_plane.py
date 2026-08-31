@@ -48,6 +48,11 @@ class AgentTeamsVersion:
 class AgentTeamsControlPlaneClient:
     """Typed client for the AgentTeams v1.2 controller API."""
 
+    #: Worker-document fields confirmed as JSON booleans rather than by
+    #: equality. See ``_matches``; the set has one member because
+    #: ``containerManaged`` is the one boolean anything turns on.
+    _STRICT_BOOLEAN_FIELDS = frozenset({"containerManaged"})
+
     def __init__(
         self,
         base_url: str,
@@ -127,6 +132,13 @@ class AgentTeamsControlPlaneClient:
         self._set_optional(payload, "identity", projection.identity)
         self._set_optional(payload, "soul", projection.soul)
         self._set_optional(payload, "agents", projection.agents)
+        if not projection.container_managed:
+            # Sent only by the explicit external path. The controller defaults
+            # the field to true (``resource_handler.go``), so a managed worker's
+            # payload stays byte-identical to the one RepoMesh has always sent
+            # — two spellings of the same resource is how field-for-field
+            # parity turns into a 409.
+            payload["containerManaged"] = False
         if projection.mcp_servers:
             payload["mcpServers"] = [
                 {
@@ -328,6 +340,19 @@ class AgentTeamsControlPlaneClient:
                 }
                 for server in expected.mcp_servers
             ]
+        # A containerManaged mismatch is the one conflict that must never be
+        # reconciled away: adopting a managed worker as external leaves a
+        # container running under an identity a local process is serving, and
+        # adopting an external one as managed starts a second body for it.
+        # Absence is not agreement either — the v1.2.0 worker document always
+        # carries the field, so a document without it cannot confirm anything,
+        # and only the request that needs a confirmation is refused over it.
+        if "containerManaged" in body:
+            fields["containerManaged"] = expected.container_managed
+        elif not expected.container_managed:
+            raise AgentTeamsConflict(
+                "existing AgentTeams worker does not confirm containerManaged: false"
+            )
         if expected.identity:
             fields["identity"] = expected.identity
         if expected.soul:
@@ -362,8 +387,35 @@ class AgentTeamsControlPlaneClient:
         AgentTeamsControlPlaneClient._assert_fields("team", body, fields)
 
     @staticmethod
+    def _matches(key: str, observed: Any, expected: Any) -> bool:
+        """Whether the controller's value confirms the one being asked for.
+
+        Equality, except for the fields in ``_STRICT_BOOLEAN_FIELDS``, which are
+        compared against the JSON boolean itself. Python's ``0 == False`` is
+        true, so a controller answering ``"containerManaged": 0`` used to
+        *confirm* an external projection — and that confirmation is the single
+        fact the bridge preflight is built on (ADR 0004 decision 5). Identity
+        against ``True``/``False`` accepts the JSON literal and nothing that
+        merely compares equal to it, which puts ``0``, ``"false"`` and ``null``
+        in the same place absence already is: unable to confirm anything.
+
+        Deliberately not applied to the rest. ``model``, ``runtime``,
+        ``skills`` and the projections below are strings and lists, where
+        equality says exactly what the operator means, and tightening them
+        would refuse pairs that agree.
+        """
+
+        if key in AgentTeamsControlPlaneClient._STRICT_BOOLEAN_FIELDS:
+            return observed is expected
+        return observed == expected
+
+    @staticmethod
     def _assert_fields(kind: str, body: dict[str, Any], fields: dict[str, Any]) -> None:
-        mismatches = [key for key, value in fields.items() if body.get(key) != value]
+        mismatches = [
+            key
+            for key, value in fields.items()
+            if not AgentTeamsControlPlaneClient._matches(key, body.get(key), value)
+        ]
         if mismatches:
             joined = ", ".join(sorted(mismatches))
             raise AgentTeamsConflict(f"existing AgentTeams {kind} differs in: {joined}")
@@ -379,6 +431,10 @@ class AgentTeamsControlPlaneClient:
 
     @staticmethod
     def _worker_ref(body: dict[str, Any]) -> WorkerRuntimeRef:
+        # Anything that is not a JSON boolean reads as "unknown" rather than as
+        # a truthy value: the preflight binding turns on this field being
+        # exactly False, and a string "false" must not get there.
+        observed = body.get("containerManaged")
         return WorkerRuntimeRef(
             name=str(body.get("name", "")),
             phase=str(body.get("phase", "")),
@@ -392,6 +448,7 @@ class AgentTeamsControlPlaneClient:
             # reconcile adopt an existing repository Team instead of walking
             # into the exclusive-membership 400 (A-8).
             team=body.get("team"),
+            container_managed=observed if isinstance(observed, bool) else None,
         )
 
     @staticmethod

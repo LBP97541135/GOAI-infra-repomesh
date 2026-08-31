@@ -352,7 +352,18 @@ export interface TeamRuntimeFields {
 /** §4.3 契约枚举：Controller 回报的运行时适配器种类。 */
 export type RuntimeKind = "openclaw" | "copaw" | "hermes" | "openhuman" | "repomesh-runner";
 
+/** 这个成员**由谁托管**——服务端向 Controller 核实的 `containerManaged` 转述：
+ *   - `container`：Controller 确认容器归它管；
+ *   - `external`：Controller 确认容器**不**归它管（本机 CLI 经 Bridge 接入）；
+ *   - `null`：这次探测压根没问（manager 探测不带该字段）——是**未知不是 external**。
+ *
+ *  `external` 时 `phase` / `runtime_kind` 恒 null：那是容器生命周期词汇，对一个
+ *  永远不会被容器化的成员没有主语。Controller 仍会为它回 `Pending`（空 phase 的
+ *  默认值），服务端已在 §4.3 投影处扣掉——前端拿到的就是 null。 */
+export type AgentRuntimeHosting = "container" | "external";
+
 export interface AgentRuntimeFields {
+  kind: AgentRuntimeHosting | null;
   phase: string | null;
   runtime_kind: RuntimeKind | null;
   matrix_user_id: string | null;
@@ -373,6 +384,10 @@ export interface ConsoleRepositoryView {
   description: string;
   topics: string[];
   languages: string[];
+  /** 操作者声明的正式验证命令；空数组表示尚未配置，不能由前端猜测。 */
+  test_commands: string[];
+  /** 验证命令读取/写入的测试路径，与命令作为一个配置对维护。 */
+  test_paths: string[];
   profiled_at: string;
   /** 拓扑派生：该仓库被多少 team 驻扎 */
   resident_team_count: number;
@@ -383,9 +398,29 @@ export interface ConsoleRepositoryView {
   teams: Array<{ team_id: string; issue_id: string; runtime_status: TeamRuntimeStatus }>;
 }
 
+/** `PATCH /repositories/{id}/verification` 的完整替换请求。 */
+export interface RepositoryVerificationUpdate {
+  test_commands: string[];
+  test_paths: string[];
+}
+
+/** 更新端点只需由调用方消费这三个回显字段。 */
+export interface RepositoryVerificationView extends RepositoryVerificationUpdate {
+  id: string;
+}
+
 /** §4.2。`runtime_status`（拓扑记录的**建团结果**，历史事实）与 `runtime.phase`
  *  （Controller 的**当前观测态**，可能不可达）是两个不同事实，**契约明文不得合并**：
  *  合成一个徽标会让 controller 打不通时显示成「团队坏了」，而团队其实建成过。 */
+/** 谁把本团队的仓库级任务拆成 worker 任务（裁决 D-2，迁移 0037）。
+ *
+ *  `server` = 平台在派 leader 任务的同一步里拆解直派（历史行为、绝大多数团队）；
+ *  `leader` = 批次停在 leader 任务，等这个团队自己的 external Repository Leader
+ *  经 leader-actions 面提交计划。**只有正式 adoption 通道**（materialize 时
+ *  controller 说这个 leader 的容器不归它管）才写得出 `leader`，没有任何脚本或
+ *  界面开关能设它——所以这个字段是**采用结果的回显**，不是一个可切换的配置。 */
+export type TeamDecompositionMode = "server" | "leader";
+
 export interface ConsoleTeamView {
   team_id: string;
   agentteams_team_name: string;
@@ -394,6 +429,8 @@ export interface ConsoleTeamView {
   /** 契约写 string，但实现在 catalog 查不到该仓库时给 null（已核 service.py） */
   repository_name: string | null;
   runtime_status: TeamRuntimeStatus;
+  /** 拓扑持久化的**采用结果**，与 `runtime` 探测无关：controller 打不通时它照样为真。 */
+  decomposition_mode: TeamDecompositionMode;
   team_room_id: string | null;
   leader_room_id: string | null;
   leader: RoomMemberView;
@@ -762,7 +799,10 @@ export interface CollaborationMessageView {
   kind: string;
   subject: string;
   body: string;
-  sender_agent_id: string;
+  /** 房间时间线条目可能**没有**发送者 principal：Matrix 发送者没能映射到任何
+   *  注册主体时这里是 null（裁决 D-4，服务端 `_timeline_message_item` 如实透传）。
+   *  此时 `sender_name` 兜的是原始 Matrix handle——「未解析的发送者，如实呈现它自己」。 */
+  sender_agent_id: string | null;
   sender_name: string | null;
   recipient_agent_id: string;
   recipient_name: string | null;
@@ -1554,9 +1594,31 @@ export interface CodingAgentsProbe {
 /** `/setup/status` 的九项检查。前五项（model / database / agentteams / matrix /
  *  internal_auth）是 `ready_for_project_creation` 的必检项，其余四项不参与那个
  *  判定——后端的 `required` 元组是唯一事实，前端不另立一套。 */
+/** `/setup/status` retains the boolean checks for compatibility. `dependencies`
+ * is the setup UI's source of truth for ownership and remediation. */
+export type SetupDependencyState =
+  | "checking"
+  | "ready"
+  | "missing"
+  | "repairing"
+  | "waiting_for_user"
+  | "failed"
+  | "optional"
+  | "pending_onboarding";
+
+export interface SetupDependencyView {
+  id: string;
+  state: SetupDependencyState;
+  owner: "system" | "user" | "onboarding";
+  remediation: "automatic" | "user_input" | "optional" | "workflow";
+  required: boolean;
+  message: string;
+}
+
 export interface SetupStatusView {
   ready_for_project_creation: boolean;
   checks: Record<string, boolean>;
+  dependencies: SetupDependencyView[];
   counts: { accounts: number; agents: number; repositories: number };
   /** 未通过项的名字，后端已算好 */
   next_actions: string[];

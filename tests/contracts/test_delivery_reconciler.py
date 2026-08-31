@@ -108,6 +108,9 @@ async def prepared_delivery():
     )
     store = InMemoryChangeSetStore()
     service = DeliveryService(store)
+    plan_id = uuid4()
+    run_id = uuid4()
+    worker_agent_id = uuid4()
     change_set = await service.prepare(
         PrepareChangeSetCommand(
             organization_id=uuid4(),
@@ -124,6 +127,9 @@ async def prepared_delivery():
                     branch_name="repomesh/pricing",
                     required_checks=("unit-tests",),
                     required_approvals=1,
+                    plan_id=plan_id,
+                    run_id=run_id,
+                    worker_agent_id=worker_agent_id,
                 ),
             ),
         ),
@@ -271,6 +277,9 @@ async def stranded_delivery() -> tuple[
     )
     store = InMemoryChangeSetStore()
     service = DeliveryService(store)
+    plan_id = uuid4()
+    run_id = uuid4()
+    worker_agent_id = uuid4()
     change_set = await service.prepare(
         PrepareChangeSetCommand(
             organization_id=uuid4(),
@@ -287,6 +296,9 @@ async def stranded_delivery() -> tuple[
                     branch_name="repomesh/a762abba/9dfa78f2",
                     required_checks=("unit-tests",),
                     required_approvals=1,
+                    plan_id=plan_id,
+                    run_id=run_id,
+                    worker_agent_id=worker_agent_id,
                 ),
             ),
         ),
@@ -317,10 +329,18 @@ async def test_sweep_opens_the_pull_request_a_failed_publish_left_behind() -> No
     assert command.head_branch == "repomesh/a762abba/9dfa78f2"
     assert command.base_branch == "main"
     assert command.expected_head_sha == "a" * 40
-    # Honest minimal body: only facts, no plan narrative it could not verify.
-    assert str(change_set_id) in command.body
-    assert str(repository_id) in command.body
-    assert "a" * 40 in command.body
+    # The owning plan-delivery application persists the complete chain on the
+    # candidate, so reconciliation can render it without querying another module.
+    change_set = await service.get(change_set_id)
+    assert f"- issue: `{change_set.project_id}`" in command.body
+    assert f"- change_set: `{change_set_id}`" in command.body
+    assert f"- repository: `{repository_id}`" in command.body
+    assert f"- task: `{change_set.repositories[0].task_id}`" in command.body
+    assert "- branch: `repomesh/a762abba/9dfa78f2`" in command.body
+    assert f"- commit: `{'a' * 40}`" in command.body
+    assert f"- plan: `{change_set.repositories[0].plan_id}`" in command.body
+    assert f"- run: `{change_set.repositories[0].run_id}`" in command.body
+    assert f"- worker_agent: `{change_set.repositories[0].worker_agent_id}`" in command.body
     assert "completed by reconciliation" in command.body.lower()
 
 

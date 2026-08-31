@@ -13,6 +13,7 @@ import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
+import { LocalCliPage } from "./pages/LocalCliPage";
 import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
 import { ObserveHome } from "./pages/observe/ObserveHome";
 import { ObserveLogs } from "./pages/observe/ObserveLogs";
@@ -22,6 +23,8 @@ import { RepositoriesPage } from "./pages/RepositoriesPage";
 import { ReviewDeskPage } from "./pages/ReviewDeskPage";
 import { RoomViewContainer } from "./pages/RoomViewContainer";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SetupWizardPage } from "./pages/SetupWizardPage";
+import { fetchSetupStatus } from "./api/platformSetup";
 import { TeamsPage } from "./pages/TeamsPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 
@@ -44,6 +47,8 @@ export default function ConsoleShell() {
     "checking",
   );
   const [authNote, setAuthNote] = useState<string | null>(null);
+  const [setupReady, setSetupReady] = useState<boolean | null>(null);
+  const [setupRequested, setSetupRequested] = useState(false);
   const [route, setRoute] = useState<Route>(readRoute);
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -103,6 +108,17 @@ export default function ConsoleShell() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    let cancelled = false;
+    fetchSetupStatus()
+      .then((status) => !cancelled && setSetupReady(status.ready_for_project_creation))
+      .catch(() => !cancelled && setSetupReady(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [authState]);
 
   useEffect(() => {
     const onHash = () => setRoute(readRoute());
@@ -196,17 +212,28 @@ export default function ConsoleShell() {
 
   const navigate = (nav: NavKey) => {
     window.location.hash = NAV_HASH[nav];
-    setRoute({ nav, issueId: null, roomId: null, observeSection: null });
+    setRoute({ nav, issueId: null, roomId: null, observeSection: null, settingsSection: null });
+  };
+
+  const openLocalCli = () => {
+    window.location.hash = "#/settings/local-cli";
+    setRoute({
+      nav: "settings",
+      issueId: null,
+      roomId: null,
+      observeSection: null,
+      settingsSection: "local-cli",
+    });
   };
 
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
-    setRoute({ nav: "issues", issueId, roomId: null, observeSection: null });
+    setRoute({ nav: "issues", issueId, roomId: null, observeSection: null, settingsSection: null });
   };
 
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
-    setRoute({ nav: "issues", issueId, roomId, observeSection: null });
+    setRoute({ nav: "issues", issueId, roomId, observeSection: null, settingsSection: null });
   };
 
   /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
@@ -271,6 +298,22 @@ export default function ConsoleShell() {
     );
   }
 
+  if (setupReady === null) {
+    return <div className="grid h-screen place-items-center bg-ink"><p className="microlabel">检查平台配置…</p></div>;
+  }
+
+  if ((!setupReady || setupRequested) && account.is_admin) {
+    return (
+      <SetupWizardPage
+        account={account}
+        onReady={() => {
+          setSetupReady(true);
+          setSetupRequested(false);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
       <SidebarV2
@@ -284,6 +327,8 @@ export default function ConsoleShell() {
         onSelectWorkspace={setWorkspaceId}
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
+        localCliActive={route.settingsSection === "local-cli"}
+        onOpenLocalCli={openLocalCli}
         onNewIssue={() => setNewIssueOpen(true)}
         onLogout={handleLogout}
         onToast={showToast}
@@ -353,7 +398,12 @@ export default function ConsoleShell() {
           ) : (
             <ObserveTrace />
           ))}
-        {route.nav === "settings" && <SettingsPage account={account} />}
+        {route.nav === "settings" &&
+          (route.settingsSection === "local-cli" ? (
+            <LocalCliPage />
+          ) : (
+            <SettingsPage account={account} onConfigure={() => setSetupRequested(true)} />
+          ))}
       </main>
 
       <NewIssueModal

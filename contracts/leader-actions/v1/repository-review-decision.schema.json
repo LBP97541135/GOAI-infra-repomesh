@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/leader-actions/v1/repository-review-decision.schema.json",
+  "title": "RepoMesh Repository Review Decision v1",
+  "description": "Request body of POST /api/v1/agent-actions/leader/assignments/{taskId}/review. The leader's evidence-based verdict over the review_due assignment package. Invariants the server enforces (409 review_invalid_findings on violation, pinned by contract tests): verdict request_rework requires at least one finding carrying reworkInstruction; every finding's workerTaskId must appear in the review evidence. approve makes the leader task SUCCEEDED with summary as the roll-up body; request_rework creates new revision worker tasks through the formal assignment path without touching already-terminal ones; escalate makes the leader task BLOCKED and triggers the existing EXCEPTION_ESCALATION checkpoint.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "verdict", "summary", "findings", "provenance"],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.leader-actions.review-decision.v1"},
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "request_rework", "escalate"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "For approve, this becomes the leader task's roll-up summary toward the Organization Manager."
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workerTaskId", "note"],
+        "properties": {
+          "workerTaskId": {"type": "string", "format": "uuid"},
+          "note": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "reworkInstruction": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Present on findings that demand rework; each becomes a new revision worker task."
+          }
+        }
+      },
+      "description": "May be empty for approve; must contain at least one reworkInstruction-bearing entry for request_rework."
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "sessionThreadId"],
+      "properties": {
+        "source": {"const": "leader-codex-session"},
+        "sessionThreadId": {"type": "string", "minLength": 1, "maxLength": 200},
+        "turnId": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    }
+  }
+}

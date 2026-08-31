@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "repomesh.leader-actions.plan-receipt.v1",
+  "leaderTaskId": "00000000-0000-0000-0000-0000000000a1",
+  "planRevision": 1,
+  "workerTaskIds": [
+    "00000000-0000-0000-0000-0000000000b1",
+    "00000000-0000-0000-0000-0000000000b2"
+  ]
+}

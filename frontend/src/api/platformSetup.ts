@@ -12,6 +12,64 @@ import type {
   SetupStatusView,
 } from "./contract";
 import { defaultClient } from "./client";
+import { sessionRequest } from "./auth";
+
+export interface CredentialItemStatus {
+  set: boolean;
+  masked: string | null;
+  updated_at: string | null;
+}
+
+export interface CredentialStatus {
+  model: {
+    api_key: CredentialItemStatus;
+    base_url: CredentialItemStatus;
+    model: CredentialItemStatus;
+  };
+  github_app: {
+    app_id: CredentialItemStatus;
+    private_key: CredentialItemStatus;
+    webhook_secret: CredentialItemStatus;
+  };
+}
+
+export interface CredentialSaveReceipt {
+  saved: boolean;
+  restarting: boolean;
+  restart_required: boolean;
+}
+
+export type BootstrapState =
+  | "idle"
+  | "pending"
+  | "running"
+  | "waiting_for_user"
+  | "retryable_failure"
+  | "terminal_failure"
+  | "completed";
+
+export type BootstrapPhase =
+  | "waiting_for_model"
+  | "installing_agentteams"
+  | "verifying_controller"
+  | "configuring_matrix"
+  | "configuring_storage"
+  | "writing_runtime_config"
+  | "restarting_api"
+  | "verifying_platform"
+  | "complete";
+
+export interface BootstrapStatus {
+  operation_id: string | null;
+  state: BootstrapState;
+  phase: BootstrapPhase;
+  attempt: number;
+  retryable: boolean;
+  error_code: string | null;
+  error_detail: string | null;
+  message: string;
+  updated_at: string | null;
+}
 
 export type {
   AdapterAuthStatus,
@@ -26,4 +84,50 @@ export function fetchSetupStatus(): Promise<SetupStatusView> {
 
 export function fetchCodingAgents(): Promise<CodingAgentsProbe> {
   return defaultClient().getCodingAgents();
+}
+
+export function fetchCredentialStatus(): Promise<CredentialStatus> {
+  return sessionRequest<CredentialStatus>("/setup/credentials");
+}
+
+export function fetchBootstrapStatus(): Promise<BootstrapStatus> {
+  return sessionRequest<BootstrapStatus>("/setup/bootstrap");
+}
+
+export function retryBootstrap(): Promise<BootstrapStatus> {
+  return sessionRequest<BootstrapStatus>("/setup/bootstrap/retry", { method: "POST" });
+}
+
+export function putModelCredential(payload: {
+  api_key: string;
+  base_url?: string;
+  model?: string;
+}): Promise<CredentialSaveReceipt> {
+  return sessionRequest<CredentialSaveReceipt>("/setup/credentials/model", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function putGitHubAppCredential(payload: {
+  app_id: number;
+  private_key_pem: string;
+  webhook_secret?: string;
+}): Promise<CredentialSaveReceipt> {
+  return sessionRequest<CredentialSaveReceipt>("/setup/credentials/github-app", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function onboardRepositories(payload: {
+  organization_id: string;
+  org_url: string;
+  default_worker_count: number;
+  scan_workers: number;
+}): Promise<{ repositories: unknown[] }> {
+  return sessionRequest("/setup/repositories/onboard", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

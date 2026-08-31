@@ -21,6 +21,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.delivery.contracts import ChangeSetStatus
+from repomesh.modules.project.contracts import TeamDecompositionMode
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
 
 from .test_issues import StubTopology, _snapshot, _topology
@@ -231,6 +232,51 @@ async def test_team_list_keeps_formation_status_and_live_phase_apart() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [(TeamDecompositionMode.SERVER, "server"), (TeamDecompositionMode.LEADER, "leader")],
+)
+async def test_team_list_reports_who_decomposes_without_asking_the_controller(
+    mode: TeamDecompositionMode, expected: str
+) -> None:
+    """The adoption result is a third persisted fact, beside formation status.
+
+    Deliberately asserted with the runtime probe answering nothing: an operator
+    confirming that materialize really adopted an external Repository Leader
+    (adjudication D-2) must get a truthful answer from a row, not from a
+    controller that is offline as often as not. The default is ``server``,
+    which is what every team in an installation that has adopted nobody says.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    topology_view = _topology(project_id, repository_id)
+    topology_view = replace(
+        topology_view,
+        repository_teams=(
+            replace(topology_view.repository_teams[0], decomposition_mode=mode),
+        ),
+    )
+    service = _service(
+        StubPlans(_plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        topology=StubTopology({project_id: topology_view}),
+        runtime=StubRuntime({}),
+    )
+
+    payload = await service.list_teams(with_runtime=False)
+
+    item = payload["teams"][0]
+    assert item["decomposition_mode"] == expected
+    # The role fact an operator checks beside it, on the same row.
+    assert item["leader"]["role"] == "repository_leader"
+    assert item["runtime"] is None
+
+
+@pytest.mark.asyncio
 async def test_with_runtime_false_makes_no_controller_call() -> None:
     project_id = uuid4()
     repository_id = uuid4()
@@ -267,14 +313,14 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     )
     leader = _principal(
         AgentRole.REPOSITORY_LEADER,
-        "rm-leader-a-api",
+        "repomesh-leader-a-api",
         agent_id=team.leader_agent_id,
         repository_id=repository_id,
         leader_agent_id=manager.id,
     )
     worker_principal = _principal(
         AgentRole.WORKER,
-        "rm-worker-a-api",
+        "repomesh-worker-a-api",
         agent_id=team.worker_agent_ids[0],
         repository_id=repository_id,
         leader_agent_id=leader.id,
@@ -295,10 +341,10 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
         topology=StubTopology({project_id: topology_view}),
         runtime=StubRuntime(
             {
-                "rm-worker-a-api": RuntimeSnapshot(
+                "repomesh-worker-a-api": RuntimeSnapshot(
                     phase="Running",
                     runtime_kind="openclaw",
-                    matrix_user_id="@rm-worker-a-api:local",
+                    matrix_user_id="@repomesh-worker-a-api:local",
                     room_id="!team:local",
                     message="ready",
                 )
@@ -309,7 +355,7 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     payload = await service.list_agents()
 
     by_name = {item["agentteams_resource_name"]: item for item in payload["agents"]}
-    worker_row = by_name["rm-worker-a-api"]
+    worker_row = by_name["repomesh-worker-a-api"]
     assert worker_row["role"] == "worker"
     assert worker_row["status"] == "active"
     assert worker_row["team_id"] == team.id
@@ -317,14 +363,95 @@ async def test_agent_roster_resolves_membership_and_never_invents_uptime() -> No
     assert worker_row["repository_name"] == "repomesh-e2e-api"
     assert worker_row["active_task_count"] == 1
     assert worker_row["runtime"]["runtime_kind"] == "openclaw"
-    assert worker_row["runtime"]["matrix_user_id"] == "@rm-worker-a-api:local"
+    assert worker_row["runtime"]["matrix_user_id"] == "@repomesh-worker-a-api:local"
     # §4.4: no start timestamp and no observed sleep state exist upstream.
     assert worker_row["runtime"]["uptime_seconds"] is None
     assert worker_row["runtime"]["awake"] is None
     # The organization leader belongs to no repository team.
     assert by_name["console-demo-org-leader"]["team_id"] is None
     assert by_name["console-demo-org-leader"]["repository_id"] is None
-    assert by_name["rm-leader-a-api"]["team_id"] == team.id
+    assert by_name["repomesh-leader-a-api"]["team_id"] == team.id
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_external_member_is_never_given_a_container_phase() -> None:
+    """W-C3 AC-06: containerManaged:false makes lifecycle words a lie.
+
+    The controller answers "Pending" for a worker whose container it has no
+    intention of ever starting, so an operator reading the roster waits for a
+    boot that cannot happen. All three kinds are asserted in one test because
+    the external row's silence only means something next to a managed row that
+    still reports everything it observes.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    topology_view = _topology(project_id, repository_id)
+    team = topology_view.repository_teams[0]
+    manager = _principal(
+        AgentRole.ORGANIZATION_LEADER,
+        "console-demo-org-leader",
+        agent_id=topology_view.organization_leader_id,
+    )
+    external = _principal(
+        AgentRole.REPOSITORY_LEADER,
+        "repomesh-leader-external",
+        agent_id=team.leader_agent_id,
+        repository_id=repository_id,
+    )
+    managed = _principal(
+        AgentRole.WORKER,
+        "repomesh-worker-managed",
+        agent_id=team.worker_agent_ids[0],
+        repository_id=repository_id,
+    )
+    service = _service(
+        StubPlans(),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        repositories=StubProfiles(_profile("repomesh-e2e-api", repository_id)),
+        agents=StubRoster(manager, external, managed),
+        topology=StubTopology({project_id: topology_view}),
+        runtime=StubRuntime(
+            {
+                "repomesh-worker-managed": RuntimeSnapshot(
+                    phase="Running",
+                    runtime_kind="openclaw",
+                    container_managed=True,
+                ),
+                "repomesh-leader-external": RuntimeSnapshot(
+                    phase="Pending",
+                    matrix_user_id="@repomesh-leader-external:local",
+                    room_id="!team:local",
+                    container_managed=False,
+                ),
+            }
+        ),
+    )
+
+    payload = await service.list_agents()
+
+    runtimes = {item["agentteams_resource_name"]: item["runtime"] for item in payload["agents"]}
+    assert runtimes["repomesh-worker-managed"]["kind"] == "container"
+    assert runtimes["repomesh-worker-managed"]["phase"] == "Running"
+    assert runtimes["repomesh-worker-managed"]["runtime_kind"] == "openclaw"
+    # The manager probe never asks containerManaged: that is unknown, not external.
+    assert runtimes["console-demo-org-leader"]["kind"] is None
+    assert runtimes["console-demo-org-leader"]["phase"] == "Running"
+
+    row = runtimes["repomesh-leader-external"]
+    assert row["kind"] == "external"
+    assert row["phase"] is None
+    assert row["runtime_kind"] is None
+    # The point of the row, stated as bluntly as it can be: whatever container
+    # word the controller sent, none of it reaches the console.
+    assert "Pending" not in row.values()
+    # Addressing survives — where to reach this member is a fact about the
+    # member, not about a container.
+    assert row["matrix_user_id"] == "@repomesh-leader-external:local"
+    assert row["room_id"] == "!team:local"
 
 
 # ------------------------------------------------------------------------ §4.4
@@ -406,7 +533,7 @@ async def test_unreachable_probes_run_concurrently(monkeypatch) -> None:
 async def test_runtime_is_null_when_agentteams_is_not_configured() -> None:
     """Not configured is not the same as unreachable: there is no fact at all."""
 
-    principal = _principal(AgentRole.WORKER, "rm-worker-a-api", repository_id=uuid4())
+    principal = _principal(AgentRole.WORKER, "repomesh-worker-a-api", repository_id=uuid4())
     service = _service(
         StubPlans(),
         StubSnapshots(),

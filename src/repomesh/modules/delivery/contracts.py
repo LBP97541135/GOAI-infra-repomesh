@@ -145,6 +145,8 @@ class SCMCommandView:
     last_error: str | None
     created_at: datetime
     claimed_at: datetime | None
+    lease_owner: str | None
+    lease_expires_at: datetime | None
     completed_at: datetime | None
 
 
@@ -209,6 +211,22 @@ class RepositoryCandidateInput:
     depends_on: tuple[UUID, ...] = ()
     required_checks: tuple[str, ...] = ()
     required_approvals: int = 0
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecordCandidateTraceabilityCommand:
+    """Attach owning-application provenance to a frozen delivery candidate."""
+
+    change_set_id: UUID
+    repository_id: UUID
+    task_id: UUID
+    commit_sha: str
+    plan_id: UUID
+    run_id: UUID | None
+    worker_agent_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,6 +373,9 @@ class RepositoryDeliveryView:
     ci_checks: tuple[CICheckObservationView, ...]
     required_approvals: int
     reviews: tuple[ReviewObservationView, ...]
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -426,6 +447,71 @@ class ChangeSetView:
     candidate_revisions: tuple[CandidateRevisionView, ...]
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryTraceability:
+    """The chain a reviewer walks from a delivered pull request back to the Issue.
+
+    Ruling D-9: the owning application assembles this before delivery and the
+    SCM layer publishes what it is handed. That separation is the whole point
+    of the type — an adapter able to fill ``run_id`` for itself would be
+    reaching into task_orchestration from inside ``integrations``, and the
+    acceptance evidence would then rest on a cross-module query rather than on
+    what the delivering application actually knew.
+
+    The three optional ids allow legacy or non-Runner callers to remain honest.
+    Plan delivery persists the complete chain on each ChangeSet candidate so
+    reconciliation never has to query task orchestration for it.
+    """
+
+    issue_id: UUID
+    change_set_id: UUID
+    repository_id: UUID
+    task_id: UUID
+    branch_name: str
+    commit_sha: str
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
+
+
+def render_delivery_pull_request_body(
+    traceability: DeliveryTraceability,
+    *,
+    headline: str,
+    context: tuple[str, ...] = (),
+    notes: tuple[str, ...] = (),
+) -> str:
+    """Render the description both delivery paths publish, one generator for both.
+
+    A reviewer reading a reconciler-completed pull request finds the same facts
+    under the same labels as on a finalizer-published one. ``headline`` and
+    ``notes`` are where the two paths legitimately differ: they say which path
+    wrote the description and what that path was in a position to verify.
+
+    An absent optional id is absent from the body. A ``- run: unknown`` line
+    reads like a recorded fact and would be evidence of nothing.
+    """
+
+    fields: tuple[tuple[str, object | None], ...] = (
+        ("issue", traceability.issue_id),
+        ("change_set", traceability.change_set_id),
+        ("plan", traceability.plan_id),
+        ("repository", traceability.repository_id),
+        ("task", traceability.task_id),
+        ("run", traceability.run_id),
+        ("worker_agent", traceability.worker_agent_id),
+        ("branch", traceability.branch_name),
+        ("commit", traceability.commit_sha),
+    )
+    lines = [headline, ""]
+    lines.extend(f"- {label}: `{value}`" for label, value in fields if value is not None)
+    lines.extend(f"- {line}" for line in context)
+    if notes:
+        lines.append("")
+        lines.extend(notes)
+    return "\n".join(lines)
 
 
 MERGE_GATE_GOVERNANCE_MISSING_REASON = "head-bound governance decision is missing"

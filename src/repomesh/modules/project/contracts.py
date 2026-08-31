@@ -107,6 +107,25 @@ class HumanProjectGrantView:
     path_patterns: tuple[str, ...] = ()
 
 
+class TeamDecompositionMode(StrEnum):
+    """Who decomposes a repository-level task into worker tasks for this team.
+
+    ``SERVER`` is today's behavior: the platform decomposes and dispatches in the
+    same breath as leader assignment. ``LEADER`` parks the batch after the leader
+    task is dispatched and waits for the external Repository Leader to submit a
+    plan over the leader-actions surface (``contracts/leader-actions/v1``).
+
+    Frozen as part of the wave-0 contract baseline (2026-08-28). Producer:
+    project topology (persisted by PR 5.5B, set to ``LEADER`` only by the formal
+    materialize/adoption use case, adjudication D-2). Consumer:
+    task_orchestration's batch assignment (PR 7), which must read it through
+    this module's contracts, never the project schema.
+    """
+
+    SERVER = "server"
+    LEADER = "leader"
+
+
 @dataclass(frozen=True, slots=True)
 class RepositoryTeamView:
     id: UUID
@@ -118,6 +137,7 @@ class RepositoryTeamView:
     runtime_status: ProjectTeamRuntimeStatus
     room_id: str | None
     leader_room_id: str | None
+    decomposition_mode: TeamDecompositionMode = TeamDecompositionMode.SERVER
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +155,22 @@ class ProjectAgentTopologyView:
 
 class ProjectTopologyReader(Protocol):
     async def get_view(self, project_id: UUID) -> ProjectAgentTopologyView | None: ...
+
+
+class TeamDecompositionModeReader(Protocol):
+    """The one question task_orchestration's assignment path asks per batch item.
+
+    Deliberately narrower than ``ProjectTopologyReader``: the caller sits inside
+    a dispatch loop that already knows project and repository, and handing it
+    the whole topology would invite it to consume facts this contract does not
+    freeze. A team that does not exist resolves to ``SERVER`` — absence of an
+    adopted external leader is exactly what ``SERVER`` means, so the reader has
+    no error channel to misuse.
+    """
+
+    async def decomposition_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> TeamDecompositionMode: ...
 
 
 class ProjectTopologyProvisioner(Protocol):

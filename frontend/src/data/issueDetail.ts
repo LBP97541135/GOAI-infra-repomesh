@@ -73,9 +73,9 @@ export const issueDetailFixture: IssueDetailView = {
     { repository_id: REPO_DOCS, name: "saleor-docs", team_id: "t-0003", role_in_issue: null },
   ],
   teams: [
-    { team_id: "t-0001", agentteams_team_name: "rm-team-a1b2c3", repository_id: REPO_API, runtime_status: "ready" },
-    { team_id: "t-0002", agentteams_team_name: "rm-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "ready" },
-    { team_id: "t-0003", agentteams_team_name: "rm-team-90cc11", repository_id: REPO_DOCS, runtime_status: "pending" },
+    { team_id: "t-0001", agentteams_team_name: "repomesh-team-a1b2c3", repository_id: REPO_API, runtime_status: "ready" },
+    { team_id: "t-0002", agentteams_team_name: "repomesh-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "ready" },
+    { team_id: "t-0003", agentteams_team_name: "repomesh-team-90cc11", repository_id: REPO_DOCS, runtime_status: "pending" },
   ],
   contract: null,
   // role 取后端 `HumanProjectRole` 的真实取值。原先写的 `delivery_owner` 后端根本没有
@@ -176,8 +176,8 @@ export const issueDetailFreshRoundFixture: IssueDetailView = {
     { repository_id: REPO_WEB, name: "saleor-dashboard", team_id: "t-0002", role_in_issue: null },
   ],
   teams: [
-    { team_id: "t-0001", agentteams_team_name: "rm-team-a1b2c3", repository_id: REPO_API, runtime_status: "pending" },
-    { team_id: "t-0002", agentteams_team_name: "rm-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "pending" },
+    { team_id: "t-0001", agentteams_team_name: "repomesh-team-a1b2c3", repository_id: REPO_API, runtime_status: "pending" },
+    { team_id: "t-0002", agentteams_team_name: "repomesh-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "pending" },
   ],
 };
 
@@ -212,8 +212,8 @@ export const issueDetailHalfRoundFixture: IssueDetailView = {
     { repository_id: REPO_WEB, name: "saleor-dashboard", team_id: "t-0002", role_in_issue: null },
   ],
   teams: [
-    { team_id: "t-0001", agentteams_team_name: "rm-team-a1b2c3", repository_id: REPO_API, runtime_status: "pending" },
-    { team_id: "t-0002", agentteams_team_name: "rm-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "pending" },
+    { team_id: "t-0001", agentteams_team_name: "repomesh-team-a1b2c3", repository_id: REPO_API, runtime_status: "pending" },
+    { team_id: "t-0002", agentteams_team_name: "repomesh-team-d4e5f6", repository_id: REPO_WEB, runtime_status: "pending" },
   ],
 };
 
@@ -238,9 +238,9 @@ export const roomsFixture: RoomListItemView[] = [
     repository_id: REPO_API,
     repository_name: "saleor-core",
     members: [
-      { agent_id: "a-lead-01", name: "rm-leader-core", role: "repository_leader" },
-      { agent_id: "a-work-01", name: "rm-worker-597869c4", role: "worker" },
-      { agent_id: "a-work-02", name: "rm-worker-b6b2f051", role: "worker" },
+      { agent_id: "a-lead-01", name: "repomesh-leader-core", role: "repository_leader" },
+      { agent_id: "a-work-01", name: "repomesh-worker-597869c4", role: "worker" },
+      { agent_id: "a-work-02", name: "repomesh-worker-b6b2f051", role: "worker" },
     ],
     last_message: {
       at: "2026-08-11T14:31:00Z",
@@ -260,7 +260,7 @@ export const roomsFixture: RoomListItemView[] = [
     repository_name: "saleor-core",
     members: [
       { agent_id: "a-org-lead", name: "rm-manager", role: "organization_leader" },
-      { agent_id: "a-lead-01", name: "rm-leader-core", role: "repository_leader" },
+      { agent_id: "a-lead-01", name: "repomesh-leader-core", role: "repository_leader" },
     ],
     last_message: {
       at: "2026-08-11T15:30:00Z",
@@ -279,8 +279,8 @@ export const roomsFixture: RoomListItemView[] = [
     repository_id: REPO_WEB,
     repository_name: "saleor-dashboard",
     members: [
-      { agent_id: "a-lead-02", name: "rm-leader-dashboard", role: "repository_leader" },
-      { agent_id: "a-work-03", name: "rm-worker-8a1c22de", role: "worker" },
+      { agent_id: "a-lead-02", name: "repomesh-leader-dashboard", role: "repository_leader" },
+      { agent_id: "a-work-03", name: "repomesh-worker-8a1c22de", role: "worker" },
     ],
     last_message: {
       at: "2026-08-11T12:14:00Z",
@@ -300,7 +300,7 @@ export const roomsFixture: RoomListItemView[] = [
     repository_name: "saleor-dashboard",
     members: [
       { agent_id: "a-org-lead", name: "rm-manager", role: "organization_leader" },
-      { agent_id: "a-lead-02", name: "rm-leader-dashboard", role: "repository_leader" },
+      { agent_id: "a-lead-02", name: "repomesh-leader-dashboard", role: "repository_leader" },
     ],
     last_message: null,
     message_count: 0,
@@ -334,7 +334,7 @@ const leaderDmStreamFixture: RoomStreamPage = {
         subject: "第 2 轮候选已就绪",
         body: "core 的 price_override_reason 已落库并通过本仓单测，等待发布门禁。",
         sender_agent_id: "a-lead-01",
-        sender_name: "rm-leader-core",
+        sender_name: "repomesh-leader-core",
         recipient_agent_id: "a-org-lead",
         recipient_name: "rm-manager",
         repository_id: REPO_API,
@@ -398,9 +398,9 @@ const teamRoomStreamFixture: RoomStreamPage = {
         subject: "任务指派：交付 core 价格原因字段",
         body: "按已冻结的工程契约实现本仓库范围，验收标准见任务卡。",
         sender_agent_id: "a-lead-01",
-        sender_name: "rm-leader-core",
+        sender_name: "repomesh-leader-core",
         recipient_agent_id: "a-work-01",
-        recipient_name: "rm-worker-597869c4",
+        recipient_name: "repomesh-worker-597869c4",
         repository_id: REPO_API,
         task_id: "task-0007",
         status: "delivered",
@@ -425,9 +425,9 @@ const teamRoomStreamFixture: RoomStreamPage = {
         subject: "返工指派：修复 core 的失败候选",
         body: "隐藏验收测试 test_price_reason_audit 未过，按证据修正后重新提交。",
         sender_agent_id: "a-lead-01",
-        sender_name: "rm-leader-core",
+        sender_name: "repomesh-leader-core",
         recipient_agent_id: "a-work-01",
-        recipient_name: "rm-worker-597869c4",
+        recipient_name: "repomesh-worker-597869c4",
         repository_id: REPO_API,
         task_id: "task-0009",
         status: "delivered",
@@ -470,9 +470,9 @@ const dashboardTeamStreamFixture: RoomStreamPage = {
         subject: "任务指派：dashboard 订单详情展示修改原因",
         body: "订单详情页新增「价格修改原因」展示项，字段随 core 的 GraphQL 类型同步。",
         sender_agent_id: "a-lead-02",
-        sender_name: "rm-leader-dashboard",
+        sender_name: "repomesh-leader-dashboard",
         recipient_agent_id: "a-work-03",
-        recipient_name: "rm-worker-8a1c22de",
+        recipient_name: "repomesh-worker-8a1c22de",
         repository_id: REPO_WEB,
         task_id: "task-0011",
         status: "delivered",
@@ -591,7 +591,7 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       title: "价格修改原因：模型、审计与 GraphQL 暴露",
       backend_status: "succeeded",
       display_status: "succeeded",
-      agent: "rm-worker-597869c4",
+      agent: "repomesh-worker-597869c4",
       attempt: 1,
       depends_on: [],
       result_summary: "PR 19466：迁移 + 必填校验 + 审计字段，隐藏验收 9/9",
@@ -618,7 +618,7 @@ export const deliveryAggregateFixture: DeliveryAggregate = {
       title: "后台订单详情页展示价格修改原因",
       backend_status: "in_progress",
       display_status: "repairing",
-      agent: "rm-worker-b6b2f051",
+      agent: "repomesh-worker-b6b2f051",
       attempt: 2,
       depends_on: ["b7d20c11-4e6f-4a83-9c01-6f2e8d94a002"],
       result_summary: null,

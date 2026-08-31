@@ -35,16 +35,28 @@ RUN apt-get update \
 
 WORKDIR /opt/repomesh-runner
 
-# pyproject.toml declares the whole RepoMesh application, but repomesh_runner
-# imports exactly one third-party package (httpx); everything else it uses is
-# standard library. So httpx is installed explicitly and the package itself is
-# installed with --no-deps, which keeps fastapi, sqlalchemy, alembic, asyncpg
-# and uvicorn out of the worker. README.md is copied because pyproject.toml
-# names it as the project readme; src/repomesh is deliberately not copied, so
-# the `repomesh` console script the metadata declares stays unused here.
+# pyproject.toml declares the whole RepoMesh application, so the runner's own
+# third-party dependencies are named here and the package itself is installed
+# with --no-deps, which keeps fastapi, sqlalchemy, alembic, asyncpg and uvicorn
+# out of the worker. README.md is copied because pyproject.toml names it as the
+# project readme; src/repomesh is deliberately not copied, so the `repomesh`
+# console script the metadata declares stays unused here.
+#
+# The OpenTelemetry pair is not optional, however little tracing this image
+# usually does. `executor.py` imports `observer.py` unconditionally and that
+# module imports `opentelemetry.trace` at module scope, because `telemetry.py`
+# makes tracing opt-in at *runtime* — without REPOMESH_OTLP_ENDPOINT no
+# TracerProvider is installed and every span call stays a near-free no-op — so
+# that instrumentation sites never need their own enabled/disabled branch. The
+# import is therefore always required even when tracing is off, and leaving it
+# out made this image exit on ModuleNotFoundError before it read a single
+# environment variable. Versions track pyproject's own pins.
 COPY pyproject.toml README.md ./
 COPY src/repomesh_runner ./src/repomesh_runner
-RUN python -m pip install --no-cache-dir "httpx>=0.27,<1" \
+RUN python -m pip install --no-cache-dir \
+        "httpx>=0.27,<1" \
+        "opentelemetry-sdk>=1.29,<2" \
+        "opentelemetry-exporter-otlp-proto-http>=1.29,<2" \
     && python -m pip install --no-cache-dir --no-deps .
 
 # The mock coding agent and its launcher. The launcher name is what the `mock`
@@ -69,9 +81,19 @@ USER runner
 # unprivileged runner user inside the container.
 RUN git config --global --add safe.directory '*'
 
+# The task ledger is named explicitly because its default is derived from the
+# workspace root, and the workspace root is the one directory this image does
+# not own: the platform mounts it, and a volume's ownership shadows the chown
+# above. A root-owned mount then leaves the unprivileged runner unable to create
+# `<workspace_root>/.runner-state` — and it discovers that *after* executing the
+# task and posting its events, so the run lands but the key that makes a
+# redelivery a no-op never persists. The ledger is this process's own memory
+# rather than workspace content, so it lives in the runner's home; a deployment
+# that needs it to outlive the container mounts a volume there.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     REPOMESH_RUNNER_WORKSPACE_ROOT=/workspace \
+    REPOMESH_RUNNER_STATE_DIR=/home/runner/.runner-state \
     REPOMESH_MOCK_SCENARIO=success \
     REPOMESH_MOCK_STATE_DIR=/home/runner/.mock-agent-sessions
 

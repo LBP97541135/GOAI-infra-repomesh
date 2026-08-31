@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "repomesh.leader-actions.assignment-package.v1",
+  "leaderTaskId": "00000000-0000-0000-0000-0000000000a1",
+  "phase": "planning",
+  "organizationId": "00000000-0000-0000-0000-000000000001",
+  "projectId": "00000000-0000-0000-0000-000000000011",
+  "repositoryId": "00000000-0000-0000-0000-000000000021",
+  "repositoryTask": {
+    "title": "Multi-currency quoting: extend the pricing contract",
+    "instruction": "Extend the shared quote contract with a currency field and rounding rules: USD/EUR keep two decimal places, zero-decimal currencies such as JPY are priced and rendered as integers.",
+    "acceptance": "Quote contract carries currency and rounding rules; existing USD behavior unchanged; repository test command passes."
+  },
+  "workerRoster": [
+    {
+      "workerAgentId": "00000000-0000-0000-0000-000000000002",
+      "workerName": "pricing-codex-worker",
+      "responsibilityPaths": ["src/pricing_core/"]
+    }
+  ],
+  "safetyEnvelope": {
+    "allowedPathRoots": ["src/pricing_core/", "tests/"],
+    "testPaths": ["tests/"],
+    "testCommands": ["python scripts/run_tests.py"]
+  },
+  "advisoryContext": {
+    "authoritative": false,
+    "discoveryEvidence": "pricing-core is the shared contract producer; billing and checkout consume its quote schema.",
+    "dependencyEdges": [
+      {
+        "upstreamRepositoryId": "00000000-0000-0000-0000-000000000021",
+        "downstreamRepositoryId": "00000000-0000-0000-0000-000000000022"
+      },
+      {
+        "upstreamRepositoryId": "00000000-0000-0000-0000-000000000021",
+        "downstreamRepositoryId": "00000000-0000-0000-0000-000000000023"
+      }
+    ],
+    "decompositionHint": "Contract change and rounding implementation are separable steps."
+  },
+  "reviewEvidence": null
+}

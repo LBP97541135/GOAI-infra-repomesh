@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agent-bridge/v1/room-observation.schema.json",
+  "title": "RepoMesh Room Observation v1",
+  "description": "One observable fact the Bridge projects into a Matrix room. Matrix message text is a display projection of this document; structured truth stays in RepoMesh. Reasoning/THINKING content, system prompts, credentials, raw protocol frames, and unsanitized stdout/stderr are never valid observation content.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "observationId",
+    "emittedAt",
+    "workerName",
+    "roomId",
+    "kind",
+    "body"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.room-observation.v1"},
+    "observationId": {"type": "string", "format": "uuid"},
+    "emittedAt": {"type": "string", "format": "date-time"},
+    "workerName": {"type": "string", "minLength": 1, "maxLength": 100},
+    "roomId": {"type": "string", "pattern": "^![^:]+:.+$", "maxLength": 255},
+    "kind": {
+      "enum": [
+        "run_accepted",
+        "run_started",
+        "phase_changed",
+        "tool_action",
+        "files_changed",
+        "test_completed",
+        "question",
+        "blocked",
+        "resumed",
+        "run_completed",
+        "run_failed",
+        "run_interrupted",
+        "note"
+      ]
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "description": "Short sanitized human-readable summary. Never a raw transcript."
+    },
+    "taskId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Present only for governed execution. Absent/null for plain conversation observations."
+    },
+    "runId": {"type": ["string", "null"], "format": "uuid"},
+    "phase": {
+      "type": ["string", "null"],
+      "enum": ["reading", "modifying", "verifying", "awaiting_input", null],
+      "description": "Only meaningful with kind=phase_changed."
+    },
+    "toolName": {
+      "type": ["string", "null"],
+      "maxLength": 100,
+      "description": "Only meaningful with kind=tool_action. The tool name, never its raw arguments."
+    },
+    "changedFiles": {
+      "type": ["array", "null"],
+      "maxItems": 200,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500},
+      "description": "Repository-relative paths. Only meaningful with kind=files_changed or terminal kinds."
+    },
+    "testCommand": {"type": ["string", "null"], "maxLength": 500},
+    "testExitCode": {"type": ["integer", "null"]},
+    "commitSha": {"type": ["string", "null"], "pattern": "^[0-9a-f]{7,64}$"},
+    "questionId": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Only meaningful with kind=question. References the RepoMesh input_required control request an authorized sender may answer."
+    }
+  }
+}

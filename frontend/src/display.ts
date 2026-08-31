@@ -1,4 +1,5 @@
 import type {
+  AgentRuntimeHosting,
   DeliveryTaskView,
   DiscoveryTier,
   DiscoveryTierStatus,
@@ -52,6 +53,22 @@ export const TEAM_STATUS_SKIN: Record<"pending" | "ready" | "failed", string> = 
   pending: "border-line text-tx2",
   ready: "border-olive text-olive",
   failed: "border-salmon text-salmon",
+};
+
+/** 拆解模式的措辞与说明（裁决 D-2）。措辞落在**谁拆解**这件事上，不写「external」
+ *  三个字——运行形态（External · Codex）是 PR 10 的 `runtime` 块的事，本页只回显
+ *  拓扑里已采用的事实，两个来源不能在同一个徽标里混说。
+ *
+ *  `server` 是绝大多数团队的常态，**不给徽标**：满屏都是的事实不是信息。只有
+ *  `leader` 显示，因为它才是「这个团队被采用成了 leader 自拆」的那一条。 */
+export const TEAM_DECOMPOSITION_LABEL: Record<"server" | "leader", string> = {
+  server: "平台拆解",
+  leader: "Leader 自拆",
+};
+
+export const TEAM_DECOMPOSITION_HINT: Record<"server" | "leader", string> = {
+  server: "平台在派 leader 任务的同一步里拆解直派（默认）",
+  leader: "批次停在 leader 任务，等本团队的 Repository Leader 提交计划（materialize 采用外部 leader 的结果）",
 };
 
 /** 发现链三档的措辞与皮肤唯一表（契约 v0.4）。三色沿决策夹标签色（设计定稿
@@ -295,7 +312,7 @@ export function eventTime(at: string | null | undefined): string {
 }
 
 /** 发起人恒为 **agent**（最早 PlanSnapshot 的 created_by_agent_id）。
- *  `opened_by_name` 是 AgentTeams 资源名（rm-worker-01 这类），与 §4.2 的
+ *  `opened_by_name` 是 AgentTeams 资源名（repomesh-worker-01 这类），与 §4.2 的
  *  `sender_name` 同源同精度，**不是人名**——AGENT 前缀必须保留，否则读者会
  *  以为这单是同事开的。两者都取不到时显「发起人未关联」，不编造。 */
 export function openedBy(item: Pick<IssueListItemView, "opened_by_name" | "opened_by_agent_id">): string {
@@ -315,19 +332,29 @@ export function repositoryLabel(name: string | null, repositoryId: string): stri
 /** 两段式取数的探测阶段（团队页 / 花名册页共用，见 pages/useRuntimeRows.ts）。 */
 export type RuntimePhase = "loading" | "done" | "failed";
 
-/** §4.4 运行时块的**五种呈现**。前四种都不是「有观测值」，措辞必须各不相同——
+/** §4.4 运行时块的**六种呈现**。前四种都不是「有观测值」，措辞必须各不相同——
  *  把它们糊成同一句「未接入」会丢掉「探测过但打不通」与「压根没有这个资源」的区别。
  *
  *  尤其是 `unreachable`：契约明写这是**降级不是故障**（HTTP 仍 200，持久化事实照常可读），
- *  所以文案只说「运行时探测不可达」，绝不说团队/智能体坏了。 */
+ *  所以文案只说「运行时探测不可达」，绝不说团队/智能体坏了。
+ *
+ *  `external` 与前四种恰恰相反：那是**核实过的事实**，不是缺失的观测——它排在
+ *  `observed` 之前，因为对一个确认不由 Controller 托管的成员，`phase` 已经没有主语。 */
 export type RuntimeDisplay =
   | { kind: "probing"; label: string; hint: string }
   | { kind: "probe_failed"; label: string; hint: string }
   | { kind: "unreachable"; label: string; hint: string }
   | { kind: "absent"; label: string; hint: string }
+  | { kind: "external"; label: string; hint: string }
   | { kind: "observed"; label: string; hint: string };
 
-export function runtimeDisplay(phase: RuntimePhase, runtime: RuntimeBlock<{ phase: string | null }>): RuntimeDisplay {
+/** 按**结构**收窄而不绑定页面类型：团队页的 `TeamRuntimeFields` 没有 `kind`
+ *  （list_teams 只探测 team 资源，per-member 的托管方式那里无源），所以 `kind`
+ *  可选——缺席即「这个调用方问不出托管方式」，与花名册的 `kind: null` 同义。 */
+export function runtimeDisplay(
+  phase: RuntimePhase,
+  runtime: RuntimeBlock<{ phase: string | null; kind?: AgentRuntimeHosting | null }>,
+): RuntimeDisplay {
   // 首段的 runtime 恒为 null（没请求探测），此时 null 不表示「没有」——不得据此判定
   if (phase === "loading") {
     return { kind: "probing", label: "探测中…", hint: "运行时状态由 AgentTeams Controller 实时代理，正在探测" };
@@ -342,6 +369,16 @@ export function runtimeDisplay(phase: RuntimePhase, runtime: RuntimeBlock<{ phas
   }
   if (!runtime.reachable) {
     return { kind: "unreachable", label: "探测不可达", hint: "Controller 未响应（超时或网络错误）。这是降级不是故障——持久化事实仍然为真" };
+  }
+  // 托管方式先于阶段：确认 external 的成员没有容器阶段可言，再往下读 phase
+  // 就是在替一个不存在的容器编状态。文案不提任何具体 CLI——平台核实过的只有
+  // 「容器不归 Controller 管」这一件事，CLI 种类它压根不观测。
+  if (runtime.kind === "external") {
+    return {
+      kind: "external",
+      label: "External",
+      hint: "containerManaged:false 已由平台向 Controller 核实；本机 CLI 经 Bridge 接入，平台不观测 CLI 种类",
+    };
   }
   // phase 是 Controller 的字面值，前端只透传不映射
   return {

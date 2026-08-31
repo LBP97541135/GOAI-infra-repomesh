@@ -33,8 +33,11 @@ const SOURCE_SKIN: Record<Exclude<RoomStreamItemView["source"], "message">, { la
 function MessageBubble({ item }: { item: RoomStreamItemView }) {
   const m = item.message;
   if (!m) return null;
-  // sender_name 可能为 null（§4.2 诚实降级）：退到 agent id 短版，不编造名字
-  const who = agentLabel(m.sender_name, m.sender_agent_id);
+  // sender_name 可能为 null（§4.2 诚实降级）：退到 agent id 短版，不编造名字。
+  // 两者同时为 null 的条目是「Matrix 发送者没映射到任何主体」的房间消息——
+  // 如实说未解析，不留空也不拿 id 位置糊一个空串。
+  const who =
+    m.sender_agent_id === null ? (m.sender_name ?? "发送者未解析") : agentLabel(m.sender_name, m.sender_agent_id);
   const initial = m.sender_name ? m.sender_name.slice(0, 2).toUpperCase() : "AG";
 
   return (

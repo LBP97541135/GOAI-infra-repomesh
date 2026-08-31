@@ -11,7 +11,10 @@ from typing import Protocol
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import AgentPrincipalView
-from repomesh.modules.collaboration.contracts import CollaborationMessageView
+from repomesh.modules.collaboration.contracts import (
+    CollaborationMessageView,
+    RoomTimelineEntryView,
+)
 from repomesh.modules.delivery.contracts import (
     ChangeSetView,
     DeliveryArchiveView,
@@ -191,6 +194,12 @@ class RuntimeSnapshot:
     message: str | None = None
     ready_workers: int | None = None
     total_workers: int | None = None
+    container_managed: bool | None = None
+    """Whether the controller runs this resource's container, as it reports it.
+
+    Three-valued on purpose, mirroring ``WorkerRuntimeRef``: None is "the probe
+    did not ask" (the manager and team probes never do), not "external".
+    """
 
 
 class RuntimeProbe(Protocol):
@@ -243,6 +252,22 @@ class MessageSource(Protocol):
         every message body of the project would make an honest timestamp an
         expensive one.
         """
+        ...
+
+
+class RoomTimelineSource(Protocol):
+    """What a room itself said, as ``collaboration`` recorded it.
+
+    A source of its own rather than more methods on :class:`MessageSource`:
+    the two answer different questions about the same room. ``MessageSource``
+    holds RepoMesh's outbound rows — messages this server composed, addressed
+    and knows the business meaning of — while this holds a transcript of
+    events the homeserver reported, whose sender may be nobody we know. The
+    read model merges them; it must not be able to confuse them.
+    """
+
+    async def for_room(self, room_id: str) -> tuple[RoomTimelineEntryView, ...]:
+        """One room's recorded messages, in ``(occurred_at, event_id)`` order."""
         ...
 
 

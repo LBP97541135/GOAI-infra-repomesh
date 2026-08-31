@@ -100,6 +100,8 @@ export function SidebarV2({
   onSelectWorkspace,
   onCreateWorkspace,
   onNavigate,
+  localCliActive,
+  onOpenLocalCli,
   onNewIssue,
   onLogout,
   onToast,
@@ -120,6 +122,9 @@ export function SidebarV2({
    *  幂等键由本组件持有（A2：名称变化/成功才换键，重试沿用同键） */
   onCreateWorkspace: (name: string, idempotencyKey: string) => Promise<void>;
   onNavigate: (nav: NavKey) => void;
+  /** 设置下的本地 CLI 子页，不扩成一级导航。 */
+  localCliActive: boolean;
+  onOpenLocalCli: () => void;
   onNewIssue: () => void;
   onLogout: () => void;
   onToast: (text: string) => void;
@@ -341,6 +346,17 @@ export function SidebarV2({
             <NavIcon nav="settings" />
           </span>
           设置
+        </button>
+        <button
+          className={`ml-5 flex items-center gap-2 rounded-hard border-l px-2 py-1 text-left font-mono text-[11px] ${
+            localCliActive
+              ? "border-amber text-amber-hi"
+              : "border-line text-tx2 hover:border-amber/60 hover:text-amber-hi"
+          }`}
+          onClick={onOpenLocalCli}
+        >
+          <span aria-hidden="true" className="text-amber">&gt;_</span>
+          本地 CLI
         </button>
         <div className="flex items-center gap-2 px-2 py-1.5">
           <span className="grid size-7 flex-none place-items-center rounded-hard bg-[#4a4130] text-[12px] font-extrabold text-cream">

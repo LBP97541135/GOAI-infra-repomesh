@@ -19,7 +19,9 @@ from repomesh.modules.repository_intelligence.application import (
     IssueIntakeKeyMismatch,
     RegisterRepository,
     RepositoryDiscoveryService,
+    RepositoryNotFound,
     ScanRegistration,
+    UpdateRepositoryVerification,
     register_scanned_profiles,
     render_markdown,
 )
@@ -77,6 +79,7 @@ from .models import (
     RepoScanRequest,
     RepoScanResult,
     RepositoryCreate,
+    RepositoryVerificationUpdate,
     RepositoryView,
     RequirementAnalysisRequest,
     RequirementAnalysisView,
@@ -400,6 +403,27 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
         status_code=201 if receipt.created else 200, content=jsonable_encoder(summary)
     )
 
+
+@router.patch(
+    "/repositories/{repository_id}/verification",
+    response_model=RepositoryView,
+    dependencies=[ACTION_TOKEN],
+)
+async def update_repository_verification(
+    repository_id: UUID,
+    body: RepositoryVerificationUpdate,
+    catalog: CatalogDependency,
+) -> RepositoryProfile:
+    """Replace the verification command/path pair used by future dispatches."""
+
+    try:
+        return await UpdateRepositoryVerification(catalog).execute(
+            repository_id,
+            test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
+            test_paths=tuple(item.strip() for item in body.test_paths if item.strip()),
+        )
+    except RepositoryNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 @router.post(
     "/repositories", response_model=RepositoryView, status_code=201, dependencies=[ACTION_TOKEN]

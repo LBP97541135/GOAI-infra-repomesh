@@ -1,7 +1,15 @@
 import { useCallback } from "react";
 import type { ConsoleTeamView } from "../api/contract";
 import { fetchConsoleTeams, gridSourceMode } from "../api/grid";
-import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, repositoryLabel, shortId, type RuntimePhase } from "../display";
+import {
+  TEAM_DECOMPOSITION_HINT,
+  TEAM_DECOMPOSITION_LABEL,
+  TEAM_STATUS_LABEL,
+  TEAM_STATUS_SKIN,
+  repositoryLabel,
+  shortId,
+  type RuntimePhase,
+} from "../display";
 import { RuntimeBadge } from "../components/RuntimeBadge";
 import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 import { useRuntimeRows } from "./useRuntimeRows";
@@ -61,11 +69,29 @@ function TeamCard({
           {TEAM_STATUS_LABEL[team.runtime_status] ?? team.runtime_status}
         </span>
         <RuntimeBadge phase={phase} runtime={team.runtime} />
+        {/* 第三个持久化事实：谁拆解（D-2）。只在 leader 时出现——「平台拆解」是
+            所有团队的常态，满屏重复它不是信息。与左边两个徽标并列而不合并，理由
+            同上：建团结果、运行观测、采用结果是三件不同的事。 */}
+        {team.decomposition_mode === "leader" && (
+          <span
+            className="rounded-hard border border-amber px-2 py-px text-[11px] text-amber-hi"
+            title={TEAM_DECOMPOSITION_HINT.leader}
+            data-testid="team-decomposition-mode"
+          >
+            {TEAM_DECOMPOSITION_LABEL.leader}
+          </span>
+        )}
         {workerCount && <span className="text-[11px] text-tx2">{workerCount}</span>}
       </div>
 
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <span className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2">
+        {/* role 来自读模型，不由前端从字段名推断——「谁是 leader」和「他是什么角色」
+            是同一条记录里的两个值，验收要能在同一屏核对 mode 与 role。 */}
+        <span
+          className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2"
+          title={`role ${team.leader.role} · agent ${team.leader.agent_id}`}
+          data-testid="team-leader-chip"
+        >
           <span className="text-amber">LD</span> {team.leader.name ?? shortId(team.leader.agent_id)}
         </span>
         {team.workers.map((w) => (
@@ -142,8 +168,9 @@ export function TeamsPage({
       )}
 
       <p className="pt-4 text-[11px] text-tx3">
-        「建团结果」来自拓扑持久化，「运行时」是 AgentTeams Controller 的当前观测 ——
-        两者是不同事实，故分列两个徽标。
+        「建团结果」与「拆解模式」来自拓扑持久化，「运行时」是 AgentTeams Controller
+        的当前观测 —— 三者是不同事实，故各占一个徽标。「Leader 自拆」只在 materialize
+        采用了该仓库已绑定的外部 Repository Leader 时出现，界面不提供切换。
         <ProbeNote
           phase={phase}
           showProbing={rows !== null}

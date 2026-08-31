@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "repomesh.leader-actions.plan-decision.v1",
+  "engineeringSpec": {
+    "summary": "A plan whose two steps each claim to depend on the other.",
+    "markdown": "# Invalid: cyclic plan\nThe contract step depends on rounding and rounding depends on the contract step."
+  },
+  "taskDag": {
+    "nodes": [
+      {"nodeId": "contract"},
+      {"nodeId": "rounding"}
+    ],
+    "edges": [
+      {"from": "contract", "to": "rounding"},
+      {"from": "rounding", "to": "contract"}
+    ]
+  },
+  "workerTasks": [
+    {
+      "nodeId": "contract",
+      "assigneeWorkerAgentId": "00000000-0000-0000-0000-000000000002",
+      "title": "Extend the quote contract with currency and rounding rules",
+      "instruction": "Add a currency field to the Quote contract.",
+      "allowedPaths": ["src/pricing_core/contracts/", "tests/"],
+      "tests": ["python scripts/run_tests.py"]
+    },
+    {
+      "nodeId": "rounding",
+      "assigneeWorkerAgentId": "00000000-0000-0000-0000-000000000002",
+      "title": "Implement per-currency rounding",
+      "instruction": "Implement round_amount(amount, currency).",
+      "allowedPaths": ["src/pricing_core/", "tests/"],
+      "tests": ["python scripts/run_tests.py"]
+    }
+  ],
+  "provenance": {
+    "source": "leader-codex-session",
+    "sessionThreadId": "thread-0192f3a1-planning",
+    "turnId": "turn-0005"
+  }
+}

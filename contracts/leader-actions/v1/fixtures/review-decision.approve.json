@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "repomesh.leader-actions.review-decision.v1",
+  "verdict": "approve",
+  "summary": "Both worker tasks succeeded with green repository tests: the quote contract now carries currency and rounding rules, and rounding is implemented per currency with USD behavior unchanged. Evidence reviewed: commits 3f2a9d1 and 8e7d6c5, test exit code 0 on both runs.",
+  "findings": [],
+  "provenance": {
+    "source": "leader-codex-session",
+    "sessionThreadId": "thread-0192f3a1-review",
+    "turnId": "turn-0009"
+  }
+}

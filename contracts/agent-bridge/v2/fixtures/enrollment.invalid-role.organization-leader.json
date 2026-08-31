@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "repomesh.agent-bridge.enrollment.v2",
+  "role": "organization_leader",
+  "organizationId": "00000000-0000-0000-0000-000000000001",
+  "workerAgentId": "00000000-0000-0000-0000-000000000004",
+  "workerName": "rogue-org-leader",
+  "teamName": "pricing-repo-team",
+  "matrixUserId": "@rogue-org-leader:matrix.example.org",
+  "matrixHomeserverUrl": "https://matrix.example.org",
+  "allowedRoomIds": [
+    "!team-pricing:matrix.example.org"
+  ],
+  "repomeshEndpoint": "https://repomesh.example.org",
+  "codingProfile": "codex",
+  "credentialRefs": {
+    "matrix": "keyring://bridge/rogue/matrix-token"
+  }
+}

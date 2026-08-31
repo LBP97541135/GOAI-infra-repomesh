@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "plan_invalid_dag_cycle",
+    "message": "the submitted task DAG contains a cycle: contract -> rounding -> contract"
+  }
+}

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     app_name: str = "RepoMesh"
     environment: Literal["development", "test", "staging", "production"] = "development"
     log_level: str = "INFO"
+    supervised: bool = False
     database_url: str = "postgresql+asyncpg://repomesh:repomesh@localhost:5432/repomesh"
     local_session_ttl_seconds: int = Field(default=28800, ge=300, le=604800)
     agentteams_required: bool = False
@@ -34,6 +35,13 @@ class Settings(BaseSettings):
     agentteams_manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
     agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     runner_control_token: str | None = None
+    #: Worker-scoped runner credentials: a JSON object mapping worker agent id
+    #: to that worker's own bearer token, e.g. ``{"<uuid>": "<token>"}``. The
+    #: token above has no subject and so opens every worker's queue; one of
+    #: these names exactly one worker, which is all an out-of-cluster Bridge
+    #: needs (ADR 0004 decision 6). Kept as an env document rather than a table
+    #: because issuance is a deployment act this round, not a product feature.
+    runner_worker_tokens: str | None = None
     agent_action_token: str | None = None
     #: Hosts the scan endpoints may reach, comma separated. Anything else is
     #: refused before a request leaves this process. Known hosting platforms
@@ -72,6 +80,13 @@ class Settings(BaseSettings):
     mcp_gateway_tokens: tuple[str, ...] = ()
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
+    worker_execution_reservation_lease_seconds: int = Field(default=300, ge=30)
+    worker_execution_reservation_wait_seconds: int = Field(default=30, ge=1)
+    worker_recovery_enabled: bool = False
+    worker_recovery_scan_interval_seconds: int = Field(default=15, ge=5)
+    worker_recovery_grace_seconds: int = Field(default=60, ge=10)
+    worker_recovery_max_execution_attempts: int = Field(default=3, ge=1)
+    worker_recovery_max_reassignments: int = Field(default=2, ge=0)
     capability_root: Path = Path(".")
     # OTLP/HTTP collector base URL (e.g. a local AgentScope Studio). None keeps
     # tracing off; see docs/development/observability-instrumentation-plan-20260807.md.
@@ -177,6 +192,11 @@ class Settings(BaseSettings):
     #: beyond the scored candidates. ``0`` disables the supplement. The value
     #: is a starting point — track the recorded supplement counts and adjust.
     discovery_confirmation_supplement_cap: int = Field(default=5, ge=0, le=50)
+    #: Lease for a dispatched SCM command (task) before another runner may
+    #: reclaim it after a crash; renewal interval keeps the lease warm while
+    #: the command still executes.
+    scm_command_lease_seconds: int = Field(default=300, ge=10)
+    scm_command_lease_renew_interval_seconds: int = Field(default=60, ge=1)
 
 
 @lru_cache

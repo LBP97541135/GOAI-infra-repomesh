@@ -291,7 +291,10 @@ def test_decision_chain_emits_five_events_on_one_project(
             ANALYSIS_OK,
             CANDIDATES,
             _confirmation("REQUIRED"),
-            _confirmation("MAYBE"),
+            # The plan-integration model now grounds every new LLM edge in the
+            # approved plans: ts-order names ts-notify in depends_on, which is
+            # what keeps the serialization ts-notify → ts-order.
+            _confirmation("MAYBE", depends_on=("ts-notify",)),
             INTEGRATION,
         ),
     )

@@ -1,7 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -31,6 +31,7 @@ from .contracts import (
     PrepareChangeSetCommand,
     PullRequestObservationCommand,
     RecordCandidateRevisionCommand,
+    RecordCandidateTraceabilityCommand,
     RecordedSCMObservation,
     RecordGovernanceDecisionCommand,
     RecordMergeRequestedCommand,
@@ -45,7 +46,6 @@ from .contracts import (
     RepositoryDeliveryStatus,
     RequestChangeSetRollbackCommand,
     ReviewObservationCommand,
-    SCMCommandStatus,
     SCMCommandView,
     SCMObservationView,
 )
@@ -68,6 +68,7 @@ from .ports import (
     ContractCatalogPort,
     DeliveryArchiveStore,
     DeliveryAuditLog,
+    DeliveryConflictCasePort,
     ExecutionPlanStatusReader,
     SCMCommandStore,
     SCMObservationStore,
@@ -91,7 +92,7 @@ class SCMCommandService:
         max_attempts: int = 8,
     ) -> None:
         self._store = store
-        self._lease = timedelta(seconds=lease_seconds)
+        self._lease_seconds = lease_seconds
         self._max_attempts = max_attempts
 
     async def enqueue(self, command: EnqueueSCMCommand) -> SCMCommandView:
@@ -121,34 +122,52 @@ class SCMCommandService:
             return existing.to_view()
         return created.to_view()
 
-    async def claim(self, command_id: UUID) -> SCMCommandView | None:
-        current = await self._required(command_id)
-        now = datetime.now(UTC)
-        if current.status.value == "processing":
-            if current.claimed_at is None or current.claimed_at > now - self._lease:
-                return None
-            current = replace(current, status=SCMCommandStatus.FAILED)
-        if current.status.value == "accepted" or current.attempts >= self._max_attempts:
-            return None
-        updated = current.claim(now)
-        await self._store.update(updated, expected_version=current.version)
-        return updated.to_view()
+    async def claim_batch(
+        self, lease_owner: str, *, limit: int = 100
+    ) -> tuple[SCMCommandView, ...]:
+        claimed = await self._store.claim_batch(
+            lease_owner=lease_owner,
+            lease_seconds=self._lease_seconds,
+            max_attempts=self._max_attempts,
+            limit=limit,
+        )
+        return tuple(item.to_view() for item in claimed)
 
-    async def accept(self, command_id: UUID) -> SCMCommandView:
-        current = await self._required(command_id)
-        updated = current.accept(datetime.now(UTC))
-        await self._store.update(updated, expected_version=current.version)
-        return updated.to_view()
+    async def renew(
+        self, command_id: UUID, lease_owner: str, fencing_version: int
+    ) -> SCMCommandView:
+        renewed = await self._store.renew(
+            command_id,
+            lease_owner=lease_owner,
+            fencing_version=fencing_version,
+            lease_seconds=self._lease_seconds,
+        )
+        return renewed.to_view()
 
-    async def fail(self, command_id: UUID, error: str) -> SCMCommandView:
-        current = await self._required(command_id)
-        updated = current.fail(error)
-        await self._store.update(updated, expected_version=current.version)
-        return updated.to_view()
+    async def accept(
+        self, command_id: UUID, lease_owner: str, fencing_version: int
+    ) -> SCMCommandView:
+        accepted = await self._store.accept(
+            command_id,
+            lease_owner=lease_owner,
+            fencing_version=fencing_version,
+        )
+        return accepted.to_view()
+
+    async def fail(
+        self, command_id: UUID, error: str, lease_owner: str, fencing_version: int
+    ) -> SCMCommandView:
+        failed = await self._store.fail(
+            command_id,
+            error,
+            lease_owner=lease_owner,
+            fencing_version=fencing_version,
+        )
+        return failed.to_view()
 
     async def list_dispatchable(self, *, limit: int = 100) -> tuple[SCMCommandView, ...]:
         items = await self._store.list_dispatchable(
-            stale_before=datetime.now(UTC) - self._lease,
+            stale_before=datetime.now(UTC) - timedelta(seconds=self._lease_seconds),
             max_attempts=self._max_attempts,
             limit=limit,
         )
@@ -321,6 +340,7 @@ class DeliveryService:
         validation_reader: ValidationSnapshotReader | None = None,
         contract_catalog: ContractCatalogPort | None = None,
         audit: DeliveryAuditLog | None = None,
+        conflict_cases: DeliveryConflictCasePort | None = None,
     ) -> None:
         self._store = store
         self._require_governance = require_governance
@@ -328,6 +348,7 @@ class DeliveryService:
         self._validation_reader = validation_reader
         self._contract_catalog = contract_catalog
         self._audit = audit
+        self._conflict_cases = conflict_cases
 
     async def prepare(
         self, command: PrepareChangeSetCommand, *, idempotency_key: str
@@ -354,6 +375,9 @@ class DeliveryService:
                 merge_order=order[item.repository_id],
                 required_checks=tuple(name.strip().lower() for name in item.required_checks),
                 required_approvals=item.required_approvals,
+                plan_id=item.plan_id,
+                run_id=item.run_id,
+                worker_agent_id=item.worker_agent_id,
             )
             for item in command.candidates
         )
@@ -382,6 +406,23 @@ class DeliveryService:
     async def get_by_idempotency_key(self, key: str) -> ChangeSetView | None:
         existing = await self._store.get_by_idempotency_key(key)
         return existing[0].to_view() if existing is not None else None
+
+    async def record_candidate_traceability(
+        self, command: RecordCandidateTraceabilityCommand
+    ) -> ChangeSetView:
+        """Idempotently bind plan/run/worker provenance to one candidate."""
+
+        return await self._update_repository(
+            command.change_set_id,
+            command.repository_id,
+            lambda item: item.attach_traceability(
+                task_id=command.task_id,
+                commit_sha=command.commit_sha,
+                plan_id=command.plan_id,
+                run_id=command.run_id,
+                worker_agent_id=command.worker_agent_id,
+            ),
+        )
 
     async def append_candidates(
         self, command: AppendCandidatesCommand, *, idempotency_key: str
@@ -418,6 +459,9 @@ class DeliveryService:
                 merge_order=order[item.repository_id],
                 required_checks=tuple(name.strip().lower() for name in item.required_checks),
                 required_approvals=item.required_approvals,
+                plan_id=item.plan_id,
+                run_id=item.run_id,
+                worker_agent_id=item.worker_agent_id,
             )
             for item in fresh
         )
@@ -569,6 +613,12 @@ class DeliveryService:
             command.reason,
         )
         await self._store.update(updated, expected_version=change_set.version)
+        if self._conflict_cases is not None:
+            await self._conflict_cases.resolve_for_revision(
+                command.change_set_id,
+                command.repository_id,
+                command.previous_head_sha.strip().lower(),
+            )
         return updated.to_view()
 
     async def evaluate_merge_gate(
@@ -577,6 +627,10 @@ class DeliveryService:
         change_set = await self._required(change_set_id)
         target = self._repository(change_set, repository_id)
         reasons: list[str] = []
+        if self._conflict_cases is not None:
+            conflict = await self._conflict_cases.active_for(change_set_id, repository_id)
+            if conflict is not None:
+                reasons.append(f"delivery conflict is unresolved: {conflict.kind.value}")
         if target.status is not RepositoryDeliveryStatus.READY_TO_MERGE:
             reasons.append("required CI checks have not passed")
         if target.status in {
@@ -865,7 +919,14 @@ class DeliveryService:
 
     @staticmethod
     def _fingerprint(command: PrepareChangeSetCommand) -> str:
-        payload = json.dumps(asdict(command), default=str, sort_keys=True, separators=(",", ":"))
+        raw = asdict(command)
+        # Provenance can be back-filled after a stranded publish without
+        # changing the frozen delivery candidate or its idempotency identity.
+        for candidate in raw["candidates"]:
+            candidate.pop("plan_id", None)
+            candidate.pop("run_id", None)
+            candidate.pop("worker_agent_id", None)
+        payload = json.dumps(raw, default=str, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode()).hexdigest()
 
 

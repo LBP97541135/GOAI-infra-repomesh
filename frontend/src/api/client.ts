@@ -38,6 +38,8 @@ import type {
   OrganizationsResponse,
   PlanSnapshotView,
   RepositoryPlanView,
+  RepositoryVerificationUpdate,
+  RepositoryVerificationView,
   RollbackReceipt,
   RollbackRequest,
   RollbackScopeView,
@@ -52,6 +54,7 @@ import type {
   SetupStatusView,
   UrlIdentification,
 } from "./contract";
+import { browserApiToken } from "../runtimeConfig";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -106,7 +109,7 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
 export function defaultClient() {
   return createApiClient({
     baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
+    token: browserApiToken(),
   });
 }
 
@@ -149,6 +152,18 @@ export function createApiClient(config: ApiClientConfig) {
      *  本端点**没有 runtime 块**，故无 with_runtime 参数，实测 0.3s 返回。 */
     listConsoleRepositories: () =>
       request<ConsoleRepositoriesResponse>(config, "GET", `/console/repositories`),
+
+    /** 仓库验证配置是操作者事实，不由扫描器或计划模型猜测；完整替换使重试幂等。 */
+    updateRepositoryVerification: (
+      repositoryId: string,
+      payload: RepositoryVerificationUpdate,
+    ) =>
+      request<RepositoryVerificationView>(
+        config,
+        "PATCH",
+        `/repositories/${encodeURIComponent(repositoryId)}/verification`,
+        payload,
+      ),
 
     /** §4.2。`withRuntime: false` 时 runtime 字段常在、值恒 null（契约 §7.3 勘正），
      *  且不发任何 Controller 请求（实测 0.10s vs 默认 true 的 2.12s）——
@@ -268,7 +283,7 @@ export function createApiClient(config: ApiClientConfig) {
     /** §5.1：未建团的 issue 返回 `{"rooms": []}` 且 HTTP 200，空态不是错误 */
     listRooms: (issueId: string) => request<RoomListResponse>(config, "GET", `/issues/${issueId}/rooms`),
 
-    /** §5.2：room_id 形如 `!rm-team-c-billing:matrix.local`，含 `!` 与 `:` 必须编码；
+    /** §5.2：room_id 形如 `!repomesh-team-c-billing:matrix.local`，含 `!` 与 `:` 必须编码；
      *  cursor 语义同 §4.1 events；未知 room_id → 404 */
     getRoomStream: (roomId: string, opts?: { cursor?: string; limit?: number }) => {
       const params = new URLSearchParams();

@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, String, Text, UniqueConstraint, func, select
+from sqlalchemy import DateTime, Index, String, Text, UniqueConstraint, and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -9,10 +9,14 @@ from sqlalchemy.types import Uuid
 from repomesh.modules.collaboration.contracts import (
     CollaborationDeliveryStatus,
     CollaborationMessageKind,
+    RoomTimelineCursor,
+    RoomTimelineEntryView,
 )
 from repomesh.modules.collaboration.domain import CollaborationConflict, CollaborationMessage
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
+from repomesh.persistence.models import AuditEventRecord
+from repomesh.shared.events import EventEnvelope
 
 
 class CollaborationMessageRecord(Base):
@@ -49,6 +53,51 @@ class ProcessedMatrixEventRecord(Base):
     project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     task_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
     sender_agent_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+
+
+class RoomTimelineMessageRecord(Base):
+    """What a room said, as the homeserver said it.
+
+    A table of its own rather than a second use of ``processed_matrix_events``:
+    that one is a consumption cursor — "this event has been acted on" — and
+    this one is a transcript. Sharing a table would make deleting a stale
+    cursor entry delete a message, and would make the two consumers'
+    idempotency the same fact when they are not: an event can be recorded here
+    and deliberately not acted on there (D-7), and both statements are true at
+    once.
+
+    The primary key is the Matrix event id, which is what makes replaying a
+    sync batch free. ``ix_room_timeline_messages_room_id`` covers the read the
+    console actually makes — one room, in ``(occurred_at, event_id)`` order —
+    so paging never sorts the table.
+    """
+
+    __tablename__ = "room_timeline_messages"
+    __table_args__ = (
+        Index(
+            "ix_room_timeline_messages_room_id",
+            "room_id",
+            "occurred_at",
+            "event_id",
+        ),
+        {"schema": "collaboration"},
+    )
+
+    event_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    room_id: Mapped[str] = mapped_column(Text)
+    project_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    repository_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), index=True)
+    sender_matrix_user_id: Mapped[str] = mapped_column(Text)
+    #: Null when no principal owns this Matrix user (D-4): stored unresolved
+    #: rather than resolved to a plausible neighbour.
+    sender_agent_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    #: Matrix ``origin_server_ts``. The room's own clock, not ours: the console
+    #: shows messages in the order the room saw them.
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class InMemoryCollaborationMessageStore:
@@ -112,6 +161,51 @@ class InMemoryProcessedMatrixEventStore:
         self, event_id: str, *, project_id: UUID, task_id: UUID, sender_agent_id: UUID
     ) -> None:
         self.events.setdefault(event_id, (project_id, task_id, sender_agent_id))
+
+
+def _timeline_order(entry: RoomTimelineEntryView) -> tuple[datetime, str]:
+    """The one sort key. Ties on the room's clock break on the event id.
+
+    Written once and used by both adapters so "stable order" cannot mean two
+    different things depending on where the rows came from.
+    """
+
+    return (entry.occurred_at, entry.event_id)
+
+
+class InMemoryRoomTimelineStore:
+    def __init__(self) -> None:
+        self.entries: dict[str, RoomTimelineEntryView] = {}
+
+    async def get(self, event_id: str) -> RoomTimelineEntryView | None:
+        return self.entries.get(event_id)
+
+    async def add(self, entry: RoomTimelineEntryView) -> RoomTimelineEntryView:
+        return self.entries.setdefault(entry.event_id, entry)
+
+    async def list_room(
+        self,
+        room_id: str,
+        *,
+        after: RoomTimelineCursor | None = None,
+        limit: int = 100,
+    ) -> tuple[RoomTimelineEntryView, ...]:
+        rows = sorted(
+            (entry for entry in self.entries.values() if entry.room_id == room_id),
+            key=_timeline_order,
+        )
+        if after is not None:
+            cursor = (after.occurred_at, after.event_id)
+            rows = [entry for entry in rows if _timeline_order(entry) > cursor]
+        return tuple(rows[:limit])
+
+
+class InMemoryCollaborationAuditLedger:
+    def __init__(self) -> None:
+        self.events: list[EventEnvelope] = []
+
+    async def record(self, event: EventEnvelope) -> None:
+        self.events.append(event)
 
 
 class PostgresCollaborationMessageStore:
@@ -270,6 +364,106 @@ class PostgresCollaborationMessageStore:
             correlation_id=record.correlation_id,
             created_at=record.created_at,
         )
+
+
+class PostgresRoomTimelineStore:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def get(self, event_id: str) -> RoomTimelineEntryView | None:
+        async with self._database.transaction() as session:
+            record = await session.get(RoomTimelineMessageRecord, event_id)
+            return self._to_view(record) if record is not None else None
+
+    async def add(self, entry: RoomTimelineEntryView) -> RoomTimelineEntryView:
+        """Insert, and on a duplicate event id return what is already there.
+
+        The conflict is not an error worth propagating: an event id arriving
+        twice is a sync batch being replayed, which the poller does by design
+        after any failure in the batch. Losing the race means somebody else
+        recorded the identical event, so the caller is told about that row.
+        """
+
+        try:
+            async with self._database.transaction() as session:
+                session.add(
+                    RoomTimelineMessageRecord(
+                        event_id=entry.event_id,
+                        room_id=entry.room_id,
+                        project_id=entry.project_id,
+                        repository_id=entry.repository_id,
+                        sender_matrix_user_id=entry.sender_matrix_user_id,
+                        sender_agent_id=entry.sender_agent_id,
+                        body=entry.body,
+                        occurred_at=entry.occurred_at,
+                    )
+                )
+        except IntegrityError:
+            stored = await self.get(entry.event_id)
+            if stored is None:  # pragma: no cover - only a non-key conflict
+                raise
+            return stored
+        return entry
+
+    async def list_room(
+        self,
+        room_id: str,
+        *,
+        after: RoomTimelineCursor | None = None,
+        limit: int = 100,
+    ) -> tuple[RoomTimelineEntryView, ...]:
+        statement = select(RoomTimelineMessageRecord).where(
+            RoomTimelineMessageRecord.room_id == room_id
+        )
+        if after is not None:
+            # Spelled out rather than as a row-value comparison: the same
+            # predicate has to run on SQLite, where tuple comparison support
+            # is version-dependent.
+            statement = statement.where(
+                or_(
+                    RoomTimelineMessageRecord.occurred_at > after.occurred_at,
+                    and_(
+                        RoomTimelineMessageRecord.occurred_at == after.occurred_at,
+                        RoomTimelineMessageRecord.event_id > after.event_id,
+                    ),
+                )
+            )
+        statement = statement.order_by(
+            RoomTimelineMessageRecord.occurred_at,
+            RoomTimelineMessageRecord.event_id,
+        ).limit(limit)
+        async with self._database.transaction() as session:
+            records = (await session.scalars(statement)).all()
+        return tuple(self._to_view(record) for record in records)
+
+    @staticmethod
+    def _to_view(record: RoomTimelineMessageRecord) -> RoomTimelineEntryView:
+        return RoomTimelineEntryView(
+            event_id=record.event_id,
+            room_id=record.room_id,
+            project_id=record.project_id,
+            repository_id=record.repository_id,
+            sender_matrix_user_id=record.sender_matrix_user_id,
+            sender_agent_id=record.sender_agent_id,
+            body=record.body,
+            occurred_at=record.occurred_at,
+        )
+
+
+class PostgresCollaborationAuditLedger:
+    """Append one envelope to ``platform.audit_events``.
+
+    The platform ledger rather than a table of this module's own: the row is
+    an audit fact about a refusal, which is what that table is for, and adding
+    a private one would put half the audit trail somewhere no operator looks.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def record(self, event: EventEnvelope) -> None:
+        async with self._database.transaction() as session:
+            session.add(AuditEventRecord.from_envelope(event))
 
 
 class PostgresProcessedMatrixEventStore:

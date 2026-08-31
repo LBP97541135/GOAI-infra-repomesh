@@ -34,6 +34,7 @@ from repomesh.modules.project.contracts import CheckpointGateDecision
 from repomesh.modules.task_orchestration import (
     AssignTaskCommand,
     InMemoryExecutionPlanStore,
+    InMemoryLeaderAssignmentStore,
     TaskOrchestrator,
     TaskStatus,
 )
@@ -42,7 +43,14 @@ from repomesh.modules.task_orchestration.application import (
     RedispatchRound,
     _dispatch_message_key,
 )
-from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage, RedispatchScope
+from repomesh.modules.task_orchestration.contracts import (
+    LeaderAssignmentPhase,
+    LeaderAssignmentView,
+    LeaderSafetyEnvelopeView,
+    PublishedTaskPackage,
+    RedispatchScope,
+    WorkerRosterEntryView,
+)
 from repomesh.modules.task_orchestration.domain import (
     ExecutionPlan,
     PlannedRepositoryTask,
@@ -712,3 +720,101 @@ async def test_a_rerun_un_succeeds_the_batch() -> None:
     )
 
     assert await advancer._batch_succeeded(plan) is False  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_a_leader_mode_rerun_reopens_workers_and_a_fresh_review_not_the_leader() -> None:
+    """A closed leader assignment must not receive a stale planning notice.
+
+    Reopening the leader task while its assignment remains ``closed`` makes the
+    Bridge discard the re-sent planning notice and leaves the task assigned
+    forever.  The recovery round is instead a new review over the same worker
+    task identities: workers go back to work, the stable leader result remains
+    settled, and the assignment returns to ``executing`` at a fresh review
+    revision so terminal worker reports can open ``review_due`` again.
+    """
+
+    messenger = MatrixDedupingMessenger()
+    env, orchestrator = _flow(messenger)
+    leader_task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=env.organization_id,
+            project_id=env.project_id,
+            repository_id=env.repository_ids[0],
+            assigned_by_agent_id=env.organization_leader_id,
+            assignee_agent_id=env.leader_ids[0],
+            title="Lead pricing",
+            instruction="Plan and review the repository-level pricing change.",
+            acceptance=("Tests pass",),
+        ),
+        idempotency_key="round-1:b0:leader",
+    )
+    worker_task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=env.organization_id,
+            project_id=env.project_id,
+            repository_id=env.repository_ids[0],
+            parent_task_id=leader_task.id,
+            assigned_by_agent_id=env.leader_ids[0],
+            assignee_agent_id=env.worker_ids[0],
+            title="Implement pricing",
+            instruction="Own the repository-level pricing change.",
+            acceptance=("Tests pass",),
+        ),
+        idempotency_key="round-1:b0:worker",
+    )
+    for task_id, status, summary in (
+        (leader_task.id, TaskStatus.SUCCEEDED, "leader approved review 9"),
+        (worker_task.id, TaskStatus.FAILED, "Runner evidence has no test results"),
+    ):
+        stored = await orchestrator._tasks.get(task_id)  # noqa: SLF001
+        await orchestrator._tasks.update(  # noqa: SLF001
+            stored.report(status, summary), expected_version=stored.version
+        )
+
+    assignments = InMemoryLeaderAssignmentStore()
+    await assignments.ensure(
+        LeaderAssignmentView(
+            leader_task_id=leader_task.id,
+            organization_id=env.organization_id,
+            project_id=env.project_id,
+            repository_id=env.repository_ids[0],
+            leader_agent_id=env.leader_ids[0],
+            phase=LeaderAssignmentPhase.CLOSED,
+            safety_envelope=LeaderSafetyEnvelopeView(
+                allowed_path_roots=("**",),
+                test_paths=("tests/**",),
+                test_commands=("python scripts/run_tests.py",),
+            ),
+            worker_roster=(
+                WorkerRosterEntryView(
+                    worker_agent_id=env.worker_ids[0],
+                    worker_name="pricing-worker",
+                    responsibility_paths=("**",),
+                ),
+            ),
+            review_revision=9,
+        )
+    )
+    plans, plan = await _round(orchestrator, env.project_id, leader_task.id)
+    posted = len(messenger.deliveries)
+
+    receipt = await RedispatchRound(
+        plans, orchestrator._tasks, orchestrator, assignments  # noqa: SLF001
+    ).execute(plan.id, attempt="press-review-10", scope=RedispatchScope.RERUN)
+
+    persisted_leader = await orchestrator._tasks.get(leader_task.id)  # noqa: SLF001
+    persisted_worker = await orchestrator._tasks.get(worker_task.id)  # noqa: SLF001
+    reopened_assignment = await assignments.get(leader_task.id)
+    assert persisted_leader.status is TaskStatus.SUCCEEDED
+    assert persisted_leader.result_summary == "leader approved review 9"
+    assert persisted_worker.status is TaskStatus.ASSIGNED
+    assert persisted_worker.result_summary is None
+    assert reopened_assignment is not None
+    assert reopened_assignment.phase is LeaderAssignmentPhase.EXECUTING
+    assert reopened_assignment.review_revision == 10
+    assert reopened_assignment.review_evidence is None
+    assert receipt.task_ids == (worker_task.id,)
+    assert receipt.reopened_task_ids == (worker_task.id,)
+    assert receipt.settled_task_ids == (leader_task.id,)
+    assert len(messenger.deliveries) == posted + 1

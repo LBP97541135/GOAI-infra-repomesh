@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Room-Native Bridge 终局验收并行编排",
+    "locale": "zh-CN",
+    "output": "room-native-bridge-parallel-orchestration-plan-20260828.html",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" }
+  },
+  "lanes": [
+    { "id": "track_a", "label": "A 线 · External Leader / 服务端" },
+    { "id": "track_b", "label": "B 线 · LeaderDecision / Bridge / 集成主轴" },
+    { "id": "track_c", "label": "C 线 · Worker / Room / 前端" }
+  ],
+  "phases": [
+    { "id": "baseline", "label": "波次 0 · 基线", "fromCol": 0, "toCol": 0, "variant": "security" },
+    { "id": "start", "label": "波次 1 · 三线开工", "fromCol": 1, "toCol": 1, "variant": "emphasis" },
+    { "id": "build", "label": "波次 2 · 纵向实现", "fromCol": 2, "toCol": 3 },
+    { "id": "finish", "label": "M8/M7 → E1/E0b → V2", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["wave0", "pr7core", "pr8", "v2"],
+  "nodes": [
+    { "id": "wave0", "lane": "track_b", "col": 0, "type": "security", "label": "基线与契约", "sublabel": "tracked · fixture · E0a", "tag": "GO 前硬门" },
+    { "id": "pr55", "lane": "track_a", "col": 1, "type": "backend", "label": "PR 5.5A/B", "sublabel": "External Leader + mode", "tag": "关键路径" },
+    { "id": "pr7state", "lane": "track_a", "col": 3, "type": "backend", "label": "PR 7 状态机", "sublabel": "plan · review · rework", "tag": "等 PR5.5B 集成" },
+    { "id": "pr7core", "lane": "track_b", "col": 1, "type": "backend", "label": "PR 7 核心纵切", "sublabel": "planning GET + adapters", "tag": "冻结 contract" },
+    { "id": "pr8", "lane": "track_b", "col": 3, "type": "backend", "label": "PR 8 fake 开发", "sublabel": "port · HTTP · session", "tag": "supervisor 等 PR6" },
+    { "id": "v1pr6", "lane": "track_c", "col": 1, "type": "backend", "label": "V1 → PR 6", "sublabel": "Worker live + auto wake", "tag": "环境队列 1–2" },
+    { "id": "follow", "lane": "track_c", "col": 3, "type": "frontend", "label": "PR 9/10 + Q", "sublabel": "timeline · UI · Q1/Q3a", "tag": "C 线顺序" },
+    { "id": "v2", "lane": "track_b", "col": 5, "type": "external", "label": "M8/M7 → V2", "sublabel": "E1/E0b · 3 PR · Q3b", "tag": "关闭 delivery" }
+  ],
+  "edges": [
+    { "from": "wave0", "to": "pr55", "role": "branch" },
+    { "from": "wave0", "to": "pr7core", "variant": "emphasis", "role": "main" },
+    { "from": "wave0", "to": "v1pr6", "role": "branch" },
+    { "from": "pr55", "to": "pr7state", "role": "branch", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "pr7core", "to": "pr7state", "role": "branch", "via": [[345, 243], [345, 119]] },
+    { "from": "pr7core", "to": "pr8", "variant": "emphasis", "role": "main", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "v1pr6", "to": "follow", "role": "branch", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "pr7state", "to": "v2", "role": "branch" },
+    { "from": "pr8", "to": "v2", "variant": "security", "role": "main", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "follow", "to": "v2", "role": "branch" }
+  ]
+}

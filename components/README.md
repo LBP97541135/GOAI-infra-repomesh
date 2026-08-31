@@ -19,5 +19,15 @@ task, context, validation, or delivery state.
 `src/repomesh_runner`. A Runner executes immutable Runtime v1 coding tasks inside an
 AgentTeams-managed Worker and returns ordered events and artifact references.
 
-Both components communicate with the RepoMesh product control plane through
-`contracts/runtime/v1`. No component imports another component's internal implementation.
+## RepoMesh Agent Bridge
+
+`components/repomesh-agent-bridge` describes the Python bridge process whose implementation lives
+in `src/repomesh_agent_bridge`. The Bridge runs one local coding CLI as an AgentTeams external
+Worker (`containerManaged: false`): it validates an enrollment, preflights the worker binding
+against RepoMesh, claims a single instance per worker identity, and joins that worker's Matrix
+rooms. It communicates through `contracts/agent-bridge/v1` and holds no AgentTeams management
+credentials.
+
+Components communicate with the RepoMesh product control plane through their versioned contracts
+(`contracts/runtime/v1`, `contracts/agent-bridge/v1`). No component imports another component's
+internal implementation.

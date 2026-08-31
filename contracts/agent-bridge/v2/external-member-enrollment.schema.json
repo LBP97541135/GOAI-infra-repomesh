@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agent-bridge/v2/external-member-enrollment.schema.json",
+  "title": "RepoMesh External Member Enrollment v2",
+  "description": "Non-secret binding a Room-Native Coding Agent Bridge instance needs to serve one AgentTeams external member. v2 is v1 plus exactly one new required field, `role`: the same document now enrolls either a Worker or a Repository Leader. Every shared field keeps its v1 name and shape; `workerAgentId`/`workerName` are historical names and, for a repository_leader, name the leader's AgentPrincipal and AgentTeams resource. Credential fields are opaque references resolved by the local credential resolver at runtime; secret values never appear in this document. v1 remains valid for the worker form and is not superseded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "role",
+    "organizationId",
+    "workerAgentId",
+    "workerName",
+    "teamName",
+    "matrixUserId",
+    "matrixHomeserverUrl",
+    "allowedRoomIds",
+    "repomeshEndpoint",
+    "codingProfile",
+    "credentialRefs"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.agent-bridge.enrollment.v2"},
+    "role": {
+      "type": "string",
+      "enum": ["worker", "repository_leader"],
+      "description": "RepoMesh role this member serves as. organization_leader is deliberately not representable: the Organization Leader stays on the existing AgentTeams Manager and is rejected at provision time, so this contract cannot describe one. A repository_leader Bridge never receives a workspace root and never enters the Runner execution path."
+    },
+    "organizationId": {"type": "string", "format": "uuid"},
+    "workerAgentId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "RepoMesh AgentPrincipal id for this member. Historical field name kept from v1. Used as the subject of preflight (the binding response must return the same id) and, for role=worker, as workerAgentId in Runtime v1 RunnerTask."
+    },
+    "workerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "AgentTeams Worker resource name. Historical field name kept from v1; a repository_leader is still provisioned as an AgentTeams worker resource with containerManaged: false, as confirmed by RepoMesh preflight, not merely asserted here."
+    },
+    "teamName": {"type": "string", "minLength": 1, "maxLength": 100},
+    "matrixUserId": {
+      "type": "string",
+      "pattern": "^@[^:]+:.+$",
+      "maxLength": 255,
+      "description": "Fully qualified Matrix user id of the member identity. Used for mention detection and sender binding; the access token is NOT part of this document."
+    },
+    "matrixHomeserverUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the Matrix homeserver the member identity is registered on. May differ from the server name embedded in matrixUserId when well-known delegation is used; the Bridge must connect to this URL, not derive one from the user id."
+    },
+    "allowedRoomIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^![^:]+:.+$", "maxLength": 255},
+      "description": "Rooms the Bridge may read from and post to. Events from any other room are ignored; invites outside this list are not auto-joined. The authoritative list is role-aware and comes from the binding response: a worker's rooms are its team room and worker DM, a repository_leader's rooms are its team room and leader DM."
+    },
+    "repomeshEndpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the RepoMesh control plane used for preflight, task validation, governed execution (worker) and the leader decision surface (repository_leader)."
+    },
+    "codingProfile": {
+      "type": "string",
+      "enum": ["codex", "claude-code", "kimi"],
+      "description": "Runner profile id driving the local CLI session. Exactly one per enrollment."
+    },
+    "credentialRefs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["matrix"],
+      "properties": {
+        "matrix": {"$ref": "#/$defs/credentialRef"},
+        "model": {"$ref": "#/$defs/credentialRef"},
+        "scm": {"$ref": "#/$defs/credentialRef"},
+        "repomesh": {"$ref": "#/$defs/credentialRef"}
+      },
+      "description": "Opaque references handed to the local credential resolver. A ref names where a secret lives (keyring entry, env var name, file path); it is never the secret itself. `repomesh` should reference the member's own external-member token."
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "Optional human-facing name used in room messages. Defaults to workerName."
+    }
+  },
+  "$defs": {
+    "credentialRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "Opaque locator understood by the local credential resolver. Must not contain the secret value."
+    }
+  }
+}

@@ -187,6 +187,10 @@ def _build_graph_assisted_prompt(
             plan_lines.append(f"  changed_apis: {', '.join(r.plan.changed_apis)}")
         if r.plan.changed_modules:
             plan_lines.append(f"  changed_modules: {', '.join(r.plan.changed_modules)}")
+        if r.plan.depends_on:
+            plan_lines.append(f"  depends_on: {', '.join(r.plan.depends_on)}")
+        if r.plan.impacts:
+            plan_lines.append(f"  impacts: {', '.join(r.plan.impacts)}")
         plan_lines.append(f"  risk: {r.plan.risk}")
         plan_lines.append("")
 
@@ -224,6 +228,14 @@ def _build_graph_assisted_prompt(
         "agreement. You may skip edges where the dependency is unrelated.\n"
         "3. **Task DAG instructions**: For each repo, write a concrete "
         "instruction describing what to change.\n\n"
+        "DEPENDENCY GROUNDING RULES:\n"
+        "- A new dependency or contract must be supported directionally by "
+        "an exact confirmed repository name in the consumer plan's depends_on "
+        "or the producer plan's impacts.\n"
+        "- Do not treat shortened aliases as repository identities.\n"
+        "- Do not infer serialization merely because one repository's business "
+        "output could plausibly be read by another. Separate consumers of a "
+        "shared producer remain parallel.\n\n"
         "Return ONLY a JSON object (no markdown fences):\n"
         "{\n"
         '  "engineering_spec": "detailed project-level plan",\n'
@@ -376,6 +388,7 @@ def _build_plan_graph(
     repo_names: list[str],
     scan_edges: list[GraphEdge],
     llm_plan: IntegratedPlan,
+    grounded_edge_keys: set[tuple[str, str]],
 ) -> PlanGraph:
     """Merge the world layer and LLM semantics into the plan-layer graph.
 
@@ -383,10 +396,12 @@ def _build_plan_graph(
     - Scan ``possible`` edges become plan ``candidate`` edges (discovery
       only — they never participate in topology).
     - LLM contracts attach ``interface``/``agreement`` to existing edges and
-      promote possible edges to confirmed; brand-new pairs become confirmed
-      llm edges (contract ⇒ serialization must hold).
-    - LLM ``depends_on`` not already present become confirmed llm edges, so
-      LLM-discovered dependencies enter the execution batches.
+      promote possible edges to confirmed. Brand-new pairs become confirmed
+      only when the approved repository plans contain matching directional
+      evidence.
+    - LLM ``depends_on`` not already present follow the same grounding rule,
+      so integration cannot silently add a serialization decision that was
+      absent from the evidence bound to the classification approval.
 
     ``plan_version`` is a placeholder (1); the snapshot row owns the real
     version.
@@ -419,7 +434,7 @@ def _build_plan_graph(
                     "agreement": contract.agreement or existing.agreement,
                 }
             )
-        else:
+        elif key in grounded_edge_keys:
             edges[key] = PlanGraphEdge(
                 from_=contract.producer,
                 to=contract.consumer,
@@ -428,12 +443,24 @@ def _build_plan_graph(
                 interface=contract.interface,
                 agreement=contract.agreement,
             )
+        else:
+            _logger.warning(
+                "Dropping ungrounded LLM contract edge %s -> %s",
+                contract.producer,
+                contract.consumer,
+            )
     for task in llm_plan.task_dag:
         for dep in task.depends_on:
             key = (dep, task.repository)
-            if key not in edges:
+            if key not in edges and key in grounded_edge_keys:
                 edges[key] = PlanGraphEdge(
                     from_=dep, to=task.repository, status="confirmed", source="llm"
+                )
+            elif key not in edges:
+                _logger.warning(
+                    "Dropping ungrounded LLM dependency edge %s -> %s",
+                    dep,
+                    task.repository,
                 )
 
     return PlanGraph(
@@ -441,6 +468,33 @@ def _build_plan_graph(
         nodes=list(nodes.values()),
         edges=list(edges.values()),
     )
+
+
+def _grounded_edge_keys(
+    results: list[ConfirmationResult], repo_names: list[str]
+) -> set[tuple[str, str]]:
+    """Return approved directional relationships using exact repository IDs.
+
+    The classification approval is bound to these repository plans.  The
+    integration model may add semantic detail, but it may not introduce a new
+    execution dependency that was absent from the approved evidence.  Exact
+    names are intentional: accepting aliases such as ``billing`` for
+    ``repomesh-e2e-billing`` would make the binding ambiguous.
+    """
+
+    valid = set(repo_names)
+    grounded: set[tuple[str, str]] = set()
+    for result in results:
+        plan = result.plan
+        if plan is None or result.repository not in valid:
+            continue
+        for producer in plan.depends_on:
+            if producer in valid and producer != result.repository:
+                grounded.add((producer, result.repository))
+        for consumer in plan.impacts:
+            if consumer in valid and consumer != result.repository:
+                grounded.add((result.repository, consumer))
+    return grounded
 
 
 # ---------------------------------------------------------------------------
@@ -539,5 +593,6 @@ class PlanIntegrationService:
             repo_names=repo_names,
             scan_edges=edges,
             llm_plan=llm_plan,
+            grounded_edge_keys=_grounded_edge_keys(results, repo_names),
         )
         return normalize_plan(llm_plan, graph)

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agent-bridge/v1/external-worker-binding.schema.json",
+  "title": "RepoMesh External Worker Binding v1",
+  "description": "Versioned response RepoMesh preflight returns to a Bridge instance during startup, after local schema/profile/credential-ref validation and before Matrix sync or any CLI process is spawned. It is the network-authoritative confirmation of worker binding and room ownership: it binds RepoMesh workerAgentId to the AgentTeams worker name, the Matrix user id, and the authoritative allowed room ids, and confirms containerManaged: false plus the organization/team. Contains no secrets and no Go Controller addresses; the Bridge talks only to RepoMesh, never to the AgentTeams Go Controller directly.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "organizationId",
+    "teamName",
+    "workerAgentId",
+    "workerName",
+    "matrixUserId",
+    "allowedRoomIds",
+    "containerManaged"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.agent-bridge.binding.v1"},
+    "organizationId": {"type": "string", "format": "uuid"},
+    "teamName": {"type": "string", "minLength": 1, "maxLength": 100},
+    "workerAgentId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "RepoMesh AgentPrincipal id RepoMesh has on file for this worker. Must equal the enrollment's workerAgentId; a mismatch is a preflight failure, not a value the Bridge may override."
+    },
+    "workerName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "description": "AgentTeams Worker resource name, as confirmed by RepoMesh's own AgentTeams projection, not merely echoed back from the enrollment document."
+    },
+    "matrixUserId": {
+      "type": "string",
+      "pattern": "^@[^:]+:.+$",
+      "maxLength": 255,
+      "description": "Matrix user id RepoMesh has on file for this worker identity."
+    },
+    "allowedRoomIds": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^![^:]+:.+$", "maxLength": 255},
+      "description": "Authoritative room allowlist as known to RepoMesh/AgentTeams team membership. The Bridge must use the intersection of this list and its enrollment allowedRoomIds; RepoMesh is the source of truth for room ownership, not the enrollment document."
+    },
+    "containerManaged": {
+      "const": false,
+      "description": "Confirms the worker is provisioned as an external worker. A preflight response for a containerManaged: true worker is a validation failure, not a valid binding; this field is always false when the response is well-formed."
+    }
+  }
+}

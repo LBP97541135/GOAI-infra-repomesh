@@ -205,9 +205,30 @@ if (Test-HttpServingSettled "http://127.0.0.1:$ApiPort/docs") {
     )
     Write-Ok 'Python 依赖就绪。'
 
+    # 1b-2. 迁移前谱系比对（对齐 dev-up.sh 的 M-9 / A-2 检查）
+    # 上面的端口归属守卫只保证“这个库不是别的进程的”，保证不了“这个库的迁移谱系跟
+    # 当前代码同源”。一个先于本脚本存在、被采纳的同端口 compose 库，可能停在本地
+    # alembic 历史里根本没有的 revision 上——对它 upgrade head 会把它改坏。所以在
+    # 迁移前先问一次库的当前 revision：只要 alembic 认不出它（谱系不符），就中止。
+    Write-Info '比对数据库迁移谱系（alembic current）…'
+    $env:REPOMESH_DATABASE_URL = $Dsn
+    $lineageOut = (& uv run alembic current 2>&1 | Out-String)
+    if ($lineageOut -match "(?i)can.t locate revision") {
+        $stuckRev = if ($lineageOut -match "identified by '([^']+)'") { $Matches[1] } else { $null }
+        Stop-WithGuidance "数据库停在本地 alembic 历史里没有的 revision（$(if ($stuckRev) { $stuckRev } else { '见下方原文' })）。" @(
+            '这个库的迁移谱系跟当前代码不同源——多半是先于本脚本存在的、别的分支或别的项目',
+            '留下的同端口 compose 库。对它执行 upgrade head 会把它改坏，所以这里直接中止。',
+            "alembic 原文：$lineageOut",
+            '三选一：',
+            '  1) 换个空库（换端口）： $env:REPOMESH_POSTGRES_PORT = "5433"; .\scripts\dev-up.ps1',
+            '  2) 清掉旧卷重来（会清数据）： docker compose down -v 后重跑本脚本',
+            '  3) 若确认这库确属本项目、只是分支超前——先把代码切到与库匹配的分支再起'
+        )
+    }
+    Write-Ok '迁移谱系一致（或是全新空库），可以安全迁移。'
+
     # 1c. 迁移
     Write-Info "执行数据库迁移（alembic upgrade head → $Dsn）…"
-    $env:REPOMESH_DATABASE_URL = $Dsn
     Invoke-Checked 'uv' @('run', 'alembic', 'upgrade', 'head') 'alembic upgrade head 失败。' @(
         '常见原因：',
         '  * DSN 指向的库不是本项目的库（迁移谱系不符）——换一个空库再试；',
@@ -276,14 +297,18 @@ if (Test-HttpServingSettled "$ConsoleUrl/") {
         "请先停掉占用它的进程： netstat -ano | findstr :$WebPort"
     )
 } else {
-    if (-not (Test-Command 'npm')) {
+    $npmCommand = Get-Command 'npm.cmd' -ErrorAction SilentlyContinue
+    if (-not $npmCommand) {
+        $npmCommand = Get-Command 'npm' -ErrorAction SilentlyContinue
+    }
+    if (-not $npmCommand) {
         Stop-WithGuidance '找不到 npm。' @(
             '装 Node.js 20+： https://nodejs.org/',
             '或者走全 Docker 方案： docker compose --profile console up -d'
         )
     }
     $frontendDir = Join-Path $RepoRoot 'frontend'
-    $npm = (Get-Command 'npm').Source
+    $npm = $npmCommand.Source
     if (Test-Path (Join-Path $frontendDir 'node_modules')) {
         Write-Skip 'frontend/node_modules 已存在，跳过 npm install（要更新依赖请手工 npm install）。'
     } else {
@@ -301,6 +326,10 @@ if (Test-HttpServingSettled "$ConsoleUrl/") {
     }
 
     Write-Info '启动 vite…'
+    # vite.config.ts 的代理默认已指向容器全执行面 API（:8000）。本脚本起的是
+    # 计划态后端（:8100），所以在这里把 REPOMESH_API_TARGET 显式指回自己的
+    # :8100——否则计划态控制台会打到可能没起的 :8000 上（对齐 dev-up.sh 第 300-303 行）。
+    $env:REPOMESH_API_TARGET = "http://127.0.0.1:$ApiPort"
     $frontend = Start-Process -FilePath $npm -PassThru -WindowStyle Hidden `
         -WorkingDirectory $frontendDir -ArgumentList @('run', 'dev') `
         -RedirectStandardOutput (Join-Path $StateDir 'frontend.log') `
@@ -339,8 +368,18 @@ Write-Host @"
 控制台： $ConsoleUrl
 接口文档： http://127.0.0.1:$ApiPort/docs
 
-身份：    控制台无登录门，打开即默认管理员身份。
+身份：    控制台有登录门；首次访问请点『首次部署？初始化管理员』设置本地
+          管理员账号（用户名、显示名、密码——密码至少 12 位）。
 数据源：  默认就是真实数据（打 8100 后端）；演示夹具要显式加 ?source=replay。
+
+执行面：  本脚本只起“计划态”控制台（后端 API + 前端 + 数据库），不含 AgentTeams
+          执行面。所以 materialize / 派单 / 真正跑 agent 会返回 503
+          （“…has no rooms for this project's teams (AgentTeams request failed…)”）——
+          这是预期限制、不是故障：宿主进程本就连不到控制器（控制器的 8090/6167 只在
+          agentteams-net 内网可达，没有映射到宿主）。要完整执行面（能 materialize、
+          能派单、能跑 agent），用容器内跑、接入 agentteams-net 的那条路：
+            scripts\start-platform.ps1          # 首次装执行面加 -InstallAgentTeams
+          它把 API 跑在容器里并连上控制器（就是已在跑的 :8000 那套）。
 
 日志： $StateDir
 收摊： .\scripts\dev-down.ps1（只停本脚本起的组件，且逐项问你）

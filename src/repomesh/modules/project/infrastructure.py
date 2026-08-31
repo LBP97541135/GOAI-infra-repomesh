@@ -29,6 +29,7 @@ from repomesh.modules.project.contracts import (
     ProjectExecutionMode,
     ProjectOperationalStatus,
     ProjectTeamRuntimeStatus,
+    TeamDecompositionMode,
 )
 from repomesh.modules.project.domain import (
     HumanProjectGrant,
@@ -39,6 +40,7 @@ from repomesh.modules.project.domain import (
     RepositoryTeam,
     TopologyPolicyDraft,
 )
+from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.persistence import Database
 from repomesh.persistence.base import Base
 
@@ -169,6 +171,30 @@ class ProjectRepositoryTeamRecord(Base):
     runtime_status: Mapped[str] = mapped_column(String(30), index=True)
     room_id: Mapped[str | None] = mapped_column(Text)
     leader_room_id: Mapped[str | None] = mapped_column(Text)
+    decomposition_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=TeamDecompositionMode.SERVER.value,
+        default=TeamDecompositionMode.SERVER.value,
+        index=True,
+    )
+    """Who decomposes this team's repository tasks (adjudication D-2, revision 0037).
+
+    A plain string rather than a PostgreSQL enum, matching how
+    ``runtime_status`` beside it and ``phase`` in ``leader_assignments`` are
+    stored: the mode is read back through ``TeamDecompositionMode(...)``, and a
+    third value arriving one day should be a code change rather than a
+    migration that has to run before any row can hold it.
+
+    ``server_default`` as well as ``default`` because rows written before this
+    column existed have to mean something, and what they mean is ``server`` —
+    no installation had an adopted external leader before 0037. The default is
+    on the column rather than applied by a backfill for the same reason: there
+    is nothing to compute per row.
+
+    Indexed because ``PersistedTeamDecompositionModeReader`` is asked once per
+    batch item on the dispatch path.
+    """
 
 
 class ProjectCheckpointDecisionRecord(Base):
@@ -518,6 +544,7 @@ class PostgresProjectTopologyStore:
                 runtime_status=team.runtime_status.value,
                 room_id=team.room_id,
                 leader_room_id=team.leader_room_id,
+                decomposition_mode=team.decomposition_mode.value,
             )
             for team in topology.repository_teams
         )
@@ -549,10 +576,53 @@ class PostgresProjectTopologyStore:
                     runtime_status=ProjectTeamRuntimeStatus(team.runtime_status),
                     room_id=team.room_id,
                     leader_room_id=team.leader_room_id,
+                    # ``or`` rather than a bare read: a row written before
+                    # revision 0037 and read back through a session that never
+                    # refreshed it carries None, and None is a server team.
+                    decomposition_mode=TeamDecompositionMode(
+                        team.decomposition_mode or TeamDecompositionMode.SERVER.value
+                    ),
                 )
                 for team in teams
             ),
         )
+
+
+class PersistedTeamDecompositionModeReader:
+    """``TeamDecompositionModeReader`` answered from the topology on disk (A-3).
+
+    The mode is a *persisted* fact, so this reads the row and asks the
+    controller nothing. That is the decision, not an optimisation: the question
+    "who decomposes this team's tasks" is settled by the adoption pass, and a
+    live controller lookup on the dispatch path would let a momentary outage
+    change the answer mid-round — the same silent downgrade
+    ``RepositoryTeam.with_adopted_leader`` refuses to make one layer down.
+
+    Written against ``ProjectTopologyStore`` rather than against SQLAlchemy, so
+    the production reader and the one the tests drive are the same class over
+    two stores. A reader with its own hand-written SELECT would be a second
+    mapping from row to mode, free to disagree with ``_to_domain`` about a
+    value neither of them would ever be asked to reconcile.
+
+    Every absence resolves to ``SERVER``, and the protocol has no error channel
+    on purpose: a project with no topology, a repository with no team, and a
+    team nobody adopted are three ways of saying the same thing — nothing here
+    parks a batch for a leader.
+    """
+
+    def __init__(self, store: ProjectTopologyStore) -> None:
+        self._store = store
+
+    async def decomposition_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> TeamDecompositionMode:
+        topology = await self._store.get(project_id)
+        if topology is None:
+            return TeamDecompositionMode.SERVER
+        for team in topology.repository_teams:
+            if team.repository_id == repository_id:
+                return team.decomposition_mode
+        return TeamDecompositionMode.SERVER
 
 
 class PostgresTopologyPolicyDraftStore:

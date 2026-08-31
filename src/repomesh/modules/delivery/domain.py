@@ -45,16 +45,25 @@ class SCMCommand:
     last_error: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     claimed_at: datetime | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
     completed_at: datetime | None = None
 
-    def claim(self, now: datetime) -> "SCMCommand":
-        if self.status not in {SCMCommandStatus.PENDING, SCMCommandStatus.FAILED}:
+    def claim(self, now: datetime, *, owner: str, lease_expires_at: datetime) -> "SCMCommand":
+        if self.status not in {
+            SCMCommandStatus.PENDING,
+            SCMCommandStatus.FAILED,
+            SCMCommandStatus.PROCESSING,
+        }:
             raise DeliveryConflict("SCM command is not claimable")
         return replace(
             self,
             status=SCMCommandStatus.PROCESSING,
             attempts=self.attempts + 1,
             claimed_at=now,
+            lease_owner=owner,
+            lease_expires_at=lease_expires_at,
+            last_error=None,
             version=self.version + 1,
         )
 
@@ -65,6 +74,8 @@ class SCMCommand:
             self,
             status=SCMCommandStatus.ACCEPTED,
             completed_at=now,
+            lease_owner=None,
+            lease_expires_at=None,
             last_error=None,
             version=self.version + 1,
         )
@@ -76,6 +87,8 @@ class SCMCommand:
             self,
             status=SCMCommandStatus.FAILED,
             last_error=error[:2000],
+            lease_owner=None,
+            lease_expires_at=None,
             version=self.version + 1,
         )
 
@@ -93,6 +106,8 @@ class SCMCommand:
             last_error=self.last_error,
             created_at=self.created_at,
             claimed_at=self.claimed_at,
+            lease_owner=self.lease_owner,
+            lease_expires_at=self.lease_expires_at,
             completed_at=self.completed_at,
         )
 
@@ -314,6 +329,9 @@ class RepositoryDelivery:
     ci_check_run_id: str | None = None
     ci_summary: str | None = None
     merge_sha: str | None = None
+    plan_id: UUID | None = None
+    run_id: UUID | None = None
+    worker_agent_id: UUID | None = None
 
     def __post_init__(self) -> None:
         for value, label in ((self.commit_sha, "commit_sha"), (self.base_sha, "base_sha")):
@@ -336,6 +354,32 @@ class RepositoryDelivery:
             status=RepositoryDeliveryStatus.PR_OPEN,
             pull_request_number=number,
             pull_request_url=url.strip(),
+        )
+
+    def attach_traceability(
+        self,
+        *,
+        task_id: UUID,
+        commit_sha: str,
+        plan_id: UUID,
+        run_id: UUID | None,
+        worker_agent_id: UUID,
+    ) -> "RepositoryDelivery":
+        """Persist the chain supplied by the owning plan-delivery application."""
+
+        if task_id != self.task_id:
+            raise DeliveryConflict("traceability task does not match candidate task")
+        if commit_sha.strip().lower() != self.commit_sha:
+            raise DeliveryConflict("traceability commit does not match candidate commit")
+        values = (plan_id, run_id, worker_agent_id)
+        current = (self.plan_id, self.run_id, self.worker_agent_id)
+        if any(value is not None for value in current) and current != values:
+            raise DeliveryConflict("candidate traceability is already bound differently")
+        return replace(
+            self,
+            plan_id=plan_id,
+            run_id=run_id,
+            worker_agent_id=worker_agent_id,
         )
 
     def observe_ci(
@@ -476,6 +520,9 @@ class RepositoryDelivery:
             ci_checks=tuple(item.to_view() for item in self.ci_checks),
             required_approvals=self.required_approvals,
             reviews=tuple(item.to_view() for item in self.reviews),
+            plan_id=self.plan_id,
+            run_id=self.run_id,
+            worker_agent_id=self.worker_agent_id,
         )
 
 

@@ -10,19 +10,34 @@ from repomesh.integrations.orchestration import (
     DeliveryStateAdapter,
 )
 from repomesh.integrations.scm.contracts import RepositoryRef, SCMAdapter
+from repomesh.modules.agent_directory.contracts import AgentRole
 from repomesh.modules.agent_directory.ports import AgentDirectory
+from repomesh.modules.agent_runtime.contracts import ExternalWorkerRefused
 from repomesh.modules.agent_runtime.ports.agent_team import (
     AgentTeamControlPlane,
-    AgentTeamMessenger,
+    ExternalMemberProvisioner,
+    ExternalMemberRole,
+    ExternalWorkerProvisioner,
+    WorkerBindingReader,
+    WorkerControlPlaneUnavailable,
+    WorkerRuntimeRef,
 )
 from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
 from repomesh.modules.capability_management import (
     PresetCapabilityAssembler,
+    RegistryCapabilityAssembler,
     ResolveAgentCapabilities,
 )
+from repomesh.modules.capability_management.infrastructure import SkillRegistryService
+from repomesh.modules.capability_management.mcp_guard import McpCallGuard, McpPolicy
 from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
-from repomesh.modules.collaboration.ports import CollaborationMessageStore
+from repomesh.modules.collaboration.contracts import AuthorizedRoom, CollaborationGateway
+from repomesh.modules.collaboration.ports import (
+    AuthorizedRoomReader,
+    CollaborationMessageStore,
+    CollaborationMessenger,
+)
 from repomesh.modules.context.application import ContextPublicationGateway, GetExecutionContextGrant
 from repomesh.modules.context.ports import ContextStore
 from repomesh.modules.identity_access import LocalAccountService, PolicyAuthorizationGateway
@@ -37,7 +52,17 @@ from repomesh.modules.observability.infrastructure.trace_ingest import TraceStor
 from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
-from repomesh.modules.project.contracts import ProjectAgentTopologyView, ProjectTopologyReader
+from repomesh.modules.platform_config import (
+    PostgresBootstrapOperationStore,
+    PostgresPlatformCredentialStore,
+)
+from repomesh.modules.project.contracts import (
+    ProjectAgentTopologyView,
+    ProjectTopologyReader,
+    TeamDecompositionMode,
+    TeamDecompositionModeReader,
+)
+from repomesh.modules.project.infrastructure import PersistedTeamDecompositionModeReader
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
@@ -62,8 +87,13 @@ from repomesh.modules.specification.ports import SpecificationStore
 from repomesh.modules.task_orchestration import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    LeaderDecisionLane,
     ObserveExecutionPlan,
     PostgresExecutionPlanStore,
+    PostgresLeaderAssignmentStore,
+    ReadLeaderAssignment,
+    SubmitRepositoryPlan,
+    SubmitRepositoryReview,
 )
 from repomesh.modules.task_orchestration.contracts import (
     PublishedTaskPackage,
@@ -72,7 +102,11 @@ from repomesh.modules.task_orchestration.contracts import (
     TaskReportGateway,
     TaskView,
 )
-from repomesh.modules.task_orchestration.ports import ExecutionPlanStore, TaskStore
+from repomesh.modules.task_orchestration.ports import (
+    ExecutionPlanStore,
+    LeaderAssignmentStore,
+    TaskStore,
+)
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import get_settings
@@ -92,6 +126,18 @@ class BackgroundService(Protocol):
     async def close(self) -> None: ...
 
 
+#: How many recorded room messages one stream read pulls from the timeline.
+#:
+#: The room stream merges every source and *then* pages, so this is a ceiling
+#: on what one room's transcript contributes to that merge, not the page the
+#: console sees. A room with more recorded messages than this shows its oldest
+#: ones; the outbound side has no equivalent ceiling because that table is
+#: written only by this server and stays small. Raising the number is a
+#: one-line change; making the merge itself cursor-based across sources is the
+#: real fix, and is not what a repository team's room volume calls for.
+_ROOM_TIMELINE_PAGE = 1000
+
+
 def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReader:
     """Adapt the topology store to the read port modules depend on."""
 
@@ -103,7 +149,63 @@ def project_topology_reader(store: ProjectTopologyStore) -> ProjectTopologyReade
     return _Adapter()
 
 
-def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMessenger:
+def authorized_room_reader(store: ProjectTopologyStore) -> AuthorizedRoomReader:
+    """The room-ingest whitelist, derived from the topology and nothing else.
+
+    A room is authorized exactly when some repository team names it as its
+    team room or its leader DM — there is no separate list to maintain and no
+    way for one to drift from the teams that actually exist. Everything else,
+    including any room RepoMesh's account is merely invited to, resolves to
+    None and is never recorded.
+
+    The lookup returns the *team's* project and repository so the recorder can
+    attribute the message without a second query; a room id that matches two
+    teams is impossible (each id appears in one team's row).
+    """
+
+    class _Adapter:
+        async def authorized_room(self, room_id: str) -> AuthorizedRoom | None:
+            topology = await store.find_view_by_room(room_id)
+            if topology is None:
+                return None
+            for team in topology.repository_teams:
+                if room_id in {team.room_id, team.leader_room_id}:
+                    return AuthorizedRoom(
+                        room_id=room_id,
+                        project_id=topology.project_id,
+                        repository_id=team.repository_id,
+                    )
+            return None
+
+    return _Adapter()
+
+
+class StaticTeamDecompositionModeReader:
+    """One answer for every team, whatever the topology says.
+
+    Was the production ``TeamDecompositionModeReader`` while the project module
+    had nowhere to persist a per-team mode; since PR 5.5B that job belongs to
+    ``PersistedTeamDecompositionModeReader``, which reads the adopted mode off
+    the topology row (adjudication D-2, revision 0037), and the wiring below
+    uses it.
+
+    Kept because it is the honest reader for a container assembled without a
+    topology store to read through, and because "every team decomposes
+    server-side" is worth being able to state in one line in a test. It is no
+    longer wired anywhere by default, and a deployment that reached for it
+    again would be turning off adoption for every project at once.
+    """
+
+    def __init__(self, mode: TeamDecompositionMode = TeamDecompositionMode.SERVER) -> None:
+        self._mode = mode
+
+    async def decomposition_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> TeamDecompositionMode:
+        return self._mode
+
+
+def collaboration_routed_messenger(messenger: CollaborationMessenger) -> CollaborationMessenger:
     """Adapt the AgentTeams messenger to the refusal the collaboration port owns.
 
     ``AgentTeamsUnavailable`` is the integration's word for "the execution
@@ -139,6 +241,7 @@ def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMe
             *,
             transaction_id: str,
             recipient_resource_name: str | None = None,
+            recipient_role: AgentRole | None = None,
         ) -> str:
             try:
                 return await messenger.send_task(
@@ -146,6 +249,7 @@ def collaboration_routed_messenger(messenger: AgentTeamMessenger) -> AgentTeamMe
                     body,
                     transaction_id=transaction_id,
                     recipient_resource_name=recipient_resource_name,
+                    recipient_role=recipient_role,
                 )
             except AgentTeamsUnavailable as error:
                 raise CollaborationRouteUnavailable(str(error)) from error
@@ -280,7 +384,7 @@ class ApplicationContainer:
     # Process-log capture + background flush service for the unified log page.
     log_recorder: LogRecorder | None = None
     agent_team_control_plane: AgentTeamControlPlane | None = None
-    agent_team_messenger: AgentTeamMessenger | None = None
+    agent_team_messenger: CollaborationMessenger | None = None
     agentteams_probe: ReadinessProbe | None = None
     agentteams_required: bool = False
     external_resources: tuple[AsyncCloseable, ...] = ()
@@ -297,11 +401,46 @@ class ApplicationContainer:
         return PresetCapabilityAssembler()
 
     @cached_service
+    def skill_registry_service(self) -> SkillRegistryService:
+        return SkillRegistryService(self.database)
+
+    @cached_service
+    def agent_capability_assembler(self) -> RegistryCapabilityAssembler:
+        return RegistryCapabilityAssembler(self.skill_registry_service())
+
+    @cached_service
+    def mcp_call_guard(self) -> "McpCallGuard":
+        registry = self.skill_registry_service()
+
+        async def policy_provider(server_id: str) -> "McpPolicy | None":
+            record = await registry.get_mcp_policy(server_id)
+            if record is None:
+                return None
+            return McpPolicy(
+                id=record.id,
+                timeout_seconds=record.timeout_seconds,
+                max_retries=record.max_retries,
+                retryable_only_reads=record.retryable_only_reads,
+                degraded_block_writes=record.degraded_block_writes,
+                required_task_features=tuple(record.required_task_features),
+            )
+
+        return McpCallGuard(policy_provider=policy_provider)
+
+    @cached_service
     def local_account_service(self):
         return LocalAccountService(
             PostgresLocalAccountStore(self.database),
             session_ttl_seconds=get_settings().local_session_ttl_seconds,
         )
+
+    @cached_service
+    def platform_credential_store(self) -> PostgresPlatformCredentialStore:
+        return PostgresPlatformCredentialStore(self.database)
+
+    @cached_service
+    def bootstrap_operation_store(self) -> PostgresBootstrapOperationStore:
+        return PostgresBootstrapOperationStore(self.database)
 
     def project_topology_creator(self):
         from repomesh.modules.project import CreateProjectAgentTopology
@@ -437,7 +576,7 @@ class ApplicationContainer:
         )
 
     def agent_capabilities(self) -> ResolveAgentCapabilities:
-        return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
+        return ResolveAgentCapabilities(self.agent_directory, self.agent_capability_assembler())
 
     def native_agent_registration(self):
         from repomesh.integrations.agentteams import RegisterNativeAgent
@@ -450,13 +589,158 @@ class ApplicationContainer:
             worker_task_control_url=get_settings().worker_task_control_url,
         )
 
+    def external_worker_binding_control_plane(self) -> WorkerBindingReader | None:
+        """The control plane the bridge preflight (ADR 0004) reads through.
+
+        Wraps ``agent_team_control_plane`` in ``ExternalWorkerProjection`` so
+        that an unreachable controller reaches ``ResolveExternalWorkerBinding``
+        as ``WorkerControlPlaneUnavailable`` rather than the integration's own
+        ``AgentTeamsUnavailable`` — the router maps the former to 503 without
+        importing ``repomesh.integrations.*``, which module code may not do.
+
+        Typed as the narrow ``WorkerBindingReader`` because that is what this
+        returns and what the preflight may have: the adapter implements two
+        reads and a provisioning method, never the whole
+        ``AgentTeamControlPlane``, and an annotation claiming otherwise invites
+        a caller to reach for an ``ensure_*`` that is not there.
+
+        Scoped to this one call site: every other reader of
+        ``agent_team_control_plane`` (``ProjectRuntimeProjection``,
+        ``RegisterNativeAgent``, the readiness probe) keeps talking to the raw
+        client and is unaffected by this translation.
+        """
+
+        if self.agent_team_control_plane is None:
+            return None
+        from repomesh.integrations.agentteams.runtime_projection import (  # noqa: PLC0415
+            ExternalWorkerProjection,
+        )
+
+        settings = get_settings()
+        return ExternalWorkerProjection(
+            self.agent_team_control_plane,
+            model=settings.deepseek_model,
+            worker_runtime=settings.agentteams_worker_runtime,
+            worker_task_control_url=settings.worker_task_control_url,
+        )
+
+    def external_worker_provisioner(self) -> ExternalWorkerProvisioner | None:
+        """The v1 name for the adapter below, kept for the v1 route that asks by it.
+
+        One adapter, two names, because there is one AgentTeams resource per
+        principal and provisioning it twice under two spellings is exactly what
+        a second adapter would make possible. The narrower type is the honest
+        one for this caller: the v1 route has no role to pass and must not
+        acquire the ability to.
+        """
+
+        return self.external_member_provisioner()
+
+    def external_member_provisioner(self) -> ExternalMemberProvisioner | None:
+        """The provisioning half of ADR 0004, with the integration's errors translated.
+
+        ``ExternalWorkerProjection``, the same class the preflight reads
+        through — one projection, so the worker this writes is field-for-field
+        the worker that endpoint later confirms — wrapped in the translation the
+        port's contract
+        asks its callers for: ``ExternalWorkerProvisioner`` says an adapter
+        conflict is a *refusal*, not an internal error, and the admin route
+        cannot enforce that itself because module code may not import
+        ``repomesh.integrations.*`` to catch ``AgentTeamsConflict``.
+
+        So the split is the same one ``project_runtime_projector`` makes, on the
+        same question — *is pressing the button again a plan?* A controller that
+        answered and said no (a conflict, or any 4xx it spelled out) is a 409
+        that no retry clears; a controller that did not answer, or answered 5xx,
+        is a 503. Reads stay unwrapped: ``ExternalWorkerProjection.get_worker``
+        and ``get_team`` already translate their own transport failures.
+
+        ``None`` when no control plane is configured, exactly as
+        ``external_worker_binding_control_plane`` answers — the route turns that
+        into 503 rather than provisioning nothing and reporting success.
+
+        The adapter is built here rather than taken from that method precisely
+        because that method's return type is narrowed to two reads on purpose:
+        casting past a narrowing to reach the write it was narrowed to hide is
+        the move it exists to prevent. The three settings below are the only
+        duplication, and they are the same three both call sites would read.
+        """
+
+        if self.agent_team_control_plane is None:
+            return None
+        from repomesh.integrations.agentteams.runtime_projection import (  # noqa: PLC0415
+            ExternalWorkerProjection,
+        )
+
+        settings = get_settings()
+        projection = ExternalWorkerProjection(
+            self.agent_team_control_plane,
+            model=settings.deepseek_model,
+            worker_runtime=settings.agentteams_worker_runtime,
+            worker_task_control_url=settings.worker_task_control_url,
+        )
+
+        class _ExternalMemberProvisioner:
+            async def provision(
+                self,
+                name: str,
+                *,
+                idempotency_key: str,
+                role: ExternalMemberRole = ExternalMemberRole.WORKER,
+            ) -> WorkerRuntimeRef:
+                from repomesh.integrations.agentteams import (  # noqa: PLC0415
+                    AgentTeamsConflict,
+                    AgentTeamsError,
+                    AgentTeamsResponseError,
+                )
+
+                try:
+                    return await projection.provision(
+                        name, idempotency_key=idempotency_key, role=role
+                    )
+                except AgentTeamsConflict as error:
+                    raise ExternalWorkerRefused(str(error)) from error
+                except AgentTeamsResponseError as error:
+                    if 400 <= error.status_code < 500:
+                        raise ExternalWorkerRefused(str(error)) from error
+                    raise WorkerControlPlaneUnavailable(str(error)) from error
+                except AgentTeamsError as error:
+                    raise WorkerControlPlaneUnavailable(str(error)) from error
+
+        return _ExternalMemberProvisioner()
+
     async def start(self) -> None:
         for service in self.background_services:
             await service.start()
+        await self._seed_capability_registry()
+
+    async def _seed_capability_registry(self) -> None:
+        """Idempotent first-boot seed: preset skills as promoted 1.0.0 + MCP policies.
+
+        A seed failure must not keep the platform down — capability governance
+        degrades to "registry empty", and the next boot retries. That is why
+        this is logged, not raised.
+        """
+
+        from repomesh.modules.capability_management import seed_preset_skills
+        from repomesh.modules.capability_management.infrastructure import seed_mcp_policies
+
+        try:
+            await seed_preset_skills(self.skill_registry_service())
+            await seed_mcp_policies(self.skill_registry_service())
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "capability registry seeding failed; governance falls back to empty registry"
+            )
 
     async def is_agentteams_ready(self) -> bool:
         if not self.agentteams_required:
             return True
+        return await self.is_agentteams_available()
+
+    async def is_agentteams_available(self) -> bool:
         return self.agentteams_probe is not None and await self.agentteams_probe.health()
 
     @cached_service
@@ -728,6 +1012,7 @@ class ApplicationContainer:
             DeliveryService,
             PostgresChangeSetStore,
             PostgresDeliveryAuditLog,
+            PostgresDeliveryConflictCaseStore,
         )
 
         validation = self.validation_snapshot_service()
@@ -740,6 +1025,7 @@ class ApplicationContainer:
                 self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
             audit=PostgresDeliveryAuditLog(self.database),
+            conflict_cases=PostgresDeliveryConflictCaseStore(self.database),
         )
 
     @cached_service
@@ -1073,6 +1359,22 @@ class ApplicationContainer:
             async def last_assignment_at(self, project_id: UUID):
                 return await message_store.last_assignment_at(project_id)
 
+        class _RoomTimeline:
+            """Read through ``collaboration``'s own read use case (gate #9).
+
+            Not a query against ``collaboration.room_timeline_messages``: the
+            API layer holds a Database handle and could join that table
+            directly, and doing so would make the ordering rule and the
+            whitelist two independent opinions the moment either changed. The
+            use case is one line thick on purpose — the point is which module
+            owns the answer, not how much code stands between.
+            """
+
+            async def for_room(self, room_id: str):
+                return await container.room_timeline_reader().list_room(
+                    room_id, limit=_ROOM_TIMELINE_PAGE
+                )
+
         class _Observations:
             async def for_change_set(self, change_set_id: UUID):
                 return tuple(
@@ -1101,6 +1403,7 @@ class ApplicationContainer:
                     matrix_user_id=ref.matrix_user_id,
                     room_id=ref.room_id,
                     message=ref.message,
+                    container_managed=ref.container_managed,
                 )
 
             async def manager(self, name: str):
@@ -1156,6 +1459,7 @@ class ApplicationContainer:
             runner_events=_RunnerEvents(),
             messages=_Messages(),
             observations=_Observations(),
+            room_timeline=_RoomTimeline(),
             runtime=(
                 _Runtime(self.agent_team_control_plane)
                 if self.agent_team_control_plane is not None
@@ -1428,6 +1732,8 @@ class ApplicationContainer:
                 self.scm_adapter,
                 command_service=self.scm_command_service(),
                 base_branch=get_settings().delivery_base_branch,
+                conflict_cases=self.delivery_conflict_case_store(),
+                conflict_tasks=self.delivery_conflict_task_gateway(),
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
@@ -1449,7 +1755,29 @@ class ApplicationContainer:
             ),
             command_service=self.scm_command_service(),
             base_branch=get_settings().delivery_base_branch,
+            conflict_cases=self.delivery_conflict_case_store(),
+            conflict_tasks=self.delivery_conflict_task_gateway(),
         )
+
+    @cached_service
+    def delivery_conflict_case_store(self):
+        from repomesh.modules.delivery import PostgresDeliveryConflictCaseStore
+
+        return PostgresDeliveryConflictCaseStore(self.database)
+
+    @cached_service
+    def recovery_case_store(self):
+        from repomesh.modules.recovery_management import PostgresRecoveryCaseStore
+
+        return PostgresRecoveryCaseStore(self.database)
+
+    def delivery_conflict_task_gateway(self):
+        from repomesh.integrations.scm import DeliveryConflictTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return DeliveryConflictTaskCreator(tasks, self.topology_reader())
 
     def ci_rework_task_gateway(self):
         """Route a failed delivery candidate back to the repository Worker.
@@ -1646,7 +1974,12 @@ class ApplicationContainer:
             return None
         from repomesh.modules.task_orchestration.application import RedispatchRound
 
-        return RedispatchRound(self.execution_plan_store(), self.task_store, dispatcher)
+        return RedispatchRound(
+            self.execution_plan_store(),
+            self.task_store,
+            dispatcher,
+            self.leader_assignment_store(),
+        )
 
     def project_task_reader(self):
         """Expose task views through the TaskOrchestrator public read port."""
@@ -1665,11 +1998,161 @@ class ApplicationContainer:
     def execution_plan_observer(self) -> ObserveExecutionPlan:
         return ObserveExecutionPlan(self.execution_plan_store(), self.task_store)
 
+    @cached_service
+    def dynamic_plan_revision_service(self):
+        from repomesh.modules.task_orchestration import (
+            DynamicPlanRevisionService,
+            PostgresExecutionPlanRevisionStore,
+        )
+
+        return DynamicPlanRevisionService(
+            self.execution_plan_store(),
+            PostgresExecutionPlanRevisionStore(self.database),
+            self.topology_reader(),
+        )
+
     def handoff_doc_store(self) -> PostgresHandoffDocStore:
         return PostgresHandoffDocStore(self.database)
 
     def handoff_doc_service(self) -> HandoffDocService:
         return HandoffDocService(self.handoff_doc_store())
+
+    @cached_service
+    def leader_assignment_store(self) -> LeaderAssignmentStore:
+        return PostgresLeaderAssignmentStore(self.database)
+
+    @cached_service
+    def team_decomposition_mode_reader(self) -> TeamDecompositionModeReader:
+        """Who decomposes each team's repository tasks (adjudication D-2).
+
+        The project module's own projection over the persisted topology, as of
+        PR 5.5B: the mode is a row, written by the adoption pass and read here
+        without asking the controller anything. Teams nobody adopted answer
+        ``SERVER``, which is every team in an installation that has not
+        provisioned an external Repository Leader — so switching the placeholder
+        out for this changes no behavior anywhere that has not opted in through
+        adoption, which is the whole of D-2.
+        """
+
+        return PersistedTeamDecompositionModeReader(self.project_topology_store)
+
+    @cached_service
+    def leader_assignment_reader(self) -> ReadLeaderAssignment:
+        """The read behind ``GET /agent-actions/leader/assignments/{taskId}``."""
+
+        return ReadLeaderAssignment(
+            self.leader_assignment_store(),
+            self.task_store,
+            self.agent_directory,
+            self.team_decomposition_mode_reader(),
+        )
+
+    @cached_service
+    def leader_plan_submitter(self) -> SubmitRepositoryPlan:
+        """The write behind ``POST .../plan``.
+
+        The assigner and the spec author are the *same* two collaborators
+        ``DecomposeRepositoryTask`` uses, and that is the point of the slice: a
+        leader-planned worker task is created, published, told about and
+        permitted by exactly the machinery that creates a server-planned one.
+        A second path would be a second set of bugs.
+
+        Raises rather than answering None when the orchestrator is absent. The
+        optional services above are optional because a *round* can exist
+        without a messenger; this endpoint cannot — a plan that could not
+        dispatch its worker tasks would be accepted and then do nothing, which
+        is worse than refusing to answer at all.
+        """
+
+        assigner = self.task_assignment_gateway()
+        if assigner is None:
+            raise RuntimeError(
+                "the AgentTeams messenger is not configured, so a leader plan could not "
+                "dispatch the worker tasks it creates"
+            )
+        return SubmitRepositoryPlan(
+            self.leader_assignment_store(),
+            self.task_store,
+            self.agent_directory,
+            self.team_decomposition_mode_reader(),
+            assigner,
+            spec_author=ApprovedTaskSpecificationAuthor(
+                self.specification_service(), self.specification_store
+            ),
+        )
+
+    @cached_service
+    def leader_review_submitter(self) -> SubmitRepositoryReview:
+        """The write behind ``POST .../review``.
+
+        ``on_leader_task_terminal`` is the execution plan's own advance hook,
+        the same callable the Runner gateway holds. In leader mode an approved
+        review is the *only* way a leader task reaches a terminal status, so
+        without it an approved round would settle the task and leave its plan
+        parked one batch short of finished.
+        """
+
+        assigner = self.task_assignment_gateway()
+        if assigner is None or self.task_report_gateway is None:
+            raise RuntimeError(
+                "the AgentTeams messenger is not configured, so a leader review could not "
+                "report its verdict"
+            )
+        advancer = self.execution_plan_advancer()
+        return SubmitRepositoryReview(
+            self.leader_assignment_store(),
+            self.task_store,
+            self.agent_directory,
+            self.team_decomposition_mode_reader(),
+            assigner,
+            self.task_report_gateway,
+            spec_author=ApprovedTaskSpecificationAuthor(
+                self.specification_service(), self.specification_store
+            ),
+            on_leader_task_terminal=(
+                advancer.on_task_terminal if advancer is not None else None
+            ),
+        )
+
+    @cached_service
+    def collaboration_gateway(self) -> CollaborationGateway | None:
+        """The composed collaboration sender, or None without a messenger.
+
+        Built here the way ``project_checkpoint_service`` builds its own: the
+        gateway is assembled in ``bootstrap.app`` for the TaskOrchestrator and
+        never handed to the container, so a container-side caller composes it
+        from the same five collaborators rather than reaching for a global.
+        """
+
+        if self.agent_team_messenger is None:
+            return None
+        from repomesh.modules.collaboration import SendCollaborationMessage
+
+        return SendCollaborationMessage(
+            self.agent_directory,
+            self.project_topology_store,
+            PolicyAuthorizationGateway(),
+            self.collaboration_message_store,
+            self.agent_team_messenger,
+        )
+
+    @cached_service
+    def room_timeline_store(self):
+        from repomesh.modules.collaboration import PostgresRoomTimelineStore
+
+        return PostgresRoomTimelineStore(self.database)
+
+    @cached_service
+    def room_timeline_reader(self):
+        """The read use case the console's room stream goes through.
+
+        Cached like the other process-level services: it holds a store and no
+        request state, and a fresh one per request would buy nothing.
+        """
+
+        from repomesh.modules.collaboration import ReadRoomTimeline
+
+        return ReadRoomTimeline(self.room_timeline_store())
 
     @cached_service
     def execution_plan_advancer(self) -> AdvanceExecutionPlan | None:
@@ -1694,6 +2177,22 @@ class ApplicationContainer:
             # The one-shot ``handle`` is superseded by ``handle_batch``.
             on_batch_deliver = self.plan_delivery_finalizer().handle_batch
             delivery_state = self.delivery_state_adapter()
+        # Wiring the lane does not switch any team into leader mode: the reader
+        # above answers per team from the persisted topology, and only a team
+        # whose external Repository Leader the adoption pass adopted says
+        # LEADER. Every other team -- every team at all, in an installation
+        # that has provisioned no external leader -- takes the path it always
+        # has.
+        collaboration = self.collaboration_gateway()
+        leader_lane = (
+            LeaderDecisionLane(
+                modes=self.team_decomposition_mode_reader(),
+                assignments=self.leader_assignment_store(),
+                collaboration=collaboration,
+            )
+            if collaboration is not None
+            else None
+        )
         return AdvanceExecutionPlan(
             self.execution_plan_store(),
             self.task_store,
@@ -1702,6 +2201,7 @@ class ApplicationContainer:
             on_plan_completed=completion_handler,
             delivery_state=delivery_state,
             on_batch_deliver=on_batch_deliver,
+            leader_lane=leader_lane,
         )
 
     def delivery_state_adapter(self):
@@ -1736,12 +2236,14 @@ class ApplicationContainer:
 
     def runner_gateway(self):
         from repomesh.integrations.runner.gateway import RunnerControlGateway
+        from repomesh.modules.task_orchestration import PostgresTaskAssignmentStore
 
         advancer = self.execution_plan_advancer()
         return RunnerControlGateway(
             PostgresRunnerGatewayStore(self.database),
             self.task_store,
             advancer.on_task_terminal if advancer is not None else None,
+            PostgresTaskAssignmentStore(self.database),
         )
 
     def worker_task_dispatcher(self):
@@ -1765,8 +2267,12 @@ class ApplicationContainer:
             StartWorkerTaskExecution,
         )
         from repomesh.integrations.workspace import GitWorktreeManager
+        from repomesh.modules.agent_runtime import PostgresWorkerExecutionReservationStore
         from repomesh.modules.context.application import PublishContextBundle
-        from repomesh.modules.task_orchestration import TaskExecutionState
+        from repomesh.modules.task_orchestration import (
+            PostgresTaskAssignmentStore,
+            TaskExecutionState,
+        )
 
         states = TaskExecutionState(self.agent_directory, self.task_store)
         execution = StartWorkerTaskExecution(
@@ -1787,6 +2293,12 @@ class ApplicationContainer:
             states,
             self.task_report_gateway,
             dispatches=PostgresRunnerGatewayStore(self.database),
+            reservations=PostgresWorkerExecutionReservationStore(self.database),
+            reservation_lease_seconds=(
+                settings.worker_execution_reservation_lease_seconds
+            ),
+            reservation_wait_seconds=settings.worker_execution_reservation_wait_seconds,
+            assignments=PostgresTaskAssignmentStore(self.database),
         )
 
     async def close(self) -> None:

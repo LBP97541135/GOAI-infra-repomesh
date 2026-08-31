@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/leader-actions/v1/repository-plan-decision.schema.json",
+  "title": "RepoMesh Repository Plan Decision v1",
+  "description": "Request body of POST /api/v1/agent-actions/leader/assignments/{taskId}/plan. The leader's own product: Engineering Spec, task DAG, and worker tasks, produced by the leader's Codex session and carrying its provenance. The leader task id lives only in the URL path — it is the idempotency key; the body deliberately does not repeat it. Cross-field invariants the server enforces (409 on violation, pinned by contract tests): DAG nodes and workerTasks correspond one-to-one via nodeId; edges reference declared nodes only; the DAG is acyclic; every assignee is in the assignment package's workerRoster; every allowedPaths entry falls under the package's safetyEnvelope.allowedPathRoots; every workerTask's tests include every safetyEnvelope.testCommands entry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "engineeringSpec", "taskDag", "workerTasks", "provenance"],
+  "properties": {
+    "schemaVersion": {"const": "repomesh.leader-actions.plan-decision.v1"},
+    "engineeringSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "markdown"],
+      "properties": {
+        "summary": {"type": "string", "minLength": 1, "maxLength": 500},
+        "markdown": {"type": "string", "minLength": 1}
+      },
+      "description": "The leader-authored Engineering Spec for this repository. The server persists it verbatim as the leader's product; it never rewrites it."
+    },
+    "taskDag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["nodeId"],
+            "properties": {
+              "nodeId": {"type": "string", "minLength": 1, "maxLength": 100}
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": {"type": "string", "minLength": 1, "maxLength": 100},
+              "to": {"type": "string", "minLength": 1, "maxLength": 100}
+            }
+          },
+          "description": "An edge points from a prerequisite node to the node that depends on it: `from` executes before `to`."
+        }
+      }
+    },
+    "workerTasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["nodeId", "assigneeWorkerAgentId", "title", "instruction", "allowedPaths", "tests"],
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Must name exactly one taskDag node; each node must be named by exactly one worker task."
+          },
+          "assigneeWorkerAgentId": {"type": "string", "format": "uuid"},
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "instruction": {"type": "string", "minLength": 1},
+          "allowedPaths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "minLength": 1}
+          },
+          "tests": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "sessionThreadId"],
+      "properties": {
+        "source": {
+          "const": "leader-codex-session",
+          "description": "The plan must come from the leader's own Codex session; a server-authored plan cannot carry this constant honestly. Submissions without credible provenance are plan_invalid_provenance."
+        },
+        "sessionThreadId": {"type": "string", "minLength": 1, "maxLength": 200},
+        "turnId": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    }
+  }
+}

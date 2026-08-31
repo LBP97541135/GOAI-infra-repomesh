@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Room-Native Bridge 终局验收并行编排",
+    "locale": "zh-CN",
+    "output": "room-native-bridge-parallel-orchestration-plan-20260828.html",
+    "quality_profile": "showcase",
+    "legend": { "mode": "hidden" }
+  },
+  "lanes": [
+    { "id": "delivery", "label": "关键路径 · Leader / Bridge / 终局验收" },
+    { "id": "parallel", "label": "并行支线 · Worker / Room / 前端" }
+  ],
+  "phases": [
+    { "id": "baseline", "label": "波次 0 · 基线", "fromCol": 0, "toCol": 0, "variant": "security" },
+    { "id": "start", "label": "波次 1 · 并行开工", "fromCol": 1, "toCol": 1, "variant": "emphasis" },
+    { "id": "build", "label": "波次 2 · 纵向实现", "fromCol": 2, "toCol": 3 },
+    { "id": "accept", "label": "联调与 V2 验收", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["wave0", "pr55", "leader_chain", "final"],
+  "nodes": [
+    {
+      "id": "wave0",
+      "lane": "delivery",
+      "col": 0,
+      "type": "security",
+      "label": "基线与契约",
+      "sublabel": "tracked · fixture · E0a",
+      "tag": "GO 前硬门"
+    },
+    {
+      "id": "pr55",
+      "lane": "delivery",
+      "col": 1,
+      "type": "backend",
+      "label": "PR 5.5A/B",
+      "sublabel": "External Leader + mode",
+      "tag": "关键路径"
+    },
+    {
+      "id": "leader_chain",
+      "lane": "delivery",
+      "col": 3,
+      "type": "backend",
+      "label": "PR 7/8 Leader 链",
+      "sublabel": "plan · review · Bridge",
+      "tag": "先 fake 后 supervisor",
+      "width": 132
+    },
+    {
+      "id": "final",
+      "lane": "delivery",
+      "col": 5,
+      "type": "external",
+      "label": "M8/M7 → V2",
+      "sublabel": "E1/E0b · 3 PR · Q3b",
+      "tag": "关闭 delivery"
+    },
+    {
+      "id": "worker_live",
+      "lane": "parallel",
+      "col": 1,
+      "type": "backend",
+      "label": "V1 → PR 6",
+      "sublabel": "Worker live + auto wake",
+      "tag": "真实环境队列"
+    },
+    {
+      "id": "room_ui",
+      "lane": "parallel",
+      "col": 3,
+      "type": "frontend",
+      "label": "PR 9/10 + Q",
+      "sublabel": "timeline · UI · Q1/Q3a",
+      "tag": "C 线内顺序"
+    }
+  ],
+  "edges": [
+    { "from": "wave0", "to": "pr55", "variant": "emphasis", "role": "main", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "wave0", "to": "worker_live", "role": "branch" },
+    { "from": "pr55", "to": "leader_chain", "variant": "emphasis", "role": "main", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "worker_live", "to": "room_ui", "role": "branch", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "leader_chain", "to": "final", "variant": "security", "role": "main", "route": "straight", "fromSide": "right", "toSide": "left" },
+    { "from": "room_ui", "to": "final", "role": "branch" }
+  ]
+}

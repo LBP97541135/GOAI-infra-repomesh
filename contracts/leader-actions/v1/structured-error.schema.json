@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/leader-actions/v1/structured-error.schema.json",
+  "title": "RepoMesh Leader Actions Structured Error v1",
+  "description": "Every non-2xx response of the three leader endpoints. FastAPI's `detail` envelope is kept for consistency with the rest of the API surface, but detail is structured: a machine-readable code from the frozen enum plus a human-readable message. The code-to-HTTP-status mapping is frozen in fixtures/error-matrix.json and pinned by contract tests; a server may not reuse a code under a different status.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["detail"],
+  "properties": {
+    "detail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "invalid_token",
+            "forbidden_not_assignee",
+            "forbidden_role",
+            "assignment_not_found",
+            "phase_conflict",
+            "decomposition_mode_conflict",
+            "plan_invalid_dag_cycle",
+            "plan_invalid_dag_coverage",
+            "plan_invalid_assignee",
+            "plan_invalid_allowed_paths",
+            "plan_invalid_tests_removed",
+            "plan_invalid_provenance",
+            "review_invalid_findings"
+          ]
+        },
+        "message": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

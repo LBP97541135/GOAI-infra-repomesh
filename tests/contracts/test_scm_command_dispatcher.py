@@ -1,3 +1,5 @@
+import asyncio
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
@@ -10,6 +12,7 @@ from repomesh.integrations.scm.contracts import (
     SCMProvider,
 )
 from repomesh.modules.delivery import (
+    DeliveryConflict,
     DeliveryService,
     InMemoryChangeSetStore,
     InMemorySCMCommandStore,
@@ -155,3 +158,51 @@ async def test_command_enqueue_is_idempotent_and_rejects_changed_meaning() -> No
                 {**original.payload, "pull_request_number": 99},
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_atomic_claim_fences_stale_owner() -> None:
+    _, commands, _, _, command_id, _ = await setup_dispatcher()
+
+    first = (await commands.claim_batch("dispatcher-a", limit=1))[0]
+    assert first.lease_owner == "dispatcher-a"
+    assert await commands.claim_batch("dispatcher-b", limit=1) == ()
+
+    renewed = await commands.renew(first.id, "dispatcher-a", first.version)
+    assert renewed.version == first.version
+    assert renewed.lease_expires_at is not None
+
+    with pytest.raises(DeliveryConflict, match="ownership"):
+        await commands.accept(command_id, "dispatcher-b", first.version)
+
+    accepted = await commands.accept(command_id, "dispatcher-a", first.version)
+    assert accepted.status is SCMCommandStatus.ACCEPTED
+    assert accepted.lease_owner is None
+    assert accepted.lease_expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_two_dispatchers_mutate_provider_once() -> None:
+    dispatcher, commands, _, _, command_id, adapter = await setup_dispatcher()
+    second = SCMCommandDispatcher(
+        commands,
+        dispatcher._delivery,
+        dispatcher._catalog,
+        adapter,
+        lease_owner="dispatcher-b",
+    )
+    dispatcher._lease_owner = "dispatcher-a"
+
+    await asyncio.gather(dispatcher.run_once(), second.run_once())
+
+    assert adapter.calls == 1
+    assert (await commands._required(command_id)).status is SCMCommandStatus.ACCEPTED
+
+
+@pytest.mark.asyncio
+async def test_attempt_limit_prevents_automatic_reclaim() -> None:
+    _, commands, _, _, command_id, _ = await setup_dispatcher()
+    current = await commands._required(command_id)
+    commands._store.items[command_id] = replace(current, attempts=8)
+
+    assert await commands.claim_batch("dispatcher-a", limit=1) == ()

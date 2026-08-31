@@ -8,15 +8,20 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalView,
     AgentRole,
 )
-from repomesh.modules.collaboration.contracts import CollaborationRouteUnavailable
+from repomesh.modules.collaboration.contracts import (
+    CollaborationRouteUnavailable,
+    SendCollaborationMessageCommand,
+)
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTeamRuntimeStatus,
     RepositoryTeamView,
+    TeamDecompositionMode,
 )
 from repomesh.modules.task_orchestration.application import (
     AdvanceExecutionPlan,
     DecomposeRepositoryTask,
+    LeaderDecisionLane,
     ObserveExecutionPlan,
 )
 from repomesh.modules.task_orchestration.contracts import (
@@ -39,6 +44,7 @@ from repomesh.modules.task_orchestration.domain import (
 )
 from repomesh.modules.task_orchestration.infrastructure import (
     InMemoryExecutionPlanStore,
+    InMemoryLeaderAssignmentStore,
     InMemoryTaskStore,
 )
 
@@ -86,10 +92,12 @@ class RecordingAssigner:
         *,
         idempotency_key: str,
         origin: TaskOrigin = TaskOrigin.PLANNED,
+        deliver: bool = True,
     ):
         self.commands.append((command, idempotency_key))
         if existing := await self._tasks.get_by_idempotency_key(idempotency_key):
-            self._deliver(idempotency_key)
+            if deliver:
+                self._deliver(idempotency_key)
             return existing[0].to_view()
         task = Task(
             organization_id=command.organization_id,
@@ -108,8 +116,22 @@ class RecordingAssigner:
             idempotency_key=idempotency_key,
             request_fingerprint="sha256:test",
         )
-        self._deliver(idempotency_key)
+        if deliver:
+            self._deliver(idempotency_key)
         return task.to_view()
+
+    async def deliver_assignment(self, task_id: UUID) -> None:
+        """The announcement half of a dispatch split in two (defect S-1).
+
+        Keyed the way the real gateway keys it: the task's *original*
+        assignment key, read back from the same store. So a test that marks a
+        key undeliverable still breaks the delivery of the task that key
+        created, whichever half of the split now runs it.
+        """
+
+        key = await self._tasks.assignment_key(task_id)
+        assert key is not None, "a row this assigner wrote always has its key"
+        self._deliver(key)
 
     def _deliver(self, idempotency_key: str) -> None:
         if idempotency_key in self.unpublishable:
@@ -169,6 +191,34 @@ class FakeDeliveryState:
         )
 
 
+class RecordingCollaboration:
+    """Records what would have been sent to a room, and to whom."""
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[SendCollaborationMessageCommand, str]] = []
+
+    async def send(
+        self, command: SendCollaborationMessageCommand, *, idempotency_key: str
+    ) -> None:
+        self.sent.append((command, idempotency_key))
+
+
+class FakeDecompositionModes:
+    """Per-team decomposition modes, defaulting to today's server-side mode."""
+
+    def __init__(self, leader_repository_ids: frozenset[UUID] = frozenset()) -> None:
+        self._leader_repository_ids = leader_repository_ids
+
+    async def decomposition_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> TeamDecompositionMode:
+        return (
+            TeamDecompositionMode.LEADER
+            if repository_id in self._leader_repository_ids
+            else TeamDecompositionMode.SERVER
+        )
+
+
 class Environment:
     def __init__(
         self,
@@ -178,6 +228,7 @@ class Environment:
         worker_paths: tuple[str, ...] = ("src/**",),
         delivery_state: DeliveryStatePort | None = None,
         on_batch_deliver=None,
+        leader_mode_repositories: tuple[int, ...] = (),
     ) -> None:
         self.organization_id = uuid4()
         self.project_id = uuid4()
@@ -259,6 +310,23 @@ class Environment:
         self.decomposer = DecomposeRepositoryTask(
             self.directory, self.topologies, self.tasks, self.assigner, self.spec_author
         )
+        # No lane unless a test names a leader-mode repository: the historical
+        # behaviour is what every other test in this module is about, and it is
+        # reached by the same absent-lane path a deployment without a
+        # collaboration messenger takes.
+        self.leader_assignments = InMemoryLeaderAssignmentStore()
+        self.collaboration = RecordingCollaboration()
+        self.leader_lane = (
+            LeaderDecisionLane(
+                modes=FakeDecompositionModes(
+                    frozenset(self.repository_ids[index] for index in leader_mode_repositories)
+                ),
+                assignments=self.leader_assignments,
+                collaboration=self.collaboration,
+            )
+            if leader_mode_repositories
+            else None
+        )
         self.advancer = AdvanceExecutionPlan(
             self.plans,
             self.tasks,
@@ -266,6 +334,7 @@ class Environment:
             self.decomposer,
             delivery_state=delivery_state,
             on_batch_deliver=on_batch_deliver,
+            leader_lane=self.leader_lane,
         )
 
     @property
@@ -986,6 +1055,42 @@ async def test_terminal_task_outside_any_plan_is_ignored() -> None:
     await environment.advancer.on_task_terminal(uuid4())
 
     assert environment.plans.plans == {}
+
+
+@pytest.mark.asyncio
+async def test_appended_dynamic_batch_is_dispatched_after_current_batch() -> None:
+    environment = Environment(repository_count=2)
+    plan = environment.plan(((0,),))
+    await environment.advancer.start(plan, idempotency_key="dynamic-start")
+    persisted = await environment.plans.get(plan.id)
+    assert persisted is not None
+    appended = persisted.append_tasks(
+        (
+            PlannedRepositoryTask(
+                repository_id=environment.repository_ids[1],
+                title="Discovered billing adapter",
+                instruction="Implement the newly discovered adapter",
+                acceptance=("adapter tests pass",),
+                depends_on=(environment.repository_ids[0],),
+            ),
+        )
+    )
+    await environment.plans.update(appended, expected_version=persisted.version)
+
+    first_leader = await environment.leader_task_id(plan.id, 0, 0)
+    first_worker = await environment.worker_task_of(first_leader)
+    await environment.finish(first_worker.id, TaskStatus.SUCCEEDED, "Initial work completed.")
+    await environment.advancer.on_task_terminal(first_worker.id)
+
+    revised = await environment.plans.get(plan.id)
+    assert revised is not None and revised.current_batch_index == 1
+    appended_keys = [
+        key
+        for command, key in environment.assigner.commands
+        if command.repository_id == environment.repository_ids[1]
+        and ":decompose:" not in key
+    ]
+    assert appended_keys == [f"{plan.id}:b1:{environment.repository_ids[1]}"]
 
 
 # ---------------------------------------------------------------------------

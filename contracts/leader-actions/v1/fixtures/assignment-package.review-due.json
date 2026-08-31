@@ -1,0 +1,77 @@
+{
+  "schemaVersion": "repomesh.leader-actions.assignment-package.v1",
+  "leaderTaskId": "00000000-0000-0000-0000-0000000000a1",
+  "phase": "review_due",
+  "organizationId": "00000000-0000-0000-0000-000000000001",
+  "projectId": "00000000-0000-0000-0000-000000000011",
+  "repositoryId": "00000000-0000-0000-0000-000000000021",
+  "repositoryTask": {
+    "title": "Multi-currency quoting: extend the pricing contract",
+    "instruction": "Extend the shared quote contract with a currency field and rounding rules: USD/EUR keep two decimal places, zero-decimal currencies such as JPY are priced and rendered as integers.",
+    "acceptance": "Quote contract carries currency and rounding rules; existing USD behavior unchanged; repository test command passes."
+  },
+  "workerRoster": [
+    {
+      "workerAgentId": "00000000-0000-0000-0000-000000000002",
+      "workerName": "pricing-codex-worker",
+      "responsibilityPaths": ["src/pricing_core/"]
+    }
+  ],
+  "safetyEnvelope": {
+    "allowedPathRoots": ["src/pricing_core/", "tests/"],
+    "testPaths": ["tests/"],
+    "testCommands": ["python scripts/run_tests.py"]
+  },
+  "advisoryContext": {
+    "authoritative": false,
+    "discoveryEvidence": "pricing-core is the shared contract producer; billing and checkout consume its quote schema.",
+    "dependencyEdges": [
+      {
+        "upstreamRepositoryId": "00000000-0000-0000-0000-000000000021",
+        "downstreamRepositoryId": "00000000-0000-0000-0000-000000000022"
+      },
+      {
+        "upstreamRepositoryId": "00000000-0000-0000-0000-000000000021",
+        "downstreamRepositoryId": "00000000-0000-0000-0000-000000000023"
+      }
+    ],
+    "decompositionHint": "Contract change and rounding implementation are separable steps."
+  },
+  "reviewEvidence": {
+    "reviewRevision": 1,
+    "workerEvidence": [
+      {
+        "workerTaskId": "00000000-0000-0000-0000-0000000000b1",
+        "workerAgentId": "00000000-0000-0000-0000-000000000002",
+        "status": "succeeded",
+        "runId": "00000000-0000-0000-0000-0000000000c1",
+        "commitSha": "3f2a9d1b7c4e8f0a6b5d2c1e9f8a7b6c5d4e3f2a",
+        "changedFiles": [
+          "src/pricing_core/contracts/quote.py",
+          "tests/test_quote_contract.py"
+        ],
+        "diffStat": "2 files changed, 84 insertions(+), 6 deletions(-)",
+        "testResults": [
+          {"command": "python scripts/run_tests.py", "exitCode": 0}
+        ],
+        "summary": "Added currency field and rounding-rule table to the quote contract."
+      },
+      {
+        "workerTaskId": "00000000-0000-0000-0000-0000000000b2",
+        "workerAgentId": "00000000-0000-0000-0000-000000000002",
+        "status": "succeeded",
+        "runId": "00000000-0000-0000-0000-0000000000c2",
+        "commitSha": "8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c3b2a1f0e9d",
+        "changedFiles": [
+          "src/pricing_core/rounding.py",
+          "tests/test_rounding.py"
+        ],
+        "diffStat": "2 files changed, 121 insertions(+), 2 deletions(-)",
+        "testResults": [
+          {"command": "python scripts/run_tests.py", "exitCode": 0}
+        ],
+        "summary": "Implemented per-currency rounding: two decimals for USD/EUR, integers for JPY."
+      }
+    ]
+  }
+}

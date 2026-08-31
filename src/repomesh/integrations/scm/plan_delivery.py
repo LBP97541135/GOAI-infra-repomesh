@@ -13,8 +13,12 @@ from uuid import UUID
 from repomesh.modules.delivery import DeliveryService, delivery_change_set_key
 from repomesh.modules.delivery.contracts import (
     AppendCandidatesCommand,
+    DeliveryTraceability,
     PrepareChangeSetCommand,
+    RecordCandidateTraceabilityCommand,
     RepositoryCandidateInput,
+    RepositoryDeliveryView,
+    render_delivery_pull_request_body,
 )
 from repomesh.modules.delivery.ports import ContractCatalogPort
 from repomesh.modules.project.checkpoint_control import ProjectCheckpointService
@@ -27,8 +31,10 @@ from repomesh.modules.review_validation import (
 from repomesh.modules.task_orchestration.contracts import (
     BatchDeliveryRefused,
     ExecutionPlanView,
+    PlannedRepositoryTaskView,
     TaskStatus,
 )
+from repomesh.modules.task_orchestration.domain import Task
 from repomesh.modules.task_orchestration.ports import TaskStore
 
 from .delivery import ChangeSetSCMCoordinator, PublishChangeSetPullRequestCommand
@@ -42,6 +48,28 @@ class PlanDeliveryPolicy:
     required_checks: tuple[str, ...] = ()
     required_approvals: int = 1
     add_label: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerProvenance:
+    """The two traceability ids a delivered candidate does not persist.
+
+    ``RepositoryCandidateInput`` keeps run and worker out on purpose (ruling
+    W-C3-D3: no migration, no change to the persisted candidate), so the
+    finalizer carries them beside the candidates it just built rather than
+    through the delivery contract.
+    """
+
+    run_id: UUID | None
+    worker_agent_id: UUID
+
+    @classmethod
+    def of(cls, worker: Task) -> _WorkerProvenance:
+        evidence = worker.to_view().evidence
+        return cls(
+            run_id=evidence.run_id if evidence is not None else None,
+            worker_agent_id=worker.assignee_agent_id,
+        )
 
 
 class PlanDeliveryFinalizer:
@@ -69,7 +97,7 @@ class PlanDeliveryFinalizer:
 
     async def handle(self, plan: ExecutionPlanView) -> None:
         self._policy = await self._resolve_policy(plan.organization_id)
-        candidates, workspaces, tests = await self._candidates(plan)
+        candidates, workspaces, tests, provenance = await self._candidates(plan)
         if not candidates:
             return
         if self._checkpoints is not None:
@@ -135,6 +163,7 @@ class PlanDeliveryFinalizer:
             ),
             idempotency_key=idempotency_key,
         )
+        await self._record_traceability(change_set.id, candidates)
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
             if candidate.pull_request_number is not None:
                 continue
@@ -145,7 +174,7 @@ class PlanDeliveryFinalizer:
                     workspace=workspaces[candidate.repository_id],
                     base_branch=self._policy.base_branch,
                     body=self._pull_request_body(
-                        plan, [candidate.repository_id], batch_index=None
+                        plan, change_set.id, candidate, provenance, batch_index=None
                     ),
                     # Draft by design: consumers of a contract stay hidden
                     # until the producer merges, then undraft_when_allowed
@@ -153,7 +182,9 @@ class PlanDeliveryFinalizer:
                     draft=True,
                 )
             )
-        await self._backfill_sibling_links(change_set.id, plan, batch_index=None)
+        await self._backfill_sibling_links(
+            change_set.id, plan, provenance, batch_index=None
+        )
 
     async def handle_batch(self, plan: ExecutionPlanView) -> None:
         """Deliver the plan's current batch (batch-by-batch delivery).
@@ -166,7 +197,9 @@ class PlanDeliveryFinalizer:
         """
         self._policy = await self._resolve_policy(plan.organization_id)
         batch_index = plan.current_batch_index
-        candidates, workspaces, tests = await self._candidates_for_batch(plan, batch_index)
+        candidates, workspaces, tests, provenance = await self._candidates_for_batch(
+            plan, batch_index
+        )
         if not candidates:
             return
         idempotency_key = f"execution-plan:{plan.id}:delivery"
@@ -209,6 +242,7 @@ class PlanDeliveryFinalizer:
                 ),
                 idempotency_key=f"{idempotency_key}:b{batch_index}",
             )
+        await self._record_traceability(change_set.id, candidates)
         for candidate in sorted(change_set.repositories, key=lambda item: item.merge_order):
             if (
                 candidate.pull_request_number is not None
@@ -222,7 +256,7 @@ class PlanDeliveryFinalizer:
                     workspace=workspaces[candidate.repository_id],
                     base_branch=self._policy.base_branch,
                     body=self._pull_request_body(
-                        plan, [candidate.repository_id], batch_index=batch_index
+                        plan, change_set.id, candidate, provenance, batch_index=batch_index
                     ),
                     # Draft by design: consumers of a contract stay hidden
                     # until the producer merges, then undraft_when_allowed
@@ -231,7 +265,10 @@ class PlanDeliveryFinalizer:
                 )
             )
         await self._backfill_sibling_links(
-            change_set.id, plan, batch_index=batch_index
+            change_set.id,
+            plan,
+            await self._delivered_provenance(plan, batch_index),
+            batch_index=batch_index,
         )
 
     async def _resolve_policy(self, organization_id: UUID) -> PlanDeliveryPolicy:
@@ -245,10 +282,12 @@ class PlanDeliveryFinalizer:
         list[RepositoryCandidateInput],
         dict[UUID, Path],
         list[ValidationTestInput],
+        dict[UUID, _WorkerProvenance],
     ]:
         candidates: list[RepositoryCandidateInput] = []
         workspaces: dict[UUID, Path] = {}
         tests: list[ValidationTestInput] = []
+        provenance: dict[UUID, _WorkerProvenance] = {}
         earlier_repositories = [
             item.repository_id
             for batch in plan.batches[:batch_index]
@@ -257,14 +296,7 @@ class PlanDeliveryFinalizer:
         for planned in plan.batches[batch_index]:
             if planned.leader_task_id is None:
                 continue
-            workers = await self._tasks.list_by_parent(planned.leader_task_id)
-            succeeded = [task for task in workers if task.status is TaskStatus.SUCCEEDED]
-            if len(succeeded) != 1:
-                raise BatchDeliveryRefused(
-                    f"repository {planned.repository_id} has no unique successful candidate",
-                    repository_id=planned.repository_id,
-                )
-            worker = succeeded[0]
+            worker = await self._successful_worker(planned)
             # Declared evidence, resolved by the producing module at projection
             # time. This used to re-parse ``result_summary`` here, which is free
             # text by contract, so delivery was reading a shape nobody promised
@@ -298,6 +330,7 @@ class PlanDeliveryFinalizer:
                     task_id=worker.id,
                 )
             branch = f"repomesh/{str(plan.id)[:8]}/{str(planned.repository_id)[:8]}"
+            worker_provenance = _WorkerProvenance.of(worker)
             candidates.append(
                 RepositoryCandidateInput(
                     repository_id=planned.repository_id,
@@ -308,9 +341,13 @@ class PlanDeliveryFinalizer:
                     depends_on=tuple(earlier_repositories),
                     required_checks=self._policy.required_checks,
                     required_approvals=self._policy.required_approvals,
+                    plan_id=plan.id,
+                    run_id=worker_provenance.run_id,
+                    worker_agent_id=worker_provenance.worker_agent_id,
                 )
             )
             workspaces[planned.repository_id] = workspace
+            provenance[planned.repository_id] = worker_provenance
             # The last undeclared read is gone (A-18): test results are now part
             # of TaskEvidenceView, so this reads the producer's parse like every
             # other field above instead of re-opening the free-text summary.
@@ -346,7 +383,39 @@ class PlanDeliveryFinalizer:
                 )
             earlier_repositories.append(planned.repository_id)
         await self._check_contract_coverage(plan, earlier_repositories)
-        return candidates, workspaces, tests
+        return candidates, workspaces, tests, provenance
+
+    async def _successful_worker(self, planned: PlannedRepositoryTaskView) -> Task:
+        workers = await self._tasks.list_by_parent(planned.leader_task_id)
+        succeeded = [task for task in workers if task.status is TaskStatus.SUCCEEDED]
+        if len(succeeded) != 1:
+            raise BatchDeliveryRefused(
+                f"repository {planned.repository_id} has no unique successful candidate",
+                repository_id=planned.repository_id,
+            )
+        return succeeded[0]
+
+    async def _delivered_provenance(
+        self, plan: ExecutionPlanView, batch_index: int
+    ) -> dict[UUID, _WorkerProvenance]:
+        """Provenance for every batch delivered so far, not only the current one.
+
+        ``_backfill_sibling_links`` rewrites the description of every published
+        pull request in the ChangeSet, and the earlier batches' run and worker
+        ids are not in this invocation's candidate set. Rewriting without them
+        would strip two traceability lines off a pull request that was opened
+        carrying them.
+        """
+
+        provenance: dict[UUID, _WorkerProvenance] = {}
+        for batch in plan.batches[: batch_index + 1]:
+            for planned in batch:
+                if planned.leader_task_id is None:
+                    continue
+                provenance[planned.repository_id] = _WorkerProvenance.of(
+                    await self._successful_worker(planned)
+                )
+        return provenance
 
     async def _check_contract_coverage(
         self, plan: ExecutionPlanView, delivered_ids: list[UUID]
@@ -387,6 +456,7 @@ class PlanDeliveryFinalizer:
         self,
         change_set_id: UUID,
         plan: ExecutionPlanView,
+        provenance: dict[UUID, _WorkerProvenance],
         *,
         batch_index: int | None,
     ) -> None:
@@ -399,16 +469,24 @@ class PlanDeliveryFinalizer:
 
         current = await self._delivery.get(change_set_id)
         published = [
-            (item.repository_id, item.pull_request_number)
+            item
             for item in sorted(current.repositories, key=lambda item: item.merge_order)
             if item.pull_request_number is not None
         ]
-        if len(published) < 2:
+        if not published:
             return
-        sibling_section = self._sibling_links(current, published)
-        for repository_id, _ in published:
+        sibling_section = (
+            self._sibling_links(
+                current,
+                [(item.repository_id, item.pull_request_number) for item in published],
+            )
+            if len(published) > 1
+            else ""
+        )
+        for candidate in published:
+            repository_id = candidate.repository_id
             body = self._pull_request_body(
-                plan, [repository_id], batch_index=batch_index
+                plan, change_set_id, candidate, provenance, batch_index=batch_index
             )
             await self._coordinator.update_pull_request_description(
                 change_set_id, repository_id, body + sibling_section
@@ -417,6 +495,26 @@ class PlanDeliveryFinalizer:
                 await self._coordinator.add_change_set_label(
                     change_set_id, repository_id
                 )
+
+    async def _record_traceability(
+        self, change_set_id: UUID, candidates: list[RepositoryCandidateInput]
+    ) -> None:
+        """Persist the owning application's complete chain before SCM replay."""
+
+        for candidate in candidates:
+            if candidate.plan_id is None or candidate.worker_agent_id is None:
+                continue
+            await self._delivery.record_candidate_traceability(
+                RecordCandidateTraceabilityCommand(
+                    change_set_id=change_set_id,
+                    repository_id=candidate.repository_id,
+                    task_id=candidate.task_id,
+                    commit_sha=candidate.commit_sha,
+                    plan_id=candidate.plan_id,
+                    run_id=candidate.run_id,
+                    worker_agent_id=candidate.worker_agent_id,
+                )
+            )
 
     @staticmethod
     def _sibling_links(change_set, published: list[tuple[UUID, int | None]]) -> str:
@@ -437,27 +535,48 @@ class PlanDeliveryFinalizer:
     @staticmethod
     def _pull_request_body(
         plan: ExecutionPlanView,
-        repository_ids: list[UUID],
+        change_set_id: UUID,
+        candidate: RepositoryDeliveryView,
+        provenance: dict[UUID, _WorkerProvenance],
         *,
         batch_index: int | None,
     ) -> str:
-        """Standard PR body: change_id, execution order and batch scope."""
-        batch_line = (
-            f"- execution order: batch {batch_index + 1}"
-            if batch_index is not None
-            else "- execution order: full plan"
+        """The full traceability chain, assembled here because only here is it whole.
+
+        Ruling D-9 places the assembly in the owning application: the plan
+        supplies the Issue and plan ids, the ChangeSet candidate the repository,
+        task, branch and commit, and ``provenance`` the run and worker the SCM
+        layer is not allowed to go looking for.
+
+        ``provenance`` is looked up rather than indexed because a replay of an
+        already-delivered batch (which ``handle_batch`` promises is idempotent)
+        can back-fill a repository belonging to a *later* batch than the index
+        it was handed. Two lines thinner is the right answer there; refusing the
+        replay outright is not.
+        """
+
+        worker = provenance.get(candidate.repository_id)
+        traceability = DeliveryTraceability(
+            issue_id=plan.project_id,
+            change_set_id=change_set_id,
+            repository_id=candidate.repository_id,
+            task_id=candidate.task_id,
+            branch_name=candidate.branch_name,
+            commit_sha=candidate.commit_sha,
+            plan_id=plan.id,
+            run_id=worker.run_id if worker is not None else None,
+            worker_agent_id=worker.worker_agent_id if worker is not None else None,
         )
-        return "\n".join(
-            [
-                f"Automated RepoMesh delivery for execution plan `{plan.id}`.",
-                "",
-                f"- change_id: `{plan.id}`",
-                batch_line,
-                "- repositories: "
-                + ", ".join(f"`{repository_id}`" for repository_id in repository_ids),
-                "",
-                "The candidate commits passed their frozen Task Spec commands.",
-            ]
+        batch_line = (
+            f"execution order: batch {batch_index + 1}"
+            if batch_index is not None
+            else "execution order: full plan"
+        )
+        return render_delivery_pull_request_body(
+            traceability,
+            headline=f"Automated RepoMesh delivery for execution plan `{plan.id}`.",
+            context=(batch_line,),
+            notes=("The candidate commits passed their frozen Task Spec commands.",),
         )
 
     async def _candidates(
@@ -466,18 +585,21 @@ class PlanDeliveryFinalizer:
         list[RepositoryCandidateInput],
         dict[UUID, Path],
         list[ValidationTestInput],
+        dict[UUID, _WorkerProvenance],
     ]:
         candidates: list[RepositoryCandidateInput] = []
         workspaces: dict[UUID, Path] = {}
         tests: list[ValidationTestInput] = []
+        provenance: dict[UUID, _WorkerProvenance] = {}
         for batch_index in range(len(plan.batches)):
-            batch_candidates, batch_workspaces, batch_tests = (
+            batch_candidates, batch_workspaces, batch_tests, batch_provenance = (
                 await self._candidates_for_batch(plan, batch_index)
             )
             candidates.extend(batch_candidates)
             workspaces.update(batch_workspaces)
             tests.extend(batch_tests)
-        return candidates, workspaces, tests
+            provenance.update(batch_provenance)
+        return candidates, workspaces, tests, provenance
 
     @staticmethod
     def _evidence(raw: str | None) -> dict[str, object]:

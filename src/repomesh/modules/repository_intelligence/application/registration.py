@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
@@ -32,6 +33,38 @@ class RegisterRepository:
             payload={"name": profile.name, "url": profile.url},
         )
         await self._catalog.add(profile, events=(event,))
+
+
+class RepositoryNotFound(LookupError):
+    pass
+
+
+class UpdateRepositoryVerification:
+    """Replace the operator-owned command/path pair for one repository.
+
+    This is deliberately a full replacement, not an append operation, so a
+    browser retry has the same result and cannot duplicate commands or paths.
+    Repository scanning remains responsible only for derived profile evidence.
+    """
+
+    def __init__(self, catalog: RepositoryCatalog) -> None:
+        self._catalog = catalog
+
+    async def execute(
+        self,
+        repository_id: UUID,
+        *,
+        test_commands: tuple[str, ...],
+        test_paths: tuple[str, ...],
+    ) -> RepositoryProfile:
+        updated = await self._catalog.update_verification(
+            repository_id,
+            test_commands=test_commands,
+            test_paths=test_paths,
+        )
+        if updated is None:
+            raise RepositoryNotFound(f"Repository not found: {repository_id}")
+        return updated
 
 
 @dataclass(frozen=True, slots=True)

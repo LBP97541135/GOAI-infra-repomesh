@@ -208,7 +208,7 @@ def _topology(
                 repository_id=repository_id,
                 leader_agent_id=uuid4(),
                 worker_agent_ids=(uuid4(),),
-                agentteams_team_name="rm-team-1",
+                agentteams_team_name="repomesh-team-1",
                 runtime_status=ProjectTeamRuntimeStatus.READY,
                 room_id="!team:local",
                 leader_room_id="!leader:local",
@@ -611,7 +611,7 @@ async def test_issue_overview_adds_rounds_repositories_teams_and_grants() -> Non
             "role_in_issue": None,
         }
     ]
-    assert overview["teams"][0]["agentteams_team_name"] == "rm-team-1"
+    assert overview["teams"][0]["agentteams_team_name"] == "repomesh-team-1"
     assert overview["teams"][0]["runtime_status"] == "ready"
     assert overview["human_grants"][0]["role"] == "project_supervisor"
     assert overview["human_grants"][0]["code_access"] == "read"

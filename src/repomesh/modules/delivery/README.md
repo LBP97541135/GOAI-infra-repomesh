@@ -19,6 +19,12 @@ release evidence, and rollback records. Coding agents cannot push, open PRs, or 
 7. A repository can merge only after all of its upstream repositories are recorded as merged.
 8. The ChangeSet is delivered only when every repository is merged.
 
+SCM commands are claimed atomically in PostgreSQL with `FOR UPDATE SKIP LOCKED`. Every claim has a
+bounded owner lease and uses the command version as a fencing token. Renew, accept, and fail reject
+stale owners, while expired work can be reclaimed after restart. Provider calls remain
+at-least-once because GitHub cannot share the database transaction; live PR reconciliation makes
+the effective operation idempotent and converges interrupted acknowledgements.
+
 GitHub accepting a Merge request moves a repository only to `merge_requested`. RepoMesh records
 `merged` and the merge commit SHA only after reconciliation observes the remote PR in the merged
 state. Replayed Webhooks cannot submit another Merge while that confirmation is pending.

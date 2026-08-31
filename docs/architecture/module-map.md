@@ -1,6 +1,6 @@
 # Module Ownership Map
 
-This map is the source of truth for team ownership. RepoMesh currently has sixteen business
+This map is the source of truth for team ownership. RepoMesh currently has eighteen business
 modules. Each module also has a machine-readable `module.toml`; its `status` field distinguishes
 active modules from planned boundaries. Replace the provisional team labels with GitHub teams
 when the repository moves into an organization.
@@ -23,6 +23,7 @@ when the repository moves into an organization.
 | Observability | platform | audit, traces, metrics, cost timeline | business command handling |
 | Identity And Access | platform | organizations, users, authorization, credential refs | secret storage |
 | Capability Management | platform | governed MCP and Skill presets, role-scoped agent capability bundles | runtime authorization decisions |
+| Recovery Management | platform | unified failure projection, human recovery decisions, durable recovery operations | source-module failure truth, arbitrary command execution |
 | Runtime | runtime-integrations | planned runtime-neutral contracts, cross-plane execution policy and gateway schemas | coding run state, CLI process execution, concrete AgentTeams or vendor adapters |
 
 ## Runtime component and integration ownership
@@ -31,6 +32,7 @@ when the repository moves into an organization.
 | --- | --- | --- |
 | AgentTeams | runtime-integrations | first-party Go runtime resources, reconciliation, Matrix and Worker lifecycle |
 | RepoMesh Runner | runtime-integrations | first-party Python coding execution, native sessions and runtime events |
+| Room-Native Agent Bridge | runtime-integrations | operator-hosted process for one external Worker: enrollment validation, RepoMesh binding preflight, the per-worker instance claim, room membership and the local coding session; holds no AgentTeams management credential and owns no task, permission or delivery state |
 | Coding agents | runtime-integrations | provider CLI and native session differences |
 | Workspace | runtime-integrations | worktree isolation and recovery |
 | Worker task control | runtime-integrations | AgentTeams MCP start action, automatic Run/Context creation and durable Runner dispatch |
