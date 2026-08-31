@@ -32,7 +32,7 @@ import json
 from collections.abc import Callable, Mapping
 from types import TracebackType
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
 from opentelemetry.trace import Span, Status, StatusCode
 
 from repomesh_runner.contracts import RunnerTask
@@ -77,6 +77,14 @@ TOOL_RESULT_MISSING = "repomesh.tool_result_missing"
 
 OPERATION_INVOKE_AGENT = "invoke_agent"
 OPERATION_EXECUTE_TOOL = "execute_tool"
+
+# Proxy-meter counter: resolves to the real MeterProvider once setup_metrics()
+# runs, stays a no-op otherwise (same mechanism as the module tracers).
+_tool_calls = metrics.get_meter("repomesh.runner").create_counter(
+    "repomesh.tool.calls",
+    unit="1",
+    description="Agent tool invocations observed by the runner",
+)
 
 EVENT_PERMISSION_REQUEST = "permission_request"
 EVENT_AGENT_TEXT = "agent_text"
@@ -225,6 +233,7 @@ class OtelDriverObserver:
     def _on_tool_use(self, root: Span, payload: Mapping[str, object]) -> None:
         call_id = _text(payload.get("call_id"))
         tool_name = _text(payload.get("tool_name")) or "tool"
+        _tool_calls.add(1, {"repomesh.tool_name": tool_name})
         # A repeated call id means the provider reused it; close the stale span
         # rather than dropping it on the floor.
         self._end_orphan(self._tool_spans.pop(call_id, None))

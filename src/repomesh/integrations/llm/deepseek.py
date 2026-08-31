@@ -25,10 +25,30 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
-from opentelemetry import trace
+from opentelemetry import metrics, trace
 from opentelemetry.trace import StatusCode
 
 _tracer = trace.get_tracer("repomesh.llm")
+
+# Metrics run through the same proxy mechanism as _tracer: counters created here
+# resolve to the real MeterProvider once setup_metrics() runs, and stay no-op
+# (near-free) when it never does.
+_meter = metrics.get_meter("repomesh.llm")
+_llm_calls = _meter.create_counter(
+    "repomesh.llm.calls",
+    unit="1",
+    description="DeepSeek chat completion calls, split by outcome",
+)
+_llm_input_tokens = _meter.create_counter(
+    "repomesh.llm.tokens.input",
+    unit="token",
+    description="Prompt tokens sent to DeepSeek",
+)
+_llm_output_tokens = _meter.create_counter(
+    "repomesh.llm.tokens.output",
+    unit="token",
+    description="Completion tokens returned by DeepSeek",
+)
 
 # Prompts are repo profiles plus requirement text; 32 KiB keeps replay useful
 # without letting a runaway prompt bloat every exported span.
@@ -83,6 +103,14 @@ class DeepSeekClient:
                 # problems show up on the observability page instead of being
                 # silently absent. Re-raise so the span above records the
                 # exception and the status stays non-OK.
+                _llm_calls.add(
+                    1,
+                    {
+                        "gen_ai.provider.name": "deepseek",
+                        "gen_ai.request.model": self._config.model,
+                        "repomesh.outcome": "error",
+                    },
+                )
                 if self._usage_sink is not None:
                     self._usage_sink(
                         self._usage_payload(
@@ -101,6 +129,22 @@ class DeepSeekClient:
                     "gen_ai.response.finish_reasons": [str(choice.get("finish_reason") or "")],
                     "gen_ai.output.messages": _serialized(choice.get("message") or {}),
                 }
+            )
+            _llm_calls.add(
+                1,
+                {
+                    "gen_ai.provider.name": "deepseek",
+                    "gen_ai.request.model": self._config.model,
+                    "repomesh.outcome": "ok",
+                },
+            )
+            _llm_input_tokens.add(
+                int(usage.get("prompt_tokens") or 0),
+                {"gen_ai.request.model": self._config.model},
+            )
+            _llm_output_tokens.add(
+                int(usage.get("completion_tokens") or 0),
+                {"gen_ai.request.model": self._config.model},
             )
             span.set_status(StatusCode.OK)
             if self._usage_sink is not None:

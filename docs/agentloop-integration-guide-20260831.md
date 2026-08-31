@@ -1,14 +1,16 @@
 # AgentLoop 接入方案（可观测接续）
 
 > 目标：把 RepoMesh 现有 OTel 锚点接续到阿里云 AgentLoop，零代码改动。
-> 日期：2026-08-31 ｜ 状态：**通道 A 已验证上云 ✅ / 通道 B 已配置待重启生效**
+> 日期：2026-08-31 ｜ 状态：**通道 A 三信号（Trace/Metrics/Logs）代码+网关验证通过 ✅ / 通道 B 已配置待重启生效**
 
 ## 0. 接入状态
 
 | 通道 | 状态 |
 |---|---|
-| A：RepoMesh API/runner → AgentLoop | ✅ 已配置 + 代码已支持 headers + 真实上报验证通过（控制台可见 `repomesh-connectivity-check`） |
-| B：AgentTeams Manager/Workers → AgentLoop | ✅ 已配置（`agentteams-manager.env`）⏳ 待重启 manager + 重建 worker 生效 |
+| A：RepoMesh API/runner → AgentLoop（Trace） | ✅ 已配置 + headers 透传 + 真实上报验证通过（控制台可见 `repomesh-connectivity-check`） |
+| A：RepoMesh API/runner → AgentLoop（Metrics） | ✅ 已接入：`setup_metrics` + `_metrics_url` 拼接 + LLM/工具调用计数器埋点；网关 `/v1/metrics` 实测 200 |
+| A：RepoMesh API/runner → AgentLoop（Logs） | ✅ 已接入：`setup_logs` + `_logs_url` 拼接 + `LoggingHandler` 自动附加 trace_id；网关 `/v1/logs` 实测 200 |
+| B：AgentTeams Manager/Workers → AgentLoop | ✅ 已配置（`agentteams-manager.env`，含 `AGENTTEAMS_CMS_METRICS_ENABLED=true`）⏳ 待重启 manager + 重建 worker 生效 |
 
 ## 1. 核心结论
 
@@ -85,19 +87,25 @@ https://<project>.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry
 REPOMESH_OTLP_ENDPOINT=https://proj-xtrace-2eb66b38475880aa4d34533055742318-cn-hangzhou.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry
 REPOMESH_OTLP_HEADERS=x-arms-license-key=j2mvbfwr8q@92c1c70037310fa,x-arms-project=proj-xtrace-2eb66b38475880aa4d34533055742318-cn-hangzhou,x-cms-workspace=agentloop-f6b04100cd32575d72ff2676eabf7af7
 REPOMESH_OTLP_SERVICE_NAME=repomesh-api
+# ---- Metrics / Logs 开关（2026-08-31 新增，默认 false）----
+REPOMESH_OTLP_METRICS_ENABLED=true
+REPOMESH_OTLP_LOGS_ENABLED=true
+REPOMESH_OTLP_LOG_LEVEL=INFO   # 经 LoggingHandler 上云的最低日志级别
 ```
 
-> ⚠️ 重要：`REPOMESH_OTLP_ENDPOINT` 填 AgentLoop 控制台给的 **base 接入点**（`.../apm/trace/opentelemetry`），SDK 会追加 `/v1/traces`。实测直接 POST 到 base 路径返回 404，追加 `/v1/traces` 后才可达——不要自行改成带 `/v1/traces` 的完整地址，也不要截掉路径。
+> ⚠️ 重要：`REPOMESH_OTLP_ENDPOINT` 填 AgentLoop 控制台给的 **base 接入点**（`.../apm/trace/opentelemetry`），SDK 会追加信号路径。实测直接 POST 到 base 路径返回 404；追加 `/v1/traces`、`/v1/metrics`、`/v1/logs` 后均返回 200（2026-08-31 实测）——不要自行改成带 `/v1/...` 的完整地址，也不要截掉路径。
 
-> 注：runner 进程（如独立启动的 `repomesh_runner`）读取同名 `REPOMESH_OTLP_ENDPOINT`，默认 service_name 为 `repomesh-runner`；若要区分可加 `REPOMESH_OTLP_SERVICE_NAME=repomesh-runner`。
+> 注：runner 进程（如独立启动的 `repomesh_runner`）读取同名 `REPOMESH_OTLP_ENDPOINT`，默认 service_name 为 `repomesh-runner`；若要区分可加 `REPOMESH_OTLP_SERVICE_NAME=repomesh-runner`。runner 侧开关为 `REPOMESH_OTLP_METRICS_ENABLED` / `REPOMESH_OTLP_LOGS_ENABLED` / `REPOMESH_OTLP_LOG_LEVEL`（`"1"/"true"/"yes"` 判定）。
 
-### 生效机制（2026-08-31 已扩展代码支持 AgentLoop 鉴权）
+### 生效机制（2026-08-31 已扩展代码支持 AgentLoop 鉴权 + 三信号）
 
-- `src/repomesh/bootstrap/app.py:818` → `setup_tracing(settings.otlp_endpoint, service_name=settings.otlp_service_name, headers=settings.otlp_headers)`
-- `src/repomesh/settings.py:93-96` → `otlp_endpoint` / `otlp_service_name` / `otlp_headers`（`REPOMESH_OTLP_HEADERS`，格式 `k=v,k2=v2`）
-- `src/repomesh_runner/main.py:150` → 读 `REPOMESH_OTLP_ENDPOINT` + `REPOMESH_OTLP_HEADERS`，无值则 no-op
-- `src/repomesh_runner/telemetry.py` → `setup_tracing(endpoint, service_name, headers)` 将 headers 透传给 OTLPExporter；`_traces_url` 保持"base + /v1/traces"拼接
-- 测试：`tests/test_telemetry.py` 新增 AgentLoop endpoint 拼接与 headers 解析用例
+- `src/repomesh/bootstrap/app.py:818` → `setup_tracing(settings.otlp_endpoint, service_name=settings.otlp_service_name, headers=settings.otlp_headers)`，随后按开关调用 `setup_metrics(...)` / `setup_logs(...)`
+- `src/repomesh/settings.py:93-96` → `otlp_endpoint` / `otlp_service_name` / `otlp_headers`（`REPOMESH_OTLP_HEADERS`，格式 `k=v,k2=v2`）；新增 `otlp_metrics_enabled` / `otlp_logs_enabled` / `otlp_log_level`
+- `src/repomesh_runner/main.py:150` → 读 `REPOMESH_OTLP_ENDPOINT` + `REPOMESH_OTLP_HEADERS` + 三个开关，无值则 no-op
+- `src/repomesh_runner/telemetry.py` → `setup_tracing` / `setup_metrics` / `setup_logs` 均透传 headers；`_traces_url` / `_metrics_url` / `_logs_url` 保持"base + /v1/信号路径"拼接（幂等）
+- Metrics 打点：`src/repomesh/integrations/llm/deepseek.py`（LLM 调用次数、输入/输出 token，`repomesh.llm.*`）+ `src/repomesh_runner/observer.py`（工具调用次数，`repomesh.tool.calls`）——proxy-meter 机制：未启用时 no-op，启用后自动解析到真实 MeterProvider
+- Logs：`LoggingHandler` 挂到 root logger，自动给每条日志附加当前 `trace_id`/`span_id`（日志 ⇄ Trace 联动）；SDK 已对该类发 DeprecationWarning，后续可迁移 `opentelemetry-instrumentation-logging`
+- 测试：`tests/test_telemetry.py` 新增 AgentLoop endpoint 拼接、headers 解析、`setup_metrics`/`setup_logs` 安装与 no-op 用例（共 11 个全部通过）
 
 ### 重启
 
@@ -114,6 +122,17 @@ docker compose up -d --force-recreate api
 ```
 
 控制台已可见服务 `repomesh-connectivity-check` 的测试 trace。
+
+**三信号网关可达性（2026-08-31 10:29 实测，空 POST 探测）：**
+
+| 路径 | HTTP 状态 | 结论 |
+|---|---|---|
+| base（无信号路径） | 404 | 必须追加信号路径 |
+| `/v1/traces` | 200 | Trace 通道通 |
+| `/v1/metrics` | 200 | Metrics 通道通 |
+| `/v1/logs` | 200 | Logs 通道通 |
+
+代码侧：`ruff check .` 全绿 + `pytest tests/test_telemetry.py` 11 个用例全部通过。
 
 ## 6. 通道 B：AgentTeams Manager / Workers
 
@@ -185,10 +204,10 @@ docker logs <api-container> 2>&1 | grep -i tracing
 
 ## 9. 后续可选增强（按性价比排序）
 
-1. **Higress 网关 OTel 插件**：Agent 所有 LLM 调用都过网关，埋 1 点覆盖全部流量（token/TTFT 计量最完整）——此前规划文档评估的最高性价比动作。
+1. **Higress 网关 OTel 插件**：Agent 所有 LLM 调用都过网关，埋 1 点覆盖全部流量（token/TTFT 计量最完整）——需要新部署网关（架构变更），本轮未做，仍是最高性价比动作。
 2. 补 `retrieval.*` span：扫描链路已有 dep_evidence / identities / exposed_apis 数据，缺 span 埋点。
-3. 结构化日志带 `trace_id`：实现"日志 ⇄ Trace"联动定位。
-4. OTLP Metrics：将 alerting 现有 estimated_cost / latency_p95 / success_rate 指标同步上报，与自建告警双轨。
+3. ~~结构化日志带 `trace_id`~~ → **已落地（2026-08-31）**：`setup_logs` + `LoggingHandler`，日志自动附加 trace_id/span_id。
+4. ~~OTLP Metrics 上报~~ → **已落地（2026-08-31）**：`setup_metrics` + `repomesh.llm.calls` / `repomesh.llm.tokens.*` / `repomesh.tool.calls` 计数器；后续可把 alerting 的 estimated_cost / latency_p95 / success_rate 指标继续同步上报，与自建告警双轨。
 
 ## 10. 关联文档
 

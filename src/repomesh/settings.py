@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # OTLP exporter request headers, "k=v,k2=v2" (e.g. Alibaba Cloud AgentLoop:
     # x-arms-license-key,x-arms-project,x-cms-workspace).
     otlp_headers: str | None = None
+    # Additional OTLP signals: metrics (MeterProvider + /v1/metrics) and logs
+    # (LoggingHandler + /v1/logs with trace_id attached). Disabled by default.
+    otlp_metrics_enabled: bool = False
+    otlp_logs_enabled: bool = False
+    otlp_log_level: str = "WARNING"
     # The product exposes one default model connection. Legacy planning-specific
     # names remain aliases so existing deployments can override it independently.
     deepseek_api_key: str | None = Field(

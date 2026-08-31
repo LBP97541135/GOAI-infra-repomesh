@@ -87,3 +87,50 @@ def test_setup_tracing_accepts_agentloop_endpoint_and_headers() -> None:
         )
         is True
     )
+
+
+def test_metrics_and_logs_urls_append_signal_paths() -> None:
+    from repomesh_runner.telemetry import _logs_url, _metrics_url
+
+    base = "https://proj-xtrace-xxx.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry"
+    assert _metrics_url(base) == f"{base}/v1/metrics"
+    assert _logs_url(base) == f"{base}/v1/logs"
+    assert _metrics_url(f"{base}/v1/metrics") == f"{base}/v1/metrics"
+    assert _logs_url(f"{base}/v1/logs") == f"{base}/v1/logs"
+
+
+def test_setup_metrics_without_endpoint_is_noop() -> None:
+    from repomesh_runner.telemetry import setup_metrics
+
+    assert setup_metrics(None, service_name="x") is False
+    assert setup_metrics("", service_name="x") is False
+
+
+def test_setup_metrics_installs_meter_provider_once() -> None:
+    from opentelemetry import metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+
+    from repomesh_runner.telemetry import setup_metrics
+
+    assert setup_metrics("http://localhost:4318", service_name="repomesh-m-test") is True
+    provider = metrics.get_meter_provider()
+    assert isinstance(provider, MeterProvider)
+    # Re-entry keeps the existing provider.
+    assert setup_metrics("http://elsewhere:4318", service_name="other") is True
+    assert metrics.get_meter_provider() is provider
+
+
+def test_setup_logs_without_endpoint_is_noop() -> None:
+    from repomesh_runner.telemetry import setup_logs
+
+    assert setup_logs(None, service_name="x") is False
+
+
+def test_setup_logs_installs_logging_handler() -> None:
+    import logging
+
+    from repomesh_runner.telemetry import logs_enabled, setup_logs
+
+    assert setup_logs("http://localhost:4318", service_name="repomesh-l-test") is True
+    assert logs_enabled() is True
+    assert any(isinstance(h, logging.Handler) for h in logging.getLogger().handlers)

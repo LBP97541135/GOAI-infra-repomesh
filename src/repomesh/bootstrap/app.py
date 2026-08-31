@@ -143,7 +143,7 @@ from repomesh.modules.task_orchestration.contracts import TaskAssignmentPublishe
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
 from repomesh.settings import Settings, get_settings
-from repomesh_runner.telemetry import setup_tracing
+from repomesh_runner.telemetry import setup_logs, setup_metrics, setup_tracing
 
 _API_LOGGER = logging.getLogger("repomesh.api")
 
@@ -820,6 +820,19 @@ def create_app(container: ApplicationContainer | None = None) -> FastAPI:
         service_name=settings.otlp_service_name,
         headers=settings.otlp_headers,
     )
+    if settings.otlp_metrics_enabled:
+        setup_metrics(
+            settings.otlp_endpoint,
+            service_name=settings.otlp_service_name,
+            headers=settings.otlp_headers,
+        )
+    if settings.otlp_logs_enabled:
+        setup_logs(
+            settings.otlp_endpoint,
+            service_name=settings.otlp_service_name,
+            headers=settings.otlp_headers,
+            level=getattr(logging, settings.otlp_log_level.upper(), logging.WARNING),
+        )
     application = FastAPI(
         title=settings.app_name,
         version="0.1.0",
