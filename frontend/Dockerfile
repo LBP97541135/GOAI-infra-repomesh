@@ -8,8 +8,12 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
+# registry.npmjs.org is unreliably slow from this team's network; default to a
+# fast regional mirror and allow per-build override with
+# `docker compose build --build-arg NPM_REGISTRY=...`.
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --registry=${NPM_REGISTRY}
 
 COPY . .
 

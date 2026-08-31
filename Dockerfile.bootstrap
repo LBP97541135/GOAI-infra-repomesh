@@ -1,6 +1,11 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+# Same regional mirror rationale as the api Dockerfile: pip resolving
+# cryptography (and friends) against pypi.org times out from this network.
+# Override per build with --build-arg PIP_INDEX_URL=... .
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
