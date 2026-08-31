@@ -139,6 +139,15 @@ class Settings(BaseSettings):
     scm_command_dispatch_interval_seconds: int = Field(default=5, ge=1)
     scm_command_lease_seconds: int = Field(default=300, ge=10)
     scm_command_lease_renew_interval_seconds: int = Field(default=60, ge=1)
+    operations_alert_action: Literal["none", "degrade_writes", "pause_intake"] = "none"
+    operations_capacity_retry_after_seconds: int = Field(default=30, ge=1, le=3600)
+    operations_backup_configured: bool = False
+    operations_last_backup_age_hours: int | None = Field(default=None, ge=0)
+    operations_restore_drill_age_days: int | None = Field(default=None, ge=0)
+    operations_usage_retention_days: int = Field(default=90, ge=7, le=3650)
+    operations_log_retention_days: int = Field(default=30, ge=7, le=3650)
+    operations_trace_retention_days: int = Field(default=30, ge=7, le=3650)
+    operations_retention_batch_size: int = Field(default=500, ge=1, le=10000)
 
 
 @lru_cache

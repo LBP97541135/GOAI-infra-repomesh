@@ -38,6 +38,15 @@ from repomesh.modules.delivery.infrastructure import (
     SCMObservationRecord,
     SCMPollCursorRecord,
 )
+from repomesh.modules.observability.infrastructure.models import (
+    AlertEventRecord,
+    AlertRuleRecord,
+    LLMUsageRecord,
+    LogEntryRecord,
+    OperationalResponseRecord,
+    TraceEventRecord,
+    TraceSessionRecord,
+)
 from repomesh.modules.platform_config.bootstrap_store import BootstrapOperationRecord
 from repomesh.modules.platform_config.store import PlatformCredentialRecord
 from repomesh.modules.project.infrastructure import (
@@ -81,6 +90,13 @@ _REGISTERED_MODELS = (
     SkillEvaluationRecord,
     SkillSnapshotRecord,
     McpServerPolicyRecord,
+    LLMUsageRecord,
+    AlertRuleRecord,
+    AlertEventRecord,
+    OperationalResponseRecord,
+    TraceSessionRecord,
+    TraceEventRecord,
+    LogEntryRecord,
     AgentPrincipalRecord,
     WorkerExecutionReservationRecord,
     WorkerRecoveryOperationRecord,

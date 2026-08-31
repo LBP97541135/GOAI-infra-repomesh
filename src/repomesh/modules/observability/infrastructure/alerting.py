@@ -276,12 +276,14 @@ class AlertingEvaluator:
         store: AlertingStore,
         usage_query,
         trace_query=None,
+        transition_handler=None,
         *,
         interval_seconds: int = 60,
     ) -> None:
         self._store = store
         self._usage_query = usage_query
         self._trace_query = trace_query
+        self._transition_handler = transition_handler
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
 
@@ -331,9 +333,13 @@ class AlertingEvaluator:
         firing = _violates(float(value), rule["operator"], rule["threshold"])
         active = await self._store.active_event_for(rule["id"])
         if firing and active is None:
-            await self._store.create_event(rule, float(value))
+            event = await self._store.create_event(rule, float(value))
+            if self._transition_handler is not None:
+                await self._transition_handler.firing(event)
         elif not firing and active is not None:
             await self._store.resolve_event(active["id"])
+            if self._transition_handler is not None:
+                await self._transition_handler.resolved(active["id"])
 
     async def _run(self) -> None:
         try:

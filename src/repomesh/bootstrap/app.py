@@ -323,6 +323,21 @@ def build_default_container(
     recovery_case_store = PostgresRecoveryCaseStore(database)
     worker_recovery_projection_store = PostgresWorkerRecoveryStore(database)
     delivery_conflict_projection_store = PostgresDeliveryConflictCaseStore(database)
+    from repomesh.modules.observability.operations import (
+        InMemoryOperationalGate,
+        LoggingNotificationSink,
+        OperationalAction,
+        OperationalResponseCoordinator,
+        OperationalResponseStore,
+    )
+
+    operational_gate = InMemoryOperationalGate()
+    operational_coordinator = OperationalResponseCoordinator(
+        OperationalResponseStore(database),
+        LoggingNotificationSink(),
+        operational_gate,
+        default_action=OperationalAction(settings.operations_alert_action),
+    )
     background_services = (
         RecoverySourceProjector(
             recovery_case_store,
@@ -564,6 +579,7 @@ def build_default_container(
             AlertingStore(database),
             UsageQueryStore(database),
             trace_query=TraceQueryStore(database),
+            transition_handler=operational_coordinator,
         ),
     )
     # Trace ingest projects CoPaw session files into the observability schema;
@@ -742,6 +758,8 @@ def build_default_container(
         project_checkpoint_service_instance=checkpoint_service,
         usage_recorder=usage_recorder,
         log_recorder=log_recorder,
+        operational_gate_instance=operational_gate,
+        operational_response_coordinator_instance=operational_coordinator,
     )
     container_holder["container"] = container
     return container

@@ -392,6 +392,8 @@ class ApplicationContainer:
     scm_adapter: SCMAdapter | None = None
     scm_token_provider: Callable[[RepositoryRef], Awaitable[str]] | None = None
     project_checkpoint_service_instance: object | None = None
+    operational_gate_instance: object | None = None
+    operational_response_coordinator_instance: object | None = None
     _service_cache: dict[str, object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -801,11 +803,56 @@ class ApplicationContainer:
         return AlertingStore(self.database)
 
     @cached_service
+    def operational_gate(self):
+        from repomesh.modules.observability.operations import InMemoryOperationalGate
+
+        if self.operational_gate_instance is not None:
+            return self.operational_gate_instance
+        return InMemoryOperationalGate()
+
+    @cached_service
+    def operational_response_coordinator(self):
+        from repomesh.modules.observability.operations import (
+            LoggingNotificationSink,
+            OperationalAction,
+            OperationalResponseCoordinator,
+            OperationalResponseStore,
+        )
+
+        if self.operational_response_coordinator_instance is not None:
+            return self.operational_response_coordinator_instance
+        return OperationalResponseCoordinator(
+            OperationalResponseStore(self.database),
+            LoggingNotificationSink(),
+            self.operational_gate(),
+            default_action=OperationalAction(get_settings().operations_alert_action),
+        )
+
+    @cached_service
+    def observability_retention_service(self):
+        from repomesh.modules.observability.operations import (
+            ObservabilityRetentionService,
+            RetentionPolicy,
+        )
+
+        settings = get_settings()
+        return ObservabilityRetentionService(
+            self.database,
+            RetentionPolicy(
+                usage_days=settings.operations_usage_retention_days,
+                log_days=settings.operations_log_retention_days,
+                trace_days=settings.operations_trace_retention_days,
+                batch_size=settings.operations_retention_batch_size,
+            ),
+        )
+
+    @cached_service
     def alerting_evaluator(self) -> AlertingEvaluator:
         return AlertingEvaluator(
             self.alerting_store(),
             self.usage_query_store(),
             trace_query=self.trace_query_store(),
+            transition_handler=self.operational_response_coordinator(),
         )
 
     @cached_service
