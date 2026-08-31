@@ -10,7 +10,7 @@
 | A：RepoMesh API/runner → AgentLoop（Trace） | ✅ 已配置 + headers 透传 + 真实上报验证通过（控制台可见 `repomesh-connectivity-check`） |
 | A：RepoMesh API/runner → AgentLoop（Metrics） | ✅ 已接入：`setup_metrics` + `_metrics_url` 拼接 + LLM/工具调用计数器埋点；网关 `/v1/metrics` 实测 200 |
 | A：RepoMesh API/runner → AgentLoop（Logs） | ✅ 已接入：`setup_logs` + `_logs_url` 拼接 + `LoggingHandler` 自动附加 trace_id；网关 `/v1/logs` 实测 200 |
-| B：AgentTeams Manager/Workers → AgentLoop | ✅ 端到端打通（2026-08-31 实测）：controller/manager 重建注入 CMS 7 变量 → worker openclaw.json 注入 `openclaw-cms-plugin`（trace）+ `diagnostics-otel`（metrics）→ `[ArmsTrace] Exporter initialized (service=agentteams-worker-e2e)` → 容器内 OTLP traces/metrics/logs 三端点实测 200 |
+| B：AgentTeams Manager/Workers → AgentLoop | ✅ 已配置（`agentteams-manager.env`，含 `AGENTTEAMS_CMS_METRICS_ENABLED=true`）⏳ 待重启 manager + 重建 worker 生效 |
 
 ## 1. 核心结论
 
@@ -138,60 +138,34 @@ docker compose up -d --force-recreate api
 
 ### 配置
 
-CMS 配置挂在 **controller** 上（embedded 镜像内嵌 MinIO/Higress），由 controller 下发 manager，manager 在拉起 worker 时传播。三处容器都需要以下 7 个变量：
+在 `~/agentteams-manager.env`（Manager 容器环境变量文件）追加：
 
 ```bash
+# ---- AgentLoop / CMS 2.0 上报（通道 B：Agent 容器侧）----
 AGENTTEAMS_CMS_TRACES_ENABLED=true
-AGENTTEAMS_CMS_METRICS_ENABLED=true
-AGENTTEAMS_CMS_SERVICE_NAME=agentteams-manager
 AGENTTEAMS_CMS_ENDPOINT=https://<project>.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry
 AGENTTEAMS_CMS_LICENSE_KEY=<LicenseKey>
 AGENTTEAMS_CMS_PROJECT=<SLS project>
 AGENTTEAMS_CMS_WORKSPACE=<CMS workspace id>
+AGENTTEAMS_CMS_SERVICE_NAME=agentteams-manager
 ```
 
-（实测值见 `~/agentteams-manager.env` / controller 启动参数；worker 的 `SERVICE_NAME` 由 manager 自动设为 `agentteams-worker-<WORKER_NAME>`。）
+### 生效机制（AgentTeams v1.0.9+ 已内置，无需改代码）
 
-### 生效机制（2026-08-31 实测修正：不是环境变量自动生效）
-
-> 文档原稿（v1.0.9 注入 `OTEL_EXPORTER_OTLP_*` 环境变量）**与 worker 实际行为不符**。
-> 实测：openclaw 主体**不消费** `OPENCLAW_CMS_PLUGIN_DIR` 环境变量，CMS 上报必须经
-> **openclaw.json 的 `plugins` 段显式启用插件**，配置存放在 **MinIO**（`agentteams-storage/agents/<WORKER_NAME>/openclaw.json`），worker 启动时拉取并 merge 到本地。
-
-真实链路：
-
-```
-controller（embedded，7 CMS 变量）
-  └─ 拉起 manager（copaw，继承 7 变量，SERVICE_NAME=agentteams-manager）
-       └─ 拉起 worker（openclaw，继承 7 变量）
-            └─ openclaw.json（存于 MinIO）plugins 段：
-                 openclaw-cms-plugin（trace）:
-                   endpoint = AGENTTEAMS_CMS_ENDPOINT
-                   headers  = {x-arms-license-key, x-arms-project, x-cms-workspace}
-                   serviceName = agentteams-worker-<WORKER_NAME>
-                 diagnostics-otel（metrics，可选）:
-                   diagnostics.otel.{enabled,endpoint,headers,serviceName,metrics:true}
-```
-
-- 官方注入逻辑在 `components/agentteams/manager/agent/skills/worker-management/scripts/generate-worker-config.sh`（177–235 行），条件：`AGENTTEAMS_CMS_TRACES_ENABLED=true` + endpoint/license/workspace 非空 + 插件 manifest 存在。
-- worker 侧 merge 规则（`merge-openclaw-config.sh`）：MinIO 版提供 `plugins.entries` base / `plugins.load.paths` 并集 / models / gateway / channels，本地自定义保留。
-- diagnostics-otel 需要 npm 生产依赖：镜像内 package.json 的 `devDependencies` 含 `workspace:*`（monorepo 协议），容器内 `npm install --omit=dev` 会报 `EUNSUPPORTEDPROTOCOL`。落地时已 `jq 'del(.devDependencies)'` 后重装成功（102 包）。
-
-### 落地记录（2026-08-31 ✅）
-
-1. **重建 controller + manager**：旧三容器为 3 小时前创建，CMS 7 变量从未注入（install 脚本只在进程 env 有值时 `-e` 传入）。`rebuild-controller.ps1` / `rebuild-manager.ps1` 提取原 env 后注入 CMS 7 变量重建。
-2. **manager 自动恢复 worker**：manager 重建后自动拉起 `agentteams-worker-e2e` 且 7 变量齐全（传播机制验证通过）。
-3. **手动注入 worker openclaw.json**（manager 未自动重新生成）：在 worker 容器内用官方 jq 逻辑注入 `openclaw-cms-plugin` + `diagnostics-otel` 到 MinIO 版配置（`mc cat` → jq → `mc cp`），重启 worker。
-4. **验证通过**：日志出现 `[plugins] [ArmsTrace] Plugin activated (endpoint: …, service: agentteams-worker-e2e)`、`[gateway] ready (4 plugins: diagnostics-otel, matrix, memory-core, openclaw-cms-plugin)`、`[ArmsTrace] Exporter initialized`；容器内 OTLP 三端点实测 200。
+- `hermes/scripts/hermes-worker-entrypoint.sh`（137–139 行）、`qwenpaw/scripts/qwenpaw-worker-entrypoint.sh`（73–75 行）、`manager/scripts/init/start-copaw-manager.sh`（182–187 行）自动将 `AGENTTEAMS_CMS_*` 注入为：
+  ```bash
+  export OTEL_EXPORTER_OTLP_ENDPOINT="${AGENTTEAMS_CMS_ENDPOINT}"
+  export OTEL_EXPORTER_OTLP_PROTOCOL="http/protobuf"
+  export OTEL_EXPORTER_OTLP_HEADERS="x-arms-license-key=${AGENTTEAMS_CMS_LICENSE_KEY},x-arms-project=${AGENTTEAMS_CMS_PROJECT},x-cms-workspace=${AGENTTEAMS_CMS_WORKSPACE}"
+  ```
 
 ### 重启
 
 ```bash
 # 1) 重启 Manager（读取新环境变量）
 docker restart agentteams-manager
-# 2) worker 由 manager 自动恢复；若需要强制刷新 openclaw.json：
-#    改 MinIO 中的 agentteams-storage/agents/<WORKER_NAME>/openclaw.json 后
-docker restart agentteams-worker-<WORKER_NAME>
+# 2) 删除重建 Worker 容器，使其从 Manager 继承 OTLP 配置
+#    （Worker 由 Manager 拉起，重启后自动带 OTEL_EXPORTER_*）
 ```
 
 ## 7. 验证
@@ -215,17 +189,6 @@ env | grep OTEL_EXPORTER
 
 # API 日志应出现 tracing 初始化日志（INFO 级别）
 docker logs <api-container> 2>&1 | grep -i tracing
-
-# 通道 B：worker 插件激活 + exporter 初始化（worker 容器日志）
-docker logs agentteams-worker-e2e 2>&1 | grep -E "ArmsTrace|ready \(4 plugins"
-# 期望：Plugin activated … service: agentteams-worker-e2e / Exporter initialized
-
-# 通道 B：worker 内 OTLP 三端点冒烟（应各返回 200）
-docker exec agentteams-worker-e2e sh -c 'for s in traces metrics logs; do curl -s -o /dev/null -w "$s %{http_code}\n" -X POST "https://<project>.cn-hangzhou.log.aliyuncs.com/apm/trace/opentelemetry/v1/$s" -H "x-arms-license-key: <LicenseKey>" -H "x-arms-project: <SLS project>" -H "x-cms-workspace: <workspace>" -H "Content-Type: application/x-protobuf" --data-binary ""; done'
-
-# 通道 B：确认 openclaw.json 已含 CMS 插件（worker 容器内）
-jq '.plugins.entries | keys' /root/agentteams-fs/agents/e2e/openclaw.json
-# 期望：["diagnostics-otel","matrix","memory-core","openclaw-cms-plugin"]
 ```
 
 > 数据为批量上报（BatchSpanProcessor），控制台有 1–2 分钟延迟，属正常现象。
@@ -236,10 +199,7 @@ jq '.plugins.entries | keys' /root/agentteams-fs/agents/e2e/openclaw.json
 |---|---|
 | 控制台无数据 | ① Endpoint 可达？`curl -I` ② LicenseKey 无空格/换行 ③ 容器确实重启 ④ `docker logs` 看报错 ⑤ 等 1–2 分钟刷新 |
 | 通道 A 无数据 | `.env` 是否被 compose 读取（`docker compose config \| grep OTLP`）；api 是否 `--force-recreate` 重启 |
-| 通道 B 无数据（worker） | ① openclaw.json 是否含 cms 插件：`jq '.plugins.entries' ~/agentteams-fs/agents/e2e/openclaw.json` ② 无 → 按 §6 落地记录手动注入 MinIO 版并重启 worker ③ `docker logs worker \| grep ArmsTrace` 应有 `Exporter initialized` |
-| worker 日志报 `EUNSUPPORTEDPROTOCOL` | diagnostics-otel 的 `workspace:*` devDependency 导致 npm install 失败 → 容器内 `jq 'del(.devDependencies)' /opt/openclaw/extensions/diagnostics-otel/package.json` 后重装（§6） |
-| API 容器 `Restarting (255)`（迁移失败） | ① 镜像是否包含最新 merge 迁移（`alembic upgrade head` 报 Multiple head → `docker compose build api`）② `alembic_version` 是否滞后于实际 schema（手工对齐后 `upgrade head`）③ 迁移是否缺 `CREATE SCHEMA`（本次 decision_chain 属 0001 已建，非 0033 缺陷） |
-| 通道 B 无数据 | Manager env 文件路径是否正确；worker 是否重建（旧容器不继承 CMS 变量）；openclaw.json 是否含 cms 插件条目（见上行） |
+| 通道 B 无数据 | Manager env 文件路径是否正确；Worker 是否重建（旧容器不继承）；`env \| grep OTEL` 是否在容器内可见 |
 | 401 / 鉴权失败 | LicenseKey 与 workspace 是否属于同一 AgentSpace；region 是否一致 |
 
 ## 9. 后续可选增强（按性价比排序）
