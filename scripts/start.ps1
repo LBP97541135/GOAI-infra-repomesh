@@ -60,7 +60,7 @@ if (-not $env:REPOMESH_WEB_PORT) {
     "REPOMESH_POSTGRES_PORT=$env:REPOMESH_POSTGRES_PORT"
     "REPOMESH_API_PORT=$env:REPOMESH_API_PORT"
     "REPOMESH_WEB_PORT=$env:REPOMESH_WEB_PORT"
-) | Set-Content -Encoding utf8NoBOM $StartupEnv
+) | ForEach-Object { $_ } | Out-File -Encoding utf8 $StartupEnv
 
 & (Join-Path $PSScriptRoot "start-platform.ps1")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

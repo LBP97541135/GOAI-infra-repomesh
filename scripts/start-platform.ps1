@@ -3,7 +3,14 @@ param(
     [switch]$SkipBackend
 )
 
-$ErrorActionPreference = "Stop"
+# ErrorActionPreference must stay "Continue" on Windows PowerShell 5.1: docker
+# (and docker compose) write progress/status to stderr, and under EAP=Stop PS 5.1
+# converts those lines into a terminating NativeCommandError -- even with 2>&1
+# redirection. The script already detects native failures via $LASTEXITCODE and
+# aborts with explicit throw statements, so Continue is the correct setting here.
+# On PowerShell 7+ the PS7-only $PSNativeCommandUseErrorActionPreference=$false
+# would achieve the same effect while keeping Stop.
+$ErrorActionPreference = "Continue"
 $RepositoryRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepositoryRoot
 $ApiPort = if ($env:REPOMESH_API_PORT) { $env:REPOMESH_API_PORT } else { "8000" }
@@ -59,6 +66,16 @@ function New-FernetKey {
     return [Convert]::ToBase64String($Bytes).Replace('+', '-').Replace('/', '_')
 }
 
+# PS 5.1-compatible equivalent of `Set-Content -Encoding utf8NoBOM` (which
+# only exists in PowerShell 7+). Joins the given lines and writes them without
+# a BOM so downstream env parsers (Get-Content / regex key=value matching)
+# behave identically on both PowerShell editions.
+function Set-Utf8NoBom([string]$Path, [string[]]$Lines) {
+    $Content = ($Lines -join "`r`n")
+    if ($Content -ne "") { $Content += "`r`n" }
+    [System.IO.File]::WriteAllText($Path, $Content, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 $SecretDirectory = if ($env:REPOMESH_SECRETS_DIR) {
     if ([System.IO.Path]::IsPathRooted($env:REPOMESH_SECRETS_DIR)) {
         [System.IO.Path]::GetFullPath($env:REPOMESH_SECRETS_DIR)
@@ -86,7 +103,7 @@ New-Item -ItemType Directory -Force $SecretDirectory | Out-Null
 $CredentialKeyFile = Join-Path $SecretDirectory "platform-credentials.key"
 if ([string]::IsNullOrWhiteSpace($env:REPOMESH_CREDENTIALS_ENCRYPTION_KEY) -and
     -not (Test-Path $CredentialKeyFile)) {
-    New-FernetKey | Set-Content -Encoding utf8NoBOM $CredentialKeyFile
+    Set-Utf8NoBom $CredentialKeyFile @(New-FernetKey)
 }
 $PersistedSecrets = @{}
 if (Test-Path $PlatformSecretFile) {
@@ -107,11 +124,10 @@ foreach ($Name in @(
     [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
     $PersistedSecrets[$Name] = $Value
 }
-$PersistedSecrets.GetEnumerator() | Sort-Object Name | ForEach-Object {
-    "$($_.Name)=$($_.Value)"
-} | Set-Content -Encoding utf8NoBOM $PlatformSecretFile
-$PersistedSecrets["REPOMESH_AGENT_ACTION_TOKEN"] | Set-Content `
-    -Encoding utf8NoBOM (Join-Path $SecretDirectory "browser-action-token")
+Set-Utf8NoBom $PlatformSecretFile @(
+    $PersistedSecrets.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }
+)
+Set-Utf8NoBom (Join-Path $SecretDirectory "browser-action-token") $PersistedSecrets["REPOMESH_AGENT_ACTION_TOKEN"]
 
 if ([string]::IsNullOrWhiteSpace($env:AGENTTEAMS_LLM_API_KEY)) {
     $env:AGENTTEAMS_LLM_API_KEY = Get-RepoMeshEnvValue "REPOMESH_MODEL_API_KEY"
@@ -127,7 +143,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker is required to start RepoMesh infrastructure."
 }
 
-docker compose up -d postgres
+docker compose up -d postgres 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "PostgreSQL failed to start."
 }
@@ -166,7 +182,7 @@ if ($SkipBackend) {
 
 $InjectedControllerToken = $false
 if ($AgentTeamsReady -and [string]::IsNullOrWhiteSpace($env:REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN)) {
-    $ControllerToken = docker exec $ControllerContainer cat /var/run/agentteams/cli-token
+    $ControllerToken = docker exec $ControllerContainer cat /var/run/agentteams/cli-token 2>$null
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($ControllerToken)) {
         throw "AgentTeams Controller token could not be loaded."
     }
@@ -195,7 +211,7 @@ if ($AgentTeamsReady -and [string]::IsNullOrWhiteSpace($env:REPOMESH_AGENTTEAMS_
             } | ConvertTo-Json -Compress
             $LoginResult = $LoginBody | docker exec -i $ControllerContainer curl -sf `
                 -X POST http://127.0.0.1:6167/_matrix/client/v3/login `
-                -H "Content-Type: application/json" -d '@-'
+                -H "Content-Type: application/json" -d '@-' 2>$null
             if ($LASTEXITCODE -eq 0 -and $LoginResult) {
                 $env:REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN = `
                     ($LoginResult | ConvertFrom-Json).access_token
@@ -269,12 +285,12 @@ if ($AgentTeamsReady -and
         "REPOMESH_AGENTTEAMS_STORAGE_ACCESS_KEY=$env:REPOMESH_AGENTTEAMS_STORAGE_ACCESS_KEY"
         "REPOMESH_AGENTTEAMS_STORAGE_SECRET_KEY=$env:REPOMESH_AGENTTEAMS_STORAGE_SECRET_KEY"
         "REPOMESH_AGENTTEAMS_STORAGE_BUCKET=agentteams-storage"
-    ) | Set-Content -Encoding utf8NoBOM $RuntimeTemporary
+    ) | Set-Utf8NoBom $RuntimeTemporary
     Move-Item -Force $RuntimeTemporary $RuntimeFile
 }
 
 try {
-    docker compose --profile platform up -d --build api web bootstrap
+    docker compose --profile platform up -d --build api web bootstrap 2>&1 | Out-Null
     $ComposeExitCode = $LASTEXITCODE
 } finally {
     if ($InjectedControllerToken) {
@@ -299,7 +315,7 @@ foreach ($Attempt in 1..30) {
 }
 
 if (-not $Ready) {
-    docker compose --profile platform logs --tail 100 api
+    docker compose --profile platform logs --tail 100 api 2>&1
     throw "RepoMesh API did not become ready at http://127.0.0.1:$ApiPort."
 }
 
@@ -316,15 +332,15 @@ foreach ($Attempt in 1..30) {
     }
 }
 if (-not $WebReady) {
-    docker compose --profile platform logs --tail 100 web
+    docker compose --profile platform logs --tail 100 web 2>&1
     throw "RepoMesh console did not become ready at http://127.0.0.1:$WebPort."
 }
 
 $BootstrapReady = $false
-$BootstrapContainer = docker compose --profile platform ps -q bootstrap
+$BootstrapContainer = docker compose --profile platform ps -q bootstrap 2>&1
 foreach ($Attempt in 1..30) {
     if ($BootstrapContainer) {
-        $BootstrapHealth = docker inspect --format '{{.State.Health.Status}}' $BootstrapContainer
+        $BootstrapHealth = docker inspect --format '{{.State.Health.Status}}' $BootstrapContainer 2>$null
         if ($BootstrapHealth -eq "healthy") {
             $BootstrapReady = $true
             break
@@ -333,7 +349,7 @@ foreach ($Attempt in 1..30) {
     Start-Sleep -Seconds 2
 }
 if (-not $BootstrapReady) {
-    docker compose --profile platform logs --tail 100 bootstrap
+    docker compose --profile platform logs --tail 100 bootstrap 2>&1
     throw "RepoMesh bootstrap reconciler did not become ready."
 }
 
