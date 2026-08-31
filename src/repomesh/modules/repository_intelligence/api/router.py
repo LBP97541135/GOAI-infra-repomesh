@@ -6,7 +6,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse
 
@@ -29,6 +29,12 @@ from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
     ConfirmationSummary,
     RepositoryPlan,
+)
+from repomesh.modules.repository_intelligence.application.document_parse import (
+    MAX_DOCUMENT_BYTES,
+    DocumentParseError,
+    UnsupportedDocumentFormat,
+    extract_document_text,
 )
 from repomesh.modules.repository_intelligence.application.handoff_docs import (
     HandoffDocStatus,
@@ -401,6 +407,48 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     # FastAPI's default encoding, a manual JSONResponse must encode explicitly.
     return JSONResponse(
         status_code=201 if receipt.created else 200, content=jsonable_encoder(summary)
+    )
+
+
+@router.post("/issues/parse-document", dependencies=[ACTION_TOKEN])
+async def parse_issue_document(
+    file: Annotated[UploadFile, File()],
+) -> JSONResponse:
+    """Real file intake: extract requirement text from an uploaded document.
+
+    The intake write itself still takes plain ``requirement_text`` (contract
+    v0.3 §1) — this endpoint is how a client turns a document into that text,
+    so the pipeline never learns about document formats. Supported: plain
+    text / Markdown, .docx, .pdf, .odt, .rtf. The document is parsed in
+    memory and never stored; the extracted text (capped at the intake write's
+    own limit) is what the caller then submits with the issue.
+
+    Refusals: 413 over the size cap, 415 unsupported format, 422 when the
+    file cannot be read or yields no text (e.g. a scanned image PDF).
+    """
+
+    raw = await file.read(MAX_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"document too large; limit is {MAX_DOCUMENT_BYTES} bytes",
+        )
+    filename = file.filename or "document"
+    try:
+        parsed = extract_document_text(filename, raw)
+    except UnsupportedDocumentFormat as error:
+        raise HTTPException(status_code=415, detail=str(error)) from error
+    except DocumentParseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return JSONResponse(
+        content={
+            "filename": parsed.filename,
+            "format": parsed.format,
+            "text": parsed.text,
+            "chars": parsed.chars,
+            "truncated": parsed.truncated,
+        }
     )
 
 

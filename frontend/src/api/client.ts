@@ -36,6 +36,7 @@ import type {
   OrganizationCreateRequest,
   OrganizationCreateResponse,
   OrganizationsResponse,
+  ParsedDocumentView,
   PlanSnapshotView,
   RepositoryPlanView,
   RepositoryVerificationUpdate,
@@ -75,6 +76,21 @@ export interface ApiClientConfig {
   token: string;
 }
 
+async function errorFromResponse(res: Response, method: string, path: string): Promise<string> {
+  // FastAPI 错误体 {"detail": "<message>"}（422 时 detail 为数组）
+  const raw = await res.text().catch(() => "");
+  let detail = raw;
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown };
+    if (parsed.detail !== undefined) {
+      detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail);
+    }
+  } catch {
+    /* 非 JSON 体，原样展示 */
+  }
+  return `${method} ${path} → HTTP ${res.status}${detail ? ` · ${detail.slice(0, 200)}` : ""}`;
+}
+
 async function request<T>(config: ApiClientConfig, method: string, path: string, body?: unknown): Promise<T> {
   const url = `${config.baseUrl}/api/v1${path}`;
   const headers: Record<string, string> = { Accept: "application/json" };
@@ -88,18 +104,7 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
     throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`);
   }
   if (!res.ok) {
-    // FastAPI 错误体 {"detail": "<message>"}（422 时 detail 为数组）
-    const raw = await res.text().catch(() => "");
-    let detail = raw;
-    try {
-      const parsed = JSON.parse(raw) as { detail?: unknown };
-      if (parsed.detail !== undefined) {
-        detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail);
-      }
-    } catch {
-      /* 非 JSON 体，原样展示 */
-    }
-    throw new ApiError(res.status, url, `${method} ${path} → HTTP ${res.status}${detail ? ` · ${detail.slice(0, 200)}` : ""}`);
+    throw new ApiError(res.status, url, await errorFromResponse(res, method, path));
   }
   return (await res.json()) as T;
 }
@@ -136,6 +141,29 @@ export function createApiClient(config: ApiClientConfig) {
      *  响应都是 §2 单条投影；403 主体非活跃 Org Leader、404 主体不存在。 */
     createIssue: (payload: IssueIntakeRequest) =>
       request<IssueListItemView>(config, "POST", `/issues`, payload),
+
+    /** 需求文档真实上传：multipart 解析（与 createIssue 互补——上传取回的纯文本
+     *  由弹窗填入需求区、可编辑后再随 issue 提交）。415 格式不支持、413 超限、
+     *  422 无可提取文本（如扫描件 PDF），detail 原样上抛。 */
+    parseIssueDocument: async (file: File) => {
+      const path = "/issues/parse-document";
+      const url = `${config.baseUrl}/api/v1${path}`;
+      const form = new FormData();
+      form.append("file", file);
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (config.token) headers.Authorization = `Bearer ${config.token}`;
+      // Content-Type 不手设：浏览器会带 multipart 边界，手设反而丢边界导致 422。
+      let res: Response;
+      try {
+        res = await fetch(url, { method: "POST", headers, body: form });
+      } catch (cause) {
+        throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      if (!res.ok) {
+        throw new ApiError(res.status, url, await errorFromResponse(res, "POST", path));
+      }
+      return (await res.json()) as ParsedDocumentView;
+    },
 
     /** 契约 v0.3 §2.2：工作区注册表（console 命名空间，§4.5 裁决同款前缀）。 */
     listOrganizations: () =>

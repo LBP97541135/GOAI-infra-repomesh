@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { resolveGovernanceAgent, type GovernanceAgent } from "../api/decisions";
+import { parseRequirementDocument } from "../api/issues";
 import { errText } from "../display";
 import { Modal } from "./Modal";
 
@@ -8,6 +9,10 @@ import { Modal } from "./Modal";
  *
  *  写路径 = 契约 v0.3 §1（POST /issues，建首份虚拟草稿快照）。replay 模式不写
  *  后端（回放夹具世界不可篡改），提交时如实说明并保留草稿。
+ *
+ *  需求文档真实上传：📎 把 .txt/.md/.docx/.pdf/.odt/.rtf 发到 POST
+ *  /issues/parse-document 解析成纯文本填入需求区（可继续编辑），解析只读后端、
+ *  不写数据，replay 模式同样可用。文本一旦变化即视为新的逻辑创建、换幂等键。
  *
  *  处理者芯片显示花名册派生的 Org Leader（resolveGovernanceAgent 单点）；解析
  *  不到时提交按钮不禁用——服务端 403/404 的原因比前端预判更准，错误原样呈现。 */
@@ -36,9 +41,13 @@ export function NewIssueModal({
   // 提交**成功**才清空（主脑 2026-08-11 裁决，写端点接入后的约定行为）。
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [parsingFile, setParsingFile] = useState(false);
+  /** 已成功解析的文档来源（仅标记，提取文本已入 textarea，可继续编辑）。 */
+  const [sourceFile, setSourceFile] = useState<{ name: string; chars: number } | null>(null);
   const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
   const [principalResolving, setPrincipalResolving] = useState(false);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   /** A2（§1.3）：幂等键随「逻辑创建」而非「请求」——文本一变/提交成功即换新键，
    *  失败重试沿用同键，超时重点不会创建第二个 issue */
   const keyRef = useRef<string>(crypto.randomUUID());
@@ -74,6 +83,7 @@ export function NewIssueModal({
     onCreate(text.trim(), keyRef.current)
       .then(() => {
         setText("");
+        setSourceFile(null);
         keyRef.current = crypto.randomUUID(); // 本次逻辑创建已完成，下一次换新键
       })
       .catch((err: unknown) => {
@@ -81,6 +91,35 @@ export function NewIssueModal({
       })
       .finally(() => setSubmitting(false));
   }, [text, mode, submitting, onToast, onCreate]);
+
+  /** 需求文档真实上传：解析成功后把提取文本并入需求区（可继续编辑），
+   *  文本变化即换幂等键（与手输同语义）。失败 toast 原样呈现（415/413/422）。 */
+  const handleFileChange = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = ""; // 允许再次选择同一文件
+      if (!file || parsingFile) return;
+      setParsingFile(true);
+      try {
+        const parsed = await parseRequirementDocument(file);
+        setText((prev) =>
+          prev.trim() ? `${prev.trimEnd()}\n\n${parsed.text}` : parsed.text,
+        );
+        setSourceFile({ name: parsed.filename, chars: parsed.chars });
+        keyRef.current = crypto.randomUUID();
+        onToast(
+          parsed.truncated
+            ? `已从 ${parsed.filename} 提取 ${parsed.chars} 字符（超长已截断）`
+            : `已从 ${parsed.filename} 提取 ${parsed.chars} 字符，可继续编辑`,
+        );
+      } catch (err) {
+        onToast(`文档解析失败：${errText(err)}`);
+      } finally {
+        setParsingFile(false);
+      }
+    },
+    [parsingFile, onToast],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -142,6 +181,15 @@ export function NewIssueModal({
         }}
       />
 
+      {/* 真实文件上传：隐藏 input，由 📎 触发；解析只读后端、不写数据 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".txt,.md,.markdown,.docx,.pdf,.odt,.rtf"
+        className="hidden"
+        onChange={handleFileChange}
+      />
+
       <div className="flex items-center gap-2.5 border-t border-line px-3.5 py-2.5">
         <button
           className="rounded-hard border border-line px-2.5 py-[3px] text-[11.5px] text-tx2 hover:border-tx2"
@@ -150,11 +198,29 @@ export function NewIssueModal({
           ▣ 范围 · Org Leader 提议
         </button>
         <button
-          className="text-[12px] text-tx2 hover:text-amber-hi"
-          onClick={() => onToast("附件（PRD 文档等）为二期能力")}
+          className="text-[12px] text-tx2 hover:text-amber-hi disabled:opacity-60"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={parsingFile}
+          title="上传需求文档（.txt/.md/.docx/.pdf/.odt/.rtf）"
         >
           📎
         </button>
+        {parsingFile && (
+          <span className="font-mono text-[10.5px] text-tx3">解析中…</span>
+        )}
+        {sourceFile && (
+          <span className="inline-flex items-center gap-1.5 rounded-hard border border-line bg-[#241d12] px-2 py-px font-mono text-[10.5px] text-kraft">
+            {sourceFile.name}
+            <span className="text-tx3">· {sourceFile.chars} 字</span>
+            <button
+              className="text-tx3 hover:text-amber-hi"
+              title="移除文档标记（已提取文本保留）"
+              onClick={() => setSourceFile(null)}
+            >
+              ✕
+            </button>
+          </span>
+        )}
         <button
           className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
           disabled={submitting}

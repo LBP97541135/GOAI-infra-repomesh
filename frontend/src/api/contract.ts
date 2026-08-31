@@ -107,6 +107,16 @@ export interface IssueIntakeRequest {
   organization_id?: string;
 }
 
+/** 需求文档解析结果（POST /issues/parse-document）：上传真实文件后取回的文本。
+ *  `chars` 是截断后的实际字符数；`truncated` 为真说明源文档超过 intake 上限。 */
+export interface ParsedDocumentView {
+  filename: string;
+  format: string;
+  text: string;
+  chars: number;
+  truncated: boolean;
+}
+
 /** 契约 v0.3 §2.2：工作区（Organization）注册表单条。 */
 export interface OrganizationView {
   organization_id: string;
