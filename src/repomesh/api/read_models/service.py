@@ -1571,6 +1571,9 @@ class DeliveryReadModelService:
                     # Defect A-21: the paths those commands read. Shown beside
                     # them because a command without its path is the trap.
                     "test_paths": list(profile.test_paths),
+                    # 档案开关 (supply-side, CONTEXT.md): the teams grid joins
+                    # against this for the test-team badge.
+                    "capability_profile": profile.capability_profile,
                     "profiled_at": profile.profiled_at,
                     "resident_team_count": len(teams_by_repository.get(profile.id, ())),
                     "open_issue_count": open_issues.get(profile.id, 0),

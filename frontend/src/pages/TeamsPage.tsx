@@ -1,6 +1,6 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ConsoleTeamView } from "../api/contract";
-import { fetchConsoleTeams, gridSourceMode } from "../api/grid";
+import { fetchConsoleRepositories, fetchConsoleTeams, gridSourceMode } from "../api/grid";
 import {
   TEAM_DECOMPOSITION_HINT,
   TEAM_DECOMPOSITION_LABEL,
@@ -27,11 +27,15 @@ import { useRuntimeRows } from "./useRuntimeRows";
 
 function TeamCard({
   team,
+  isTestTeam,
   phase,
   onOpenIssue,
   onOpenRoom,
 }: {
   team: ConsoleTeamView;
+  /** 前端 join 仓库档案得出（裁决：身份字段不进 team view）。撕档后存量测试
+   *  团队失徽标不失功能——已知局限，验收标准 §D 显式接受，此处不做补偿。 */
+  isTestTeam: boolean;
   phase: RuntimePhase;
   onOpenIssue: (issueId: string) => void;
   onOpenRoom: (issueId: string, roomId: string) => void;
@@ -47,6 +51,15 @@ function TeamCard({
     <div className="rounded-hard border border-line bg-panel px-4 py-3">
       <div className="flex flex-wrap items-baseline gap-2.5">
         <span className="font-mono text-[12.5px] text-tx">{team.agentteams_team_name}</span>
+        {isTestTeam && (
+          <span
+            className="rounded-hard border border-amber px-2 py-px text-[11px] text-amber-hi"
+            title="仓库档案 cross-repo-test-team：跨仓联调专职团队（供给侧身份，join 自仓库列表）"
+            data-testid="team-test-badge"
+          >
+            测试团队
+          </span>
+        )}
         <span className="text-[11.5px] text-tx2">
           {/* catalog 查不到时为 null（§7.3 已把三处同源标注统一）——不拿 id 冒充仓库名 */}
           {repositoryLabel(team.repository_name, team.repository_id)}
@@ -137,6 +150,26 @@ export function TeamsPage({
 }) {
   const fetcher = useCallback((withRuntime: boolean) => fetchConsoleTeams(withRuntime), []);
   const { rows, error, phase, probeError, retry } = useRuntimeRows<ConsoleTeamView>(fetcher);
+  /** 徽标的 join 右表：仓库 → 档案。取用失败不挡团队列表——那时徽标整体不渲染
+   *  （宁可少一个徽标，也不拿猜测冒充身份），列表本身照常。 */
+  const [profileByRepository, setProfileByRepository] = useState<Map<string, string | null>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    let cancelled = false;
+    fetchConsoleRepositories()
+      .then(
+        (repositories) =>
+          !cancelled &&
+          setProfileByRepository(
+            new Map(repositories.map((repo) => [repo.repository_id, repo.capability_profile])),
+          ),
+      )
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="max-w-[860px]">
@@ -159,6 +192,9 @@ export function TeamsPage({
             <TeamCard
               key={team.team_id}
               team={team}
+              isTestTeam={
+                profileByRepository.get(team.repository_id) === "cross-repo-test-team"
+              }
               phase={phase}
               onOpenIssue={onOpenIssue}
               onOpenRoom={onOpenRoom}

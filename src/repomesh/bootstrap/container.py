@@ -1038,6 +1038,7 @@ class ApplicationContainer:
                         test_commands=tuple(profile.test_commands),
                         test_paths=tuple(profile.test_paths),
                         profiled_at=profile.profiled_at,
+                        capability_profile=profile.capability_profile,
                     )
                     for profile in await container.repository_catalog.list()
                 )

@@ -385,6 +385,10 @@ export interface ConsoleRepositoryView {
   test_commands: string[];
   /** 验证命令读取/写入的测试路径，与命令作为一个配置对维护。 */
   test_paths: string[];
+  /** 档案开关（供给侧），见 CONTEXT.md：只决定之后新建的拓扑建不建测试团队，
+   *  对存量已建团队无追溯力。null = default 档。TeamsPage 的「测试团队」徽标
+   *  以本字段为 join 右表（裁决：身份字段不进 team view，前端 join）。 */
+  capability_profile: string | null;
   profiled_at: string;
   /** 拓扑派生：该仓库被多少 team 驻扎 */
   resident_team_count: number;
@@ -404,6 +408,18 @@ export interface RepositoryVerificationUpdate {
 /** 更新端点只需由调用方消费这三个回显字段。 */
 export interface RepositoryVerificationView extends RepositoryVerificationUpdate {
   id: string;
+}
+
+/** `PATCH /repositories/{id}/capability-profile` 的请求体。`default` 档以 null
+ *  拼写——后端把 "default" 字面量当 422 拒绝，存储侧只有 NULL 一种写法。 */
+export interface RepositoryCapabilityProfileUpdate {
+  capability_profile: string | null;
+}
+
+/** 回显消费面：端点返回全量 RepositoryView，前端只消费这两个字段。 */
+export interface RepositoryCapabilityProfileView {
+  id: string;
+  capability_profile: string | null;
 }
 
 /** §4.2。`runtime_status`（拓扑记录的**建团结果**，历史事实）与 `runtime.phase`

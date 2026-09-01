@@ -87,14 +87,14 @@ AC-D2 因此只断言正向。
 
 | 编号 | 结果 | 证据 | 日期 |
 |---|---|---|---|
-| P-1 | | | |
-| AC-A1~A6 | | | |
-| AC-B1 | | | |
-| AC-B2 | | | |
-| AC-B3 | | | |
-| AC-C1 | | | |
-| AC-C2 | | | |
-| AC-D1~D4 | | | |
+| P-1 | 未执行（W0a 待活体新栈，另行安排） | | |
+| AC-A1~A6 | **PASS**（双档） | in-memory 档：`tests/api/test_issue_materialize_test_team.py` 6 用例全绿（AC-A1/A2 合测、A3 拆 replay/换 key 两测、A4 双断言、A5 逐字段、另含 S-1 守卫序与去重两条冻结规则）；红验证：撤实现 4 红 2 绿（绿的两条守边界，独立于追加成立）。postgres 档：`tests/integration/test_postgres.py::test_postgres_test_team_supply_chain_converges_by_id` 于一次性 postgres:17（alembic head）全绿。AC-A6 对照组：`tests/api/test_issue_materialize.py` 35 用例全绿 | 2026-09-01 |
+| AC-B1 | 待 W4 | | |
+| AC-B2 | 待 W4 | | |
+| AC-B3 | 待 W4 | | |
+| AC-C1 | 待 W4 | | |
+| AC-C2 | 待 W4 | | |
+| AC-D1~D4 | **D4 静态半场 PASS**：`tsc -b` 零错、oxlint 受影响 6 文件零告警；replay 夹具浏览器点检过弹窗（两句冻结文案、双选项、选中态回显）、仓库卡档案回显、TeamsPage「测试团队」徽标正反向。**D1~D3 活体断言留 W4**，本波不冒充完成 | 2026-09-01 |
 
 ---
 

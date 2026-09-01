@@ -38,6 +38,8 @@ import type {
   OrganizationsResponse,
   PlanSnapshotView,
   RepositoryPlanView,
+  RepositoryCapabilityProfileUpdate,
+  RepositoryCapabilityProfileView,
   RepositoryVerificationUpdate,
   RepositoryVerificationView,
   RollbackReceipt,
@@ -161,6 +163,19 @@ export function createApiClient(config: ApiClientConfig) {
         config,
         "PATCH",
         `/repositories/${encodeURIComponent(repositoryId)}/verification`,
+        payload,
+      ),
+
+    /** 档案开关（供给侧，见 CONTEXT.md）。`default` 传 null——后端把 "default"
+     *  字面量当 422 拒绝；422（未知档名）/404（仓不存在）由弹窗呈现 detail。 */
+    updateRepositoryCapabilityProfile: (
+      repositoryId: string,
+      payload: RepositoryCapabilityProfileUpdate,
+    ) =>
+      request<RepositoryCapabilityProfileView>(
+        config,
+        "PATCH",
+        `/repositories/${encodeURIComponent(repositoryId)}/capability-profile`,
         payload,
       ),
 
