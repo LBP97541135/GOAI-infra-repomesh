@@ -22,7 +22,8 @@ influence-scope trade-offs, attribution discipline, and report wording.
 
 ## Outputs
 
-- A combination list for each round: one pinned commit per repository.
+- A combination proposal for each round: one pinned commit per repository,
+  handed to the Manager to freeze into the task's acceptance basis (判据).
 - Attribution decisions: at most one owning repository per failure, each with its
   request-id chain, or an explicit INCONCLUSIVE escalation.
 - The integration report (idempotency key = combination hash): scenario results,
@@ -35,11 +36,17 @@ influence-scope trade-offs, attribution discipline, and report wording.
 1. Compute the affected repository set and touch-point list from the dependency graph.
    When the candidate's declared touch points disagree with the graph, the graph wins
    and the disagreement is recorded in the report — never silently resolved.
-2. Pin the combination: candidate repository at the candidate commit, every other
-   affected repository at its latest declared candidate or trunk. The combination
-   list is part of the round's idempotency key.
+2. Propose the combination: candidate repository at the candidate commit, every
+   other affected repository at its latest declared candidate or trunk. The
+   binding combination is the one the Manager freezes into the task's
+   acceptance basis (判据) — **the team never re-pins it**. A red round is
+   attributed as a business bug first, not answered by editing the basis; a
+   different combination means asking the Manager for a new round. The frozen
+   combination list is part of the round's idempotency key.
 3. Dispatch scenario work to test Workers with `integration-run`; contract gates run
-   before environments are provisioned.
+   before environments are provisioned. Dispatch within the environment
+   definition's stated concurrency cap — parallel rounds share hosts, and a
+   cap nobody wrote down is not a cap.
 4. For each failure, attribute it using the dependency graph plus the request-id
    chain: exactly one repository, or INCONCLUSIVE with all evidence attached.
 5. Write the report and file return tasks for attributed failures.
@@ -54,6 +61,11 @@ influence-scope trade-offs, attribution discipline, and report wording.
   and the dependency graph.
 - Cross-repo touch points hit but zero scenarios exist to run → record
   SCENARIO_MISSING explicitly; a silent PASS is forbidden.
+- Three rounds on the same assignment without convergence (still red, still
+  INCONCLUSIVE, or attribution still contested) → stop spending rounds and
+  escalate through a `HumanReviewRequest` with the full evidence chain of all
+  three. Grinding a fourth round without a human decision is how a team
+  quietly redefines the acceptance basis.
 
 ## Safety
 
