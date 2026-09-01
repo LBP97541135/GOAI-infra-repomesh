@@ -64,6 +64,21 @@ REVIEW_DECISION_SCHEMA_VERSION = "repomesh.leader-actions.review-decision.v1"
 PLAN_RECEIPT_SCHEMA_VERSION = "repomesh.leader-actions.plan-receipt.v1"
 REVIEW_RECEIPT_SCHEMA_VERSION = "repomesh.leader-actions.review-receipt.v1"
 
+READINESS_SCHEMA_VERSION = "repomesh.agent-bridge.readiness.v1"
+"""The document one Bridge instance reports its own liveness with.
+
+A new family rather than a field on an existing one: the enrollment and the
+binding describe a *member*, they are frozen, and every deployed Bridge already
+round-trips them — while this describes a *process*, which is the thing that
+comes and goes.
+
+It is the one document here with no dataclass beside it, and that is not an
+omission. The report is written by this side and read by the server, and the
+answer that comes back is a receipt whose only field this process acts on is an
+integer number of seconds. A wire model for a document nothing here parses would
+be a validation boundary with no untrusted bytes on the other side of it.
+"""
+
 ROLE_WORKER = "worker"
 ROLE_REPOSITORY_LEADER = "repository_leader"
 MEMBER_ROLES: tuple[str, ...] = (ROLE_WORKER, ROLE_REPOSITORY_LEADER)

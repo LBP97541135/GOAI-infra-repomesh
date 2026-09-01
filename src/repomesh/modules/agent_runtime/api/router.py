@@ -12,6 +12,11 @@ from repomesh.modules.agent_runtime.application.external_worker import (
     ResolveExternalMemberBinding,
     ResolveExternalWorkerBinding,
 )
+from repomesh.modules.agent_runtime.application.readiness import (
+    ReadinessRefused,
+    ReportExternalMemberReadiness,
+    StaleInstance,
+)
 from repomesh.modules.agent_runtime.contracts import (
     ExternalMemberBindingQuery,
     ExternalWorkerBindingQuery,
@@ -35,6 +40,7 @@ from repomesh.settings import get_settings
 from .models import (
     CodingRunCreate,
     CodingRunView,
+    ExternalMemberReadinessReport,
     ExternalWorkerProvisionRequest,
     RunEventView,
     WorkerTaskStartCreate,
@@ -200,6 +206,94 @@ async def external_member_binding(
     except WorkerControlPlaneUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return binding.to_wire()
+
+
+@router.post("/runtime/v1/external-members/{member_agent_id}/readiness", response_model=None)
+async def report_external_member_readiness(
+    member_agent_id: UUID, body: ExternalMemberReadinessReport, request: Request
+) -> dict[str, object]:
+    """A Bridge saying it is up, still up, or going down.
+
+    The write that keeps the lease alive, and the one route behind
+    ``_authorize_runner`` that refuses the *global* control token. Everywhere
+    else that credential means "every worker" and is the managed Runner's; here
+    it would mean a subjectless credential making a self-report on somebody
+    else's behalf, which is not a self-report at all — so ``None`` is a 403
+    rather than a pass, and a member token pointed at another member's path is a
+    403 for the same reason the preflights give one.
+
+    The status table is short because the endpoint is: 404 for a principal
+    RepoMesh does not know, 409 for a report that does not add up to a readiness
+    this member may hold, and 409 again — structured, and the only structured
+    detail on this router — when the reporter has been replaced. That one is
+    singled out because it is the single refusal a Bridge *acts* on: it means a
+    newer process owns the member, so the right response is to stop renewing and
+    exit, and matching on prose is how a client comes to do that by accident.
+
+    Everything is checked before anything is written, so a refusal leaves no
+    lease behind: a half-applied report would be a member the materialize gate
+    admits on facts this endpoint refused.
+    """
+
+    authenticated = _authorize_runner(request)
+    if authenticated is None:
+        raise HTTPException(
+            status_code=403,
+            detail="readiness must be reported with the member's own credential",
+        )
+    if authenticated != member_agent_id:
+        raise HTTPException(
+            status_code=403, detail="a member credential may only report its own readiness"
+        )
+    container = request.app.state.container
+    try:
+        receipt = await ReportExternalMemberReadiness(
+            container.agent_directory,
+            container.external_member_readiness_store(),
+            workspace_root=get_settings().runner_workspace_root,
+        ).execute(body.to_command(member_agent_id))
+    except UnknownExternalWorker as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except StaleInstance as error:
+        raise HTTPException(
+            status_code=409, detail={"code": "stale_instance", "message": str(error)}
+        ) from error
+    except ReadinessRefused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return receipt.to_wire()
+
+
+@router.get("/runtime/v1/external-members/readiness", response_model=None)
+async def external_member_readiness(request: Request) -> dict[str, object]:
+    """Every lease, with its status derived now: what the console polls.
+
+    Guarded like the read models rather than like the writes above, because the
+    caller is a browser session and holds no member credential — and unlike the
+    reports, this is a whole-fleet read, so a credential that names one member
+    is not the right key for it either.
+
+    The snapshot carries no instance id, no workspace root and no credential:
+    a readiness list is a status board, and the reported path belongs to the
+    operator's own machine.
+    """
+
+    _authorize_readiness_reader(request)
+    snapshot = await request.app.state.container.external_member_readiness_store().snapshot()
+    return {"members": [view.to_wire() for view in snapshot]}
+
+
+def _authorize_readiness_reader(request: Request) -> None:
+    """The console's credential, checked the way the read-model routes check it.
+
+    The unconfigured case is a 503 rather than an open door: comparing against
+    an empty setting would make ``Bearer None`` the password.
+    """
+
+    expected = get_settings().agent_action_token
+    if not expected:
+        raise HTTPException(status_code=503, detail="agent action token is not configured")
+    if not _presents(request, expected):
+        raise HTTPException(status_code=401, detail="invalid agent action token")
 
 
 def _authorize_runner(request: Request) -> UUID | None:

@@ -36,7 +36,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from repomesh.modules.agent_directory.contracts import AgentHierarchyViolation
+from repomesh.modules.agent_directory.contracts import (
+    AgentHierarchyViolation,
+    AgentPrincipalStatus,
+    AgentRole,
+)
 from repomesh.modules.change_orchestration.contracts import (
     ExecutionPlaneUnavailable,
     RoundNotRecorded,
@@ -53,7 +57,9 @@ from repomesh.modules.repository_intelligence.application.discovery_chain import
     DiscoveryPreconditionFailed,
 )
 from repomesh.modules.repository_intelligence.application.discovery_materialization import (
+    ExternalMembersNotReady,
     MaterializeIssueCommand,
+    member_readiness_wire,
 )
 from repomesh.modules.repository_intelligence.contracts import (
     GUI_STEP_OF,
@@ -516,6 +522,21 @@ async def materialize_discovery_plan(
     )
     try:
         result = await service.materialize(command)
+    except ExternalMembersNotReady as error:
+        # AC-03, and the only structured detail this router answers with. Every
+        # other refusal here is one sentence about one thing; this one is a row
+        # per member, because the remedy is a row per member — go start that
+        # CLI — and a panel that had to parse it out of prose would parse it
+        # wrongly. Nothing was started and the draft is unconsumed, so the same
+        # key finishes the round once the members report in.
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "external_members_not_ready",
+                "message": str(error),
+                "members": [member_readiness_wire(fact) for fact in error.facts],
+            },
+        ) from error
     except WorkflowBlocked as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ExecutionPlaneUnavailable as error:
@@ -583,6 +604,83 @@ async def materialize_discovery_plan(
         team_count=result.team_count,
         repositories=list(result.repositories),
         status=result.status,
+    )
+
+
+#: Which directory roles a Bridge may serve, and therefore which principals the
+#: precheck asks about. The Organization Leader's absence is the point: it stays
+#: on the AgentTeams Manager (D-11) and runs no local CLI, so a readiness answer
+#: naming it would be a question nobody can act on.
+#:
+#: This is the *same* question ``agent_runtime.application.external_worker``
+#: answers with ``MEMBER_ROLES``, and the gate downstream of this set uses that
+#: mapping to name each fact's role — so the two must agree, and a role added
+#: there has to be added here. It is spelled twice rather than imported because
+#: the module-boundary rule allows this layer only another module's
+#: ``contracts``, and ``MEMBER_ROLES`` is application-layer. The keys of that
+#: mapping are what this set has to match.
+_BRIDGE_SERVED_ROLES = frozenset({AgentRole.REPOSITORY_LEADER, AgentRole.WORKER})
+
+
+@router.get("/issues/{issue_id}/discovery/readiness", dependencies=[ACTION_TOKEN])
+async def read_discovery_readiness(issue_id: UUID, request: Request) -> JSONResponse:
+    """Which of this round's local CLI members are up, before the button is pressed.
+
+    Advisory, and only advisory. A readiness lease is a claim about *now*, so
+    this answer is already a moment old by the time it is rendered; the
+    authority is the gate inside materialize, which reads the same three sources
+    at the instant work would actually be handed out. What this endpoint buys is
+    the difference between an operator pressing materialize to find out and
+    seeing beforehand which machine to go start.
+
+    The member set is derived from the *directory* rather than from the
+    project's topology, because a round's first materialize is the thing that
+    builds a topology — asking the topology would answer "nobody" for exactly
+    the round somebody most wants to check. The filter is the one
+    ``CreateAutomaticProjectTopology`` uses to pick a repository's team: active
+    principals serving a role a Bridge can serve, whose repository is one this
+    plan names. No organization narrowing, because a repository's leader is a
+    global directory singleton — a repository id already names at most one team,
+    and adding a second condition would be a second place for the two to
+    disagree.
+
+    Nothing is written. The draft is not consumed, no receipt is recorded, and
+    the discovery projection reads exactly as it did before the call.
+    """
+
+    container = request.app.state.container
+    draft = await container.plan_snapshot_store().current_draft(issue_id)
+    if draft is None:
+        # No open round means no repository set and no members to speak about.
+        # Answering an empty list would read as "everybody is ready", which is
+        # the one thing this endpoint must never say by accident.
+        raise HTTPException(
+            status_code=404,
+            detail=f"this issue has no open discovery round: {issue_id}",
+        )
+
+    repositories = {str(node.get("repository", "")) for node in (draft.task_dag or ())}
+    profiles = await container.repository_catalog.list()
+    planned = {profile.id for profile in profiles if profile.name in repositories}
+    members = tuple(
+        sorted(
+            (
+                principal.id
+                for principal in await container.agent_directory.list_views()
+                if principal.role in _BRIDGE_SERVED_ROLES
+                and principal.repository_id in planned
+                and principal.status is AgentPrincipalStatus.ACTIVE
+            ),
+            key=str,
+        )
+    )
+    facts = await container.external_member_readiness_gate().check(members)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "checkedAt": datetime.now(UTC).isoformat(),
+            "members": [member_readiness_wire(fact) for fact in facts],
+        },
     )
 
 

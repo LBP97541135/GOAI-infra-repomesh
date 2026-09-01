@@ -12,9 +12,10 @@ import asyncio
 import contextlib
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from .contracts import (
     CODING_PROFILES,
@@ -24,8 +25,14 @@ from .contracts import (
     WorkerBinding,
 )
 from .instance_lock import InstanceLock, instance_lock_path
-from .ports import CodingSessionPort, RoomPort, WorkerBindingPort
-from .runner_consumer import GovernedRuntime, RunnerConsumer
+from .ports import (
+    CodingSessionPort,
+    ReadinessRejected,
+    ReadinessReporter,
+    RoomPort,
+    WorkerBindingPort,
+)
+from .runner_consumer import GovernedRuntime
 from .state import open_state, state_path
 from .supervisor import LeaderRuntime, RoomSupervisor
 
@@ -185,6 +192,7 @@ class RoomNativeAgent:
         binding_port: WorkerBindingPort,
         room_port: RoomPort,
         coding_session: CodingSessionPort,
+        readiness: ReadinessReporter,
         state_dir: Path | None = None,
         resolve_credential: CredentialResolver = resolve_env_credential,
         governed: GovernedRuntime | None = None,
@@ -193,6 +201,11 @@ class RoomNativeAgent:
         self._binding_port = binding_port
         self._room_port = room_port
         self._coding_session = coding_session
+        self._readiness = readiness
+        """How this process tells the platform it exists. Required, unlike the
+        two lanes below: a member the control plane cannot see is refused at
+        materialize, so an agent assembled without a reporter would serve its
+        rooms while the team it belongs to could not be built (FR-04)."""
         self._state_dir = state_dir
         self._resolve_credential = resolve_credential
         self._governed = governed
@@ -218,10 +231,11 @@ class RoomNativeAgent:
 
         The order is the contract: local validation, then the instance lock,
         then RepoMesh preflight, then the coding runtime's own readiness gate,
-        then local state, then Matrix — and only then does the process serve
-        anything. Nothing after ``await`` here is reachable without every
-        earlier step having succeeded, which is what makes "no CLI is spawned
-        before preflight" a structural property rather than a promise.
+        then local state, then Matrix, then the readiness report — and only then
+        does the process serve anything. Nothing after ``await`` here is
+        reachable without every earlier step having succeeded, which is what
+        makes "no CLI is spawned before preflight" a structural property rather
+        than a promise.
 
         The two middle steps each sit between the only two neighbours they can.
         ``ensure_ready`` is after preflight because a worker RepoMesh will not
@@ -240,24 +254,20 @@ class RoomNativeAgent:
         with before it raises, which is why it is registered afterwards.
 
         Cancellation unwinds the stack in reverse: the supervisor stops without
-        committing the batch it was holding, the coding session closes, the room
-        port closes, the state file closes, the lock is released, and
-        ``CancelledError`` propagates so the caller learns the loop ended. A
-        ``RoomRefused`` out of the steady-state sync leaves the same way and for
-        the same reason — the supervisor ends the run rather than retrying a
-        decision — so the shutdown path has one shape, not two.
+        committing the batch it was holding, RepoMesh is told this member is
+        going down, the coding session closes, the room port closes, the state
+        file closes, the lock is released, and ``CancelledError`` propagates so
+        the caller learns the loop ended. A ``RoomRefused`` out of the
+        steady-state sync leaves the same way and for the same reason — the
+        supervisor ends the run rather than retrying a decision — so the
+        shutdown path has one shape, not two.
 
-        What serves at the end is one of two arrangements, and the unwind above
-        is the same for both. Conversation-only, the supervisor is simply
-        awaited and this process has no other task. With governed execution the
-        supervisor and the Runner consumer are two peers in one
-        ``asyncio.TaskGroup``: the room loop answers mentions and drains, the
-        consumer leases and executes, and neither is the other's parent. They are
-        siblings rather than one hosting the other because either failing means
-        this instance cannot do its job — a homeserver that revoked the token and
-        a control plane that will not lease are both reasons to stop — and a
-        group is the arrangement in which one failure cancels the other and the
-        exit stack still unwinds once, in order.
+        What serves at the end is two loops or three, and the unwind above is
+        the same either way. Every arrangement has the room loop, which answers
+        mentions and drains, and the renewal loop, which keeps this member's
+        lease alive; governed execution adds the Runner consumer, which leases
+        and executes. They are peers in one ``asyncio.TaskGroup`` rather than
+        one hosting another, for the reason :func:`_serve` gives.
         """
 
         lock = InstanceLock(instance_lock_path(enrollment.worker_agent_id, self._state_dir))
@@ -303,6 +313,19 @@ class RoomNativeAgent:
                 # thing an operator runs *before* the credentials are in place.
                 access_token=self._resolve_credential(enrollment.credential_refs.matrix),
             )
+            # The last gate, and the only one about this *process* rather than
+            # about the member: RepoMesh will not materialize a team whose local
+            # CLI members it cannot see, so a Bridge that announced itself ready
+            # without a lease would tell an operator the opposite of what the
+            # control plane is about to tell them (FR-04). It is here rather
+            # than earlier because what it reports is that this instance is
+            # serving, and until ``start`` returned it was not.
+            renew_after = await self._readiness.report_startup()
+            # Registered only now, so it is the *first* callback to run on the
+            # way out: the platform hears that this member is stopping before
+            # the seams it was serving through are torn down. Nothing before
+            # this line took a lease, so nothing before it owes a goodbye.
+            stack.push_async_callback(_say_goodbye, self._readiness)
             _logger.info(
                 "bridge ready: member=%s role=%s profile=%s rooms=%d governed=%s leader-lane=%s",
                 enrollment.worker_name,
@@ -321,26 +344,37 @@ class RoomNativeAgent:
                 governed_task=None if self._governed is None else self._governed.task_port,
                 leader_runtime=self._leader,
             )
-            if self._governed is None:
-                await supervisor.serve()
-            else:
-                await _serve_both(supervisor, self._governed.build_consumer(state))
+            peers = [supervisor.serve(), _renew_readiness(self._readiness, renew_after)]
+            if self._governed is not None:
+                peers.append(self._governed.build_consumer(state).serve())
+            await _serve(*peers)
 
 
-async def _serve_both(supervisor: RoomSupervisor, consumer: RunnerConsumer) -> None:
-    """Run the room loop and the Runner loop until one of them ends.
+async def _serve(*peers: Coroutine[Any, Any, None]) -> None:
+    """Run every loop this instance serves with until one of them ends.
 
-    A task group is what makes "either failure cancels the other" structural: the
-    alternative — one loop awaiting the other, or a bare ``create_task`` — leaves
-    a way for the Bridge to keep syncing a room while it has silently stopped
-    executing the runs that room asked for, which is the worst of the available
-    failures because it looks alive.
+    A task group is what makes "either failure cancels the other" structural:
+    the alternative — one loop awaiting another, or a bare ``create_task`` —
+    leaves a way for the Bridge to keep syncing a room while it has silently
+    stopped executing the runs that room asked for, or stopped holding the lease
+    that makes it dispatchable at all. Those are the worst of the available
+    failures because they look alive.
+
+    It takes however many loops the arrangement has rather than naming them,
+    which is the shape the third one forced: a conversation-only member now
+    serves its rooms and its lease, a governed one adds the Runner consumer, and
+    a variant per combination would be the same paragraph written twice. They
+    are siblings rather than one hosting another because each of them failing
+    means this instance cannot do its job — a homeserver that revoked the token,
+    a control plane that will not lease, a member the platform has replaced —
+    and a group is the arrangement in which one failure cancels the rest and the
+    exit stack still unwinds once, in order.
 
     The group reports through an ``ExceptionGroup``, and the composition root
     above it does not: the CLI maps ``RoomTransportError`` and the startup
     refusals onto exit codes by type, and a group is neither. One failure is the
-    overwhelmingly common case — the second loop is *cancelled*, not failed, so
-    it contributes nothing — so a single-leaf group is unwrapped back to the
+    overwhelmingly common case — the other loops are *cancelled*, not failed, so
+    they contribute nothing — so a single-leaf group is unwrapped back to the
     exception the caller's vocabulary is written in. A genuine double failure is
     left as a group, because collapsing that would mean choosing which of two
     real reasons to report.
@@ -348,10 +382,63 @@ async def _serve_both(supervisor: RoomSupervisor, consumer: RunnerConsumer) -> N
 
     try:
         async with asyncio.TaskGroup() as group:
-            group.create_task(supervisor.serve())
-            group.create_task(consumer.serve())
+            for peer in peers:
+                group.create_task(peer)
     except BaseExceptionGroup as failures:
         raise _single_failure(failures) from None
+
+
+async def _renew_readiness(readiness: ReadinessReporter, renew_after: int) -> None:
+    """Hold the lease open for as long as this instance serves.
+
+    The period is the server's, re-read from every answer, so a deployment that
+    retunes its TTL retunes this loop without restarting anything.
+
+    A failed renewal is tolerated and the loop simply waits for the next period.
+    That is not optimism: the renew period is a fraction of the TTL, so the
+    lease outlives a missed report and the next one restores it, while a process
+    that died or restarted on the first failure would turn a moment of bad
+    network into exactly the outage — a member the platform cannot see — that
+    reporting exists to prevent (FR-04). What is *not* tolerated is being
+    replaced: a newer instance owning this member means every future renewal is
+    a refusal, and the two of them renewing in turn would leave the platform's
+    answer depending on whichever reported last.
+    """
+
+    while True:
+        await asyncio.sleep(renew_after)
+        try:
+            renew_after = await readiness.report_renew()
+        except ReadinessRejected:
+            raise
+        except Exception as transient:
+            _logger.warning(
+                "readiness renewal failed (%s); the lease outlives one failure, so this "
+                "instance waits for the next period rather than stopping",
+                type(transient).__name__,
+            )
+
+
+async def _say_goodbye(readiness: ReadinessReporter) -> None:
+    """Report the stop, and never let the reporting of it become the stop's problem.
+
+    The one call in this file whose failure is absorbed rather than graded, and
+    FR-08 is the whole reason. A goodbye shortens the window in which a console
+    shows a member that has already gone; it is never what makes the window
+    close, because a process that was killed sends nothing and the lease has to
+    expire on its own regardless. So a failure here is a warning and the unwind
+    carries on: turning a clean stop into a crash over a courtesy would lose the
+    very thing the rest of the stack is in the middle of doing properly.
+    """
+
+    try:
+        await readiness.report_shutdown()
+    except Exception as unreported:
+        _logger.warning(
+            "could not tell RepoMesh this member is stopping (%s); the lease expires on "
+            "its own",
+            type(unreported).__name__,
+        )
 
 
 def _single_failure(failures: BaseExceptionGroup) -> BaseException:

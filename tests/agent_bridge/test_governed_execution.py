@@ -43,6 +43,7 @@ from repomesh_agent_bridge.adapters.coding_session import (
 from repomesh_agent_bridge.adapters.memory import (
     InMemoryGovernedTaskPort,
     InMemoryRoomPort,
+    MemoryReadinessReporter,
     ScriptedCodingSession,
 )
 from repomesh_agent_bridge.adapters.restricted_process import prepare_session_dirs
@@ -861,7 +862,7 @@ async def test_a_conversation_only_instance_starts_no_consumer_and_says_so(
 
     assert "governed=off" in caplog.text
     assert [message.body for message in room.sent] == [f"[note] {GOVERNANCE_DISABLED_NOTE}"]
-    assert not (asyncio.all_tasks() - before), "no second loop was started"
+    assert not (asyncio.all_tasks() - before), "nothing this run started outlives it"
 
 
 # ---------------------------------------------------------------------------
@@ -1483,6 +1484,10 @@ def _agent(
         binding_port=WireBindingPort(binding_wire()),
         room_port=room,
         coding_session=session,
+        # The third peer of the loops these tests are about, answering from
+        # memory. Its default renew period outlasts every scripted round here,
+        # so it starts, holds a lease nothing renews, and says goodbye.
+        readiness=MemoryReadinessReporter(),
         state_dir=tmp_path,
         governed=governed,  # type: ignore[arg-type]
     )

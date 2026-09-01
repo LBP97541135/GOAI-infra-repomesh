@@ -16,8 +16,9 @@ import type {
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
   DiscoveryView,
+  ExternalMembersNotReadyDetail,
 } from "./contract";
-import { defaultClient } from "./client";
+import { ApiError, defaultClient } from "./client";
 import { resolveDataSourceMode } from "./source";
 import { DISCOVERY_FIXTURE_DEFAULT, discoveryFixtures, discoveryTaskFixture } from "../data/discovery";
 
@@ -114,6 +115,22 @@ export function materializeDiscovery(
 ): Promise<DiscoveryMaterializeResult> {
   refuseInReplay();
   return defaultClient().postDiscoveryMaterialize(issueId, payload);
+}
+
+/** 物化被拒的那一族里，**唯一结构化的一份**：本机 CLI 成员未就绪。
+ *
+ *  其余 409（检查点未过、计划未生成…）照旧走 detail 原文那条路——归并成一句
+ *  「物化失败」会把可自助解决的前置问题伪装成系统故障，那条注释在 client.ts
+ *  与弹窗里各写着一遍。这一族多出来的不是特权而是**解法**：哪个成员、什么状态、
+ *  服务端给的原因，逐行摆出来才知道该去启动哪台机器上的哪个 CLI。
+ *  不是这一族则返回 null，调用方原样显 message。 */
+export function externalMembersNotReady(err: unknown): ExternalMembersNotReadyDetail | null {
+  if (!(err instanceof ApiError)) return null;
+  const detail: unknown = err.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  return "code" in detail && detail.code === "external_members_not_ready"
+    ? (detail as ExternalMembersNotReadyDetail)
+    : null;
 }
 
 /** §4.1 幂等键：**随表单生成的随机 UUID**（设计稿 ②「幂等键随表单生成」，Q9

@@ -29,6 +29,10 @@ from repomesh.modules.observability.infrastructure.trace_query import (
     TraceQueryStore,
 )
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
+from repomesh.modules.observability.operations import (
+    discover_alembic_heads,
+    operational_readiness,
+)
 from repomesh.settings import get_settings
 
 from .models import (
@@ -37,6 +41,8 @@ from .models import (
     AlertRuleOut,
     AlertRulePayload,
     AlertRulesResponse,
+    CorrelationResponse,
+    CorrelationSourceOut,
     IssueLogGroupsResponse,
     LogEntriesResponse,
     ObserveIssueLogGroup,
@@ -44,6 +50,9 @@ from .models import (
     ObserveIssuesResponse,
     ObserveSummary,
     ObserveTraceIssueGroup,
+    OperationalReadinessOut,
+    OperationalStatusResponse,
+    RetentionRunResponse,
     TraceEventsResponse,
     TraceIssueGroupsResponse,
     TraceSessionsResponse,
@@ -210,6 +219,79 @@ async def evaluate_alerts(request: Request) -> AlertEventsResponse:
     return AlertEventsResponse(events=[AlertEventOut(**e) for e in events])
 
 
+@router.get("/operations/status", response_model=OperationalStatusResponse)
+async def operational_status(request: Request) -> OperationalStatusResponse:
+    container = _authorized_container(request)
+    settings = get_settings()
+    gate = container.operational_gate()
+    checks = operational_readiness(
+        alembic_heads=discover_alembic_heads(),
+        backup_configured=settings.operations_backup_configured,
+        last_backup_age_hours=settings.operations_last_backup_age_hours,
+        restore_drill_age_days=settings.operations_restore_drill_age_days,
+    )
+    return OperationalStatusResponse(
+        intake_paused=gate.intake_paused(),
+        writes_degraded=gate.writes_degraded(),
+        checks=[
+            OperationalReadinessOut(
+                name=check.name, state=check.state.value, detail=check.detail
+            )
+            for check in checks
+        ],
+    )
+
+
+@router.post("/operations/retention/run", response_model=RetentionRunResponse)
+async def run_retention(request: Request) -> RetentionRunResponse:
+    container = _authorized_container(request)
+    result = await container.observability_retention_service().run_once()
+    return RetentionRunResponse(
+        usage_deleted=result.usage_deleted,
+        logs_deleted=result.logs_deleted,
+        trace_sessions_deleted=result.trace_sessions_deleted,
+    )
+
+
+@router.get("/operations/correlation", response_model=CorrelationResponse)
+async def correlate_issue(request: Request, issue_id: UUID) -> CorrelationResponse:
+    _authorized_container(request)
+    usage = next(
+        (item for item in await _service(request).issues() if item["issue_id"] == issue_id),
+        None,
+    )
+    logs = next(
+        (
+            item
+            for item in await _log_query(request).issue_groups()
+            if item["issue_id"] == issue_id
+        ),
+        None,
+    )
+    traces = next(
+        (
+            item
+            for item in await _trace_query(request).issue_groups()
+            if item["issue_id"] == issue_id
+        ),
+        None,
+    )
+    return CorrelationResponse(
+        issue_id=issue_id,
+        sources=[
+            CorrelationSourceOut(
+                source="metrics", count=int(usage["calls"]) if usage else 0, attribution="exact"
+            ),
+            CorrelationSourceOut(
+                source="logs", count=int(logs["count"]) if logs else 0, attribution="exact"
+            ),
+            CorrelationSourceOut(
+                source="traces",
+                count=int(traces["suspected_sessions"]) if traces else 0,
+                attribution="approximate",
+            ),
+        ],
+    )
 # --- Traces ----------------------------------------------------------------
 
 

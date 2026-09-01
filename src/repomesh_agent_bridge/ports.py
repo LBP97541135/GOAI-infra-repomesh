@@ -32,6 +32,16 @@ learn the type it calls. One stack sits behind it and behind
 :class:`CodingSessionPort` alike; what this names is the other *reading* of that
 stack's answer.
 
+A sixth is :class:`ReadinessReporter`, and it is the only one whose subject is
+the *process* rather than the member it serves: everything above carries a
+member's work, while this carries the fact that there is somewhere for that work
+to happen. It is a seam for the ordinary reason — an HTTP reporter against a
+control plane, an in-memory one beside it — and it is not folded into
+:class:`WorkerBindingPort` even though both speak to RepoMesh, because that one
+is read once and decides whether this process runs at all, while this one is
+written for the whole life of the process and decides whether the platform will
+dispatch anything to it.
+
 Two failure vocabularies meet in this package and they live in different
 modules for one reason each. The *preflight* one lives in
 :mod:`repomesh_agent_bridge.contracts`, next to the wire models that raise it:
@@ -52,6 +62,7 @@ from typing import NewType, Protocol
 from uuid import UUID
 
 from .contracts import (
+    BridgeStartupError,
     ExternalWorkerEnrollment,
     PlanReceipt,
     RepositoryAssignmentPackage,
@@ -74,6 +85,8 @@ __all__ = [
     "LeaderActionRefused",
     "LeaderActionUnavailable",
     "LeaderCoordinationPort",
+    "ReadinessRejected",
+    "ReadinessReporter",
     "RoomBatch",
     "RoomBody",
     "RoomEvent",
@@ -558,4 +571,72 @@ class LeaderCoordinationPort(Protocol):
 
     async def review(self, package: RepositoryAssignmentPackage) -> RepositoryReviewDecision:
         """Turn a ``review_due`` package into this leader's evidence-based verdict."""
+        ...
+
+
+class ReadinessRejected(BridgeStartupError):
+    """A newer instance owns this member, so this process has been superseded.
+
+    The server's ``stale_instance`` refusal, and the one readiness answer a
+    Bridge *acts* on rather than merely reports. Two processes renewing one
+    lease is the state in which the platform's answer depends on whichever
+    reported last, so the older one stops; a loop that kept trying would lose
+    every round and keep the member looking healthy while it did.
+
+    In :class:`~repomesh_agent_bridge.contracts.BridgeStartupError`'s family
+    because the CLI already maps that family onto the one exit code that means
+    "this invocation cannot produce a running Bridge, and a supervisor retrying
+    it is retrying a decision, not an outage" — which is exactly what being
+    replaced is. It lives *here* rather than beside that family for the reason
+    :class:`RoomTransportError` does: the renewal loop branches on it, and a
+    failure type the core branches on belongs to the port rather than to
+    whichever adapter raised it.
+    """
+
+
+class ReadinessReporter(Protocol):
+    """This process telling RepoMesh it is up, still up, or going down.
+
+    RepoMesh refuses to materialize a team whose local CLI members it cannot
+    see, so a Bridge that served its rooms without reporting would be invisible
+    to the one gate that decides whether work is dispatched to it at all.
+
+    The lease is short and the reporter is what keeps it alive. Nothing here
+    tells the caller how long it has — :meth:`report_startup` and
+    :meth:`report_renew` answer with the period the *server* chose, so a
+    deployment that retunes its TTL retunes every Bridge with it and no client
+    has a period compiled in.
+    """
+
+    async def report_startup(self) -> int:
+        """Take the lease, and return how many seconds until it must be renewed.
+
+        Blocking and unretried, and its failure is a startup refusal: the point
+        of reporting before ``bridge ready`` is that an operator is never told a
+        member is serving when the control plane is about to say it is not.
+
+        Raises :class:`ReadinessRejected` when a newer instance already holds
+        the member, and the ordinary startup-refusal family for everything else.
+        """
+        ...
+
+    async def report_renew(self) -> int:
+        """Extend the lease, and return the next period.
+
+        Called on a loop for the life of the process. The period comes back
+        every time rather than once at startup, because it is the server's to
+        change and the alternative is a fleet that has to be restarted to learn
+        a new one.
+        """
+        ...
+
+    async def report_shutdown(self) -> None:
+        """Say this instance is going down. Best effort, by design.
+
+        It shortens the window in which the console shows a member that has
+        already stopped; it is never what makes that window close, because a
+        process that was killed sends nothing and the lease has to expire on its
+        own regardless. An implementation may fail here and the caller is
+        expected to carry on.
+        """
         ...

@@ -376,7 +376,16 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     with the delivery write endpoints — an architecture change, not part of
     this containment."""
 
-    service = request.app.state.container.issue_intake_service()
+    container = request.app.state.container
+    if container.operational_gate().intake_paused():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "intake_paused", "detail": "new issue intake is paused"},
+            headers={
+                "Retry-After": str(get_settings().operations_capacity_retry_after_seconds)
+            },
+        )
+    service = container.issue_intake_service()
     try:
         receipt = await service.execute(
             IssueIntakeCommand(
