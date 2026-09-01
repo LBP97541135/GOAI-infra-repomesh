@@ -147,7 +147,9 @@ class StartAssignedWorkerTask:
                 )
             )
             capabilities = await self._capabilities.execute(
-                command.worker_agent_id, task_features=command.task_features
+                command.worker_agent_id,
+                task_features=command.task_features,
+                profile=repository.capability_profile,
             )
             workspace = await self._workspaces.prepare(
                 repository_id=task.repository_id,

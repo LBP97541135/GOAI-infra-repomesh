@@ -43,6 +43,7 @@ class PostgresRepositoryCatalog:
                         languages=list(profile.languages),
                         test_commands=list(profile.test_commands),
                         test_paths=list(profile.test_paths),
+                        capability_profile=profile.capability_profile,
                         profiled_at=profile.profiled_at,
                         metadata=_serialize_metadata(profile),
                     )
@@ -86,6 +87,26 @@ class PostgresRepositoryCatalog:
             await session.flush()
             return self._to_domain(record)
 
+    async def update_capability_profile(
+        self,
+        repository_id: UUID,
+        *,
+        capability_profile: str | None,
+    ) -> RepositoryProfile | None:
+        """Replace the repository's team capability profile idempotently.
+
+        Same whole-replacement contract as ``update_verification``: a retried
+        request assigns the same value again rather than accumulating anything.
+        """
+
+        async with self._database.transaction() as session:
+            record = await session.get(RepositoryRecord, repository_id)
+            if record is None:
+                return None
+            record.capability_profile = capability_profile
+            await session.flush()
+            return self._to_domain(record)
+
     @staticmethod
     def _to_domain(record: RepositoryRecord) -> RepositoryProfile:
         return RepositoryProfile(
@@ -100,6 +121,8 @@ class PostgresRepositoryCatalog:
             test_commands=tuple(record.test_commands or ()),
             # Rows written before defect A-21 say nothing about where tests live.
             test_paths=tuple(record.test_paths or ()),
+            # NULL means the default team capability profile.
+            capability_profile=record.capability_profile,
             auto_card=_deserialize_auto_card(record.metadata_payload),
             profiled_at=_as_utc(record.profiled_at),
         )

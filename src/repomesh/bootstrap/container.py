@@ -477,6 +477,7 @@ class ApplicationContainer:
         store = self.project_topology_store
         directory = self.agent_directory
         settings = get_settings()
+        repository_catalog = self.repository_catalog
 
         class _RuntimeProjection:
             async def project(self, project_id: UUID) -> None:
@@ -502,6 +503,7 @@ class ApplicationContainer:
                         manager_runtime=settings.agentteams_manager_runtime,
                         worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
+                        repository_catalog=repository_catalog,
                     ).project(project_id)
                 except AgentTeamsRoomsPending as error:
                     # A subclass of AgentTeamsError and *not* a conflict: the

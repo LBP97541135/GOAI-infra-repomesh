@@ -136,6 +136,19 @@ class RunnerTaskProjector:
         )
 
         issued_at = request.issued_at or datetime.now(UTC)
+        instruction = (
+            "Read .repomesh/context/current-task.md and the mounted RepoMesh skills. "
+            f"Complete only the assigned task: {package.instruction}"
+        )
+        if any(skill.id == "tdd" for skill in request.capabilities.skills):
+            # The mandatory-TDD mount (capabilities/skills/tdd): naming the file
+            # in the instruction is what turns a mounted file into a followed
+            # one — the renderer's Development methodology section carries the
+            # per-task detail; this sentence is the constant part.
+            instruction += (
+                " Follow .repomesh/skills/tdd/SKILL.md for the red-green-refactor"
+                " cycle: no production code without a failing test."
+            )
         return RunnerTask(
             organization_id=request.organization_id,
             project_id=package.project_id,
@@ -144,10 +157,7 @@ class RunnerTaskProjector:
             correlation_id=request.correlation_id,
             attempt=request.attempt,
             adapter_id=request.adapter_id,
-            instruction=(
-                "Read .repomesh/context/current-task.md and the mounted RepoMesh skills. "
-                f"Complete only the assigned task: {package.instruction}"
-            ),
+            instruction=instruction,
             repository=RepositoryCheckout(
                 repository_id=package.repository_id,
                 url=request.repository_url,

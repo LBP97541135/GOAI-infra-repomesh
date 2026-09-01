@@ -70,10 +70,12 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
 from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.ports import ProjectTopologyStore
+from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
 
 from .control_plane import AgentTeamsConflict, AgentTeamsError, AgentTeamsUnavailable
 from .principal_registration import with_task_control
 from .project_topology import ReconcileProjectAgentTopology
+from .team_skills import agentteams_skills
 
 
 class AgentTeamsRoomsPending(AgentTeamsError):
@@ -164,6 +166,7 @@ class ProjectRuntimeProjection:
         manager_runtime: ManagerRuntime,
         worker_runtime: WorkerRuntime,
         worker_task_control_url: str | None = None,
+        repository_catalog: RepositoryCatalog | None = None,
     ) -> None:
         self._directory = directory
         self._store = store
@@ -177,6 +180,10 @@ class ProjectRuntimeProjection:
         self._manager_runtime = manager_runtime
         self._worker_runtime = worker_runtime
         self._worker_task_control_url = worker_task_control_url
+        # Optional because the skills overlay is the only thing this class
+        # wants from the catalog, and a composition root without one (tests)
+        # must keep projecting default-profile resources exactly as before.
+        self._repository_catalog = repository_catalog
         self._reconcile = ReconcileProjectAgentTopology(directory, store, control_plane)
 
     async def project(self, project_id: UUID) -> ProjectAgentTopologyView:
@@ -236,6 +243,15 @@ class ProjectRuntimeProjection:
         if principal is None:
             raise ProjectTopologyViolation(f"agent binding does not exist: {agent_id}")
 
+        # The capability profile reaches the controller only on creation (the
+        # read-first rule above), so it is resolved per principal here — a
+        # repository-level property, read from the catalog when one is wired.
+        # The org leader has no repository and keeps the default tuple.
+        profile = None
+        if self._repository_catalog is not None and principal.repository_id is not None:
+            repository = await self._repository_catalog.get(principal.repository_id)
+            profile = repository.capability_profile if repository is not None else None
+
         # Keyed on the agent, not on the round: the same agent projected by a
         # second round, or by a retry under a fresh idempotency key, must be
         # the same controller side effect rather than a new one.
@@ -266,7 +282,9 @@ class ProjectRuntimeProjection:
                     name=name,
                     model=self._model,
                     runtime=self._worker_runtime,
-                    skills=_SKILLS[principal.role],
+                    skills=agentteams_skills(
+                        principal.role, _SKILLS[principal.role], profile=profile
+                    ),
                     state=DesiredRuntimeState.RUNNING,
                 ),
                 self._worker_task_control_url,

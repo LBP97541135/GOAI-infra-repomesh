@@ -15,6 +15,25 @@ class CapabilityAccess(StrEnum):
     EXECUTION = "execution"
 
 
+#: The team capability profile every repository team assembles under unless an
+#: operator has named another one. Published here because other modules store
+#: the profile name (the repository catalog) and must validate it against the
+#: producer's list rather than their own copy of it.
+DEFAULT_TEAM_PROFILE = "default"
+
+#: Teams whose governance repository is the organization's test-asset repository.
+#: Assembles `cross-repo-test` onto the team leader and `integration-run` onto
+#: its Workers, on top of their role presets — never instead of them.
+CROSS_REPO_TEST_TEAM_PROFILE = "cross-repo-test-team"
+
+#: Every profile name this module can assemble. The catalog's update use case
+#: refuses names outside this set, so an unknown profile cannot sit in the
+#: database waiting to be discovered by a dispatch.
+TEAM_CAPABILITY_PROFILES = frozenset(
+    {DEFAULT_TEAM_PROFILE, CROSS_REPO_TEST_TEAM_PROFILE}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilitySource:
     repository: str

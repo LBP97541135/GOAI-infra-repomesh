@@ -9,6 +9,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.capability_management import (
+    CROSS_REPO_TEST_TEAM_PROFILE,
     AgentCapabilityNotFound,
     PresetCapabilityAssembler,
     ResolveAgentCapabilities,
@@ -29,12 +30,16 @@ def principal(role: AgentRole) -> AgentPrincipalView:
     )
 
 
+def skill_ids(bundle) -> set[str]:
+    return {capability.id for capability in bundle.skills}
+
+
 @pytest.mark.parametrize(
     ("role", "skill_count", "mcp_count"),
     (
         (AgentRole.ORGANIZATION_LEADER, 3, 1),
         (AgentRole.REPOSITORY_LEADER, 6, 2),
-        (AgentRole.WORKER, 3, 2),
+        (AgentRole.WORKER, 4, 2),
     ),
 )
 def test_default_role_presets(role, skill_count, mcp_count) -> None:
@@ -44,6 +49,56 @@ def test_default_role_presets(role, skill_count, mcp_count) -> None:
     assert len(bundle.mcp_servers) == mcp_count
     assert all(role in capability.allowed_roles for capability in bundle.skills)
     assert all(role in capability.allowed_roles for capability in bundle.mcp_servers)
+
+
+def test_every_worker_carries_the_tdd_skill() -> None:
+    """The superpowers equivalent: mounting is universal, not task-negotiated."""
+
+    bundle = PresetCapabilityAssembler().assemble(principal(AgentRole.WORKER))
+
+    assert "tdd" in skill_ids(bundle)
+
+
+def test_cross_repo_profile_adds_team_skills_on_top_of_role_presets() -> None:
+    leader = PresetCapabilityAssembler().assemble(
+        principal(AgentRole.REPOSITORY_LEADER), profile=CROSS_REPO_TEST_TEAM_PROFILE
+    )
+    worker = PresetCapabilityAssembler().assemble(
+        principal(AgentRole.WORKER), profile=CROSS_REPO_TEST_TEAM_PROFILE
+    )
+    untouched = PresetCapabilityAssembler().assemble(
+        principal(AgentRole.ORGANIZATION_LEADER), profile=CROSS_REPO_TEST_TEAM_PROFILE
+    )
+
+    # Additive: the specialised team keeps every role preset and gains its own.
+    assert "cross-repo-test" in skill_ids(leader)
+    assert skill_ids(leader) >= {
+        "repository-spec-authoring",
+        "task-decomposition",
+        "code-review",
+        "test-review",
+        "worker-dispatch",
+        "worker-result-evaluation",
+    }
+    assert "integration-run" in skill_ids(worker)
+    assert "tdd" in skill_ids(worker)
+    # The profile names no skills for the organization leader, who keeps hers.
+    assert "cross-repo-test" not in skill_ids(untouched)
+
+
+def test_business_team_under_default_profile_gets_no_test_team_skills() -> None:
+    leader = PresetCapabilityAssembler().assemble(principal(AgentRole.REPOSITORY_LEADER))
+    worker = PresetCapabilityAssembler().assemble(principal(AgentRole.WORKER))
+
+    assert "cross-repo-test" not in skill_ids(leader)
+    assert "integration-run" not in skill_ids(worker)
+
+
+def test_unknown_profile_is_refused_rather_than_silently_ignored() -> None:
+    with pytest.raises(ValueError, match="unknown team capability profile"):
+        PresetCapabilityAssembler().assemble(
+            principal(AgentRole.WORKER), profile="team-x"
+        )
 
 
 def test_web_worker_gets_isolated_playwright_capability() -> None:

@@ -21,6 +21,7 @@ from repomesh.api.human_control_models import (
     TopologyPolicyDraftPut,
 )
 from repomesh.integrations.agentteams import RegisterNativeAgentRequest
+from repomesh.integrations.agentteams.team_skills import agentteams_skills
 from repomesh.modules.agent_directory.application import CreateAgentRequest
 from repomesh.modules.agent_directory.contracts import AgentDirectoryError, AgentRole
 from repomesh.modules.agent_runtime.ports.agent_team import (
@@ -249,6 +250,21 @@ async def onboard_repository_agent_team(
     model = body.model or get_settings().deepseek_model
     registration = request.app.state.container.native_agent_registration()
     leader_name = f"{prefix}-leader"
+    # The repository's capability profile picks the controller-side skill
+    # lists at creation time (the controller compares them on every ensure, so
+    # they are chosen once, here). Set the profile before onboarding: a later
+    # change reaches only resources that do not exist yet.
+    profile = repository.capability_profile
+    leader_skills = agentteams_skills(
+        AgentRole.REPOSITORY_LEADER,
+        ("worker-management", "spec-authoring", "code-review"),
+        profile=profile,
+    )
+    worker_skills = agentteams_skills(
+        AgentRole.WORKER,
+        ("git-delegation", "task-execution", "code-self-test"),
+        profile=profile,
+    )
     try:
         leader = await registration.execute(
             RegisterNativeAgentRequest(
@@ -265,7 +281,7 @@ async def onboard_repository_agent_team(
                     model=model,
                     runtime=body.leader_runtime,
                     identity=f"Repository Leader for {repository.name}",
-                    skills=("worker-management", "spec-authoring", "code-review"),
+                    skills=leader_skills,
                 ),
             ),
             idempotency_key=f"{body.idempotency_key}:leader",
@@ -289,7 +305,7 @@ async def onboard_repository_agent_team(
                             model=model,
                             runtime=body.worker_runtime,
                             identity=f"Coding Worker for {repository.name}",
-                            skills=("git-delegation", "task-execution", "code-self-test"),
+                            skills=worker_skills,
                         ),
                     ),
                     idempotency_key=f"{body.idempotency_key}:worker:{index:02d}",

@@ -22,3 +22,10 @@ class RepositoryCatalog(Protocol):
         test_commands: tuple[str, ...],
         test_paths: tuple[str, ...],
     ) -> RepositoryProfile | None: ...
+
+    async def update_capability_profile(
+        self,
+        repository_id: UUID,
+        *,
+        capability_profile: str | None,
+    ) -> RepositoryProfile | None: ...

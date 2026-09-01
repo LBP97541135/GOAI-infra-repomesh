@@ -3,6 +3,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from repomesh.modules.capability_management.contracts import (
+    DEFAULT_TEAM_PROFILE,
+    TEAM_CAPABILITY_PROFILES,
+)
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.ports import RepositoryCatalog
 from repomesh.shared.domain import new_id
@@ -61,6 +65,40 @@ class UpdateRepositoryVerification:
             repository_id,
             test_commands=test_commands,
             test_paths=test_paths,
+        )
+        if updated is None:
+            raise RepositoryNotFound(f"Repository not found: {repository_id}")
+        return updated
+
+
+class UpdateRepositoryCapabilityProfile:
+    """Set or clear the team capability profile for one repository.
+
+    Full replacement, same retry-safety as ``UpdateRepositoryVerification``.
+    The name is validated against ``capability_management``'s published
+    profile set here — at the boundary — so an unknown profile cannot reach
+    storage and wait to fail a dispatch that tries to assemble under it.
+    """
+
+    def __init__(self, catalog: RepositoryCatalog) -> None:
+        self._catalog = catalog
+
+    async def execute(
+        self,
+        repository_id: UUID,
+        *,
+        capability_profile: str | None,
+    ) -> RepositoryProfile:
+        if capability_profile is not None:
+            # "default" is what storage already says with NULL; keeping one
+            # spelling of that state is cheaper than reconciling two forever.
+            if capability_profile == DEFAULT_TEAM_PROFILE:
+                raise ValueError("clear the capability profile with null instead of 'default'")
+            if capability_profile not in TEAM_CAPABILITY_PROFILES:
+                raise ValueError(f"unknown capability profile: {capability_profile}")
+        updated = await self._catalog.update_capability_profile(
+            repository_id,
+            capability_profile=capability_profile,
         )
         if updated is None:
             raise RepositoryNotFound(f"Repository not found: {repository_id}")

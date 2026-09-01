@@ -29,11 +29,12 @@ class ResolveAgentCapabilities:
         agent_id: UUID,
         *,
         task_features: frozenset[str] = frozenset(),
+        profile: str | None = None,
     ) -> AgentCapabilityBundle:
         principal = await self._directory.get_view(agent_id)
         if principal is None:
             raise AgentCapabilityNotFound(f"agent {agent_id} is not registered")
         if principal.status is not AgentPrincipalStatus.ACTIVE:
             raise AgentCapabilityNotFound(f"agent {agent_id} is disabled")
-        return self._assembler.assemble(principal, task_features=task_features)
+        return self._assembler.assemble(principal, task_features=task_features, profile=profile)
 

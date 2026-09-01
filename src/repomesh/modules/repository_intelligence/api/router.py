@@ -20,6 +20,7 @@ from repomesh.modules.repository_intelligence.application import (
     RepositoryDiscoveryService,
     RepositoryNotFound,
     ScanRegistration,
+    UpdateRepositoryCapabilityProfile,
     UpdateRepositoryVerification,
     identify_url_type,
     register_scanned_profiles,
@@ -78,6 +79,7 @@ from .models import (
     ReplanResponse,
     RepoScanRequest,
     RepoScanResult,
+    RepositoryCapabilityProfileUpdate,
     RepositoryCreate,
     RepositoryVerificationUpdate,
     RepositoryView,
@@ -374,6 +376,36 @@ async def update_repository_verification(
             test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
             test_paths=tuple(item.strip() for item in body.test_paths if item.strip()),
         )
+    except RepositoryNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@router.patch(
+    "/repositories/{repository_id}/capability-profile",
+    response_model=RepositoryView,
+    dependencies=[ACTION_TOKEN],
+)
+async def update_repository_capability_profile(
+    repository_id: UUID,
+    body: RepositoryCapabilityProfileUpdate,
+    catalog: CatalogDependency,
+) -> RepositoryProfile:
+    """Set the team capability profile this repository's agents assemble under.
+
+    Set it before onboarding the repository's team: capability bundles are
+    resolved at dispatch (so those follow a later change) but AgentTeams skill
+    lists are chosen when a worker resource is created, and a profile changed
+    afterwards reaches only resources that do not exist yet.
+    """
+
+    profile = body.capability_profile.strip() if body.capability_profile else None
+    try:
+        return await UpdateRepositoryCapabilityProfile(catalog).execute(
+            repository_id,
+            capability_profile=profile or None,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     except RepositoryNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
 

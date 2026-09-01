@@ -62,6 +62,17 @@ class RepositoryProfile:
     saying where its tests live cannot be a way to widen what a Worker may
     touch elsewhere.
     """
+    capability_profile: str | None = None
+    """The team capability profile this repository's team assembles under.
+
+    A repository-level fact rather than a project-topology one: the cross-repo
+    test team is an ordinary repository team whose governance repository *is*
+    the test-asset repository, so "this repository's agents carry the
+    cross-repo-test profile" is a property of the repository, not of whichever
+    project a round happens to run in. Stored as a plain string and validated
+    against ``capability_management``'s published profile names by the update
+    use case — the domain stays decoupled from the producer's registry.
+    """
     id: UUID = field(default_factory=new_id)
     profiled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 

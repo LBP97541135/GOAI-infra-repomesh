@@ -33,6 +33,7 @@ from .registration import (
     RegisterRepository,
     RepositoryNotFound,
     ScanRegistration,
+    UpdateRepositoryCapabilityProfile,
     UpdateRepositoryVerification,
     register_scanned_profiles,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "RequirementAnalysis",
     "RequirementAnalyzer",
     "ScanRegistration",
+    "UpdateRepositoryCapabilityProfile",
     "UpdateRepositoryVerification",
     "TaskNode",
     "TopoResult",

@@ -45,6 +45,18 @@ class RepositoryVerificationUpdate(BaseModel):
     test_paths: list[str] = Field(default_factory=list)
 
 
+class RepositoryCapabilityProfileUpdate(BaseModel):
+    """Set — or clear with ``null`` — a repository's team capability profile.
+
+    Whole replacement, so a retried request is free. Named profiles are
+    validated server-side against the set ``capability_management`` publishes;
+    ``"default"`` is refused in favour of clearing with ``null`` so the stored
+    state keeps one spelling per meaning.
+    """
+
+    capability_profile: str | None = Field(default=None, max_length=64)
+
+
 class IssueIntakeCreate(BaseModel):
     """Contract v0.3 §1.2. No title on purpose: it derives from
     requirement_text — accepting it would create a second source of truth.
@@ -188,6 +200,7 @@ class RepositoryView(BaseModel):
     languages: tuple[str, ...]
     test_commands: tuple[str, ...] = ()
     test_paths: tuple[str, ...] = ()
+    capability_profile: str | None = None
     auto_card: AutoCardView | None = None
 
 

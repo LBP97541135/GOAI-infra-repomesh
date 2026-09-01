@@ -46,5 +46,14 @@ async def test_postgres_repository_transaction_and_outbox() -> None:
             message.payload.get("url") == profile.url
             for message in await outbox.pending()
         )
+
+        profiled = await catalog.update_capability_profile(
+            profile.id, capability_profile="cross-repo-test-team"
+        )
+        assert profiled is not None
+        assert profiled.capability_profile == "cross-repo-test-team"
+        assert (await catalog.get(profile.id)).capability_profile == (
+            "cross-repo-test-team"
+        )
     finally:
         await database.dispose()

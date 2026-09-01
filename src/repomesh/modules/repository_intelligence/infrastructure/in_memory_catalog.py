@@ -40,3 +40,16 @@ class InMemoryRepositoryCatalog:
         )
         self._profiles[repository_id] = updated
         return updated
+
+    async def update_capability_profile(
+        self,
+        repository_id: UUID,
+        *,
+        capability_profile: str | None,
+    ) -> RepositoryProfile | None:
+        profile = self._profiles.get(repository_id)
+        if profile is None:
+            return None
+        updated = replace(profile, capability_profile=capability_profile)
+        self._profiles[repository_id] = updated
+        return updated
