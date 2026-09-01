@@ -40,6 +40,9 @@ from typing import Any
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import AgentPrincipalReader
+from repomesh.modules.capability_management.contracts import (
+    CROSS_REPO_TEST_TEAM_PROFILE,
+)
 from repomesh.modules.project.contracts import (
     ProjectTopologyProvisioner,
     ProjectTopologyReader,
@@ -439,16 +442,29 @@ class DiscoveryMaterializationService:
         if not repository_ids:
             # Every repository the plan names has left the catalog. The bridge
             # would report them all as skipped and start nothing; saying so
-            # here beats a 200 with an empty task list.
+            # here beats a 200 with an empty task list. Judged on the plan's
+            # own set, before any test repository is appended: a project whose
+            # only team would be the test team has no business work to assign,
+            # which is an error, not an org chart.
             raise DiscoveryNotMaterialisable(
                 "none of the plan's repositories are in the catalog "
                 f"({', '.join(repositories)}); nothing can be assigned"
             )
+        # Every repository carrying the cross-repo test-team profile gets its
+        # team in this project's topology alongside the plan's own — the
+        # supply-side switch (CONTEXT.md: 档案开关). ``not in`` keeps a plan
+        # that names the test repository itself from seating two teams on it.
+        test_repository_ids = tuple(
+            profile.id
+            for profile in profiles
+            if profile.capability_profile == CROSS_REPO_TEST_TEAM_PROFILE
+            and profile.id not in repository_ids
+        )
         return await self._provisioner.ensure(
             organization_id=organization_id,
             project_id=project_id,
             organization_leader_id=organization_leader_id,
-            repository_ids=repository_ids,
+            repository_ids=repository_ids + test_repository_ids,
             idempotency_key=prefix,
         )
 
