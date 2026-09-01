@@ -7,6 +7,13 @@ services:
     # platform api keeps it as a dependency under the platform profile.
     profiles: ["dev", "platform"]
     image: postgres:17-alpine
+    # Every service here carries restart: unless-stopped because a Docker
+    # engine restart otherwise leaves the whole dependency chain down with
+    # nothing to pull it back up — and depends_on/service_healthy only gates
+    # the `docker compose up` that created a container: a dependent stuck in
+    # Created never starts on its own, so after an engine crash re-run
+    # `docker compose --profile <profile> up -d` rather than waiting.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: repomesh
       POSTGRES_USER: repomesh
@@ -26,6 +33,7 @@ services:
 
   api:
     profiles: ["platform"]
+    restart: unless-stopped
     build:
       context: .
     environment:
@@ -117,6 +125,7 @@ services:
   console-postgres:
     profiles: ["console"]
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: repomesh
       POSTGRES_USER: repomesh
@@ -134,6 +143,7 @@ services:
 
   console-api:
     profiles: ["console"]
+    restart: unless-stopped
     build:
       context: .
     environment:
@@ -165,6 +175,7 @@ services:
 
   console-web:
     profiles: ["console"]
+    restart: unless-stopped
     build:
       context: ./frontend
       args:

@@ -28,7 +28,14 @@ function Get-RepoMeshEnvValue([string]$Name) {
 
 function New-SecureToken {
     $Bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($Bytes)
+    # Create()/GetBytes, not the static ::Fill — the latter is .NET Core only
+    # and this script must run under Windows PowerShell 5.1 (.NET Framework).
+    $Rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $Rng.GetBytes($Bytes)
+    } finally {
+        $Rng.Dispose()
+    }
     return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 
@@ -54,9 +61,12 @@ foreach ($Name in @(
     [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
     $PersistedSecrets[$Name] = $Value
 }
-$PersistedSecrets.GetEnumerator() | Sort-Object Name | ForEach-Object {
+$SecretLines = $PersistedSecrets.GetEnumerator() | Sort-Object Name | ForEach-Object {
     "$($_.Name)=$($_.Value)"
-} | Set-Content -Encoding utf8NoBOM $PlatformSecretFile
+}
+# WriteAllLines emits UTF-8 without BOM everywhere; `-Encoding utf8NoBOM` is a
+# PowerShell 7+ name that Windows PowerShell 5.1 rejects outright.
+[System.IO.File]::WriteAllLines($PlatformSecretFile, [string[]]$SecretLines)
 
 if ([string]::IsNullOrWhiteSpace($env:AGENTTEAMS_LLM_API_KEY)) {
     $env:AGENTTEAMS_LLM_API_KEY = Get-RepoMeshEnvValue "REPOMESH_MODEL_API_KEY"

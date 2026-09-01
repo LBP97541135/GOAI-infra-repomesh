@@ -134,6 +134,12 @@ On Linux:
 ./scripts/start-platform.sh --install-agentteams
 ~~~
 
+If the Docker engine restarts (or crashes) while a stack is up, re-run the
+`docker compose ... up -d` command for that stack rather than waiting: the
+containers restart themselves (`restart: unless-stopped`), but a dependent
+service still sitting in `Created` — created while its dependency was
+unhealthy — is only started by a new `up`, never on its own.
+
 The full platform uses one default OpenAI-compatible model connection for both RepoMesh planning
 and AgentTeams agents:
 
