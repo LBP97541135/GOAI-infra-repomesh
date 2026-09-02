@@ -316,6 +316,20 @@ class DriverExecutor:
                         f"test_command_failed: {failure.command} "
                         f"(exit code {failure.exit_code})"
                     )
+                elif not changed_files:
+                    # The verification phase may be the producer: a recipe that
+                    # only runs as a test command (module-test-team spec A.2)
+                    # writes its evidence after the collection above, and an
+                    # agent phase that changed nothing would otherwise report a
+                    # clean run with nothing to commit. Look once more -- only
+                    # when the agent phase left nothing, so an agent that did
+                    # change files keeps exactly its own set -- under the same
+                    # path rules the first collection was held to.
+                    changed_files = await _changed_files(workspace)
+                    violation = _changed_path_violation(changed_files, task.permissions)
+                    if violation is not None:
+                        status = RunnerResultStatus.FAILED
+                        summary = f"changed_path_denied: {violation}"
 
             if status is RunnerResultStatus.SUCCEEDED and changed_files:
                 commit_sha, commit_error = await _commit_changes(

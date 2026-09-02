@@ -264,6 +264,18 @@ plan 的改道条款与设计稿 §5.2 预案在此生效。本节是留痕：**
   本机干跑仍可用 `--verdict-exit` 取 0/1/2 做脚本化断言。
 - **TTL 清扫**：脚本开工第一步调用 `environments/sweep-itest.sh` 清同工作区根下的 `itest-*`
   残留；judge 仍是 24h 时间戳、新鲜不动。docker 类残留在 v1 不会产生（见 A.4）。
+- **证据收集时点（冻结；2026-09-01 W4 活体后用户裁决「取 R1」）**：W4 核出 runner 执行器在
+  agent 阶段之后、`test_commands` **之前**收集 `changed_files`（`executor.py::_collect_evidence`），
+  而 Bridge 给受限 codex 的 PATH 按设计（J-12）不含 python，配方只能在 test 阶段跑——证据落盘
+  晚于收集，runner 回「0 file(s) changed」，证据永远进不了候选分支（B1 第 3/4 轮实测）。裁决：
+  执行器在 `test_commands` 全部退出 0 之后**再收集一次**，**仅当 agent 阶段变更集为空时生效**
+  （agent 自己改了文件就只提交它自己的集合，不混入 test 阶段产物），第二次收集**同样过
+  allowed/denied 路径校验**，违规照判 `changed_path_denied` 且不提交；test_command 非零仍是
+  任务 FAILED 且不提交（与上条退出码约定一致：那是配方没跑完，不是轮次结论）。
+  被拒的替代：R2 放宽 Bridge 受限 PATH 加 python/git（J-12 安全设计变更，不属本线）；
+  R3 证据不入 git、回执只指工作区路径（违背 S-3 冻结）。落点：`src/repomesh_runner/executor.py`
+  + `tests/runner/test_executor.py::TestExecutionEvidence` 四条（test 阶段证据被收集并提交 /
+  第二次收集守路径规则 / agent 阶段有变更则不二次收集 / 非零退出不提交）。
 
 ### A.3 S-4 技能文档修订的对应调整
 
@@ -291,3 +303,12 @@ M7 已跑通的 **Bridge 轨**执行：测试团队的 worker 是经 `repomesh-a
 （单仓信封、脚本检出组合、脚本写证据、平台交付推候选分支）；Bridge runner 跑在宿主机上恰好
 有 Docker 只是巧合，**v1 不依赖它**，源组装型环境的局限（A.4）照旧。环境重建照
 `docs/development/room-native-bridge-handoff-20260829-wave3-m7.md` §7.6。
+
+**A.5 已知局限（2026-09-01 W4 活体 B/C 组后如实声明，未修）**：在此形态下 agent 阶段先于
+test 阶段，而受限 codex 的 PATH（J-12）跑不了配方，所以 A.2「轮次结论写在 … 任务回执摘要里」
+与 A.3 四步中的第 3/4 步（守候回执、上报指针）**没有执行者**：回执 `summary` 是 codex 的
+「python 未找到」，团队房 `[done] … tests passed` 只表示 test_command 退出 0。轮次结论只在
+`evidence/<run-id>/steps.json.overall`、`round.md` §4 与候选分支/PR 上（A.2 的入仓条文全部
+成立：B1 PASS / B2 FAIL / C1 BLOCKED 三轮证据都经交付推成候选分支并开 PR）。v2 候选：执行器把
+`test_commands` 输出尾行并入回执 `summary`，或平台叙事读取 `steps.json.overall`。验收标准
+执行记录表 AC-B2/AC-C1 对该子句标为未达（发现 8）。

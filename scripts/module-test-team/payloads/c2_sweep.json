@@ -1,8 +1,8 @@
 {
   "project_id": "21899c3e-989f-5173-b6b7-838c6ca8a492",
   "leader_agent_id": "22222222-0000-4000-8000-000000000002",
-  "idempotency_prefix": "w4-b1-green-5",
-  "requirement": "联调轮 B1（绿组合）：对报价多币种组合执行跨仓联调场景 multi-currency-joint，产出轮次证据。",
+  "idempotency_prefix": "w4-c2-sweep",
+  "requirement": "联调轮 C2（清扫双向）：绿组合再跑一轮，只看开工清扫对 itest-stale-c2（做旧>24h）与 itest-fresh-c2（新鲜）的处置。",
   "engineering_spec": "Integration round on the test-asset repository. The combination is frozen in the acceptance basis and must not be re-pinned by the team.",
   "contracts": [],
   "task_dag": [

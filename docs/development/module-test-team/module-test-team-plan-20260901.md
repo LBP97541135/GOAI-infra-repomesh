@@ -128,6 +128,16 @@ postgres。
 **W0a 之后的实际状态**：W0a 已执行（FAIL）；W1/W2/W0b/W3 完成；W3 配方已按 runner 形态
 改写并按「取 A」改版退出语义；W4 待活体（Bridge 形态）。
 
+> **2026-09-01 三次裁决（用户，W4 活体 B1 阻断后）**：B1 跑到证据落盘但进不了提交——runner
+> 执行器在 `test_commands` 之前收集 `changed_files`，而受限 codex 的 PATH 无 python，配方只能在
+> test 阶段跑。裁决**取 R1**：执行器在 test 阶段全部退出 0 之后再收集一次，仅当 agent 阶段变更集
+> 为空时生效，同样过 allowed/denied 校验（spec A.2「证据收集时点」；`executor.py` + 四条单测）。
+> 实施后 B1-5 证据入提交 `64f32539`；随后核出交付 push 403——E0b 细粒度 PAT 对资产仓只读，
+> W4 栈的交付 token 换为本机 gh CLI 的 OAuth token（仅 gitignored secrets，见交接 §3.2）。
+
+**W4 之后的实际状态**：R1 已落地；B1 全程闭环（候选分支 + PR）；B2/C1/C2 结果见验收标准
+执行记录表；spec 冻结条文未再改动。
+
 ---
 
 ## 完成定义
