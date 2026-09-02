@@ -166,6 +166,35 @@ class AlertEventsResponse(BaseModel):
     events: list[AlertEventOut]
 
 
+class OperationalReadinessOut(BaseModel):
+    name: str
+    state: str
+    detail: str
+
+
+class OperationalStatusResponse(BaseModel):
+    intake_paused: bool
+    writes_degraded: bool
+    checks: list[OperationalReadinessOut]
+
+
+class RetentionRunResponse(BaseModel):
+    usage_deleted: int
+    logs_deleted: int
+    trace_sessions_deleted: int
+
+
+class CorrelationSourceOut(BaseModel):
+    source: str
+    count: int
+    attribution: str
+
+
+class CorrelationResponse(BaseModel):
+    issue_id: UUID
+    sources: list[CorrelationSourceOut]
+
+
 class TraceSessionOut(BaseModel):
     """One parsed agent session (CoPaw), as shown on the trace sessions page."""
 

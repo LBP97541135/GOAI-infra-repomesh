@@ -138,6 +138,15 @@ async def get_change_set(change_set_id: UUID, request: Request) -> dict:
     return asdict(await _service(request).get(change_set_id))
 
 
+@router.get("/change-sets/{change_set_id}/conflicts")
+async def get_change_set_conflicts(change_set_id: UUID, request: Request) -> list[dict]:
+    _service(request)
+    cases = await request.app.state.container.delivery_conflict_case_store().list_for_change_set(
+        change_set_id
+    )
+    return [asdict(case) for case in cases]
+
+
 @router.get("/change-sets/{change_set_id}/repositories/{repository_id}/merge-gate")
 async def evaluate_merge_gate(change_set_id: UUID, repository_id: UUID, request: Request) -> dict:
     return asdict(await _service(request).evaluate_merge_gate(change_set_id, repository_id))

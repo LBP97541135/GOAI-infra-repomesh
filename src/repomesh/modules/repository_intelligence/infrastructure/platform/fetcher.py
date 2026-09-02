@@ -7,6 +7,7 @@ wired in the composition root or CLI.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -21,11 +22,19 @@ class UrlType(Enum):
 
 
 class Platform(Enum):
-    """Supported hosting platforms."""
+    """Hosting platforms, including the two we can talk to.
+
+    ``UNSUPPORTED`` names a well-known hosting service we do not implement
+    (so the caller can say so instead of trying and failing).  ``UNKNOWN``
+    covers everything else: a host that looks like git but is neither known
+    nor declared in configuration.
+    """
 
     GITLAB = "gitlab"
     GITHUB = "github"
     LOCAL = "local"
+    UNSUPPORTED = "unsupported"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,32 +109,103 @@ class PlatformFetcher(Protocol):
         """Return the text content of a file, or ``None`` if it does not exist."""
         ...
 
+    async def resolve_repo_name(self, url: str) -> str | None:
+        """Return the authoritative repository name from the platform.
+
+        Uses the platform's own metadata (``GET /repos/...`` / ``GET
+        /projects/...``), not the URL path.  ``None`` when the URL does not
+        name an existing repository.
+        """
+        ...
+
+    async def aclose(self) -> None:
+        """Release any pooled HTTP connections (idempotent).
+
+        A fetcher may hold one shared ``httpx.AsyncClient`` so an org scan
+        reuses TCP/TLS connections instead of paying a handshake per call.
+        Composition roots (CLI, API endpoints, background tasks) must call
+        this exactly once when the fetcher is no longer needed; callers
+        that never made a request are unaffected.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Platform detection helpers
 # ---------------------------------------------------------------------------
 
+#: Well-known hosting platforms we deliberately do not implement, mapped to a
+#: friendly label for error messages.  Everything else is UNKNOWN.
+_UNSUPPORTED_PLATFORM_HOSTS = {
+    "gitee.com": "Gitee",
+    "bitbucket.org": "Bitbucket",
+    "dev.azure.com": "Azure DevOps",
+    "codeberg.org": "Codeberg",
+    "sourceforge.net": "SourceForge",
+}
 
-def detect_platform(url: str) -> Platform:
+#: Platform names accepted in ``repository_scan_platforms`` configuration.
+_PLATFORM_NAMES = {
+    "gitlab": Platform.GITLAB,
+    "github": Platform.GITHUB,
+}
+
+
+def _host_of(url: str) -> str:
+    """Extract the lower-cased hostname from a git URL of any supported form."""
+
+    lower = url.lower().strip()
+    if lower.startswith("git@"):  # git@host:path
+        return lower[4:].split(":")[0].rstrip(".").lower()
+    from urllib.parse import urlsplit  # noqa: PLC0415
+
+    return (urlsplit(lower).hostname or "").rstrip(".").lower()
+
+
+def detect_platform(
+    url: str,
+    platform_map: Mapping[str, str] | None = None,
+) -> Platform:
     """Heuristically determine the platform from a URL string.
 
-    >>> detect_platform("https://gitlab.metaglobal.cn/orders/order-service")
+    Known hosts are decided by name; anything else falls back to the
+    ``platform_map`` supplied by the caller (e.g. from
+    ``REPOMESH_REPOSITORY_PLATFORMS`` configuration) and then to
+    ``UNKNOWN`` — never to a guess that a random host speaks GitLab.
+
+    >>> detect_platform("https://gitlab.example.com/orders/order-service")
     Platform.GITLAB
     >>> detect_platform("https://github.com/org/repo")
     Platform.GITHUB
+    >>> detect_platform("https://gitee.com/org/repo")
+    Platform.UNSUPPORTED
     >>> detect_platform("D:\\\\repos\\\\order-service")
     Platform.LOCAL
     """
 
     lower = url.lower().strip()
-    if lower.startswith(("http://", "https://", "git@", "ssh://")):
-        if "github.com" in lower:
-            return Platform.GITHUB
-        # Everything else with a git URL pattern is treated as GitLab
-        # (self-hosted instances like gitlab.metaglobal.cn).
+    if not lower.startswith(("http://", "https://", "git@", "ssh://")):
+        # Local path.
+        return Platform.LOCAL
+
+    host = _host_of(lower)
+    if host in _UNSUPPORTED_PLATFORM_HOSTS:
+        return Platform.UNSUPPORTED
+    if host == "github.com" or host.endswith(".github.com"):
+        return Platform.GITHUB
+    if host == "gitlab.com" or "gitlab" in host:
         return Platform.GITLAB
-    # Local path.
-    return Platform.LOCAL
+    if platform_map:
+        mapped = _PLATFORM_NAMES.get((platform_map.get(host) or "").lower())
+        if mapped is not None:
+            return mapped
+    return Platform.UNKNOWN
+
+
+def unsupported_platform_label(url: str) -> str:
+    """Friendly label for an unsupported platform host (for error messages)."""
+
+    return _UNSUPPORTED_PLATFORM_HOSTS.get(_host_of(url), _host_of(url))
 
 
 def make_fetcher(
@@ -150,4 +230,7 @@ def make_fetcher(
 
         return GitHubFetcher(token=github_token)
 
-    raise ValueError(f"No fetcher for platform: {platform}")
+    raise ValueError(
+        f"No fetcher for platform: {platform}. "
+        "Only GitHub and GitLab are supported."
+    )

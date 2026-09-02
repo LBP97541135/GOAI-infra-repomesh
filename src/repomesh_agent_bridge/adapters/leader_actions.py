@@ -46,6 +46,11 @@ from ..contracts import (
 )
 from ..ports import LeaderActionRefused, LeaderActionUnavailable
 
+# The three wire documents ``_document`` can read. One alias keeps the reader
+# callable's signature naming a single concept instead of a union at every
+# call site; annotations are stringized by ``from __future__ import annotations``.
+type Document = RepositoryAssignmentPackage | PlanReceipt | ReviewReceipt
+
 __all__ = [
     "ASSIGNMENT_PATH",
     "PLAN_PATH",
@@ -204,7 +209,7 @@ def _refusal(response: httpx.Response) -> tuple[str | None, str]:
     return code, message
 
 
-def _document[Document](
+def _document(
     response: httpx.Response,
     read: Callable[[object], Document],
     what: str,

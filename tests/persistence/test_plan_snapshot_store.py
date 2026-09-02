@@ -26,7 +26,9 @@ from repomesh.modules.repository_intelligence.contracts import (
     plan_to_graph,
 )
 from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (
+    PlanSnapshotAlreadyExists,
     PlanSnapshotStore,
+    PlanSnapshotVersionConflict,
     plan_graph_from_snapshot,
 )
 from repomesh.persistence import Database
@@ -57,6 +59,41 @@ async def database(tmp_path: object) -> Database:
     await instance.create_all_for_tests()
     yield instance
     await instance.dispose()
+
+
+@pytest.mark.asyncio
+async def test_link_execution_plan_consumes_draft_and_rejects_second_link(
+    database: Database,
+) -> None:
+    """Linking consumes the draft; a concurrent second link loses the
+    conditional UPDATE and surfaces as PlanSnapshotAlreadyExists."""
+    store = PlanSnapshotStore(database)
+    project_id = uuid4()
+    plan = _plan()
+    snapshot = await store.save(
+        project_id=project_id,
+        plan_version=1,
+        engineering_spec=plan.engineering_spec,
+        contracts=[asdict(c) for c in plan.contracts],
+        task_dag=[asdict(t) for t in plan.task_dag],
+        execution_batches=[list(b) for b in plan.execution_batches],
+        graph_edges=[e.model_dump(by_alias=True) for e in plan.graph.edges],
+    )
+    assert snapshot.execution_plan_id is None
+
+    plan_id = uuid4()
+    await store.link_execution_plan(snapshot.id, plan_id)
+
+    consumed = await store.get_by_version(project_id, 1)
+    assert consumed is not None
+    assert consumed.execution_plan_id == plan_id
+    assert await store.current_draft(project_id) is None
+
+    # The second caller racing the same draft gets a conflict, not a silent
+    # second consumption (the storage-level half of the concurrent
+    # materialization guard).
+    with pytest.raises(PlanSnapshotAlreadyExists):
+        await store.link_execution_plan(snapshot.id, uuid4())
 
 
 @pytest.mark.asyncio
@@ -227,3 +264,112 @@ async def test_diff_between_two_saved_snapshots(database: Database) -> None:
     assert [(e.from_, e.to) for e in diff.added_edges] == [("A", "C")]
     assert diff.added_repos == ["C"]
     assert diff.affected_repos == ["C"]
+
+
+@pytest.mark.asyncio
+async def test_set_discovery_writes_block_and_bumps_version(
+    database: Database,
+) -> None:
+    """A fresh draft starts at discovery_version 0; writing the block at the
+    version the caller read replaces it and advances the version — the next
+    step's trigger reads the bumped version."""
+    store = PlanSnapshotStore(database)
+    project_id = uuid4()
+    plan = _plan()
+    snapshot = await store.save(
+        project_id=project_id,
+        plan_version=1,
+        engineering_spec=plan.engineering_spec,
+        contracts=[asdict(c) for c in plan.contracts],
+        task_dag=[asdict(t) for t in plan.task_dag],
+        execution_batches=[list(b) for b in plan.execution_batches],
+        graph_edges=[e.model_dump(by_alias=True) for e in plan.graph.edges],
+        requirement_text="requirement",
+    )
+    assert snapshot.discovery_version == 0
+    assert snapshot.discovery is None
+
+    block = {"schema_version": 1, "analysis": {"ok": True}}
+    await store.set_discovery(snapshot.id, block, expected_version=0)
+
+    written = await store.get_by_version(project_id, 1)
+    assert written is not None
+    assert written.discovery == block
+    assert written.discovery_version == 1
+
+
+@pytest.mark.asyncio
+async def test_set_discovery_rejects_stale_version(
+    database: Database,
+) -> None:
+    """Two writers that both read version N cannot both land: the second
+    conditional UPDATE matches no row and refuses as a conflict instead of
+    silently overwriting the first writer's block (v0.4 §4 optimistic lock)."""
+    store = PlanSnapshotStore(database)
+    project_id = uuid4()
+    plan = _plan()
+    snapshot = await store.save(
+        project_id=project_id,
+        plan_version=1,
+        engineering_spec=plan.engineering_spec,
+        contracts=[asdict(c) for c in plan.contracts],
+        task_dag=[asdict(t) for t in plan.task_dag],
+        execution_batches=[list(b) for b in plan.execution_batches],
+        graph_edges=[e.model_dump(by_alias=True) for e in plan.graph.edges],
+        requirement_text="requirement",
+    )
+
+    await store.set_discovery(snapshot.id, {"schema_version": 1}, expected_version=0)
+
+    # A second writer that never saw the first write retries at version 0; its
+    # WHERE clause matches nothing and the write is refused, keeping the first
+    # writer's block intact.
+    with pytest.raises(PlanSnapshotVersionConflict):
+        await store.set_discovery(
+            snapshot.id, {"schema_version": 2}, expected_version=0
+        )
+
+    written = await store.get_by_version(project_id, 1)
+    assert written is not None
+    assert written.discovery == {"schema_version": 1}
+    assert written.discovery_version == 1
+
+
+@pytest.mark.asyncio
+async def test_set_discovery_reload_then_retry_succeeds(
+    database: Database,
+) -> None:
+    """The recovery path the 409 tells the caller to take: reload the draft,
+    read the new version, and the retry lands."""
+    store = PlanSnapshotStore(database)
+    project_id = uuid4()
+    plan = _plan()
+    snapshot = await store.save(
+        project_id=project_id,
+        plan_version=1,
+        engineering_spec=plan.engineering_spec,
+        contracts=[asdict(c) for c in plan.contracts],
+        task_dag=[asdict(t) for t in plan.task_dag],
+        execution_batches=[list(b) for b in plan.execution_batches],
+        graph_edges=[e.model_dump(by_alias=True) for e in plan.graph.edges],
+        requirement_text="requirement",
+    )
+
+    await store.set_discovery(snapshot.id, {"schema_version": 1}, expected_version=0)
+    with pytest.raises(PlanSnapshotVersionConflict):
+        await store.set_discovery(
+            snapshot.id, {"schema_version": 2}, expected_version=0
+        )
+
+    # The loser reloads, sees version 1, and its write goes through.
+    fresh = await store.get_by_version(project_id, 1)
+    assert fresh is not None
+    await store.set_discovery(
+        snapshot.id, {"schema_version": 2}, expected_version=fresh.discovery_version
+    )
+
+    written = await store.get_by_version(project_id, 1)
+    assert written is not None
+    assert written.discovery == {"schema_version": 2}
+    assert written.discovery_version == 2
+

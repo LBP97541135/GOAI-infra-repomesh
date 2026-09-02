@@ -6,6 +6,16 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipalRecord
+from repomesh.modules.agent_runtime.execution_reservation import (
+    WorkerExecutionReservationRecord,
+)
+from repomesh.modules.agent_runtime.recovery import WorkerRecoveryOperationRecord
+from repomesh.modules.capability_management.infrastructure import (
+    McpServerPolicyRecord,
+    SkillEvaluationRecord,
+    SkillSnapshotRecord,
+    SkillVersionRecord,
+)
 from repomesh.modules.collaboration.infrastructure import (
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
@@ -20,6 +30,7 @@ from repomesh.modules.context.infrastructure.models import (
     ContextObjectVersionRecord,
     ContextRelationRecord,
 )
+from repomesh.modules.delivery.conflicts import DeliveryConflictCaseRecord
 from repomesh.modules.delivery.infrastructure import (
     ChangeSetRecord,
     ChangeSetRepositoryRecord,
@@ -27,21 +38,42 @@ from repomesh.modules.delivery.infrastructure import (
     SCMObservationRecord,
     SCMPollCursorRecord,
 )
+from repomesh.modules.observability.infrastructure.models import (
+    AlertEventRecord,
+    AlertRuleRecord,
+    LLMUsageRecord,
+    LogEntryRecord,
+    OperationalResponseRecord,
+    TraceEventRecord,
+    TraceSessionRecord,
+)
+from repomesh.modules.platform_config.bootstrap_store import BootstrapOperationRecord
+from repomesh.modules.platform_config.store import PlatformCredentialRecord
 from repomesh.modules.project.infrastructure import (
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
     TopologyPolicyDraftRecord,
+)
+from repomesh.modules.recovery_management.infrastructure import (
+    RecoveryCaseRecord,
+    RecoveryDecisionRecord,
+    RecoveryOperationRecord,
 )
 from repomesh.modules.repository_intelligence.infrastructure.models import (
     HandoffDocRecord,
     PlanSnapshotRecord,
     RepositoryRecord,
 )
-from repomesh.modules.review_validation.infrastructure import ValidationSnapshotRecord
+from repomesh.modules.review_validation.infrastructure import (
+    DatabaseBranchValidationRecord,
+    ValidationSnapshotRecord,
+)
 from repomesh.modules.specification.infrastructure import (
     SpecificationRecord,
     SpecificationVersionRecord,
 )
+from repomesh.modules.task_orchestration.assignment import TaskAssignmentAttemptRecord
+from repomesh.modules.task_orchestration.dynamic_revision import ExecutionPlanRevisionRecord
 from repomesh.modules.task_orchestration.infrastructure import TaskRecord
 from repomesh.persistence.base import Base
 from repomesh.persistence.models import (
@@ -54,7 +86,20 @@ from repomesh.persistence.models import (
 from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
+    SkillVersionRecord,
+    SkillEvaluationRecord,
+    SkillSnapshotRecord,
+    McpServerPolicyRecord,
+    LLMUsageRecord,
+    AlertRuleRecord,
+    AlertEventRecord,
+    OperationalResponseRecord,
+    TraceSessionRecord,
+    TraceEventRecord,
+    LogEntryRecord,
     AgentPrincipalRecord,
+    WorkerExecutionReservationRecord,
+    WorkerRecoveryOperationRecord,
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
     ContextObjectRecord,
@@ -67,6 +112,7 @@ _REGISTERED_MODELS = (
     ContextAccessEventRecord,
     ChangeSetRecord,
     ChangeSetRepositoryRecord,
+    DeliveryConflictCaseRecord,
     ProjectAgentTopologyRecord,
     ProjectRepositoryTeamRecord,
     TopologyPolicyDraftRecord,
@@ -74,17 +120,25 @@ _REGISTERED_MODELS = (
     PlanSnapshotRecord,
     HandoffDocRecord,
     ValidationSnapshotRecord,
+    DatabaseBranchValidationRecord,
+    RecoveryCaseRecord,
+    RecoveryDecisionRecord,
+    RecoveryOperationRecord,
     SCMObservationRecord,
     SCMPollCursorRecord,
     SCMCommandRecord,
     SpecificationRecord,
     SpecificationVersionRecord,
     TaskRecord,
+    TaskAssignmentAttemptRecord,
+    ExecutionPlanRevisionRecord,
     StateEventRecord,
     AuditEventRecord,
     OutboxEventRecord,
     TraceLinkRecord,
     IdempotencyRecord,
+    PlatformCredentialRecord,
+    BootstrapOperationRecord,
 )
 
 config = context.config

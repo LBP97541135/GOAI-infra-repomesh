@@ -26,8 +26,11 @@ from repomesh.modules.agent_runtime.ports.coding_agent import CodingAgent
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
 from repomesh.modules.capability_management import (
     PresetCapabilityAssembler,
+    RegistryCapabilityAssembler,
     ResolveAgentCapabilities,
 )
+from repomesh.modules.capability_management.infrastructure import SkillRegistryService
+from repomesh.modules.capability_management.mcp_guard import McpCallGuard, McpPolicy
 from repomesh.modules.change_orchestration import PlanExecutionBridge, TaskSupersederGateway
 from repomesh.modules.collaboration.contracts import AuthorizedRoom, CollaborationGateway
 from repomesh.modules.collaboration.ports import (
@@ -49,6 +52,10 @@ from repomesh.modules.observability.infrastructure.trace_ingest import TraceStor
 from repomesh.modules.observability.infrastructure.trace_query import TraceQueryStore
 from repomesh.modules.observability.infrastructure.usage_query import UsageQueryStore
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
+from repomesh.modules.platform_config import (
+    PostgresBootstrapOperationStore,
+    PostgresPlatformCredentialStore,
+)
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTopologyReader,
@@ -67,6 +74,7 @@ from repomesh.modules.repository_intelligence.application.discovery import LLMCl
 from repomesh.modules.repository_intelligence.application.requirement_analysis import (
     RequirementAnalyzer,
 )
+from repomesh.modules.repository_intelligence.domain import RepositoryProfile
 from repomesh.modules.repository_intelligence.infrastructure.handoff_doc_store import (
     PostgresHandoffDocStore,
 )
@@ -385,6 +393,8 @@ class ApplicationContainer:
     scm_adapter: SCMAdapter | None = None
     scm_token_provider: Callable[[RepositoryRef], Awaitable[str]] | None = None
     project_checkpoint_service_instance: object | None = None
+    operational_gate_instance: object | None = None
+    operational_response_coordinator_instance: object | None = None
     _service_cache: dict[str, object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -393,11 +403,46 @@ class ApplicationContainer:
         return PresetCapabilityAssembler()
 
     @cached_service
+    def skill_registry_service(self) -> SkillRegistryService:
+        return SkillRegistryService(self.database)
+
+    @cached_service
+    def agent_capability_assembler(self) -> RegistryCapabilityAssembler:
+        return RegistryCapabilityAssembler(self.skill_registry_service())
+
+    @cached_service
+    def mcp_call_guard(self) -> "McpCallGuard":
+        registry = self.skill_registry_service()
+
+        async def policy_provider(server_id: str) -> "McpPolicy | None":
+            record = await registry.get_mcp_policy(server_id)
+            if record is None:
+                return None
+            return McpPolicy(
+                id=record.id,
+                timeout_seconds=record.timeout_seconds,
+                max_retries=record.max_retries,
+                retryable_only_reads=record.retryable_only_reads,
+                degraded_block_writes=record.degraded_block_writes,
+                required_task_features=tuple(record.required_task_features),
+            )
+
+        return McpCallGuard(policy_provider=policy_provider)
+
+    @cached_service
     def local_account_service(self):
         return LocalAccountService(
             PostgresLocalAccountStore(self.database),
             session_ttl_seconds=get_settings().local_session_ttl_seconds,
         )
+
+    @cached_service
+    def platform_credential_store(self) -> PostgresPlatformCredentialStore:
+        return PostgresPlatformCredentialStore(self.database)
+
+    @cached_service
+    def bootstrap_operation_store(self) -> PostgresBootstrapOperationStore:
+        return PostgresBootstrapOperationStore(self.database)
 
     def project_topology_creator(self):
         from repomesh.modules.project import CreateProjectAgentTopology
@@ -535,7 +580,7 @@ class ApplicationContainer:
         )
 
     def agent_capabilities(self) -> ResolveAgentCapabilities:
-        return ResolveAgentCapabilities(self.agent_directory, self.capability_assembler())
+        return ResolveAgentCapabilities(self.agent_directory, self.agent_capability_assembler())
 
     def native_agent_registration(self):
         from repomesh.integrations.agentteams import RegisterNativeAgent
@@ -671,10 +716,35 @@ class ApplicationContainer:
     async def start(self) -> None:
         for service in self.background_services:
             await service.start()
+        await self._seed_capability_registry()
+
+    async def _seed_capability_registry(self) -> None:
+        """Idempotent first-boot seed: preset skills as promoted 1.0.0 + MCP policies.
+
+        A seed failure must not keep the platform down — capability governance
+        degrades to "registry empty", and the next boot retries. That is why
+        this is logged, not raised.
+        """
+
+        from repomesh.modules.capability_management import seed_preset_skills
+        from repomesh.modules.capability_management.infrastructure import seed_mcp_policies
+
+        try:
+            await seed_preset_skills(self.skill_registry_service())
+            await seed_mcp_policies(self.skill_registry_service())
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "capability registry seeding failed; governance falls back to empty registry"
+            )
 
     async def is_agentteams_ready(self) -> bool:
         if not self.agentteams_required:
             return True
+        return await self.is_agentteams_available()
+
+    async def is_agentteams_available(self) -> bool:
         return self.agentteams_probe is not None and await self.agentteams_probe.health()
 
     @cached_service
@@ -712,21 +782,206 @@ class ApplicationContainer:
 
         if self.llm_client is None:
             return None
-        return RequirementAnalyzer(self.llm_client)
+        return RequirementAnalyzer(
+            self.llm_client,
+            sufficiency_threshold=get_settings().discovery_analysis_confidence_threshold,
+        )
+
+    async def repository_profiles(self) -> list[RepositoryProfile]:
+        """全量仓库档案（进程内缓存）。
+
+        M1：档案与依赖图是派生数据，源是 ``repositories.metadata_payload``。
+        进程内复用一份，避免每次分类/计划全量读库。档案变更后由
+        ``invalidate_world_graph`` 显式失效，进程重启后自然重建。
+        """
+        key = "repository_profiles"
+        if key not in self._service_cache:
+            self._service_cache[key] = await self.repository_catalog.list()
+        return cast(list[RepositoryProfile], self._service_cache[key])
+
+    async def world_graph(self) -> DependencyGraphService | None:
+        """世界层依赖图：进程内懒加载缓存（M1）。
+
+        图 = f(profiles)，纯派生数据：分类与计划共享同一份图，避免每次
+        调用全量重建。仓库扫描更新后调用 ``invalidate_world_graph`` 失效。
+        """
+        key = "world_graph"
+        if key not in self._service_cache:
+            profiles = await self.repository_profiles()
+            self._service_cache[key] = (
+                DependencyGraphService(profiles) if profiles else None
+            )
+        return cast(DependencyGraphService | None, self._service_cache[key])
+
+    def invalidate_world_graph(self) -> None:
+        """仓库档案变更后使世界层图缓存失效（下次访问时重建）。"""
+        self._service_cache.pop("repository_profiles", None)
+        self._service_cache.pop("world_graph", None)
 
     async def confirmation_service(self, llm_client: LLMClient) -> ConfirmationService:
-        profiles = await self.repository_catalog.list()
+        profiles = await self.repository_profiles()
         by_name = {p.name: p for p in profiles}
-        graph = DependencyGraphService(profiles) if profiles else None
+        graph = await self.world_graph()
         return ConfirmationService(llm_client, by_name, graph=graph)
 
     async def plan_integration_service(self, llm_client: LLMClient) -> PlanIntegrationService:
-        profiles = await self.repository_catalog.list()
-        graph = DependencyGraphService(profiles) if profiles else None
+        graph = await self.world_graph()
         return PlanIntegrationService(llm_client, graph=graph)
 
     def plan_snapshot_store(self) -> PlanSnapshotStore:
         return PlanSnapshotStore(self.database)
+
+    def plan_snapshot_requirement_reader(self):
+        """Adapt ``PlanSnapshotStore`` to the decision chain's §6.1 root port.
+
+        The chain root (E1) is the ``plan_version=1`` snapshot's requirement
+        text. Prefer that version — a later plan is a later round, not the
+        requirement this chain answered — and fall back to the latest snapshot
+        for projects whose versioning predates the convention.
+        """
+
+        from repomesh.modules.decision_chain.contracts import RequirementView
+        from repomesh.modules.repository_intelligence.infrastructure.plan_snapshot_store import (  # noqa: E501
+            PlanSnapshotStore,
+        )
+
+        snapshots: PlanSnapshotStore = self.plan_snapshot_store()
+
+        class _RequirementReader:
+            async def get_requirement(self, project_id):
+                snapshot = await snapshots.get_by_version(project_id, 1)
+                if snapshot is None:
+                    snapshot = await snapshots.get_latest(project_id)
+                if snapshot is None:
+                    return None
+                return RequirementView(
+                    text=snapshot.requirement_text or "",
+                    plan_version=snapshot.plan_version,
+                    snapshot_id=snapshot.id,
+                )
+
+        return _RequirementReader()
+
+    def decision_chain_store(self):
+        from repomesh.modules.decision_chain import PostgresDecisionChainStore
+
+        return PostgresDecisionChainStore(self.database)
+
+    def decision_chain_event_source(self):
+        from repomesh.modules.decision_chain import PostgresDecisionEventSource
+
+        return PostgresDecisionEventSource(self.database)
+
+    @cached_service
+    def decision_chain_projection_service(self):
+        from repomesh.modules.decision_chain import (
+            DecisionChainProjectionService,
+        )
+
+        return DecisionChainProjectionService(
+            self.decision_chain_store(),
+            self.decision_chain_event_source(),
+        )
+
+    @cached_service
+    def decision_chain_trace_service(self):
+        from repomesh.modules.decision_chain import DecisionChainTraceService
+
+        return DecisionChainTraceService(
+            self.decision_chain_store(),
+            self.plan_snapshot_requirement_reader(),
+        )
+
+    @cached_service
+    def decision_chain_similarity_service(self):
+        from repomesh.modules.decision_chain import DecisionChainSimilarityService
+
+        return DecisionChainSimilarityService(self.decision_chain_store())
+
+    def decision_history_from_chain(self):
+        """Port adapter: decision-chain similarity → ``DecisionHistoryPort``.
+
+        The composition root is the only place repository_intelligence and
+        decision_chain meet over this port (AGENTS: wire adapters here, after
+        port contract tests). The adapter reads only decision_chain contracts.
+        """
+
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            DecisionHistoryFromChainStore,
+        )
+
+        return DecisionHistoryFromChainStore(self.decision_chain_similarity_service())
+
+    def decision_embedding_store(self):
+        """L3 ``decision_embeddings`` store on the ``decision_chain`` schema."""
+
+        from repomesh.modules.decision_chain import (
+            PostgresDecisionEmbeddingStore,
+        )
+
+        return PostgresDecisionEmbeddingStore(self.database)
+
+    def embedding_client(self):
+        """L3 embedding service; ``None`` disables semantic retrieval.
+
+        Any OpenAI-compatible ``/embeddings`` endpoint works (OpenAI, local
+        Ollama, SiliconFlow); the provider is ``REPOMESH_EMBEDDING_BASE_URL``.
+        """
+
+        from repomesh.integrations.llm.embeddings import make_embedding_client
+
+        settings = get_settings()
+        return make_embedding_client(
+            settings.embedding_base_url,
+            api_key=settings.embedding_api_key,
+            model=settings.embedding_model,
+            timeout_seconds=settings.embedding_timeout_seconds,
+        )
+
+    @cached_service
+    def decision_chain_semantic_search_service(self):
+        """L3 read path: cosine Top-K over the project-collapsed vectors."""
+
+        from repomesh.modules.decision_chain import (
+            DecisionChainSemanticSearchService,
+        )
+
+        return DecisionChainSemanticSearchService(self.decision_embedding_store())
+
+    def decision_embedding_service(self):
+        """L3 batch refresher service (B8); ``None`` when no embedding endpoint.
+
+        The composition root builds it only when an embedding service is
+        configured — the refresher's only job is to call it.
+        """
+
+        if self.embedding_client() is None:
+            return None
+        from repomesh.modules.decision_chain import DecisionEmbeddingService
+
+        return DecisionEmbeddingService(
+            self.decision_embedding_store(),
+            self.embedding_client(),
+        )
+
+    def decision_history_vector(self):
+        """Hybrid ``DecisionHistoryPort``: semantic over structural scope.
+
+        ``None`` when semantic retrieval is not configured — the caller then
+        falls back to the structural adapter (fail-safe, Phase 4b rule).
+        """
+
+        if self.embedding_client() is None:
+            return None
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            DecisionHistoryVectorStore,
+        )
+
+        return DecisionHistoryVectorStore(
+            self.decision_chain_semantic_search_service(),
+            self.embedding_client(),
+            structural=self.decision_history_from_chain(),
+        )
 
     def usage_query_store(self) -> UsageQueryStore:
         return UsageQueryStore(self.database)
@@ -736,11 +991,56 @@ class ApplicationContainer:
         return AlertingStore(self.database)
 
     @cached_service
+    def operational_gate(self):
+        from repomesh.modules.observability.operations import InMemoryOperationalGate
+
+        if self.operational_gate_instance is not None:
+            return self.operational_gate_instance
+        return InMemoryOperationalGate()
+
+    @cached_service
+    def operational_response_coordinator(self):
+        from repomesh.modules.observability.operations import (
+            LoggingNotificationSink,
+            OperationalAction,
+            OperationalResponseCoordinator,
+            OperationalResponseStore,
+        )
+
+        if self.operational_response_coordinator_instance is not None:
+            return self.operational_response_coordinator_instance
+        return OperationalResponseCoordinator(
+            OperationalResponseStore(self.database),
+            LoggingNotificationSink(),
+            self.operational_gate(),
+            default_action=OperationalAction(get_settings().operations_alert_action),
+        )
+
+    @cached_service
+    def observability_retention_service(self):
+        from repomesh.modules.observability.operations import (
+            ObservabilityRetentionService,
+            RetentionPolicy,
+        )
+
+        settings = get_settings()
+        return ObservabilityRetentionService(
+            self.database,
+            RetentionPolicy(
+                usage_days=settings.operations_usage_retention_days,
+                log_days=settings.operations_log_retention_days,
+                trace_days=settings.operations_trace_retention_days,
+                batch_size=settings.operations_retention_batch_size,
+            ),
+        )
+
+    @cached_service
     def alerting_evaluator(self) -> AlertingEvaluator:
         return AlertingEvaluator(
             self.alerting_store(),
             self.usage_query_store(),
             trace_query=self.trace_query_store(),
+            transition_handler=self.operational_response_coordinator(),
         )
 
     @cached_service
@@ -757,7 +1057,12 @@ class ApplicationContainer:
 
     @cached_service
     def delivery_service(self):
-        from repomesh.modules.delivery import DeliveryService, PostgresChangeSetStore
+        from repomesh.modules.delivery import (
+            DeliveryService,
+            PostgresChangeSetStore,
+            PostgresDeliveryAuditLog,
+            PostgresDeliveryConflictCaseStore,
+        )
 
         validation = self.validation_snapshot_service()
         return DeliveryService(
@@ -768,6 +1073,8 @@ class ApplicationContainer:
             contract_catalog=(
                 self.contract_catalog() if get_settings().delivery_contract_gate else None
             ),
+            audit=PostgresDeliveryAuditLog(self.database),
+            conflict_cases=PostgresDeliveryConflictCaseStore(self.database),
         )
 
     @cached_service
@@ -1325,7 +1632,15 @@ class ApplicationContainer:
                 self.repository_catalog,
                 self.llm_client,
                 self.requirement_analyzer(),
+                keyword_score_cap=get_settings().discovery_keyword_score_cap,
+                confirmation_concurrency=get_settings().discovery_confirmation_concurrency,
+                confirmation_supplement_cap=get_settings().discovery_confirmation_supplement_cap,
             ),
+            default_candidate_limit=get_settings().discovery_candidate_limit,
+            # L3 hybrid adapter when semantic retrieval is configured, the
+            # Phase-4b structural adapter otherwise (fail-safe by design).
+            decision_history=self.decision_history_vector()
+            or self.decision_history_from_chain(),
         )
 
     def discovery_materialization_service(self):
@@ -1350,6 +1665,7 @@ class ApplicationContainer:
             self.project_topology_provisioner(),
             self.plan_execution_bridge(),
             self.topology_runtime_projector(),
+            self.external_member_readiness_gate(),
         )
 
     def issue_intake_service(self):
@@ -1415,11 +1731,28 @@ class ApplicationContainer:
     @cached_service
     def validation_snapshot_service(self):
         from repomesh.modules.review_validation import (
+            PostgresDatabaseBranchValidationStore,
             PostgresValidationSnapshotStore,
             ValidationSnapshotService,
         )
 
-        return ValidationSnapshotService(PostgresValidationSnapshotStore(self.database))
+        return ValidationSnapshotService(
+            PostgresValidationSnapshotStore(self.database),
+            PostgresDatabaseBranchValidationStore(self.database),
+        )
+
+    @cached_service
+    def database_branch_validation_service(self):
+        from repomesh.modules.review_validation import (
+            DatabaseBranchValidationService,
+            PostgresDatabaseBranchValidationStore,
+            UnavailableDatabaseBranchProvider,
+        )
+
+        return DatabaseBranchValidationService(
+            PostgresDatabaseBranchValidationStore(self.database),
+            UnavailableDatabaseBranchProvider(),
+        )
 
     def scm_webhook_event_store(self):
         return self.scm_observation_service()
@@ -1467,6 +1800,8 @@ class ApplicationContainer:
                 self.scm_adapter,
                 command_service=self.scm_command_service(),
                 base_branch=get_settings().delivery_base_branch,
+                conflict_cases=self.delivery_conflict_case_store(),
+                conflict_tasks=self.delivery_conflict_task_gateway(),
             ),
             auto_merge=get_settings().delivery_auto_enabled,
             on_observed=on_observed,
@@ -1488,7 +1823,29 @@ class ApplicationContainer:
             ),
             command_service=self.scm_command_service(),
             base_branch=get_settings().delivery_base_branch,
+            conflict_cases=self.delivery_conflict_case_store(),
+            conflict_tasks=self.delivery_conflict_task_gateway(),
         )
+
+    @cached_service
+    def delivery_conflict_case_store(self):
+        from repomesh.modules.delivery import PostgresDeliveryConflictCaseStore
+
+        return PostgresDeliveryConflictCaseStore(self.database)
+
+    @cached_service
+    def recovery_case_store(self):
+        from repomesh.modules.recovery_management import PostgresRecoveryCaseStore
+
+        return PostgresRecoveryCaseStore(self.database)
+
+    def delivery_conflict_task_gateway(self):
+        from repomesh.integrations.scm import DeliveryConflictTaskCreator
+
+        tasks = self.task_assignment_gateway()
+        if tasks is None:
+            return None
+        return DeliveryConflictTaskCreator(tasks, self.topology_reader())
 
     def ci_rework_task_gateway(self):
         """Route a failed delivery candidate back to the repository Worker.
@@ -1708,6 +2065,19 @@ class ApplicationContainer:
     @cached_service
     def execution_plan_observer(self) -> ObserveExecutionPlan:
         return ObserveExecutionPlan(self.execution_plan_store(), self.task_store)
+
+    @cached_service
+    def dynamic_plan_revision_service(self):
+        from repomesh.modules.task_orchestration import (
+            DynamicPlanRevisionService,
+            PostgresExecutionPlanRevisionStore,
+        )
+
+        return DynamicPlanRevisionService(
+            self.execution_plan_store(),
+            PostgresExecutionPlanRevisionStore(self.database),
+            self.topology_reader(),
+        )
 
     def handoff_doc_store(self) -> PostgresHandoffDocStore:
         return PostgresHandoffDocStore(self.database)
@@ -1932,14 +2302,63 @@ class ApplicationContainer:
             checkpoints=self.project_checkpoint_service(),
         )
 
+    @cached_service
+    def external_member_readiness_store(self):
+        """The readiness lease table, and there is exactly one of it.
+
+        Cached for the process lifetime because the store *is* the state: a
+        factory that built a new one per request would answer an empty table to
+        every reader, and a per-request lock guards nothing. Being a process
+        singleton is also the whole extent of its durability — the leases are
+        held in memory on purpose (see ``application/readiness``), so a restart
+        empties the table and the next round of renews refills it.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            ExternalMemberReadinessStore,
+        )
+
+        return ExternalMemberReadinessStore(
+            ttl_seconds=get_settings().external_readiness_ttl_seconds
+        )
+
+    def external_member_readiness_gate(self):
+        """The join materialize refuses on, and the console's precheck reads.
+
+        Three dependencies, one per layer of "is this member there": the
+        directory says who it is, ``external_worker_binding_control_plane`` says
+        whether RepoMesh runs its body, and the lease store says whether the
+        body RepoMesh does not run is running now. Only the last holds state,
+        and it is the cached one above; this is rebuilt per call because it has
+        none of its own.
+
+        The control plane is passed exactly as it comes, ``None`` included. A
+        deployment without one cannot tell an external member from a managed
+        one, and the gate is written to refuse rather than guess — substituting
+        anything here would be the composition root deciding a question the
+        module already answered.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            RequireExternalMembersReady,
+        )
+
+        return RequireExternalMembersReady(
+            self.agent_directory,
+            self.external_worker_binding_control_plane(),
+            self.external_member_readiness_store(),
+        )
+
     def runner_gateway(self):
         from repomesh.integrations.runner.gateway import RunnerControlGateway
+        from repomesh.modules.task_orchestration import PostgresTaskAssignmentStore
 
         advancer = self.execution_plan_advancer()
         return RunnerControlGateway(
             PostgresRunnerGatewayStore(self.database),
             self.task_store,
             advancer.on_task_terminal if advancer is not None else None,
+            PostgresTaskAssignmentStore(self.database),
         )
 
     def worker_task_dispatcher(self):
@@ -1963,8 +2382,12 @@ class ApplicationContainer:
             StartWorkerTaskExecution,
         )
         from repomesh.integrations.workspace import GitWorktreeManager
+        from repomesh.modules.agent_runtime import PostgresWorkerExecutionReservationStore
         from repomesh.modules.context.application import PublishContextBundle
-        from repomesh.modules.task_orchestration import TaskExecutionState
+        from repomesh.modules.task_orchestration import (
+            PostgresTaskAssignmentStore,
+            TaskExecutionState,
+        )
 
         states = TaskExecutionState(self.agent_directory, self.task_store)
         execution = StartWorkerTaskExecution(
@@ -1985,6 +2408,12 @@ class ApplicationContainer:
             states,
             self.task_report_gateway,
             dispatches=PostgresRunnerGatewayStore(self.database),
+            reservations=PostgresWorkerExecutionReservationStore(self.database),
+            reservation_lease_seconds=(
+                settings.worker_execution_reservation_lease_seconds
+            ),
+            reservation_wait_seconds=settings.worker_execution_reservation_wait_seconds,
+            assignments=PostgresTaskAssignmentStore(self.database),
         )
 
     async def close(self) -> None:

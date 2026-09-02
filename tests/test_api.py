@@ -36,6 +36,21 @@ def test_first_run_setup_status_and_coding_agent_probe(
             "repositories": 0,
         }
         assert "administrator" in status.json()["next_actions"]
+        dependencies = {item["id"]: item for item in status.json()["dependencies"]}
+        assert dependencies["database"] == {
+            "id": "database",
+            "state": "ready",
+            "owner": "system",
+            "remediation": "automatic",
+            "required": True,
+            "message": "managed by the RepoMesh product launcher",
+        }
+        assert dependencies["agentteams"]["state"] == "missing"
+        assert dependencies["model"]["owner"] == "user"
+        assert dependencies["model"]["state"] in {"ready", "waiting_for_user"}
+        assert dependencies["github_app"]["state"] in {"ready", "optional"}
+        assert dependencies["repositories"]["state"] == "pending_onboarding"
+        assert dependencies["repositories"]["required"] is False
 
         probes = client.get("/api/v1/setup/coding-agents")
         assert probes.status_code == 200
@@ -716,6 +731,9 @@ def test_worker_mcp_direct_mode_is_forbidden_in_production(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:
     monkeypatch.setenv("REPOMESH_ENVIRONMENT", "production")
+    # The deployment guard rejects the public default token before the app
+    # starts, so the fixture must provide a real one to reach the 503 path.
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "test-non-default-token")
     monkeypatch.setenv("REPOMESH_DIRECT_WORKER_MCP_ENABLED", "true")
     get_settings.cache_clear()
     try:
@@ -780,9 +798,10 @@ def test_org_scan_refuses_hosts_outside_the_allowlist(
 ) -> None:
     """A host in the request body used to become an outbound request.
 
-    Anything that is not github.com is treated as a self-hosted GitLab and the
-    fetcher derives its API base from the submitted URL, so the body chose who
-    this server talked to. 400 means the refusal happened before any egress.
+    The fetcher derives its API base from the submitted URL, so the body chose
+    who this server talked to. Hosts that are neither a known platform nor
+    declared are refused before any egress; 400 means the refusal happened
+    before any request left this process.
     """
 
     monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
@@ -798,14 +817,130 @@ def test_org_scan_refuses_hosts_outside_the_allowlist(
             internal = client.post(
                 "/api/v1/repositories/scan-org",
                 headers=headers,
-                json={"org_url": "https://gitlab.internal.example/acme"},
+                json={"org_url": "https://code.internal.example/acme"},
             )
     finally:
         get_settings.cache_clear()
 
     assert metadata.status_code == 400
     assert internal.status_code == 400
-    assert "allowlist" in internal.json()["detail"]
+    assert "REPOMESH_REPOSITORY_PLATFORMS" in internal.json()["detail"]
+
+
+def test_known_platform_hosts_scan_without_an_allowlist_entry(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """GitHub and self-hosted GitLab hosts are reachable by default.
+
+    The allowlist exists to bound SSRF, not to re-gate platform support:
+    github.com, *.github.com, gitlab.com and any host whose name contains
+    "gitlab" reach the scan stage with an empty allowlist, while an unnamed
+    custom domain is still refused before any egress.
+    """
+
+    from repomesh.modules.repository_intelligence.application import scan_remote
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "")
+    get_settings.cache_clear()
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scan_remote, "scan_org", _explode)
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            gitlab = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://gitlab.example.com/orders"},
+            )
+            github = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://github.com/acme"},
+            )
+            custom = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://code.internal.example/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    # The known platforms passed the gate and reached the (mocked) scan,
+    # which failed → 502. The unnamed custom domain never left the process.
+    assert gitlab.status_code == 502
+    assert github.status_code == 502
+    assert custom.status_code == 400
+    assert "REPOMESH_REPOSITORY_PLATFORMS" in custom.json()["detail"]
+
+
+def test_register_repository_refuses_undeclared_hosts(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """The manual registration endpoint keeps the strict allowlist.
+
+    It takes a URL the caller typed by hand and persists the row; that row is
+    later cloned out-of-process (git_worktree), so a host off the operator's
+    allowlist here would become an unvetted outbound request on the first
+    dispatch. The scan endpoints gate the same way earlier, via platform
+    recognition; this endpoint has no platform detection to lean on.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            response = client.post(
+                "/api/v1/repositories",
+                headers=headers,
+                json={"name": "x", "url": "https://code.internal.example/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert response.status_code == 400
+    assert "allowlist" in response.json()["detail"]
+
+
+def test_scan_refuses_unsupported_and_undeclared_platforms(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Known-but-unimplemented hosts are refused by name; mystery hosts are refused outright.
+
+    Before this change every non-github.com git URL was treated as GitLab, so
+    ``https://gitee.com/...`` would have become an outbound request to Gitee's
+    API. Both refusals happen before any egress and before the allowlist, so
+    an operator can extend ``REPOMESH_REPOSITORY_PLATFORMS`` without touching
+    the allowlist.
+    """
+
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
+    get_settings.cache_clear()
+    headers = {"Authorization": "Bearer internal-secret"}
+    try:
+        with TestClient(create_app(application_container)) as client:
+            unsupported = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://gitee.com/acme"},
+            )
+            unknown = client.post(
+                "/api/v1/repositories/scan-org",
+                headers=headers,
+                json={"org_url": "https://git.example.internal/acme"},
+            )
+    finally:
+        get_settings.cache_clear()
+
+    assert unsupported.status_code == 400
+    assert "Gitee" in unsupported.json()["detail"]
+    assert unknown.status_code == 400
+    assert "REPOMESH_REPOSITORY_PLATFORMS" in unknown.json()["detail"]
 
 
 def test_org_scan_failures_do_not_echo_the_underlying_error(
@@ -881,6 +1016,25 @@ def test_url_type_endpoint_is_the_console_badge_source_of_truth(
     }
 
 
+async def _stub_require_single_repo_url(url: str, fetcher: object) -> None:
+    """Offline stand-in for the online single-repo verdict in API tests.
+
+    The real ``require_single_repo_url`` asks the platform's ``identify``
+    (``GET /repos/...``), which is a real network call a unit test must not
+    make. This keeps the endpoint's refusal path intact — the 400 a scan-repo
+    call gets for a group URL — without egress. The online verdict itself is
+    covered at the fetcher level.
+    """
+
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from fastapi import HTTPException  # noqa: PLC0415
+
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    if len(segments) < 2:
+        raise HTTPException(400, "URL must point at a single repository, not a group")
+
+
 def test_single_repo_scan_registers_the_repository_from_its_url(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:
@@ -891,11 +1045,15 @@ def test_single_repo_scan_registers_the_repository_from_its_url(
     test asserts the endpoint's contract, not GitHub's.
     """
 
+    from repomesh.modules.repository_intelligence.api import router as repo_router
     from repomesh.modules.repository_intelligence.application import scan_remote
     from repomesh.modules.repository_intelligence.domain import AutoCard, RepositoryProfile
 
     monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    monkeypatch.setattr(
+        repo_router, "require_single_repo_url", _stub_require_single_repo_url
+    )
     get_settings.cache_clear()
 
     async def _fake_scan(url: str, fetcher: object) -> RepositoryProfile:
@@ -951,8 +1109,13 @@ def test_single_repo_scan_refuses_a_group_url_and_hosts_off_the_allowlist(
     with; the internal host by the SSRF allowlist that scan-org already had.
     """
 
+    from repomesh.modules.repository_intelligence.api import router as repo_router
+
     monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    monkeypatch.setattr(
+        repo_router, "require_single_repo_url", _stub_require_single_repo_url
+    )
     get_settings.cache_clear()
     headers = {"Authorization": "Bearer internal-secret"}
     try:
@@ -965,7 +1128,7 @@ def test_single_repo_scan_refuses_a_group_url_and_hosts_off_the_allowlist(
             internal = client.post(
                 "/api/v1/repositories/scan-repo",
                 headers=headers,
-                json={"repo_url": "https://gitlab.internal.example/acme/orders"},
+                json={"repo_url": "https://code.internal.example/acme/orders"},
             )
             metadata = client.post(
                 "/api/v1/repositories/scan-repo",
@@ -978,7 +1141,7 @@ def test_single_repo_scan_refuses_a_group_url_and_hosts_off_the_allowlist(
     assert group.status_code == 400
     assert "single repository" in group.json()["detail"]
     assert internal.status_code == 400
-    assert "allowlist" in internal.json()["detail"]
+    assert "REPOMESH_REPOSITORY_PLATFORMS" in internal.json()["detail"]
     assert metadata.status_code == 400
 
 
@@ -987,10 +1150,14 @@ def test_single_repo_scan_failures_do_not_echo_the_underlying_error(
 ) -> None:
     """Same silence as scan-org: the caller does not learn what we reached."""
 
+    from repomesh.modules.repository_intelligence.api import router as repo_router
     from repomesh.modules.repository_intelligence.application import scan_remote
 
     monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     monkeypatch.setenv("REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS", "github.com")
+    monkeypatch.setattr(
+        repo_router, "require_single_repo_url", _stub_require_single_repo_url
+    )
     get_settings.cache_clear()
 
     async def _explode(*args: object, **kwargs: object) -> None:

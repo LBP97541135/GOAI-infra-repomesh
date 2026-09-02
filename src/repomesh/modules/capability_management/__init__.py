@@ -1,3 +1,9 @@
+from .application import (
+    AgentCapabilityNotFound,
+    RegistryCapabilityAssembler,
+    ResolveAgentCapabilities,
+    seed_preset_skills,
+)
 from .contracts import (
     CROSS_REPO_TEST_TEAM_PROFILE,
     DEFAULT_TEAM_PROFILE,
@@ -20,7 +26,8 @@ __all__ = [
     "CROSS_REPO_TEST_TEAM_PROFILE",
     "DEFAULT_TEAM_PROFILE",
     "PresetCapabilityAssembler",
+    "RegistryCapabilityAssembler",
     "ResolveAgentCapabilities",
+    "seed_preset_skills",
     "TEAM_CAPABILITY_PROFILES",
 ]
-from .application import AgentCapabilityNotFound, ResolveAgentCapabilities

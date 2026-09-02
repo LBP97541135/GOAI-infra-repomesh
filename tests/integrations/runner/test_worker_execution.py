@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentPrincipalView,
     AgentRole,
 )
+from repomesh.modules.agent_runtime import PostgresWorkerExecutionReservationStore
 from repomesh.modules.agent_runtime.contracts import ActiveWorkerDispatch
 from repomesh.modules.agent_runtime.runner_store import (
     ACTIVE_DISPATCH_STATUSES,
@@ -369,6 +371,29 @@ async def test_repeated_start_reuses_the_in_flight_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_start_reserves_before_preparing_resources(tmp_path: Path) -> None:
+    harness = assigned_task_harness(tmp_path)
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path / 'concurrent-start.db'}",
+        schema_translate_map={schema: None for schema in ALL_SCHEMAS},
+    )
+    await database.create_all_for_tests()
+    harness.service._reservations = PostgresWorkerExecutionReservationStore(database)
+    harness.service._reservation_owner = "api-a"
+    try:
+        first, second = await asyncio.gather(
+            harness.service.execute(harness.command()),
+            harness.service.execute(harness.command()),
+        )
+        assert first.task.run_id == second.task.run_id
+        assert len(harness.execution.commands) == 1
+        assert harness.workspaces.prepared == 1
+        assert len(harness.bundles.published) == 1
+    finally:
+        await database.dispose()
+
+
+@pytest.mark.asyncio
 async def test_start_after_a_terminal_dispatch_creates_a_new_run(tmp_path: Path) -> None:
     harness = assigned_task_harness(tmp_path)
     first = await harness.service.execute(harness.command())
@@ -423,6 +448,52 @@ async def test_active_dispatch_query_ignores_terminal_runs(tmp_path: Path) -> No
             runner_task.task_id, worker_agent_id=package.worker_agent_id
         )
     ) is None
+    await database.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runner_terminal_event_releases_execution_reservation(tmp_path: Path) -> None:
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path / 'terminal-reservation.db'}",
+        schema_translate_map={schema: None for schema in ALL_SCHEMAS},
+    )
+    await database.create_all_for_tests()
+    store = PostgresRunnerGatewayStore(database)
+    reservations = PostgresWorkerExecutionReservationStore(database)
+    projection, _, _ = scenario(tmp_path)
+    original = RunnerTaskProjector().project(projection)
+    reserved = await reservations.reserve(
+        organization_id=original.organization_id,
+        project_id=original.project_id,
+        repository_id=original.repository.repository_id,
+        task_id=original.task_id,
+        worker_agent_id=original.worker_agent_id or uuid4(),
+        lease_owner="api-a",
+        lease_seconds=60,
+    )
+    runner_task = replace(original, run_id=reserved.reservation.run_id)
+    await store.enqueue(runner_task.to_wire())
+    await reservations.bind_payload(
+        reserved.reservation.id,
+        runner_task.to_wire(),
+        lease_owner="api-a",
+        fencing_version=reserved.reservation.version,
+    )
+
+    assert await store.record_event(_completed_event(runner_task)) is True
+    assert await reservations.get_active(runner_task.task_id) is None
+
+    next_attempt = await reservations.reserve(
+        organization_id=runner_task.organization_id,
+        project_id=runner_task.project_id,
+        repository_id=runner_task.repository.repository_id,
+        task_id=runner_task.task_id,
+        worker_agent_id=runner_task.worker_agent_id or uuid4(),
+        lease_owner="api-b",
+        lease_seconds=60,
+    )
+    assert next_attempt.created is True
+    assert next_attempt.reservation.attempt == 2
     await database.dispose()
 
 
@@ -522,3 +593,4 @@ async def test_a_grant_for_a_repository_that_declared_no_test_paths_is_unchanged
     await harness.service.execute(harness.command())
 
     assert harness.bundles.published[0].allowed_paths == ("src/**", "tests/**")
+

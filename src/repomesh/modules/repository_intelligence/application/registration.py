@@ -130,9 +130,12 @@ async def register_scanned_profiles(
 
     A per-repo registration failure is counted, not raised: one repo that
     cannot be written must not discard the other thirty-nine that could. The
-    reason goes to the log, not to the caller, and not into the count's name —
-    ``failed`` here means "we could not register it", which is a different
-    thing from "we could not scan it".
+    reason goes to the log, not to the caller. Profiles whose scan itself
+    failed (``scan_status="failed"``) are never registered — a card that
+    says "we could not read this repository" must not enter the catalog as
+    if it were a repository — and count toward ``failed`` alongside
+    write-failures. ``failed`` therefore means "did not make it into the
+    catalog", whatever the reason.
     """
 
     existing = {profile.name for profile in await catalog.list()}
@@ -142,6 +145,12 @@ async def register_scanned_profiles(
     failed = 0
 
     for profile in profiles:
+        if profile.scan_status == "failed":
+            _logger.warning(
+                "skipping registration of %s: scan failed", profile.name
+            )
+            failed += 1
+            continue
         if profile.name in existing:
             skipped += 1
             continue

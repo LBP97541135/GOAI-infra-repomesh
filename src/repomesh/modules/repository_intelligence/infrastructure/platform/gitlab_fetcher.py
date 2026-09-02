@@ -14,6 +14,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from ._http import get_with_retry
 from .fetcher import FileEntry, PlatformFetcher, RepoInfo, UrlType
 
 _logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ _DEP_FILE_NAMES = {
 class GitLabProjectRef:
     """Parsed GitLab project reference extracted from a URL."""
 
-    base_url: str       # e.g. https://gitlab.metaglobal.cn
+    base_url: str       # e.g. https://gitlab.example.com
     project_path: str   # e.g. orders/order-service (URL-encoded for API)
     raw_path: str       # e.g. orders/order-service (human-readable)
     project_id: int | None = None  # numeric ID from API, filled lazily
@@ -51,6 +52,8 @@ class GitLabFetcher(PlatformFetcher):
         # Base URL is inferred per-request from the repo URL, so ``base_url``
         # is only used as a fallback for token-only initialisation.
         self._default_base_url = base_url.rstrip("/")
+        # One shared HTTP client per fetcher, created lazily on first use.
+        self._client: httpx.AsyncClient | None = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -60,12 +63,34 @@ class GitLabFetcher(PlatformFetcher):
             headers["PRIVATE-TOKEN"] = self._token
         return headers
 
+    async def _get_client(self) -> httpx.AsyncClient:
+        """The one shared client for this fetcher, created on first use.
+
+        An org scan drives hundreds of API calls through one fetcher, and
+        each ``httpx.AsyncClient`` owns a connection pool — creating one per
+        call would pay a fresh TLS+TCP handshake every time. The client is
+        created lazily (never in ``__init__``) because fetchers are built
+        synchronously in the CLI/FastAPI composition root, with no event
+        loop running yet. Concurrent first use is race-free: the check and
+        the assignment happen in one event-loop step with no ``await``
+        between them.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=30.0)
+        return self._client
+
+    async def aclose(self) -> None:
+        """Release the shared client's connection pool (idempotent)."""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
     @staticmethod
     def _parse_url(url: str) -> GitLabProjectRef:
         """Extract base_url and project path from a GitLab URL.
 
-        ``https://gitlab.metaglobal.cn/orders/order-service``
-        → base_url=``https://gitlab.metaglobal.cn``
+        ``https://gitlab.example.com/orders/order-service``
+        → base_url=``https://gitlab.example.com``
           project_path=``orders%2Forder-service``
           raw_path=``orders/order-service``
         """
@@ -92,7 +117,9 @@ class GitLabFetcher(PlatformFetcher):
         *,
         params: dict[str, Any] | None = None,
     ) -> Any:
-        response = await client.get(url, params=params, headers=self._headers())
+        response = await get_with_retry(
+            client, url, params=params, headers=self._headers()
+        )
         response.raise_for_status()
         return response.json()
 
@@ -130,63 +157,74 @@ class GitLabFetcher(PlatformFetcher):
 
     async def identify(self, url: str) -> UrlType:
         ref = self._parse_url(url)
-        async with httpx.AsyncClient(timeout=15) as client:
-            # Try project first.
-            project = await self._get_project_info(client, ref)
-            if project is not None:
-                return UrlType.SINGLE_REPO
+        client = await self._get_client()
+        # Try project first.
+        project = await self._get_project_info(client, ref)
+        if project is not None:
+            return UrlType.SINGLE_REPO
 
-            # Try group.
-            group = await self._get_group_info(client, ref)
-            if group is not None:
-                return UrlType.GROUP
+        # Try group.
+        group = await self._get_group_info(client, ref)
+        if group is not None:
+            return UrlType.GROUP
 
         return UrlType.UNKNOWN
+
+    # ------------------------------------------------------------------ resolve name
+
+    async def resolve_repo_name(self, url: str) -> str | None:
+        ref = self._parse_url(url)
+        client = await self._get_client()
+        project = await self._get_project_info(client, ref)
+        if project is None:
+            return None
+        name = project.get("name")
+        return str(name) if name else None
 
     # ------------------------------------------------------------------ parent group
 
     async def fetch_parent_group_url(self, repo_url: str) -> str | None:
         ref = self._parse_url(repo_url)
-        async with httpx.AsyncClient(timeout=15) as client:
-            project = await self._get_project_info(client, ref)
-            if project is None:
-                return None
+        client = await self._get_client()
+        project = await self._get_project_info(client, ref)
+        if project is None:
+            return None
 
-            namespace = project.get("namespace")
-            if not namespace or namespace.get("kind") != "group":
-                return None
+        namespace = project.get("namespace")
+        if not namespace or namespace.get("kind") != "group":
+            return None
 
-            # The namespace full_path gives us the group URL.
-            group_path = namespace.get("full_path", "")
-            if not group_path:
-                return None
-            return f"{ref.base_url}/{group_path}"
+        # The namespace full_path gives us the group URL.
+        group_path = namespace.get("full_path", "")
+        if not group_path:
+            return None
+        return f"{ref.base_url}/{group_path}"
 
     # ------------------------------------------------------------------ list repos
 
     async def list_repos(self, group_url: str) -> list[RepoInfo]:
         ref = self._parse_url(group_url)
         repos: list[RepoInfo] = []
-        async with httpx.AsyncClient(timeout=30) as client:
-            page = 1
-            while True:
-                url = (
-                    f"{ref.base_url}/api/v4/groups/{ref.project_path}/projects"
-                )
-                params = {
-                    "per_page": _PER_PAGE,
-                    "page": page,
-                    "include_subgroups": "true",
-                    "archived": "false",
-                }
-                data = await self._get_json(client, url, params=params)
-                if not data:
-                    break
-                for item in data:
-                    repos.append(self._to_repo_info(item, ref.base_url))
-                if len(data) < _PER_PAGE:
-                    break
-                page += 1
+        client = await self._get_client()
+        page = 1
+        while True:
+            url = (
+                f"{ref.base_url}/api/v4/groups/{ref.project_path}/projects"
+            )
+            params = {
+                "per_page": _PER_PAGE,
+                "page": page,
+                "include_subgroups": "true",
+                "archived": "false",
+            }
+            data = await self._get_json(client, url, params=params)
+            if not data:
+                break
+            for item in data:
+                repos.append(self._to_repo_info(item, ref.base_url))
+            if len(data) < _PER_PAGE:
+                break
+            page += 1
         return repos
 
     @staticmethod
@@ -207,44 +245,44 @@ class GitLabFetcher(PlatformFetcher):
     async def fetch_file_tree(self, repo_url: str) -> list[FileEntry]:
         ref = self._parse_url(repo_url)
         entries: list[FileEntry] = []
-        async with httpx.AsyncClient(timeout=30) as client:
-            page = 1
-            while True:
-                url = (
-                    f"{ref.base_url}/api/v4/projects/"
-                    f"{ref.project_path}/repository/tree"
-                )
-                params = {
-                    "recursive": "true",
-                    "per_page": _PER_PAGE,
-                    "page": page,
-                }
-                data = await self._get_json(client, url, params=params)
-                if not data:
-                    break
-                for item in data:
-                    entries.append(
-                        FileEntry(
-                            path=item.get("path", ""),
-                            is_dir=item.get("type") == "tree",
-                        )
+        client = await self._get_client()
+        page = 1
+        while True:
+            url = (
+                f"{ref.base_url}/api/v4/projects/"
+                f"{ref.project_path}/repository/tree"
+            )
+            params = {
+                "recursive": "true",
+                "per_page": _PER_PAGE,
+                "page": page,
+            }
+            data = await self._get_json(client, url, params=params)
+            if not data:
+                break
+            for item in data:
+                entries.append(
+                    FileEntry(
+                        path=item.get("path", ""),
+                        is_dir=item.get("type") == "tree",
                     )
-                if len(data) < _PER_PAGE:
-                    break
-                page += 1
+                )
+            if len(data) < _PER_PAGE:
+                break
+            page += 1
         return entries
 
     # ------------------------------------------------------------------ commits
 
     async def fetch_commits(self, repo_url: str, limit: int = 5) -> list[str]:
         ref = self._parse_url(repo_url)
-        async with httpx.AsyncClient(timeout=15) as client:
-            url = (
-                f"{ref.base_url}/api/v4/projects/"
-                f"{ref.project_path}/repository/commits"
-            )
-            params = {"per_page": limit}
-            data = await self._get_json(client, url, params=params)
+        client = await self._get_client()
+        url = (
+            f"{ref.base_url}/api/v4/projects/"
+            f"{ref.project_path}/repository/commits"
+        )
+        params = {"per_page": limit}
+        data = await self._get_json(client, url, params=params)
         return [item.get("title", "") for item in data if isinstance(item, dict)]
 
     # ------------------------------------------------------------------ file content
@@ -254,26 +292,26 @@ class GitLabFetcher(PlatformFetcher):
     ) -> str | None:
         ref = self._parse_url(repo_url)
         encoded_path = quote(file_path, safe="")
-        async with httpx.AsyncClient(timeout=15) as client:
-            # Try raw endpoint first (returns plain text).
-            url = (
-                f"{ref.base_url}/api/v4/projects/"
-                f"{ref.project_path}/repository/files/{encoded_path}/raw"
+        client = await self._get_client()
+        # Try raw endpoint first (returns plain text).
+        url = (
+            f"{ref.base_url}/api/v4/projects/"
+            f"{ref.project_path}/repository/files/{encoded_path}/raw"
+        )
+        params = {"ref": "main"}
+        try:
+            response = await get_with_retry(
+                client, url, params=params, headers=self._headers()
             )
-            params = {"ref": "main"}
-            try:
-                response = await client.get(
-                    url, params=params, headers=self._headers()
+            if response.status_code == 404:
+                # Try 'master' branch as fallback.
+                params["ref"] = "master"
+                response = await get_with_retry(
+                    client, url, params=params, headers=self._headers()
                 )
-                if response.status_code == 404:
-                    # Try 'master' branch as fallback.
-                    params["ref"] = "master"
-                    response = await client.get(
-                        url, params=params, headers=self._headers()
-                    )
-                response.raise_for_status()
-                return response.text
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404:
-                    return None
-                raise
+            response.raise_for_status()
+            return response.text
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise

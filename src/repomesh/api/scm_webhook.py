@@ -14,6 +14,7 @@ from repomesh.modules.delivery.contracts import (
     RecordSCMObservationCommand,
     SCMObservationSource,
 )
+from repomesh.modules.platform_config import GITHUB_WEBHOOK_SECRET, effective_credential
 from repomesh.settings import get_settings
 
 router = APIRouter(tags=["delivery"])
@@ -64,7 +65,11 @@ async def _receive(
     change_set_id: UUID | None = None,
     repository_id: UUID | None = None,
 ) -> dict:
-    secret = get_settings().github_webhook_secret
+    secret = await effective_credential(
+        request.app.state.container,
+        GITHUB_WEBHOOK_SECRET,
+        get_settings().github_webhook_secret,
+    )
     if not secret:
         raise HTTPException(status_code=503, detail="GitHub webhook is not configured")
     body = await request.body()

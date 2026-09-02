@@ -354,46 +354,17 @@ def _parse_integrated_plan(raw: str, repo_names: list[str]) -> IntegratedPlan:
         if repo not in existing:
             task_dag.append(TaskNode(repository=repo, instruction=""))
 
-    # Compute execution batches via topological sort
-    batches = _topological_batches(task_dag)
-
+    # Execution batches are a graph projection, not a parse-time fact:
+    # ``normalize_plan`` (contracts/integration.py) recomputes them from the
+    # confirmed edges of the plan-layer graph, so nothing is filled here. A
+    # batch list computed in this function would be overwritten at every call
+    # site and could only diverge from the graph (the single source of truth).
     return IntegratedPlan(
         engineering_spec=data.get("engineering_spec", ""),
         contracts=contracts,
         task_dag=task_dag,
-        execution_batches=batches,
+        execution_batches=[],
     )
-
-
-def _topological_batches(dag: list[TaskNode]) -> list[list[str]]:
-    """Group tasks into execution batches using Kahn's algorithm.
-
-    Returns a list of batches where each batch can run in parallel,
-    and batches must execute in order.
-    """
-
-    # Build dependency map
-    deps: dict[str, set[str]] = {}
-    for t in dag:
-        deps[t.repository] = set(d for d in t.depends_on if d in {n.repository for n in dag})
-
-    batches: list[list[str]] = []
-    remaining = set(deps.keys())
-
-    while remaining:
-        # Find all repos whose deps are fully satisfied
-        ready = {r for r in remaining if not deps[r]}
-        if not ready:
-            # Circular dependency — break by picking lowest-name
-            _logger.warning("Circular dependency detected in DAG, breaking cycle")
-            ready = {min(remaining)}
-
-        batches.append(sorted(ready))
-        remaining -= ready
-        for r in remaining:
-            deps[r] -= ready
-
-    return batches
 
 
 def _fallback_plan(repo_names: list[str]) -> IntegratedPlan:

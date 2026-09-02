@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import socket
 from contextlib import suppress
+from uuid import uuid4
 
 from repomesh.modules.delivery import DeliveryService, SCMCommandService
 from repomesh.modules.delivery.contracts import (
@@ -26,12 +28,18 @@ class SCMCommandDispatcher:
         adapter: SCMAdapter,
         *,
         interval_seconds: float = 5,
+        lease_owner: str | None = None,
+        lease_renew_interval_seconds: float = 60,
+        run_limit: int = 100,
     ) -> None:
         self._commands = commands
         self._delivery = delivery
         self._catalog = catalog
         self._adapter = adapter
         self._interval_seconds = interval_seconds
+        self._lease_owner = lease_owner or f"{socket.gethostname()}:{uuid4()}"
+        self._lease_renew_interval_seconds = lease_renew_interval_seconds
+        self._run_limit = run_limit
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -48,19 +56,69 @@ class SCMCommandDispatcher:
         self._task = None
 
     async def run_once(self) -> None:
-        for item in await self._commands.list_dispatchable():
-            claimed = await self._commands.claim(item.id)
-            if claimed is None:
-                continue
+        for _ in range(self._run_limit):
+            batch = await self._commands.claim_batch(self._lease_owner, limit=1)
+            if not batch:
+                return
+            claimed = batch[0]
+            logger.info(
+                "SCM command lease claimed",
+                extra={
+                    "scm_command_id": str(claimed.id),
+                    "lease_owner": self._lease_owner,
+                    "fencing_version": claimed.version,
+                },
+            )
+            renewal_stop = asyncio.Event()
+            renewal = asyncio.create_task(
+                self._renew_lease(claimed.id, claimed.version, renewal_stop),
+                name=f"scm-command-renew-{claimed.id}",
+            )
             try:
                 await self._dispatch(claimed)
-                await self._commands.accept(claimed.id)
+                await self._commands.accept(
+                    claimed.id, self._lease_owner, claimed.version
+                )
             except Exception as error:
-                await self._commands.fail(claimed.id, f"{type(error).__name__}: {error}")
+                with suppress(Exception):
+                    await self._commands.fail(
+                        claimed.id,
+                        f"{type(error).__name__}: {error}",
+                        self._lease_owner,
+                        claimed.version,
+                    )
                 logger.exception(
                     "SCM command dispatch failed",
                     extra={"scm_command_id": str(claimed.id)},
                 )
+            finally:
+                renewal_stop.set()
+                await renewal
+
+    async def _renew_lease(
+        self, command_id, fencing_version: int, stop: asyncio.Event
+    ) -> None:
+        while not stop.is_set():
+            with suppress(TimeoutError):
+                await asyncio.wait_for(
+                    stop.wait(), timeout=self._lease_renew_interval_seconds
+                )
+            if stop.is_set():
+                return
+            try:
+                await self._commands.renew(
+                    command_id, self._lease_owner, fencing_version
+                )
+            except Exception:
+                logger.exception(
+                    "SCM command lease renewal failed",
+                    extra={
+                        "scm_command_id": str(command_id),
+                        "lease_owner": self._lease_owner,
+                        "fencing_version": fencing_version,
+                    },
+                )
+                return
 
     async def _dispatch(self, command) -> None:
         if command.kind is SCMCommandKind.UNDRAFT_PULL_REQUEST:

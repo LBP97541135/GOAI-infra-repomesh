@@ -39,8 +39,22 @@ RepoMesh 是面向多仓库编码智能体交付的可观测控制平面。项�
 
 ## 打开控制台
 
-下面两条路，任选其一，都能把一份全新的 clone 带到浏览器里的交付控制台，不需要手工配置。
-它们是**并列的两条路，不是两个步骤**：两者都要占用 8100 端口。
+普通用户只使用产品启动器；宿主只需要已经启动的 Docker：
+
+```powershell
+.\scripts\start.ps1
+```
+
+```bash
+./scripts/start.sh
+```
+
+启动器自动选择空闲端口、生成内部凭证、安装或复用 AgentTeams、接入 Matrix/MinIO，
+并启动 PostgreSQL、完整执行面 API 和 nginx 控制台。宿主不需要 Python、uv、Node.js、
+npm 或 PostgreSQL。Docker 缺失或未启动时，启动器会明确提示；Docker 的系统安装可能涉及
+管理员权限、虚拟化和重启，因此不会被静默执行。
+
+下面两条是开发和运维入口，不是普通用户安装步骤。
 
 **开发启动器** —— 带热重载；宿主需要 Docker、uv 和 Node 20+：
 
@@ -57,7 +71,7 @@ RepoMesh 是面向多仓库编码智能体交付的可观测控制平面。项�
 回到可用状态的正常做法**——而且脚本从不重启、迁移或停掉任何不是它自己起的东西。
 `.\scripts\dev-down.ps1` / `./scripts/dev-down.sh` 只收它自己起的组件，逐项征求确认。
 
-**全栈 compose** —— 宿主只需要 Docker：
+**独立 console compose（兼容/CI）** —— 宿主只需要 Docker，但不含完整 AgentTeams 执行面：
 
 ```bash
 docker compose --profile console up -d --build
@@ -77,9 +91,8 @@ docker compose --profile console exec console-api python scripts/seed-console-de
 凭据只留在你自己机器上。两个面的认证方式**故意不同**：读模型认 Bearer action token，
 而人工控制——审核台、检查点决策——认会话。这就是为什么 agent 的令牌批不了任何东西。
 
-老实说状态：已经走通的是**可重入路径**（每个组件都已在服务、全部跳过）和 compose 配置。
-从一台空机器出发的冷启动路径**还没有端到端跑过**，所以如果某一步的失败信息没解释清楚原因，
-请说出来——那条信息和那条命令一样，都是交付物。
+产品启动器的目标与验收进度见
+[`docs/development/unified-startup-spec.md`](docs/development/unified-startup-spec.md)。
 
 ## 当前里程碑
 
@@ -112,13 +125,13 @@ uv run uvicorn repomesh.main:app --reload
 自带的安装器装 AgentTeams，并起容器化的 RepoMesh API：
 
 ~~~powershell
-.\scripts\start-platform.ps1 -InstallAgentTeams
+.\scripts\start-platform.ps1
 ~~~
 
 Linux 上：
 
 ~~~bash
-./scripts/start-platform.sh --install-agentteams
+./scripts/start-platform.sh
 ~~~
 
 完整平台用**同一个** OpenAI 兼容的模型连接，同时供 RepoMesh 规划与 AgentTeams 智能体使用：

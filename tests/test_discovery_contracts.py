@@ -14,6 +14,10 @@ is right in isolation can still be shadowed by the one before it.
 
 from __future__ import annotations
 
+from repomesh.modules.repository_intelligence.application.dependency_graph import GraphEdge
+from repomesh.modules.repository_intelligence.application.discovery_chain import (
+    _supplement_candidates,
+)
 from repomesh.modules.repository_intelligence.contracts import (
     classification_fingerprint,
     discovery_step,
@@ -24,7 +28,7 @@ from repomesh.modules.repository_intelligence.contracts import (
 
 
 def _classification(**kwargs) -> dict:
-    block = {"required": [], "maybe": [], "excluded": [], "supplemented_repos": []}
+    block = {"required": [], "maybe": [], "excluded": []}
     block.update(kwargs)
     return block
 
@@ -207,14 +211,14 @@ class TestFingerprint:
                 {"repository": "b", "status": "REQUIRED"},
                 {"repository": "a", "status": "REQUIRED"},
             ],
-            supplemented_repos=["z", "y"],
+            supplements=[{"repository": "z"}, {"repository": "y"}],
         )
         second = _classification(
             required=[
                 {"repository": "a", "status": "REQUIRED"},
                 {"repository": "b", "status": "REQUIRED"},
             ],
-            supplemented_repos=["y", "z"],
+            supplements=[{"repository": "y"}, {"repository": "z"}],
         )
         assert classification_fingerprint(first) == classification_fingerprint(second)
 
@@ -254,3 +258,133 @@ class TestTierMapping:
 
         assert tier_of("") == "required"
         assert tier_of("WEIRD") == "required"
+
+
+class _StubGraph:
+    """Minimal graph double exposing the two queries the supplement uses."""
+
+    def __init__(self, forward=None, reverse=None):
+        self._forward = forward or {}
+        self._reverse = reverse or {}
+
+    def forward_dependencies(self, name):
+        return list(self._forward.get(name, ()))
+
+    def reverse_dependencies(self, name):
+        return list(self._reverse.get(name, ()))
+
+
+class TestSupplementCandidates:
+    """The PM's graph pre-supplement (discovery_chain._supplement_candidates).
+
+    Deterministic contract: first-degree neighbours in both directions,
+    confirmed edges before declared, candidate-order stability, a hard cap,
+    and every entry carrying the edge evidence that brought it in.
+    """
+
+    def _edge(self, producer, consumer, confidence="confirmed"):
+        return GraphEdge(
+            producer=producer,
+            consumer=consumer,
+            confidence=confidence,
+            mechanism="SOURCE",
+            match_reason=f"{consumer} 依赖 {producer}",
+        )
+
+    def test_first_degree_neighbours_in_both_directions(self):
+        """Whom I depend on (forward) and who depends on me (reverse) both
+        join the list, each via the candidate whose edge pulled it in."""
+
+        graph = _StubGraph(
+            forward={
+                "candidate-a": [self._edge("producer-x", "candidate-a")],
+            },
+            reverse={
+                "candidate-a": [self._edge("candidate-a", "consumer-y")],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a"], cap=10)
+        by_name = {s.repository: s for s in supplements}
+        assert set(by_name) == {"producer-x", "consumer-y"}
+        assert by_name["producer-x"].via == "candidate-a"
+        assert by_name["consumer-y"].via == "candidate-a"
+
+    def test_known_candidates_are_not_re_added(self):
+        graph = _StubGraph(
+            reverse={
+                "candidate-a": [
+                    self._edge("candidate-a", "candidate-b"),
+                    self._edge("candidate-a", "new-comer"),
+                ],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a", "candidate-b"], cap=10)
+        assert [s.repository for s in supplements] == ["new-comer"]
+
+    def test_confirmed_edges_sort_before_declared(self):
+        graph = _StubGraph(
+            reverse={
+                "candidate-a": [
+                    self._edge("candidate-a", "weak-link", confidence="declared"),
+                    self._edge("candidate-a", "hard-link", confidence="confirmed"),
+                ],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a"], cap=10)
+        assert [s.repository for s in supplements] == ["hard-link", "weak-link"]
+        assert [s.confidence for s in supplements] == ["confirmed", "declared"]
+
+    def test_cap_truncates_after_confidence_sort(self):
+        graph = _StubGraph(
+            reverse={
+                "candidate-a": [
+                    self._edge("candidate-a", "one", confidence="declared"),
+                    self._edge("candidate-a", "two", confidence="confirmed"),
+                    self._edge("candidate-a", "three", confidence="confirmed"),
+                ],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a"], cap=2)
+        assert [s.repository for s in supplements] == ["two", "three"]
+
+    def test_cap_zero_disables_the_supplement(self):
+        graph = _StubGraph(
+            reverse={"candidate-a": [self._edge("candidate-a", "new-comer")]},
+        )
+        assert _supplement_candidates(graph, ["candidate-a"], cap=0) == []
+
+    def test_a_repo_reached_via_two_candidates_is_added_once(self):
+        graph = _StubGraph(
+            reverse={
+                "candidate-a": [self._edge("candidate-a", "shared")],
+                "candidate-b": [self._edge("candidate-b", "shared")],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a", "candidate-b"], cap=10)
+        assert [s.repository for s in supplements] == ["shared"]
+        # First candidate to reach it wins the `via` (stable, deterministic).
+        assert supplements[0].via == "candidate-a"
+
+    def test_no_recursive_cascade(self):
+        """A supplemented repo's own neighbours do not cascade — first degree
+        only, or a dense cluster floods the confirmation list."""
+
+        graph = _StubGraph(
+            reverse={
+                "candidate-a": [self._edge("candidate-a", "new-comer")],
+                "new-comer": [self._edge("new-comer", "deeper")],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a"], cap=10)
+        assert [s.repository for s in supplements] == ["new-comer"]
+
+    def test_evidence_fields_are_carried_verbatim(self):
+        graph = _StubGraph(
+            reverse={
+                "candidate-a": [self._edge("candidate-a", "new-comer")],
+            },
+        )
+        supplements = _supplement_candidates(graph, ["candidate-a"], cap=10)
+        assert supplements[0].mechanism == "SOURCE"
+        assert supplements[0].match_reason == "new-comer 依赖 candidate-a"
+        assert supplements[0].confidence == "confirmed"

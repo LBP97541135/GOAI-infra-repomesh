@@ -6,6 +6,7 @@ from .fetcher import (
     UrlType,
     detect_platform,
     make_fetcher,
+    unsupported_platform_label,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "UrlType",
     "detect_platform",
     "make_fetcher",
+    "unsupported_platform_label",
 ]

@@ -21,9 +21,19 @@
     Stopping is stop_members.ps1, which reads the same PID files. Do not reach
     for `pkill -f` from Git Bash: it does not kill a process started this way.
 
+    -Subset selects by roster tag and -Only selects one member by key. They are
+    different questions: a subset is a scenario an operator runs, while a single
+    key is what recovering one failed member needs -- and what the Local Launcher
+    needs on every start, because the already-live check below throws rather than
+    skips and would abandon the rest of the batch on a second click.
+
 .EXAMPLE
     ./start_members.ps1 -Members members.json -EnrollmentDir out\enrollments `
         -EnvFile ..\..\output\bridge-team\e1-members.env -PidDir out\pids -LogDir out\logs -Subset m7
+
+.EXAMPLE
+    ./start_members.ps1 -Members members.json -EnrollmentDir out\enrollments `
+        -PidDir out\pids -Only alpha-worker
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Members,
@@ -34,6 +44,7 @@ param(
     [string]$StateDir,
     [string]$WorkspaceRoot,
     [string]$Subset,
+    [string]$Only,
     [string]$Python,
     [switch]$DryRun
 )
@@ -72,6 +83,12 @@ if ($Subset) {
     $selected = @($roster.members | Where-Object { $_.subsets -contains $Subset })
     if ($selected.Count -eq 0) {
         throw "no roster member is tagged '$Subset'"
+    }
+}
+if ($Only) {
+    $selected = @($selected | Where-Object { $_.key -eq $Only })
+    if ($selected.Count -eq 0) {
+        throw "no roster member has the key '$Only'"
     }
 }
 

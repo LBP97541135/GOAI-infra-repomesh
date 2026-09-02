@@ -21,6 +21,7 @@ from .handoff_docs import (
 from .issue_intake import (
     IssueIntakeActorNotFound,
     IssueIntakeDenied,
+    IssueIntakeKeyMismatch,
     IssueIntakeService,
 )
 from .plan_integration import (
@@ -46,6 +47,11 @@ from .scan_remote import (
     scan_org,
     scan_single_repo,
 )
+from .service_registry import (
+    ServiceAliases,
+    ServiceRegistry,
+    build_service_registry,
+)
 
 __all__ = [
     "ConfirmationResult",
@@ -62,6 +68,7 @@ __all__ = [
     "IntegratedPlan",
     "IssueIntakeActorNotFound",
     "IssueIntakeDenied",
+    "IssueIntakeKeyMismatch",
     "IssueIntakeService",
     "LLMClient",
     "PlanIntegrationService",
@@ -72,11 +79,14 @@ __all__ = [
     "RequirementAnalysis",
     "RequirementAnalyzer",
     "ScanRegistration",
+    "ServiceAliases",
+    "ServiceRegistry",
     "UpdateRepositoryCapabilityProfile",
     "UpdateRepositoryVerification",
     "TaskNode",
     "TopoResult",
     "build_doc_content",
+    "build_service_registry",
     "extract_entry_repo_name",
     "identify_url_type",
     "infer_languages",

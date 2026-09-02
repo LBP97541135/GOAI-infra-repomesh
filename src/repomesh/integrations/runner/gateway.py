@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
-from repomesh.modules.task_orchestration.contracts import TaskStatus
+from repomesh.modules.task_orchestration.contracts import TaskAssignmentGenerationReader, TaskStatus
 from repomesh.modules.task_orchestration.ports import TaskStore
 from repomesh_runner.contracts import RunnerTask
 
@@ -21,10 +21,12 @@ class RunnerControlGateway:
         store: PostgresRunnerGatewayStore,
         tasks: TaskStore,
         on_terminal: Callable[[UUID], Awaitable[None]] | None = None,
+        assignments: TaskAssignmentGenerationReader | None = None,
     ) -> None:
         self._store = store
         self._tasks = tasks
         self._on_terminal = on_terminal
+        self._assignments = assignments
 
     async def enqueue(self, task: RunnerTask) -> None:
         if task.worker_agent_id is None:
@@ -37,14 +39,58 @@ class RunnerControlGateway:
     async def receive_event(
         self, event: dict[str, object], *, worker_agent_id: UUID | None = None
     ) -> bool:
-        inserted = await self._store.record_event(event, expected_worker_agent_id=worker_agent_id)
+        run_id = UUID(str(event["runId"]))
+        dispatch = await self._store.get_dispatch(run_id)
+        projection_allowed = True
+        if dispatch is not None and dispatch.assignment_attempt_id is not None:
+            projection_allowed = bool(
+                self._assignments is not None
+                and dispatch.assignment_generation is not None
+                and await self._assignments.allows_projection(
+                    dispatch.task_id,
+                    dispatch.assignment_attempt_id,
+                    dispatch.assignment_generation,
+                )
+            )
+        inserted = await self._store.record_event(
+            event,
+            expected_worker_agent_id=worker_agent_id,
+            projection_allowed=projection_allowed,
+        )
         if str(event.get("eventType")) in {
             "runner.completed",
             "runner.failed",
             "runner.interrupted",
             "runner.input_required",
         }:
-            await self._write_back(event)
+            if await self._store.projection_allowed(UUID(str(event["runId"]))):
+                await self._write_back(event)
+                if (
+                    str(event.get("eventType")) == "runner.completed"
+                    and dispatch is not None
+                    and dispatch.assignment_attempt_id is not None
+                    and dispatch.assignment_generation is not None
+                    and self._assignments is not None
+                ):
+                    await self._assignments.complete_current(
+                        dispatch.task_id,
+                        dispatch.assignment_attempt_id,
+                        dispatch.assignment_generation,
+                    )
+                if str(event.get("eventType")) in {
+                    "runner.failed",
+                    "runner.interrupted",
+                    "runner.input_required",
+                }:
+                    await self._store.ensure_recovery_for_run(
+                        run_id, event
+                    )
+            else:
+                _logger.warning(
+                    "Rejected stale Runner result run_id=%s task_id=%s",
+                    event.get("runId"),
+                    event.get("taskId"),
+                )
         return inserted
 
     async def _write_back(self, event: dict[str, object]) -> None:

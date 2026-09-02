@@ -203,3 +203,29 @@ def test_container_reuses_process_level_services(application_container) -> None:
         application_container.execution_plan_advancer()
         is application_container.execution_plan_advancer()
     )
+
+
+def test_decision_history_adapter_wired_into_discovery_chain(application_container) -> None:
+    from repomesh.modules.repository_intelligence.infrastructure import (
+        DecisionHistoryFromChainStore,
+    )
+    from repomesh.modules.repository_intelligence.infrastructure.decision_history_vector import (
+        DecisionHistoryVectorStore,
+    )
+
+    structural = application_container.decision_history_from_chain()
+    assert isinstance(structural, DecisionHistoryFromChainStore)
+    assert structural._similar is application_container.decision_chain_similarity_service()
+
+    service = application_container.discovery_chain_service()
+    wired = service._decision_history
+    # L3: the hybrid vector adapter wraps the structural one as its fallback
+    # when semantic retrieval is configured; otherwise the Phase-4b structural
+    # adapter is wired directly (both are valid compositions — the port's
+    # enhancement-not-gate rule holds either way).
+    if isinstance(wired, DecisionHistoryFromChainStore):
+        assert wired._similar is structural._similar
+    else:
+        assert isinstance(wired, DecisionHistoryVectorStore)
+        assert isinstance(wired._structural, DecisionHistoryFromChainStore)
+        assert wired._structural._similar is structural._similar

@@ -99,7 +99,6 @@ def _integration_payload() -> dict:
             "required": [with_repo("A", []), with_repo("B", ["A"])],
             "maybe": [],
             "excluded": [],
-            "supplemented_repos": [],
             "final_repos": ["A", "B"],
         },
     }
@@ -110,7 +109,7 @@ def test_integration_returns_graph_with_matching_projections(
 ) -> None:
     """PR-5: /integration carries the unified graph, and its materialised
     projections equal the top-level fields the frontend previously spliced."""
-    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "planning-secret")
+    monkeypatch.setenv("REPOMESH_AGENT_ACTION_TOKEN", "internal-secret")
     get_settings.cache_clear()
     application_container = replace(
         application_container, llm_client=StubLLM(_LLM_PLAN)
@@ -120,8 +119,8 @@ def test_integration_returns_graph_with_matching_projections(
         with TestClient(create_app(application_container)) as client:
             response = client.post(
                 "/api/v1/integration",
-                headers={"Authorization": "Bearer planning-secret"},
                 json=_integration_payload(),
+                headers={"Authorization": "Bearer internal-secret"},
             )
     finally:
         get_settings.cache_clear()

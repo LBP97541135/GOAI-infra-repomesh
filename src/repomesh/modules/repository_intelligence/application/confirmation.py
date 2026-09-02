@@ -17,7 +17,9 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import Context, copy_context
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from opentelemetry import trace
@@ -89,6 +91,61 @@ class ConfirmationResult:
     plan_summary: str = ""
     plan: RepositoryPlan | None = None
     missing_dependencies: list[str] = field(default_factory=list)
+    #: Brought in by the Project Manager's graph pre-supplement (not part of
+    #: the original candidate list). The confirmation is otherwise identical.
+    is_supplemented: bool = False
+    #: The graph found a confirmed dependency edge from this repo to a
+    #: REQUIRED/MAYBE repo while the model judged it EXCLUDED — a review
+    #: suggestion for the approver, never a verdict.
+    graph_conflict: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SupplementEvidence:
+    """One graph edge's worth of "why this repo was added" (PM → RM).
+
+    Produced deterministically by the discovery graph pre-supplement: the
+    repo is a first-degree neighbour of a candidate, so it joins the
+    confirmation list with the evidence that brought it in. The same record
+    feeds the RM's prompt (``## Why You Were Added``) and the block audit
+    trail — never a bare name.
+    """
+
+    repository: str
+    via: str  # the candidate whose edge pulled this repo in
+    confidence: str  # "confirmed" | "declared"
+    mechanism: str
+    match_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class GraphConflict:
+    """A graph-vs-model disagreement, surfaced for the approver.
+
+    The model judged the repo EXCLUDED, but a *confirmed* dependency edge
+    connects it to a REQUIRED/MAYBE repo. The repo's EXCLUDED verdict was
+    reached without seeing what the kept repo changes — so the conflict is a
+    review suggestion, never an error report.
+    """
+
+    repository: str
+    status: str  # the model's verdict (EXCLUDED in practice)
+    via: tuple[str, ...]  # the kept repos the confirmed edges point to
+    edges: tuple[GraphEdge, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SupplementObservation:
+    """A name the model reported (missing_dependencies / impacts) that is
+    not in the confirmation list and has no graph edge behind it.
+
+    Shown to the approver as a low-trust observation — the model's word only.
+    The approver may manually tier it (the adjustments mechanism already
+    supports adding repos nobody confirmed).
+    """
+
+    repository: str
+    via: str  # which confirmed repo reported it
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +155,9 @@ class ConfirmationSummary:
     required: list[ConfirmationResult]  # REQUIRED only
     maybe: list[ConfirmationResult]  # MAYBE (kept but low-confidence)
     excluded: list[ConfirmationResult]  # EXCLUDED
-    supplemented_repos: list[str]  # repos added via missing_dependencies
+    supplements: list[SupplementEvidence] = field(default_factory=list)
+    conflicts: list[GraphConflict] = field(default_factory=list)
+    observations: list[SupplementObservation] = field(default_factory=list)
 
     @property
     def final_repos(self) -> list[str]:
@@ -118,7 +177,8 @@ def _build_confirmation_prompt(
     *,
     discovery_rationale: str = "",
     discovery_confidence: float = 0.0,
-    reverse_deps: list[GraphEdge] | None = None,
+    supplement_context: str | None = None,
+    history_context: str | None = None,
 ) -> list[dict[str, str]]:
     """Build chat messages for a single Repository Manager confirmation.
 
@@ -127,6 +187,15 @@ def _build_confirmation_prompt(
     - The requirement text
     - The full candidate list (so it knows what other repos were flagged)
     - The Project Manager's rationale for flagging this repo (V4 measure 2)
+    - Why a graph-supplemented repo was added (deterministic edge evidence)
+    - Similar historical decision chains (Phase 4b) — reference evidence only:
+      precedent to calibrate the verdict, never a substitute for this
+      requirement's own evidence
+
+    Graph structure is deliberately *not* in the prompt: the graph's decision
+    role (who joins the list, which EXCLUDED verdicts deserve review) lives in
+    the deterministic pre-supplement and conflict detection, not in the model's
+    context window.
     """
 
     card_text = _format_autocard(profile.auto_card) if profile.auto_card else "N/A"
@@ -176,19 +245,23 @@ def _build_confirmation_prompt(
             f"find evidence to contradict it, lean towards REQUIRED or MAYBE."
         )
 
-    # Include reverse dependencies from graph (if available)
-    graph_context = ""
-    if reverse_deps:
-        lines: list[str] = []
-        for edge in reverse_deps:
-            tag = "confirmed" if edge.confidence == "confirmed" else "possible"
-            lines.append(f"  - {edge.consumer} ({tag}: {edge.match_reason})")
-        graph_context = (
-            "\n\n## Reverse Dependencies (graph-derived, not guessed)\n"
-            "These repos depend on yours — if you change your API, "
-            "they may be affected:\n"
-            + "\n".join(lines)
+    # Include supplement evidence (graph pre-supplement)
+    supplement_text = ""
+    if supplement_context:
+        supplement_text = (
+            "\n\n## Why You Were Added\n"
+            "You were not in the original candidate list. The discovery "
+            "graph pulled you in because of a structural dependency:\n"
+            f"- {supplement_context}\n"
+            "Confirm whether your repository really needs changes. Your "
+            "direct evidence may be thinner than the original candidates' — "
+            "when you cannot find solid evidence, answer MAYBE, not REQUIRED."
         )
+
+    # Include similar historical decision chains (Phase 4b) — reference only.
+    history_text = ""
+    if history_context:
+        history_text = f"\n\n{history_context}\n"
 
     user = (
         f"## Your Repository: {profile.name}\n\n"
@@ -196,7 +269,8 @@ def _build_confirmation_prompt(
         f"## Requirement\n\n{requirement}\n\n"
         f"## All Candidates Flagged by Discovery\n\n{candidates_str}\n"
         f"{pm_context}"
-        f"{graph_context}\n\n"
+        f"{supplement_text}"
+        f"{history_text}\n\n"
         f"## Task\n\n"
         f"Does YOUR repository ({profile.name}) need code changes for this "
         f"requirement? Return the JSON object now."
@@ -336,78 +410,315 @@ class ConfirmationService:
         requirement: str,
         *,
         discovery_evidence: dict[str, tuple[str, float]] | None = None,
+        supplement_evidence: dict[str, SupplementEvidence] | None = None,
+        history_context: str | None = None,
+        concurrency: int = 1,
         on_progress: Callable[[int, int, str], None] | None = None,
     ) -> ConfirmationSummary:
-        """Confirm each candidate repo.
+        """Confirm each repo in the (already graph-supplemented) list.
 
         Args:
-            candidate_names: repos to confirm.
+            candidate_names: repos to confirm — the original candidates plus
+                any graph pre-supplemented repos, in deterministic order.
             requirement: the feature requirement text.
-            discovery_evidence: optional mapping of repo_name → (rationale, confidence)
-                from the discovery phase.  When provided, each Repository Manager
-                sees *why* the Project Manager flagged it (V4 measure 2).
-            on_progress: optional callback ``(index, total, name)``.
+            discovery_evidence: optional mapping of repo_name → (rationale,
+                confidence) from the discovery phase.  When provided, each
+                Repository Manager sees *why* the Project Manager flagged it
+                (V4 measure 2).
+            supplement_evidence: optional mapping of repo_name → evidence for
+                repos the PM's graph pre-supplement added (they were not in
+                the original candidate list).
+            history_context: optional rendered section of similar historical
+                decision chains (Phase 4b). Reference evidence for calibrating
+                each verdict — never instructions, and never a substitute for
+                this requirement's own evidence.
+            concurrency: bounded parallelism for the LLM calls (a global
+                rate-limit approximation; keep well under the provider's
+                RPM/TPM). ``1`` reproduces the serial behaviour.
+            on_progress: optional callback ``(completed, total, name)``
+                invoked from the submitting thread as each confirmation
+                finishes, in completion order.
         """
 
-        results: list[ConfirmationResult] = []
-
-        for idx, name in enumerate(candidate_names):
-            profile = self._profiles.get(name)
-            if profile is None:
-                _logger.warning("Candidate %s not in catalog, skipping", name)
-                continue
-
-            if on_progress:
-                on_progress(idx + 1, len(candidate_names), name)
-
-            # V4 measure 2: pass discovery rationale to the Manager
-            rationale = ""
-            conf = 0.0
-            if discovery_evidence and name in discovery_evidence:
-                rationale, conf = discovery_evidence[name]
-
-            messages = _build_confirmation_prompt(
-                profile,
-                requirement,
+        if concurrency > 1 and len(candidate_names) > 1:
+            results = self._confirm_parallel(
                 candidate_names,
-                discovery_rationale=rationale,
-                discovery_confidence=conf,
-                reverse_deps=self._graph.reverse_dependencies(name)
-                if self._graph
-                else [],
+                requirement,
+                discovery_evidence=discovery_evidence,
+                supplement_evidence=supplement_evidence,
+                history_context=history_context,
+                concurrency=concurrency,
+                on_progress=on_progress,
             )
-            with _tracer.start_as_current_span(
-                f"confirm {name}",
-                attributes={"repomesh.repository_name": name},
-            ) as repo_span:
-                raw = self._llm.chat(messages, temperature=0.0)
-                result = _parse_confirmation(raw, name)
-                repo_span.set_attribute("repomesh.confirmation.status", result.status)
-                repo_span.set_attribute("repomesh.confirmation.confidence", result.confidence)
-            results.append(result)
-
-            _logger.info(
-                "Confirmation %s: %s (confidence=%.2f)",
-                name,
-                result.status,
-                result.confidence,
+        else:
+            results = self._confirm_serial(
+                candidate_names,
+                requirement,
+                discovery_evidence=discovery_evidence,
+                supplement_evidence=supplement_evidence,
+                history_context=history_context,
+                on_progress=on_progress,
             )
 
         required = [r for r in results if r.status == "REQUIRED"]
         maybe = [r for r in results if r.status == "MAYBE"]
         excluded = [r for r in results if r.status == "EXCLUDED"]
 
-        # Collect missing dependencies (one-degree only, from REQUIRED + MAYBE)
-        existing = set(candidate_names)
-        supplemented: list[str] = []
-        for r in required + maybe:
-            for dep in r.missing_dependencies:
-                if dep not in existing and dep not in supplemented:
-                    supplemented.append(dep)
+        # Flag every confirmed result that came in via the graph
+        # pre-supplement — the panel marks these (deterministic evidence)
+        # distinctly from the model's own judgement. Applied to all three
+        # tiers so the marker survives a repo being bucketed anywhere.
+        supplement_names = set(supplement_evidence) if supplement_evidence else set()
+        if supplement_names:
+            required = [
+                replace(r, is_supplemented=r.repository in supplement_names)
+                for r in required
+            ]
+            maybe = [
+                replace(r, is_supplemented=r.repository in supplement_names)
+                for r in maybe
+            ]
+            excluded = [
+                replace(r, is_supplemented=r.repository in supplement_names)
+                for r in excluded
+            ]
+
+        # Graph-vs-model conflict detection: a confirmed edge from an
+        # EXCLUDED repo to a kept repo means the EXCLUDED verdict deserves a
+        # second look. Deterministic, no LLM call.
+        conflicts = self._detect_conflicts(required, maybe, excluded)
+        if conflicts:
+            conflict_names = {c.repository for c in conflicts}
+            excluded = [
+                replace(r, graph_conflict=(r.repository in conflict_names))
+                for r in excluded
+            ]
+
+        # Low-trust observations: names the model reported that are neither
+        # in the confirmation list nor backed by a graph edge. Approver's
+        # word, surfaced for manual tiering — never auto-confirmed.
+        observations = self._collect_observations(required, maybe, candidate_names)
 
         return ConfirmationSummary(
             required=required,
             maybe=maybe,
             excluded=excluded,
-            supplemented_repos=supplemented,
+            supplements=list(supplement_evidence.values()) if supplement_evidence else [],
+            conflicts=conflicts,
+            observations=observations,
         )
+
+    def _confirm_one(
+        self,
+        idx: int,
+        name: str,
+        requirement: str,
+        candidate_names: list[str],
+        *,
+        discovery_evidence: dict[str, tuple[str, float]] | None,
+        supplement_evidence: dict[str, SupplementEvidence] | None,
+        history_context: str | None = None,
+    ) -> tuple[int, ConfirmationResult | None]:
+        """Confirm a single repo. ``None`` when the repo is not in the catalog.
+
+        Runs on a worker thread during parallel confirmation; the OpenTelemetry
+        context is propagated by the caller via ``copy_context``.
+        """
+
+        profile = self._profiles.get(name)
+        if profile is None:
+            _logger.warning("Candidate %s not in catalog, skipping", name)
+            return idx, None
+
+        # V4 measure 2: pass discovery rationale to the Manager
+        rationale = ""
+        conf = 0.0
+        if discovery_evidence and name in discovery_evidence:
+            rationale, conf = discovery_evidence[name]
+
+        # Graph pre-supplement: tell the Manager why it was called in.
+        supplement_context = None
+        if supplement_evidence and name in supplement_evidence:
+            ev = supplement_evidence[name]
+            supplement_context = (
+                f"'{ev.match_reason}' — pulled in via {ev.via} "
+                f"({ev.confidence} edge, mechanism {ev.mechanism})"
+            )
+
+        messages = _build_confirmation_prompt(
+            profile,
+            requirement,
+            candidate_names,
+            discovery_rationale=rationale,
+            discovery_confidence=conf,
+            supplement_context=supplement_context,
+            history_context=history_context,
+        )
+        with _tracer.start_as_current_span(
+            f"confirm {name}",
+            attributes={"repomesh.repository_name": name},
+        ) as repo_span:
+            raw = self._llm.chat(messages, temperature=0.0)
+            result = _parse_confirmation(raw, name)
+            repo_span.set_attribute("repomesh.confirmation.status", result.status)
+            repo_span.set_attribute("repomesh.confirmation.confidence", result.confidence)
+        _logger.info(
+            "Confirmation %s: %s (confidence=%.2f)",
+            name,
+            result.status,
+            result.confidence,
+        )
+        return idx, result
+
+    def _confirm_parallel(
+        self,
+        names: list[str],
+        requirement: str,
+        *,
+        discovery_evidence: dict[str, tuple[str, float]] | None,
+        supplement_evidence: dict[str, SupplementEvidence] | None,
+        history_context: str | None = None,
+        concurrency: int,
+        on_progress: Callable[[int, int, str], None] | None,
+    ) -> list[ConfirmationResult]:
+        """Confirm with a bounded thread pool.
+
+        Results come back in candidate order regardless of completion order
+        (each future carries its index). ``on_progress`` fires on the
+        submitting thread inside the ``as_completed`` loop, so the callback
+        never races across workers. Every task gets its *own* copy of the
+        capturing thread's context — a single ``Context`` instance cannot be
+        entered concurrently by two workers, so sharing one would raise
+        ``RuntimeError: cannot enter context ... already entered``.
+
+        ``history_context`` is an immutable rendered string, safe to pass by
+        value into every worker (never shared mutable state).
+        """
+
+        def run(task_ctx: Context, idx: int, name: str) -> tuple[int, ConfirmationResult | None]:
+            return task_ctx.run(
+                self._confirm_one,
+                idx,
+                name,
+                requirement,
+                names,
+                discovery_evidence=discovery_evidence,
+                supplement_evidence=supplement_evidence,
+                history_context=history_context,
+            )
+
+        results: dict[int, ConfirmationResult] = {}
+        completed = 0
+        with ThreadPoolExecutor(max_workers=min(concurrency, len(names))) as executor:
+            futures = {}
+            for idx, name in enumerate(names):
+                # Captured on the submitting thread so tracing spans keep
+                # their parent link; copied per task so concurrent workers
+                # never share one live Context.
+                futures[executor.submit(run, copy_context(), idx, name)] = idx
+            for future in as_completed(futures):
+                idx, result = future.result()
+                if result is None:
+                    continue
+                results[idx] = result
+                completed += 1
+                if on_progress:
+                    on_progress(completed, len(names), result.repository)
+        return [results[i] for i in sorted(results)]
+
+    def _confirm_serial(
+        self,
+        names: list[str],
+        requirement: str,
+        *,
+        discovery_evidence: dict[str, tuple[str, float]] | None,
+        supplement_evidence: dict[str, SupplementEvidence] | None,
+        history_context: str | None = None,
+        on_progress: Callable[[int, int, str], None] | None,
+    ) -> list[ConfirmationResult]:
+        results: list[ConfirmationResult] = []
+        completed = 0
+        for idx, name in enumerate(names):
+            _, result = self._confirm_one(
+                idx,
+                name,
+                requirement,
+                names,
+                discovery_evidence=discovery_evidence,
+                supplement_evidence=supplement_evidence,
+                history_context=history_context,
+            )
+            if result is None:
+                continue
+            results.append(result)
+            completed += 1
+            if on_progress:
+                on_progress(completed, len(names), result.repository)
+        return results
+
+    def _detect_conflicts(
+        self,
+        required: list[ConfirmationResult],
+        maybe: list[ConfirmationResult],
+        excluded: list[ConfirmationResult],
+    ) -> list[GraphConflict]:
+        """Confirmed edges from an EXCLUDED repo into the kept set.
+
+        Direction matters: only ``consumer depends on producer`` edges where
+        the EXCLUDED repo is the consumer count — the producer's API is
+        changing, so the consumer's EXCLUDED verdict deserves review. The
+        reverse direction (the EXCLUDED repo is *depended on*) means its own
+        API is untouched and the verdict stands.
+        """
+
+        if self._graph is None or not excluded:
+            return []
+        kept = {r.repository for r in required} | {r.repository for r in maybe}
+        conflicts: list[GraphConflict] = []
+        for r in excluded:
+            edges = [
+                e
+                for e in self._graph.forward_dependencies(r.repository)
+                if e.confidence == "confirmed" and e.producer in kept
+            ]
+            if edges:
+                conflicts.append(
+                    GraphConflict(
+                        repository=r.repository,
+                        status=r.status,
+                        via=tuple(sorted({e.producer for e in edges})),
+                        edges=tuple(edges),
+                    )
+                )
+        return conflicts
+
+    def _collect_observations(
+        self,
+        required: list[ConfirmationResult],
+        maybe: list[ConfirmationResult],
+        names: list[str],
+    ) -> list[SupplementObservation]:
+        """Model-reported names outside the confirmation list, in the catalog.
+
+        These have no graph edge behind them — the model's word only. Only
+        catalog members are surfaced (a hallucinated name cannot be tiered
+        anyway); the approver decides whether to manually add one.
+        """
+
+        if not (required or maybe):
+            return []
+        known = set(names)
+        observations: list[SupplementObservation] = []
+        seen: set[str] = set()
+        for r in required + maybe:
+            reported = list(r.missing_dependencies)
+            if r.plan is not None:
+                reported += list(r.plan.impacts)
+            for dep in reported:
+                if dep in known or dep in seen or dep not in self._profiles:
+                    continue
+                seen.add(dep)
+                observations.append(
+                    SupplementObservation(repository=dep, via=r.repository)
+                )
+        return observations

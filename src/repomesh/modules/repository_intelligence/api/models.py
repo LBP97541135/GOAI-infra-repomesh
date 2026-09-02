@@ -281,6 +281,8 @@ class RepositoryPlanView(BaseModel):
 
 
 class ConfirmationResultView(BaseModel):
+    # Field names are aligned one-to-one with discovery_chain._result_to_dict
+    # (the block serializer) — keep both sides in sync.
     model_config = ConfigDict(from_attributes=True)
 
     repository: str
@@ -296,7 +298,6 @@ class ConfirmationSummaryView(BaseModel):
     required: list[ConfirmationResultView]
     maybe: list[ConfirmationResultView]
     excluded: list[ConfirmationResultView]
-    supplemented_repos: list[str]
     final_repos: list[str]
 
 
@@ -558,7 +559,11 @@ class DiscoveryCandidatesRequest(BaseModel):
 
     created_by_agent_id: UUID
     idempotency_key: str = Field(min_length=8, max_length=200)
-    limit: int = Field(default=10, ge=1, le=50)
+    #: ``None`` inherits ``REPOMESH_DISCOVERY_CANDIDATE_LIMIT`` (resolved in
+    #: the chain service, so the block records the number that ran). The
+    #: panel omits it on purpose — a hardcoded default here would be a second
+    #: default that drifts from the configuration.
+    limit: int | None = Field(default=None, ge=1, le=50)
     entry_point: str | None = Field(default=None, max_length=200)
 
 

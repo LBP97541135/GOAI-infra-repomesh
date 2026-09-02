@@ -1,4 +1,4 @@
-services:
+﻿services:
   postgres:
     # Profiled so that `--profile console` does not drag this database (and its
     # published 5432) into the self-contained console stack below. Naming the
@@ -33,19 +33,17 @@ services:
 
   api:
     profiles: ["platform"]
-    restart: unless-stopped
     build:
       context: .
+    # Lets the credentials save-and-restart flow (PUT /api/v1/setup/credentials/*)
+    # exit the process to pick up newly saved DB config; Docker brings it back.
+    restart: unless-stopped
     environment:
       REPOMESH_ENVIRONMENT: development
       REPOMESH_LOG_LEVEL: INFO
+      REPOMESH_SUPERVISED: "true"
       REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@postgres:5432/repomesh
       REPOMESH_LOCAL_SESSION_TTL_SECONDS: ${REPOMESH_LOCAL_SESSION_TTL_SECONDS:-28800}
-      REPOMESH_AGENTTEAMS_REQUIRED: "true"
-      REPOMESH_AGENTTEAMS_CONTROLLER_URL: http://agentteams-controller:8090
-      REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN: ${REPOMESH_AGENTTEAMS_CONTROLLER_TOKEN:-}
-      REPOMESH_AGENTTEAMS_MATRIX_URL: http://agentteams-controller:6167
-      REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN: ${REPOMESH_AGENTTEAMS_MATRIX_ACCESS_TOKEN:-}
       REPOMESH_MODEL_API_KEY: ${REPOMESH_MODEL_API_KEY:-}
       REPOMESH_MODEL_BASE_URL: ${REPOMESH_MODEL_BASE_URL:-https://api.deepseek.com/v1}
       REPOMESH_MODEL: ${REPOMESH_MODEL:-deepseek-chat}
@@ -65,7 +63,7 @@ services:
       # 503（见 worker_mcp._authorize），故默认 true 只在本 dev 编排生效、自带护栏。
       REPOMESH_DIRECT_WORKER_MCP_ENABLED: ${REPOMESH_DIRECT_WORKER_MCP_ENABLED:-true}
       REPOMESH_GITHUB_APP_ID: ${REPOMESH_GITHUB_APP_ID:-0}
-      REPOMESH_GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/repomesh-github-app.pem
+      # No secret file is mounted here; container deployments use base64.
       REPOMESH_GITHUB_APP_PRIVATE_KEY_BASE64: ${REPOMESH_GITHUB_APP_PRIVATE_KEY_BASE64:-}
       REPOMESH_GITHUB_WEBHOOK_SECRET: ${REPOMESH_GITHUB_WEBHOOK_SECRET:-}
       REPOMESH_DELIVERY_AUTO_ENABLED: ${REPOMESH_DELIVERY_AUTO_ENABLED:-false}
@@ -87,13 +85,10 @@ services:
       # Worker 的 mirror 什么也读不到。桶名两处共用，必须与 AgentTeams 实际注册的桶一致
       # （本环境是 agentteams-storage，mc ls 只列出它）。
       REPOMESH_AGENTTEAMS_STORAGE_ROOT: /agentteams-data/minio/${REPOMESH_AGENTTEAMS_STORAGE_BUCKET:-agentteams-storage}
-      REPOMESH_AGENTTEAMS_STORAGE_ENDPOINT: ${REPOMESH_AGENTTEAMS_STORAGE_ENDPOINT:-}
-      REPOMESH_AGENTTEAMS_STORAGE_ACCESS_KEY: ${REPOMESH_AGENTTEAMS_STORAGE_ACCESS_KEY:-}
-      REPOMESH_AGENTTEAMS_STORAGE_SECRET_KEY: ${REPOMESH_AGENTTEAMS_STORAGE_SECRET_KEY:-}
-      REPOMESH_AGENTTEAMS_STORAGE_BUCKET: ${REPOMESH_AGENTTEAMS_STORAGE_BUCKET:-agentteams-storage}
     ports:
-      - "8000:8000"
+      - "${REPOMESH_API_PORT:-8000}:8000"
     volumes:
+      - ${REPOMESH_SECRETS_DIR:-./.secrets}:/app/.secrets:ro
       - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/runner-workspaces
       - agentteams-storage:/agentteams-data
     depends_on:
@@ -110,6 +105,58 @@ services:
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')",
         ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  web:
+    profiles: ["platform"]
+    build:
+      context: ./frontend
+      args:
+        API_UPSTREAM: api
+    restart: unless-stopped
+    environment:
+      REPOMESH_BROWSER_API_TOKEN: ${REPOMESH_AGENT_ACTION_TOKEN:-}
+      REPOMESH_BROWSER_API_TOKEN_FILE: /run/repomesh/browser-action-token
+    volumes:
+      - ${REPOMESH_SECRETS_DIR:-./.secrets}/browser-action-token:/run/repomesh/browser-action-token:ro
+    ports:
+      - "${REPOMESH_WEB_PORT:-5280}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  bootstrap:
+    profiles: ["platform"]
+    build:
+      context: .
+      dockerfile: Dockerfile.bootstrap
+    restart: unless-stopped
+    environment:
+      REPOMESH_ENVIRONMENT: development
+      REPOMESH_LOG_LEVEL: INFO
+      REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@postgres:5432/repomesh
+      REPOMESH_BOOTSTRAP_MODE: ${REPOMESH_BOOTSTRAP_MODE:-production}
+      REPOMESH_BOOTSTRAP_POLL_SECONDS: ${REPOMESH_BOOTSTRAP_POLL_SECONDS:-2}
+      REPOMESH_BOOTSTRAP_LEASE_SECONDS: ${REPOMESH_BOOTSTRAP_LEASE_SECONDS:-300}
+      REPOMESH_CREDENTIALS_ENCRYPTION_KEY_FILE: /app/.secrets/platform-credentials.key
+      AGENTTEAMS_ENV_FILE: /app/.secrets/agentteams-manager.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${REPOMESH_SECRETS_DIR:-./.secrets}:/app/.secrets
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/repomesh-bootstrap-ready"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -143,17 +190,29 @@ services:
 
   console-api:
     profiles: ["console"]
-    restart: unless-stopped
     build:
       context: .
+    # Same as api: the credentials save-and-restart flow relies on Docker
+    # restarting this container after it exits to pick up new DB config.
+    restart: unless-stopped
+    volumes:
+      - ./.secrets:/app/.secrets
     environment:
       REPOMESH_ENVIRONMENT: development
       REPOMESH_LOG_LEVEL: INFO
+      REPOMESH_SUPERVISED: "true"
       REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@console-postgres:5432/repomesh
       # Same default as frontend/.env.development; the web image is built with
       # the matching token, so overriding this means overriding it for both.
       REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_CONSOLE_ACTION_TOKEN:-console-dev-token}
       REPOMESH_LOCAL_SESSION_TTL_SECONDS: ${REPOMESH_LOCAL_SESSION_TTL_SECONDS:-28800}
+      # Repository scanning: SSRF allowlist plus credentials for private repos.
+      # github.com / *.github.com / gitlab.com / any host containing "gitlab"
+      # scan by default; this allowlist only gates custom self-hosted domains
+      # the platform detection cannot name.
+      REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS: ${REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS:-github.com}
+      REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN: ${REPOMESH_REPOSITORY_SCAN_GITHUB_TOKEN:-}
+      REPOMESH_REPOSITORY_SCAN_GITLAB_TOKEN: ${REPOMESH_REPOSITORY_SCAN_GITLAB_TOKEN:-}
     # The image CMD is `alembic upgrade head && uvicorn ...`, so the container
     # migrates its own (private) database on every start.
     depends_on:
@@ -179,7 +238,9 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_TOKEN: ${REPOMESH_CONSOLE_ACTION_TOKEN:-console-dev-token}
+        API_UPSTREAM: console-api
+    environment:
+      REPOMESH_BROWSER_API_TOKEN: ${REPOMESH_CONSOLE_ACTION_TOKEN:-console-dev-token}
     # The only published port of the console stack: nginx serves the built SPA
     # and reverse-proxies /api to console-api, so the browser sees one origin
     # and no CORS or dev proxy is involved.

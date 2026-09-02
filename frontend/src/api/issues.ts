@@ -3,7 +3,7 @@
  *
  *  live 打契约 v0.2 §2 的 `GET /issues`；replay 走本地夹具。两侧返回**同一个契约类型**，
  *  页面无分支。 */
-import type { IssueListItemView, IssueListResponse } from "./contract";
+import type { IssueListItemView, IssueListResponse, ParsedDocumentView } from "./contract";
 import { defaultClient } from "./client";
 import { resolveGovernanceAgent } from "./decisions";
 import { resolveDataSourceMode, type DataSourceMode } from "./source";
@@ -71,4 +71,11 @@ export async function fetchIssues(q: IssuesQuery): Promise<IssueListResponse> {
     cursor: q.cursor,
     limit: ISSUES_PAGE_LIMIT,
   });
+}
+
+/** 需求文档真实上传（与 createIssue 同源鉴权）：把 .txt/.md/.docx/.pdf/.odt/.rtf
+ *  解析成纯文本，由弹窗填入需求区继续编辑。回放模式同样可用——解析只读后端，
+ *  不写任何数据，不篡改夹具世界。 */
+export async function parseRequirementDocument(file: File): Promise<ParsedDocumentView> {
+  return defaultClient().parseIssueDocument(file);
 }

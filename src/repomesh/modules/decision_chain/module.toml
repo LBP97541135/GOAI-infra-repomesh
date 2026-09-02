@@ -1,0 +1,5 @@
+name = "decision_chain"
+owner = "quality-delivery"
+status = "active"
+schema = "decision_chain"
+responsibilities = ["decision chain projection", "decision chain tracing", "structural similarity search"]

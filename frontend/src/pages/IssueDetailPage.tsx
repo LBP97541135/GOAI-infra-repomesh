@@ -112,6 +112,13 @@ function HeaderBlock({ detail }: { detail: IssueDetailView }) {
         <span className="rounded-hard bg-amber px-2 py-px text-[11px] font-semibold text-[#191308]">
           {detail.state === "open" ? "Open" : "Closed"} · {detail.phase_note}
         </span>
+        {/* §2.3：需求已落库、尚未物化——与列表行同一徽标，详情页同样提示
+            Org Leader 下一步是驱动发现链并物化 */}
+        {detail.pending_planning && (
+          <span className="rounded-hard border border-amber px-2 py-px text-[11px] text-amber">
+            待处理
+          </span>
+        )}
         {/* §2.1：paused 不影响 state，必须独立徽标呈现 */}
         {detail.operational_status === "paused" && (
           <span className="rounded-hard border border-salmon px-2 py-px text-[11px] text-salmon">已暂停</span>

@@ -15,9 +15,11 @@ import type {
   DiscoveryCandidatesRequest,
   DiscoveryMaterializeRequest,
   DiscoveryMaterializeResult,
+  DiscoveryReadinessView,
   DiscoveryStepRequest,
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
+  ExternalMemberReadinessResponse,
   AlertEventsResponse,
   AlertRule,
   AlertRulePayload,
@@ -36,6 +38,7 @@ import type {
   OrganizationCreateRequest,
   OrganizationCreateResponse,
   OrganizationsResponse,
+  ParsedDocumentView,
   PlanSnapshotView,
   RepositoryPlanView,
   RepositoryCapabilityProfileUpdate,
@@ -56,16 +59,23 @@ import type {
   SetupStatusView,
   UrlIdentification,
 } from "./contract";
+import { browserApiToken } from "../runtimeConfig";
 
 export class ApiError extends Error {
   readonly status: number;
   readonly url: string;
+  /** FastAPI `detail` 的**原件**（解析过的 JSON 值；非 JSON 体时是响应原文）。
+   *  `message` 里那份是它的字符串化版本，够显示不够消费：结构化 detail
+   *  （物化的 `external_members_not_ready`）要按字段渲染，JSON.stringify 之后
+   *  那份结构就只剩一坨字。连不上时为 null——那一次根本没有响应体。 */
+  readonly detail: unknown;
 
-  constructor(status: number, url: string, message: string) {
+  constructor(status: number, url: string, message: string, detail: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.url = url;
+    this.detail = detail;
   }
 }
 
@@ -74,6 +84,28 @@ export interface ApiClientConfig {
   baseUrl: string;
   /** Bearer token；空则不带 Authorization 头 */
   token: string;
+}
+
+/** 统一从响应体抽取 FastAPI 错误：{"detail": "<message>"}（422 时 detail 为数组，
+ *  物化就绪拒绝时为对象）。message 用于人读，detail 原样保留给调用方判断。 */
+async function errorFromResponse(
+  res: Response,
+  method: string,
+  path: string,
+): Promise<{ message: string; detail: unknown }> {
+  const raw = await res.text().catch(() => "");
+  let detail: unknown = raw;
+  try {
+    const parsed = JSON.parse(raw) as { detail?: unknown };
+    if (parsed.detail !== undefined) detail = parsed.detail;
+  } catch {
+    /* 非 JSON 体，原样展示 */
+  }
+  const text = typeof detail === "string" ? detail : JSON.stringify(detail);
+  return {
+    message: `${method} ${path} → HTTP ${res.status}${text ? ` · ${text.slice(0, 200)}` : ""}`,
+    detail,
+  };
 }
 
 async function request<T>(config: ApiClientConfig, method: string, path: string, body?: unknown): Promise<T> {
@@ -86,21 +118,11 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
   try {
     res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch (cause) {
-    throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`);
+    throw new ApiError(0, url, `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`, null);
   }
   if (!res.ok) {
-    // FastAPI 错误体 {"detail": "<message>"}（422 时 detail 为数组）
-    const raw = await res.text().catch(() => "");
-    let detail = raw;
-    try {
-      const parsed = JSON.parse(raw) as { detail?: unknown };
-      if (parsed.detail !== undefined) {
-        detail = typeof parsed.detail === "string" ? parsed.detail : JSON.stringify(parsed.detail);
-      }
-    } catch {
-      /* 非 JSON 体，原样展示 */
-    }
-    throw new ApiError(res.status, url, `${method} ${path} → HTTP ${res.status}${detail ? ` · ${detail.slice(0, 200)}` : ""}`);
+    const err = await errorFromResponse(res, method, path);
+    throw new ApiError(res.status, url, err.message, err.detail);
   }
   return (await res.json()) as T;
 }
@@ -110,7 +132,7 @@ async function request<T>(config: ApiClientConfig, method: string, path: string,
 export function defaultClient() {
   return createApiClient({
     baseUrl: import.meta.env.VITE_API_BASE ?? "",
-    token: import.meta.env.VITE_API_TOKEN ?? "",
+    token: browserApiToken(),
   });
 }
 
@@ -137,6 +159,35 @@ export function createApiClient(config: ApiClientConfig) {
      *  响应都是 §2 单条投影；403 主体非活跃 Org Leader、404 主体不存在。 */
     createIssue: (payload: IssueIntakeRequest) =>
       request<IssueListItemView>(config, "POST", `/issues`, payload),
+
+    /** 需求文档真实上传：multipart 解析（与 createIssue 互补——上传取回的纯文本
+     *  由弹窗填入需求区、可编辑后再随 issue 提交）。415 格式不支持、413 超限、
+     *  422 无可提取文本（如扫描件 PDF），detail 原样上抛。 */
+    parseIssueDocument: async (file: File) => {
+      const path = "/issues/parse-document";
+      const url = `${config.baseUrl}/api/v1${path}`;
+      const form = new FormData();
+      form.append("file", file);
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (config.token) headers.Authorization = `Bearer ${config.token}`;
+      // Content-Type 不手设：浏览器会带 multipart 边界，手设反而丢边界导致 422。
+      let res: Response;
+      try {
+        res = await fetch(url, { method: "POST", headers, body: form });
+      } catch (cause) {
+        throw new ApiError(
+          0,
+          url,
+          `无法连接 ${url}：${cause instanceof Error ? cause.message : String(cause)}`,
+          null,
+        );
+      }
+      if (!res.ok) {
+        const err = await errorFromResponse(res, "POST", path);
+        throw new ApiError(res.status, url, err.message, err.detail);
+      }
+      return (await res.json()) as ParsedDocumentView;
+    },
 
     /** 契约 v0.3 §2.2：工作区注册表（console 命名空间，§4.5 裁决同款前缀）。 */
     listOrganizations: () =>
@@ -280,6 +331,19 @@ export function createApiClient(config: ApiClientConfig) {
      *  伪装成系统故障。 */
     postDiscoveryMaterialize: (issueId: string, payload: DiscoveryMaterializeRequest) =>
       request<DiscoveryMaterializeResult>(config, "POST", `/issues/${issueId}/discovery/materialize`, payload),
+
+    /* ── 本机 CLI 成员就绪 ──────────────────────────────────────────────── */
+
+    /** 物化前的就绪预检。**无副作用**（不消费草稿、不写回执），成员集合由服务端从
+     *  目录派生——前端不传成员名单，也不自己算谁该在场。404 = 该 issue 没有进行中的
+     *  发现轮次（此时空列表会被读成「大家都就绪」，所以服务端宁可 404）。 */
+    getDiscoveryReadiness: (issueId: string) =>
+      request<DiscoveryReadinessView>(config, "GET", `/issues/${issueId}/discovery/readiness`),
+
+    /** 全体外部成员的租约状态板（本地 CLI 页轮询）。路径里两段 v1 不是笔误：
+     *  `/api/v1` 是全站前缀，`/runtime/v1` 是 runtime 面自己的版本段。 */
+    getExternalMemberReadiness: () =>
+      request<ExternalMemberReadinessResponse>(config, "GET", `/runtime/v1/external-members/readiness`),
 
     getDelivery: (deliveryId: string) =>
       request<DeliveryAggregate>(config, "GET", `/deliveries/${deliveryId}`),

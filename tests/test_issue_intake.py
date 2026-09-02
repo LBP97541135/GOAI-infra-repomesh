@@ -162,12 +162,42 @@ def test_issue_intake_over_http(
             assert issue["opened_by_name"] == "intake-org-leader"
             assert issue["round_count"] == 0
             assert issue["issue_key"] is None  # no project registry (v0.2 §0)
+            # §2.3: a requirement that just landed has no execution plan yet —
+            # the Org Leader's next move is discovery + materialize, so the
+            # list/detail badge reads "pending".
+            assert issue["pending_planning"] is True
             assert _audit_count(application_container) == 1
 
             # Idempotent replay: 200, byte-identical issue, no second audit row.
             replay = client.post("/api/v1/issues", json=payload, headers=HEADERS)
             assert replay.status_code == 200
             assert replay.json()["issue_id"] == issue["issue_id"]
+            assert _audit_count(application_container) == 1
+
+            # §1.3 content binding: the key names one logical create, and the
+            # requirement text is part of what it names. Reusing it with a
+            # different requirement is refused (409) — answering with the
+            # original issue would hand the caller a requirement it never
+            # submitted, and nothing new may be created.
+            rekeyed = client.post(
+                "/api/v1/issues",
+                json={**payload, "requirement_text": "结算页支持满额免运费门槛（改）"},
+                headers=HEADERS,
+            )
+            assert rekeyed.status_code == 409
+            assert "issue_id" not in rekeyed.json()
+            assert _audit_count(application_container) == 1
+
+            # §6 S-5 entropy: the model allows >= 8 characters, so these pass
+            # the model layer and must be refused by the service — one char
+            # repeated, a short unit repeated, and a monotone digit run.
+            for weak_key in ("aaaaaaaa", "abababab", "12345678"):
+                weak = client.post(
+                    "/api/v1/issues",
+                    json={**payload, "idempotency_key": weak_key},
+                    headers=HEADERS,
+                )
+                assert weak.status_code == 422, weak_key
             assert _audit_count(application_container) == 1
 
             # A different key is a different issue even with the same text.
@@ -186,6 +216,11 @@ def test_issue_intake_over_http(
                 issue["issue_id"],
                 second.json()["issue_id"],
             }
+            # §2.3: both draft-only issues read back "pending planning" in the
+            # list projection — the badge is not a detail-page-only fact.
+            listed_by_id = {item["issue_id"]: item for item in listed["issues"]}
+            assert listed_by_id[issue["issue_id"]]["pending_planning"] is True
+            assert listed_by_id[second.json()["issue_id"]]["pending_planning"] is True
 
             # S-5: the same key in another workspace is a different issue —
             # the keyspace is organization-scoped, so a guessed or reused key

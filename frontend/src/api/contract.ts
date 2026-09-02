@@ -49,7 +49,7 @@ export type GovernanceDecisionValue = "ready" | "blocked" | "rollback_required";
  *   - `issue_key`：无 Project 注册表（§0/§6.1），前端显 issue_id 短版；
  *   - `operational_status` / `execution_mode`：来自 project.agent_topologies，
  *     联调种子上该表为空 → 恒 null。**null 不等于 active**，徽标须「有值才渲染」；
- *   - `opened_by_name`：AgentTeams **资源名**（repomesh-worker-01 这类），与 §4.2 的
+ *   - `opened_by_name`：AgentTeams **资源名**（rm-worker-01 这类），与 §4.2 的
  *     `sender_name` 同源同精度，**不是人名**——渲染保留 AGENT 前缀语义。 */
 export interface IssueListItemView {
   issue_id: string;
@@ -67,6 +67,9 @@ export interface IssueListItemView {
   active_round_id: string | null;
   latest_round_id: string | null;
   pending_decision_count: number;
+  /** §2.3：需求已落库但尚未物化成执行计划（无任何轮次）——Org Leader 的
+   *  下一步是驱动发现链并物化。与 phase_note「计划 vN 待物化」同一分支派生。 */
+  pending_planning: boolean;
   repository_count: number;
   team_count: number;
   /** §2.1：paused **不影响** state，前端以独立徽标呈现 */
@@ -102,6 +105,16 @@ export interface IssueIntakeRequest {
   created_by_agent_id: string;
   idempotency_key: string;
   organization_id?: string;
+}
+
+/** 需求文档解析结果（POST /issues/parse-document）：上传真实文件后取回的文本。
+ *  `chars` 是截断后的实际字符数；`truncated` 为真说明源文档超过 intake 上限。 */
+export interface ParsedDocumentView {
+  filename: string;
+  format: string;
+  text: string;
+  chars: number;
+  truncated: boolean;
 }
 
 /** 契约 v0.3 §2.2：工作区（Organization）注册表单条。 */
@@ -224,7 +237,7 @@ export interface IssueDetailView extends IssueListItemView {
 
 export interface RoomMemberView {
   agent_id: string;
-  /** AgentTeams 资源名（repomesh-leader-a-api 这类），**不是人名** */
+  /** AgentTeams 资源名（rm-leader-a-api 这类），**不是人名** */
   name: string | null;
   role: string;
 }
@@ -461,7 +474,7 @@ export interface ConsoleAgentView {
   organization_id: string;
   role: AgentRole;
   status: "active" | "disabled";
-  /** AgentTeams 资源名（repomesh-worker-01 这类），**不是人名** */
+  /** AgentTeams 资源名（rm-worker-01 这类），**不是人名** */
   agentteams_resource_name: string;
   leader_agent_id: string | null;
   repository_id: string | null;
@@ -1006,6 +1019,10 @@ export interface DiscoveryCandidateItem {
   /** **原样透传，读模型不摘要不截断**（§3.1 诚实条款），前端同样不许摘要 */
   rationale: string;
   is_entry_point: boolean;
+  /** **低信号自述**：被评仓库除名字外没有可倚仗的信号（已扫描仓取扫描的
+   *  `AutoCard.low_signal` 判定；未扫描仓 facade 全空）。此时分数是猜测——
+   *  面板显示「低信号」徽章，**禁止把猜测分数当有据判定呈现**（§3.1 诚实条款）。 */
+  low_signal: boolean;
 }
 
 /** §2.2 `candidates` 直投影（GUI 步 2 / 管线 Step 1）。 */
@@ -1033,7 +1050,12 @@ export interface ConfirmationRepositoryPlanView {
 }
 
 /** `repository_intelligence/api/models.py:255` 既有形状，§2.2 直接复用。
- *  `status` 是**大写字符串**（不是枚举类型），值域见 DiscoveryTierStatus。 */
+ *  `status` 是**大写字符串**（不是枚举类型），值域见 DiscoveryTierStatus。
+ *
+ *  本批追加两个**恒可下发**的布尔（契约 §2.2 勘正）：
+ *   - `is_supplemented`：该仓是 PM 调图预补充进确认名单的，非候选评分产物；
+ *   - `graph_conflict`：模型判 EXCLUDED、但图上有一条已确认依赖边把它连到保留仓。
+ *  两者缺省语义由契约定死（非真即不渲染），服务端**不省略**恒发 false。 */
 export interface ConfirmationResultView {
   repository: string;
   status: DiscoveryTierStatus;
@@ -1042,6 +1064,44 @@ export interface ConfirmationResultView {
   plan_summary: string;
   plan: ConfirmationRepositoryPlanView | null;
   missing_dependencies: string[];
+  is_supplemented: boolean;
+  graph_conflict: boolean;
+}
+
+/** §2.2 `classification.supplements`：图预补充的证据明细，每仓一条（契约 §2.2）。
+ *  `confidence` 是**图边**的置信度（`confirmed` / `declared`），不是 LLM 的；
+ *  `via` 是拉它进来的候选仓；`mechanism` 是 forward/reverse_dependencies。 */
+export interface SupplementEvidenceView {
+  repository: string;
+  via: string;
+  confidence: string;
+  mechanism: string;
+  match_reason: string;
+}
+
+/** §2.2 `GraphConflictView.edges[].item`：触发复核的那条已确认图边原文。 */
+export interface GraphConflictEdgeView {
+  producer: string;
+  consumer: string;
+  confidence: string;
+  mechanism: string;
+  match_reason: string;
+}
+
+/** §2.2 `classification.conflicts`：图与模型的分歧清单（复核建议，非报错）。
+ *  `status` 是模型原判（实践中恒 EXCLUDED）；`via` 是图边指向的被保留仓。 */
+export interface GraphConflictView {
+  repository: string;
+  status: string;
+  via: string[];
+  edges: GraphConflictEdgeView[];
+}
+
+/** §2.2 `classification.observations`：低信任观察名单——模型口述、无图边背书、
+ *  不在确认名单里的仓。摆给审批人看，要纳入走 adjustments，不自动补充。 */
+export interface SupplementObservationView {
+  repository: string;
+  via: string;
 }
 
 /** §2.2 `classification.adjustments`：审批人改档的留痕，与 LLM 原判**并存**。
@@ -1055,12 +1115,18 @@ export interface DiscoveryAdjustmentRecord {
 }
 
 /** §2.2 `classification` 直投影（GUI 步 3 上半 / 管线 Step 2）。
- *  三档列表保留 **LLM 原始分档**；生效分档见 §3.1 `effective_tiers`。 */
+ *  三档列表保留 **LLM 原始分档**；生效分档见 §3.1 `effective_tiers`。
+ *
+ *  `supplements` / `conflicts` / `observations` 是本批（图预补充 + 复核）新增：
+ *  图预补充的证据明细、图与模型的分歧清单、低信任观察名单（契约 §2.2）。
+ */
 export interface DiscoveryClassificationBlock {
   required: ConfirmationResultView[];
   maybe: ConfirmationResultView[];
   excluded: ConfirmationResultView[];
-  supplemented_repos: string[];
+  supplements: SupplementEvidenceView[];
+  conflicts: GraphConflictView[];
+  observations: SupplementObservationView[];
   adjustments: DiscoveryAdjustmentRecord[];
   ran_at: string;
   by_agent_id: string;
@@ -1219,10 +1285,10 @@ export interface DiscoveryAnalysisRequest {
 }
 
 /** §4.3 Step 1 候选评分。需求文本取 `analyzed_requirement`，不收。
- *  `limit` / `entry_point` **均可选**（实施定死）：`limit` 缺省 10、范围 1..50，
- *  `entry_point` 缺省 null。**前端不送，交服务端缺省**——硬编一个就是第二份缺省
- *  （同 repositoryScan.ts 不送 max_workers 的取舍）。
- *  与既有脚本入口 `POST /discovery` 的缺省 5 **有意不同**，两处各自独立、不统一。 */
+ *  `limit` / `entry_point` **均可选**（实施定死）：`limit` 缺省取服务端配置
+ *  `REPOMESH_DISCOVERY_CANDIDATE_LIMIT`（范围 1..50），`entry_point` 缺省 null。
+ *  **前端不送，交服务端缺省**——硬编一个就是第二份缺省（同 repositoryScan.ts
+ *  不送 max_workers 的取舍）。脚本入口 `POST /discovery` 走自己的请求体，互不干扰。 */
 export interface DiscoveryCandidatesRequest {
   created_by_agent_id: string;
   idempotency_key: string;
@@ -1554,9 +1620,31 @@ export interface CodingAgentsProbe {
 /** `/setup/status` 的九项检查。前五项（model / database / agentteams / matrix /
  *  internal_auth）是 `ready_for_project_creation` 的必检项，其余四项不参与那个
  *  判定——后端的 `required` 元组是唯一事实，前端不另立一套。 */
+/** `/setup/status` retains the boolean checks for compatibility. `dependencies`
+ * is the setup UI's source of truth for ownership and remediation. */
+export type SetupDependencyState =
+  | "checking"
+  | "ready"
+  | "missing"
+  | "repairing"
+  | "waiting_for_user"
+  | "failed"
+  | "optional"
+  | "pending_onboarding";
+
+export interface SetupDependencyView {
+  id: string;
+  state: SetupDependencyState;
+  owner: "system" | "user" | "onboarding";
+  remediation: "automatic" | "user_input" | "optional" | "workflow";
+  required: boolean;
+  message: string;
+}
+
 export interface SetupStatusView {
   ready_for_project_creation: boolean;
   checks: Record<string, boolean>;
+  dependencies: SetupDependencyView[];
   counts: { accounts: number; agents: number; repositories: number };
   /** 未通过项的名字，后端已算好 */
   next_actions: string[];
@@ -1607,4 +1695,65 @@ export interface PlanSnapshotView {
   /** `graph_assisted` = 图里有扫描出的边参与；`llm_only` = 全靠模型给。
    *  null = 老快照没记这一列。 */
   integration_method: string | null;
+}
+
+/* ── 本机 CLI 成员就绪（`repomesh.agent-bridge.readiness.v1`）───────────────
+   这一族的三个形状**都是 camelCase**，与本文件其余读模型的 snake_case 不同：
+   服务端两处（`ExternalMemberReadinessView.to_wire()` 与 `member_readiness_wire()`）
+   就是这么出线的，前端照抄字面不改名。
+
+   租约语义（TTL 45s，判定在服务端）：`ready` = 租约未过期且未停报；`stale` =
+   过期但还在一个 TTL 内；`offline` = 更晚，或已报 shutdown。**只有 ready 过物化门**，
+   这条判定前端不重算，一律读服务端给的 `status`。 */
+
+export type ExternalMemberReadinessStatus = "ready" | "stale" | "offline";
+
+/** Bridge 能承担的两个角色。组织 leader 不在其中——它驻在 AgentTeams Manager 上，
+ *  不跑本机 CLI，所以就绪列表里永远没有它。 */
+export type ExternalMemberRole = "repository_leader" | "worker";
+
+/** `GET /runtime/v1/external-members/readiness` 的一行：租约事实 + 服务端此刻派生的
+ *  状态。刻意没有 `instanceId` 与 `workspaceRoot`——那是进程身份与操作者机器上的路径，
+ *  状态板不发布这两样。 */
+export interface ExternalMemberReadinessView {
+  agentId: string;
+  status: ExternalMemberReadinessStatus;
+  role: ExternalMemberRole;
+  leaderLane: boolean;
+  governedLane: boolean;
+  reportedAt: string;
+  expiresAt: string;
+  /** 报过 shutdown 的时刻；没报过为 null */
+  stoppedAt: string | null;
+}
+
+export interface ExternalMemberReadinessResponse {
+  members: ExternalMemberReadinessView[];
+}
+
+/** 就绪门对一个成员的判定。**预检与物化 409 是同一个 wire helper 出的**（服务端注释：
+ *  「操作者读回的那一行与拒绝他的那份 body 不能互相打架」），所以这里也是同一个类型。
+ *  `reason` 是服务端英文原句（`the readiness lease expired without a renewal` /
+ *  `no readiness report` 等），原样展示不翻译。 */
+export interface MemberReadinessFact {
+  agentId: string;
+  role: ExternalMemberRole;
+  status: ExternalMemberReadinessStatus;
+  reason: string;
+}
+
+/** `GET /issues/{issue_id}/discovery/readiness`：物化前的**无副作用**预检。
+ *  服务端自述「仅供参考」——租约是关于此刻的断言，渲染出来时它已经旧了一瞬，
+ *  真正的权威是物化里那道门。404 = 该 issue 没有进行中的发现轮次。 */
+export interface DiscoveryReadinessView {
+  checkedAt: string;
+  members: MemberReadinessFact[];
+}
+
+/** 物化 409 的**结构化** detail（新家族）。这一族与其他 409（检查点未过、计划未生成…）
+ *  不同：它可自助解决，且解法就写在成员行里，所以不能糊成一句 detail 原文。 */
+export interface ExternalMembersNotReadyDetail {
+  code: "external_members_not_ready";
+  message: string;
+  members: MemberReadinessFact[];
 }

@@ -120,11 +120,17 @@ class ScriptedLLM:
         self.calls: list[list[dict[str, str]]] = []
         self.gate: threading.Event | None = None
         self.entered = threading.Event()
+        #: When ``gate`` is armed, block only calls at or after this 1-based
+        #: call number. ``0`` (the default) blocks every call — the behaviour
+        #: the event-loop tests rely on. A nonzero value lets earlier calls
+        #: finish while a later one stalls, which is the only way to observe
+        #: partial progress under parallel confirmation.
+        self.gate_block_from: int = 0
 
     def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.0) -> str:
         self.calls.append(messages)
         self.entered.set()
-        if self.gate is not None:
+        if self.gate is not None and len(self.calls) >= self.gate_block_from:
             # Blocks the calling thread, exactly as a real HTTP call to a model
             # would. If this runs on the event loop the whole process stops.
             self.gate.wait(timeout=10)
@@ -1238,9 +1244,21 @@ def test_classification_reports_progress_per_candidate(
 
             llm.entered.clear()
             llm.gate = threading.Event()
+            # Block only the second confirmation. analysis and candidates are
+            # calls 1-2, the first confirmation is call 3 — letting it finish
+            # is what makes "done == 1" observable. A gate that blocked every
+            # call would stall both workers at once and no progress would be
+            # recorded at all under parallel confirmation.
+            llm.gate_block_from = 4
             accepted = chain.post("classification")
             assert llm.entered.wait(timeout=10)
-            mid = chain.poll(accepted.json()["task_id"])
+            mid = None
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                mid = chain.poll(accepted.json()["task_id"])
+                if mid["progress"]["done"] >= 1:
+                    break
+                time.sleep(0.05)
 
             llm.gate.set()
             finished = chain.await_task(accepted)

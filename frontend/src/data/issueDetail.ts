@@ -37,6 +37,8 @@ export const issueDetailFixture: IssueDetailView = {
   active_round_id: "2ebf564b-3bf2-5af1-ae24-3ccc4dd9d721",
   latest_round_id: "2ebf564b-3bf2-5af1-ae24-3ccc4dd9d721",
   pending_decision_count: 1,
+  // 已物化（round_count=2）→ 不待处理
+  pending_planning: false,
   repository_count: 3,
   team_count: 3,
   // 与 data/issues.ts 列表夹具同一派生同一结论（§3 详情 = §2 全字段之上追加）
@@ -109,6 +111,8 @@ export const issueDetailDraftFixture: IssueDetailView = {
   active_round_id: null,
   latest_round_id: null,
   pending_decision_count: 0,
+  // 未物化（rounds 空）→「待处理」徽标亮起，与 phase_note 同一分支
+  pending_planning: true,
   repository_count: 0,
   team_count: 0,
   rounds: [],

@@ -6,17 +6,17 @@ Usage::
     # Text requirement
     python scripts/repomesh_cli.py run \\
         -r "修复订票流程中微信支付回调超时的问题" \\
-        https://gitlab.metaglobal.cn/orders/order-service
+        https://gitlab.example.com/orders/order-service
 
     # Requirement document (Markdown / plain text)
     python scripts/repomesh_cli.py run \\
         -f PRD.md \\
-        https://gitlab.metaglobal.cn/orders/order-service
+        https://gitlab.example.com/orders/order-service
 
     # Non-interactive mode (CI/CD)
     python scripts/repomesh_cli.py run \\
         --no-interactive -r "加微信支付" \\
-        https://gitlab.metaglobal.cn/
+        https://gitlab.example.com/
 
     # Local scan (debugging)
     python scripts/repomesh_cli.py scan /path/to/repo
@@ -138,134 +138,138 @@ async def cmd_run_async(args: argparse.Namespace) -> int:
 
     fetcher = make_fetcher(platform, **{f"{platform.value}_token": token})
 
-    # ② LLM setup (needed for both interaction and discovery).
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    base_url = os.environ.get(
-        "REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
-    )
-    model = os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat")
-    llm_client = make_llm_client(api_key, base_url=base_url, model=model)
+    try:
+        # ② LLM setup (needed for both interaction and discovery).
+        api_key = os.environ.get("DEEPSEEK_API_KEY")
+        base_url = os.environ.get(
+            "REPOMESH_DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
+        )
+        model = os.environ.get("REPOMESH_DEEPSEEK_MODEL", "deepseek-chat")
+        llm_client = make_llm_client(api_key, base_url=base_url, model=model)
 
-    # ③ Requirement sufficiency check + interactive Q&A.
-    extracted_keywords: list[str] = []
-    if llm_client is not None and not args.no_interactive:
-        analyzer = RequirementAnalyzer(llm_client)
-        for round_num in range(_MAX_INTERACTION_ROUNDS):
-            analysis = analyzer.analyze(requirement)
-            extracted_keywords = analysis.extracted_keywords
+        # ③ Requirement sufficiency check + interactive Q&A.
+        extracted_keywords: list[str] = []
+        if llm_client is not None and not args.no_interactive:
+            analyzer = RequirementAnalyzer(llm_client)
+            for round_num in range(_MAX_INTERACTION_ROUNDS):
+                analysis = analyzer.analyze(requirement)
+                extracted_keywords = analysis.extracted_keywords
 
-            if analysis.sufficient:
+                if analysis.sufficient:
+                    print(
+                        f"\n需求信息充分（置信度 {analysis.confidence:.0%}），"
+                        f"开始分析。",
+                        file=sys.stderr,
+                    )
+                    break
+
+                missing = ", ".join(analysis.missing_dimensions) or "信息不足"
                 print(
-                    f"\n需求信息充分（置信度 {analysis.confidence:.0%}），"
-                    f"开始分析。",
+                    f"\n需求信息还不够明确（缺少：{missing}）",
                     file=sys.stderr,
                 )
-                break
+                if round_num == _MAX_INTERACTION_ROUNDS - 1:
+                    print(
+                        "已达到最大交互轮次，将使用现有信息继续分析。",
+                        file=sys.stderr,
+                    )
+                    break
 
-            missing = ", ".join(analysis.missing_dimensions) or "信息不足"
+                for question in analysis.questions:
+                    print(f"\n❓ {question}")
+                    try:
+                        answer = input("> ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        answer = ""
+                    if answer:
+                        requirement += f"\n\n[补充信息] {question}\n{answer}"
+        elif llm_client is None:
             print(
-                f"\n需求信息还不够明确（缺少：{missing}）",
+                "\n⚠ No DEEPSEEK_API_KEY set — using keyword-matching fallback.",
                 file=sys.stderr,
             )
-            if round_num == _MAX_INTERACTION_ROUNDS - 1:
+        else:
+            print("\n--no-interactive: 跳过需求充分度评估。", file=sys.stderr)
+
+        # ④ Determine URL type and fetch repo list.
+        print(f"\nIdentifying URL type on {platform.value}...", file=sys.stderr)
+        url_type = await fetcher.identify(url)
+
+        entry_repo_name: str | None = None
+        group_url: str = url
+
+        if url_type is UrlType.SINGLE_REPO:
+            entry_repo_name = extract_entry_repo_name(url)
+            print("Single repo detected. Finding parent group...", file=sys.stderr)
+            parent = await fetcher.fetch_parent_group_url(url)
+            if parent:
+                group_url = parent
+                print(f"Parent group: {group_url}", file=sys.stderr)
+            else:
                 print(
-                    "已达到最大交互轮次，将使用现有信息继续分析。",
+                    "Warning: could not find parent group. "
+                    "Only this repo will be scanned.",
                     file=sys.stderr,
                 )
-                break
-
-            for question in analysis.questions:
-                print(f"\n❓ {question}")
-                try:
-                    answer = input("> ").strip()
-                except (EOFError, KeyboardInterrupt):
-                    answer = ""
-                if answer:
-                    requirement += f"\n\n[补充信息] {question}\n{answer}"
-    elif llm_client is None:
-        print(
-            "\n⚠ No DEEPSEEK_API_KEY set — using keyword-matching fallback.",
-            file=sys.stderr,
-        )
-    else:
-        print("\n--no-interactive: 跳过需求充分度评估。", file=sys.stderr)
-
-    # ④ Determine URL type and fetch repo list.
-    print(f"\nIdentifying URL type on {platform.value}...", file=sys.stderr)
-    url_type = await fetcher.identify(url)
-
-    entry_repo_name: str | None = None
-    group_url: str = url
-
-    if url_type is UrlType.SINGLE_REPO:
-        entry_repo_name = extract_entry_repo_name(url)
-        print("Single repo detected. Finding parent group...", file=sys.stderr)
-        parent = await fetcher.fetch_parent_group_url(url)
-        if parent:
-            group_url = parent
-            print(f"Parent group: {group_url}", file=sys.stderr)
+        elif url_type is UrlType.GROUP:
+            print("Group/org detected.", file=sys.stderr)
         else:
             print(
-                "Warning: could not find parent group. "
-                "Only this repo will be scanned.",
+                f"Error: could not identify {url} as a repo or group "
+                f"on {platform.value}.",
                 file=sys.stderr,
             )
-    elif url_type is UrlType.GROUP:
-        print("Group/org detected.", file=sys.stderr)
-    else:
-        print(
-            f"Error: could not identify {url} as a repo or group "
-            f"on {platform.value}.",
-            file=sys.stderr,
-        )
-        return 1
-
-    # ⑤ Load or build cache.
-    cache = OrgCache()
-    profiles = cache.load(group_url)
-
-    if profiles is not None:
-        count = cache.get_repo_count(group_url)
-        age = cache.get_age_hours(group_url)
-        print(
-            f"Using cached data: {count} repos "
-            f"(age: {age:.1f}h)",
-            file=sys.stderr,
-        )
-    else:
-        print(f"Scanning all repos under {group_url}...", file=sys.stderr)
-        profiles = await scan_org(
-            group_url,
-            fetcher,
-            on_progress=lambda i, total, name: print(
-                f"  [{i}/{total}] {name}", file=sys.stderr
-            ),
-        )
-        if not profiles:
-            print("No repositories found.", file=sys.stderr)
             return 1
-        cache.save(group_url, profiles)
-        print(f"Cached {len(profiles)} repos.", file=sys.stderr)
 
-    # ⑥ LLM discovery.
-    catalog = InMemoryRepositoryCatalog()
-    for profile in profiles:
-        catalog._profiles[profile.id] = profile  # noqa: SLF001
+        # ⑤ Load or build cache.
+        cache = OrgCache()
+        profiles = cache.load(group_url)
 
-    if llm_client is not None:
-        print(f"\nUsing LLM: {model}", file=sys.stderr)
+        if profiles is not None:
+            count = cache.get_repo_count(group_url)
+            age = cache.get_age_hours(group_url)
+            print(
+                f"Using cached data: {count} repos "
+                f"(age: {age:.1f}h)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Scanning all repos under {group_url}...", file=sys.stderr)
+            profiles = await scan_org(
+                group_url,
+                fetcher,
+                on_progress=lambda i, total, name: print(
+                    f"  [{i}/{total}] {name}", file=sys.stderr
+                ),
+            )
+            if not profiles:
+                print("No repositories found.", file=sys.stderr)
+                return 1
+            cache.save(group_url, profiles)
+            print(f"Cached {len(profiles)} repos.", file=sys.stderr)
 
-    service = RepositoryDiscoveryService(catalog, llm_client=llm_client)
-    results = await service.discover(
-        requirement,
-        limit=args.limit,
-        entry_point=entry_repo_name,
-        keywords=extracted_keywords or None,
-    )
+        # ⑥ LLM discovery.
+        catalog = InMemoryRepositoryCatalog()
+        for profile in profiles:
+            catalog._profiles[profile.id] = profile  # noqa: SLF001
 
-    # ⑦ Output.
-    _print_results(results, profiles)
-    return 0
+        if llm_client is not None:
+            print(f"\nUsing LLM: {model}", file=sys.stderr)
+
+        service = RepositoryDiscoveryService(catalog, llm_client=llm_client)
+        results = await service.discover(
+            requirement,
+            limit=args.limit,
+            entry_point=entry_repo_name,
+            keywords=extracted_keywords or None,
+        )
+
+        # ⑦ Output.
+        _print_results(results, profiles)
+        return 0
+    finally:
+        # Release the fetcher's pooled HTTP client on every exit path.
+        await fetcher.aclose()
 
 
 def cmd_run(args: argparse.Namespace) -> int:

@@ -11,6 +11,7 @@ NAMING_CONVENTION = {
 
 BUSINESS_SCHEMAS = (
     "agent_directory",
+    "capability_management",
     "repository_intelligence",
     "project",
     "specification",
@@ -21,8 +22,10 @@ BUSINESS_SCHEMAS = (
     "review_validation",
     "change_control",
     "delivery",
+    "decision_chain",
     "observability",
     "identity_access",
+    "recovery_management",
 )
 PLATFORM_SCHEMA = "platform"
 ALL_SCHEMAS = (*BUSINESS_SCHEMAS, PLATFORM_SCHEMA)

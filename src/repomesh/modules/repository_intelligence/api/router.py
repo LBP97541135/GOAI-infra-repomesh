@@ -6,7 +6,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse
 
@@ -16,13 +16,13 @@ from repomesh.modules.repository_intelligence.application import (
     HandoffDocError,
     IssueIntakeActorNotFound,
     IssueIntakeDenied,
+    IssueIntakeKeyMismatch,
     RegisterRepository,
     RepositoryDiscoveryService,
     RepositoryNotFound,
     ScanRegistration,
     UpdateRepositoryCapabilityProfile,
     UpdateRepositoryVerification,
-    identify_url_type,
     register_scanned_profiles,
     render_markdown,
 )
@@ -30,6 +30,12 @@ from repomesh.modules.repository_intelligence.application.confirmation import (
     ConfirmationResult,
     ConfirmationSummary,
     RepositoryPlan,
+)
+from repomesh.modules.repository_intelligence.application.document_parse import (
+    MAX_DOCUMENT_BYTES,
+    DocumentParseError,
+    UnsupportedDocumentFormat,
+    extract_document_text,
 )
 from repomesh.modules.repository_intelligence.application.handoff_docs import (
     HandoffDocStatus,
@@ -156,20 +162,47 @@ def require_action_token(request: Request) -> None:
 ACTION_TOKEN = Depends(require_action_token)
 
 
-def _require_scannable_host(url: str) -> None:
-    """Refuse org URLs whose host is not on the configured allowlist.
+def _is_known_public_platform_host(host: str) -> bool:
+    """Hosts whose platform the code already names, reachable without config.
 
-    ``detect_platform`` treats every non-github.com git URL as a self-hosted
-    GitLab and the fetcher derives its API base from that same URL, so an
-    arbitrary host in the request body becomes an outbound request from this
-    server. The allowlist keeps that reachable set to hosts an operator has
-    named. Default is github.com only; extend with
-    ``REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS`` (comma separated).
+    Mirrors ``detect_platform``'s built-in recognition: github.com and its
+    subdomains, gitlab.com, and any host whose name contains "gitlab" — which
+    is how a self-hosted GitLab instance is identified.
+    Platform support is the product, so it must not be gated behind a
+    per-domain list the operator has to extend for every new host. The
+    trade-off is that an attacker can also name a host ``*.gitlab.*``; that is
+    the same judgement ``detect_platform`` already makes for platform
+    selection, kept in one place.
+    """
+
+    return (
+        host == "github.com"
+        or host.endswith(".github.com")
+        or host == "gitlab.com"
+        or "gitlab" in host
+    )
+
+
+def _require_scannable_host(url: str) -> None:
+    """Refuse hosts that are neither a known platform nor declared.
+
+    Known hosting platforms (see ``_is_known_public_platform_host``) scan
+    without configuration. A host explicitly mapped in
+    ``REPOMESH_REPOSITORY_PLATFORMS`` is trusted by declaration. Anything
+    else must be named in ``REPOMESH_REPOSITORY_SCAN_ALLOWED_HOSTS`` before
+    this server will make an outbound request to it. The fetcher derives its
+    API base from the URL itself, so an allowlisted host in the request body
+    becomes an outbound request from this server; the allowlist keeps that
+    reachable set to platforms and hosts an operator has actually named.
     """
 
     from repomesh.settings import get_settings
 
     host = (urlsplit(url).hostname or "").lower()
+    if _is_known_public_platform_host(host):
+        return
+    if host in _configured_platform_map():
+        return
     allowed = {
         item.strip().lower()
         for item in (get_settings().repository_scan_allowed_hosts or "").split(",")
@@ -177,11 +210,29 @@ def _require_scannable_host(url: str) -> None:
     }
     if host in allowed:
         return
-    _logger.warning("rejected org scan for host outside the allowlist: %s", host)
+    _logger.warning("rejected scan for host outside the allowlist: %s", host)
     raise HTTPException(
         status_code=400,
         detail="organization host is not on the configured scan allowlist",
     )
+
+
+def _configured_platform_map() -> dict[str, str]:
+    """Parse ``REPOMESH_REPOSITORY_PLATFORMS`` into host → platform pairs."""
+
+    raw = get_settings().repository_scan_platforms or ""
+    mapping: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            _logger.warning("ignoring malformed platform mapping: %s", pair)
+            continue
+        host, platform = (part.strip().lower() for part in pair.split("=", 1))
+        if host and platform:
+            mapping[host] = platform
+    return mapping
 
 
 def build_scan_fetcher(
@@ -194,33 +245,50 @@ def build_scan_fetcher(
     """Validate a scan target and build the fetcher that will reach it.
 
     Every scan endpoint — native, console, sync, background — goes through
-    here, so the two refusals that must happen *before* egress cannot be
+    here, so the three refusals that must happen *before* egress cannot be
     forgotten by the next endpoint someone adds: a local path is not
-    scannable, and a host nobody put on the allowlist is not reachable.
+    scannable, a host that is not a known or declared platform is not
+    reachable, and a host nobody put on the allowlist is not reachable.
     """
 
     from repomesh.modules.repository_intelligence.infrastructure.platform import (  # noqa: PLC0415
         Platform,
         detect_platform,
         make_fetcher,
+        unsupported_platform_label,
     )
 
-    platform = detect_platform(url)
+    platform = detect_platform(url, platform_map=_configured_platform_map())
     if platform is Platform.LOCAL:
         raise HTTPException(400, f"URL must be a GitHub/GitLab {target} URL")
+    if platform is Platform.UNSUPPORTED:
+        label = unsupported_platform_label(url)
+        raise HTTPException(
+            400, f"{label} 暂不支持仓库扫描，当前仅支持 GitHub 与 GitLab"
+        )
+    if platform is Platform.UNKNOWN:
+        raise HTTPException(
+            400,
+            "无法识别的代码托管平台：请在 REPOMESH_REPOSITORY_PLATFORMS "
+            "中声明（格式 host=gitlab 或 host=github）",
+        )
     _require_scannable_host(url)
     return make_fetcher(platform, github_token=github_token, gitlab_token=gitlab_token)
 
 
-def require_single_repo_url(url: str) -> None:
+async def require_single_repo_url(url: str, fetcher: object) -> None:
     """Refuse a URL that does not name one repository.
 
     The same judgement the console badges with, applied server-side: a group
     URL sent to a single-repo scan is a mistake worth naming, not something to
-    guess a repository name out of.
+    guess a repository name out of.  The verdict comes from the platform's own
+    probe (``identify``) rather than the offline URL-shape guess, so a GitLab
+    subgroup path is confirmed against the API instead of being misread as a
+    single repo.
     """
 
-    if identify_url_type(url) is not UrlType.SINGLE_REPO:
+    verdict = await fetcher.identify(url)  # type: ignore[attr-defined]
+    if verdict is not UrlType.SINGLE_REPO:
         raise HTTPException(400, "URL must point at a single repository, not a group")
 
 
@@ -255,7 +323,13 @@ async def perform_org_scan(
     )
 
     try:
-        profiles = await scan_org(url, fetcher, max_workers=max_workers, on_progress=on_progress)
+        profiles = await scan_org(
+            url,
+            fetcher,
+            max_workers=max_workers,
+            on_progress=on_progress,
+            include_forks=get_settings().repository_scan_include_forks,
+        )
     except Exception as exc:
         # The message used to be echoed back, which handed the caller whatever
         # the outbound request saw. Operators read it in the log instead.
@@ -304,7 +378,16 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     with the delivery write endpoints — an architecture change, not part of
     this containment."""
 
-    service = request.app.state.container.issue_intake_service()
+    container = request.app.state.container
+    if container.operational_gate().intake_paused():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "intake_paused", "detail": "new issue intake is paused"},
+            headers={
+                "Retry-After": str(get_settings().operations_capacity_retry_after_seconds)
+            },
+        )
+    service = container.issue_intake_service()
     try:
         receipt = await service.execute(
             IssueIntakeCommand(
@@ -318,6 +401,11 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
         raise HTTPException(status_code=404, detail=str(error)) from error
     except IssueIntakeDenied as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
+    except IssueIntakeKeyMismatch as error:
+        # The key already names a different requirement. 409 rather than 422:
+        # the request is well-formed; it collides with an operation the server
+        # already has on record.
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -333,29 +421,46 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     )
 
 
-@router.post(
-    "/repositories", response_model=RepositoryView, status_code=201, dependencies=[ACTION_TOKEN]
-)
-async def register_repository(
-    body: RepositoryCreate, catalog: CatalogDependency
-) -> RepositoryProfile:
-    profile = RepositoryProfile(
-        name=body.name,
-        url=str(body.url),
-        description=body.description,
-        topics=tuple(body.topics),
-        languages=tuple(body.languages),
-        test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
-        test_paths=tuple(item.strip() for item in body.test_paths if item.strip()),
-        auto_card=_build_auto_card(body.auto_card),
+@router.post("/issues/parse-document", dependencies=[ACTION_TOKEN])
+async def parse_issue_document(
+    file: Annotated[UploadFile, File()],
+) -> JSONResponse:
+    """Real file intake: extract requirement text from an uploaded document.
+
+    The intake write itself still takes plain ``requirement_text`` (contract
+    v0.3 §1) — this endpoint is how a client turns a document into that text,
+    so the pipeline never learns about document formats. Supported: plain
+    text / Markdown, .docx, .pdf, .odt, .rtf. The document is parsed in
+    memory and never stored; the extracted text (capped at the intake write's
+    own limit) is what the caller then submits with the issue.
+
+    Refusals: 413 over the size cap, 415 unsupported format, 422 when the
+    file cannot be read or yields no text (e.g. a scanned image PDF).
+    """
+
+    raw = await file.read(MAX_DOCUMENT_BYTES + 1)
+    if len(raw) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"document too large; limit is {MAX_DOCUMENT_BYTES} bytes",
+        )
+    filename = file.filename or "document"
+    try:
+        parsed = extract_document_text(filename, raw)
+    except UnsupportedDocumentFormat as error:
+        raise HTTPException(status_code=415, detail=str(error)) from error
+    except DocumentParseError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    return JSONResponse(
+        content={
+            "filename": parsed.filename,
+            "format": parsed.format,
+            "text": parsed.text,
+            "chars": parsed.chars,
+            "truncated": parsed.truncated,
+        }
     )
-    await RegisterRepository(catalog).execute(profile)
-    return profile
-
-
-@router.get("/repositories", response_model=list[RepositoryView])
-async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfile]:
-    return await catalog.list()
 
 
 @router.patch(
@@ -378,6 +483,39 @@ async def update_repository_verification(
         )
     except RepositoryNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+
+@router.post(
+    "/repositories", response_model=RepositoryView, status_code=201, dependencies=[ACTION_TOKEN]
+)
+async def register_repository(
+    body: RepositoryCreate, catalog: CatalogDependency, request: Request
+) -> RepositoryProfile:
+    # Same egress guard as the scan endpoints (build_scan_fetcher): the
+    # catalog row is later cloned out-of-process (git_worktree), so a host
+    # off the operator's allowlist here would become an unvetted outbound
+    # request on the first dispatch. Refuse before anything is persisted.
+    _require_scannable_host(str(body.url))
+    profile = RepositoryProfile(
+        name=body.name,
+        url=str(body.url),
+        description=body.description,
+        topics=tuple(body.topics),
+        languages=tuple(body.languages),
+        test_commands=tuple(item.strip() for item in body.test_commands if item.strip()),
+        test_paths=tuple(item.strip() for item in body.test_paths if item.strip()),
+        auto_card=_build_auto_card(body.auto_card),
+    )
+    await RegisterRepository(catalog).execute(profile)
+    # The in-process world-layer cache (M1) is keyed off the catalog; a manual
+    # registration changes the catalog, so the cache must be dropped before the
+    # next confirmation/planning call reads a stale world graph.
+    request.app.state.container.invalidate_world_graph()
+    return profile
+
+
+@router.get("/repositories", response_model=list[RepositoryView])
+async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfile]:
+    return await catalog.list()
 
 
 @router.patch(
@@ -424,6 +562,12 @@ async def identify_repository_url(url: str) -> UrlIdentification:
     organization URL" and then refusing the scan is honest; making the badge
     double as an allowlist oracle would leak the operator's configuration to
     an endpoint that takes no credential.
+
+    ``repository_name`` here is the offline URL-path inference, for display
+    while the user is still typing. It is a hint, not a fact: the scan that
+    follows resolves the authoritative name from the platform's own metadata
+    (``PlatformFetcher.resolve_repo_name``), so a renamed GitLab project or a
+    ``.git`` suffix in the URL cannot register a wrong name.
     """
 
     from repomesh.modules.repository_intelligence.application.scan_remote import (  # noqa: PLC0415
@@ -447,7 +591,9 @@ async def identify_repository_url(url: str) -> UrlIdentification:
 
 
 @router.post("/repositories/scan-org", response_model=OrgScanResult, dependencies=[ACTION_TOKEN])
-async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) -> OrgScanResult:
+async def scan_organization(
+    body: OrgScanRequest, catalog: CatalogDependency, request: Request
+) -> OrgScanResult:
     """Batch-scan all repos under a GitHub/GitLab organization.
 
     Fetches file trees, dependency files, and commits for every repo,
@@ -470,6 +616,14 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
         outcome = await perform_org_scan(url, fetcher, catalog, max_workers=body.max_workers)
     except ScanFailed as error:
         raise HTTPException(502, str(error)) from error
+    finally:
+        # The fetcher owns a pooled HTTP client; release it before the
+        # request ends so a busy API process does not leak connections.
+        await fetcher.aclose()
+
+    # A successful scan registered new profiles; drop the in-process world
+    # layer cache (M1) so the next confirmation/planning call rebuilds it.
+    request.app.state.container.invalidate_world_graph()
 
     return OrgScanResult(
         org_url=url,
@@ -483,7 +637,7 @@ async def scan_organization(body: OrgScanRequest, catalog: CatalogDependency) ->
 
 @router.post("/repositories/scan-repo", response_model=RepoScanResult, dependencies=[ACTION_TOKEN])
 async def scan_single_repository(
-    body: RepoScanRequest, catalog: CatalogDependency
+    body: RepoScanRequest, catalog: CatalogDependency, request: Request
 ) -> RepoScanResult:
     """Scan one repository from its URL and register it.
 
@@ -497,18 +651,26 @@ async def scan_single_repository(
     actually in the repo.
     """
     url = str(body.repo_url).rstrip("/")
-    require_single_repo_url(url)
     fetcher = build_scan_fetcher(
         url,
         target="repository",
         github_token=body.github_token,
         gitlab_token=body.gitlab_token,
     )
-
     try:
-        outcome = await perform_repo_scan(url, fetcher, catalog)
-    except ScanFailed as error:
-        raise HTTPException(502, str(error)) from error
+        await require_single_repo_url(url, fetcher)
+        try:
+            outcome = await perform_repo_scan(url, fetcher, catalog)
+        except ScanFailed as error:
+            raise HTTPException(502, str(error)) from error
+    finally:
+        # Same pooled-client release as scan-org; a 400 from
+        # require_single_repo_url must not leak the fetcher either.
+        await fetcher.aclose()
+
+    # Same cache invalidation as scan-org (M1): the world layer graph is a
+    # pure projection of the catalog and must not outlive a catalog change.
+    request.app.state.container.invalidate_world_graph()
 
     return RepoScanResult(
         repo_url=url,
@@ -577,7 +739,6 @@ def _confirmation_summary_to_view(
         required=[ConfirmationResultView.model_validate(r) for r in summary.required],
         maybe=[ConfirmationResultView.model_validate(r) for r in summary.maybe],
         excluded=[ConfirmationResultView.model_validate(r) for r in summary.excluded],
-        supplemented_repos=summary.supplemented_repos,
         final_repos=summary.final_repos,
     )
 
@@ -657,7 +818,6 @@ def _summary_from_view(view: ConfirmationSummaryView) -> ConfirmationSummary:
         required=[_to_result(r) for r in view.required],
         maybe=[_to_result(r) for r in view.maybe],
         excluded=[_to_result(r) for r in view.excluded],
-        supplemented_repos=view.supplemented_repos,
     )
 
 

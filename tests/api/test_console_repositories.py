@@ -35,6 +35,23 @@ async def _one_repo(url: str, fetcher: object) -> RepositoryProfile:
     )
 
 
+async def _stub_require_single_repo_url(url: str, fetcher: object) -> None:
+    """Offline stand-in for the online single-repo verdict (no egress).
+
+    The real check asks the platform's ``identify``, which is a network call
+    a unit test must not make. This keeps the console's refusal path — a
+    group URL posted to scan-repo is 400, not a task — without the network.
+    """
+
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    from fastapi import HTTPException  # noqa: PLC0415
+
+    segments = [s for s in urlparse(url).path.split("/") if s]
+    if len(segments) < 2:
+        raise HTTPException(400, "URL must point at a single repository, not a group")
+
+
 async def _two_repos(url: str, fetcher: object, **kwargs: object) -> list[RepositoryProfile]:
     return [
         RepositoryProfile(name="order-service", url=f"{url}/order-service"),
@@ -350,8 +367,11 @@ def test_a_running_scan_is_held_by_a_strong_reference(
 def test_console_repo_scan_accepts_then_registers_one_repository(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:
+    from repomesh.modules.repository_intelligence.api import console as console_api
+
     _configure(monkeypatch)
     monkeypatch.setattr(scan_remote, "scan_single_repo", _one_repo)
+    monkeypatch.setattr(console_api, "require_single_repo_url", _stub_require_single_repo_url)
     try:
         with TestClient(create_app(application_container)) as client:
             accepted = client.post(
@@ -384,12 +404,15 @@ def test_console_scan_refuses_before_it_accepts(
     """
 
     _configure(monkeypatch)
+    from repomesh.modules.repository_intelligence.api import console as console_api
+
+    monkeypatch.setattr(console_api, "require_single_repo_url", _stub_require_single_repo_url)
     try:
         with TestClient(create_app(application_container)) as client:
             internal = client.post(
                 "/api/v1/console/repositories/scan-org",
                 headers=HEADERS,
-                json={"org_url": "https://gitlab.internal.example/acme"},
+                json={"org_url": "https://code.internal.example/acme"},
             )
             group_as_repo = client.post(
                 "/api/v1/console/repositories/scan-repo",
@@ -400,7 +423,7 @@ def test_console_scan_refuses_before_it_accepts(
         get_settings.cache_clear()
 
     assert internal.status_code == 400
-    assert "allowlist" in internal.json()["detail"]
+    assert "REPOMESH_REPOSITORY_PLATFORMS" in internal.json()["detail"]
     assert group_as_repo.status_code == 400
     assert "single repository" in group_as_repo.json()["detail"]
 

@@ -82,7 +82,7 @@ pytestmark = [
 #: The revision that has every table *except* handoff_docs.
 REVISION_BEFORE = "20260816_0035"
 #: The revision under test.
-REVISION_UNDER_TEST = "20260827_0036"
+REVISION_UNDER_TEST = "20260830_0045"
 #: PostgreSQL's ``undefined_table`` SQLSTATE, surfaced by asyncpg as
 #: ``UndefinedTableError`` and wrapped by SQLAlchemy in ``ProgrammingError``.
 UNDEFINED_TABLE = "42P01"

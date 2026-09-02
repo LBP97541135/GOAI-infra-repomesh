@@ -25,6 +25,7 @@ function issue(over: Partial<IssueListItemView> & Pick<IssueListItemView, "issue
     active_round_id: null,
     latest_round_id: null,
     pending_decision_count: 0,
+    pending_planning: false,
     repository_count: 1,
     team_count: 0,
     operational_status: null,
@@ -38,10 +39,28 @@ function issue(over: Partial<IssueListItemView> & Pick<IssueListItemView, "issue
 /** 场景取自 v2 原型 redesign-issue-centric.html */
 export const issuesFixture: IssueListResponse = {
   // 计数与条目自洽：夹具即全量，不写一个凑不出条目的大数字
-  open_count: 3,
+  open_count: 4,
   closed_count: 2,
   next_cursor: null,
   issues: [
+    issue({
+      issue_id: "9d1e4c56-1b39-4f72-a4e5-88fd30de0037",
+      title: "退货流程支持部分退款",
+      requirement_text:
+        "运营侧需要在退货流程支持部分退款：按实际收货商品金额退款，并在退款单上记录部分退款原因。",
+      state: "open",
+      phase: "plan",
+      // §2.3 形态：需求刚落库、尚无任何轮次——「待处理」徽标就在这种行上亮起
+      phase_note: "计划 v1 待物化",
+      round_count: 0,
+      pending_planning: true,
+      repository_count: 0,
+      team_count: 0,
+      opened_by_agent_id: "9c8b7a60-1122-4d33-8e44-5f6a7b8c9d00",
+      opened_by_name: "console-demo-org-leader",
+      opened_at: "2026-08-12T08:00:00Z",
+      updated_at: "2026-08-12T08:00:01Z",
+    }),
     issue({
       issue_id: "7f3d2a10-93d0-4c8e-9b21-5aa1c0de0042",
       title: "结账价格修改原因：记录、暴露并在后台展示",

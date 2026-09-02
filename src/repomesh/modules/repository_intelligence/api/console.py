@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from repomesh.modules.repository_intelligence.application import ScanRegistration
 
@@ -140,6 +140,40 @@ def _progress_reporter(record: ScanTaskRecord) -> Callable[[int, int, str], None
     return report
 
 
+async def _scan_with_fetcher(
+    fetcher: object,
+    scan: Callable[[], Awaitable[ScanRegistration]],
+) -> ScanRegistration:
+    """Run a background scan and always release the fetcher's HTTP client.
+
+    The fetcher is built in the request handler but lives as long as the
+    background task; without this the pooled client would stay open after
+    the scan finished, leaking connections for the life of the API process.
+    """
+
+    try:
+        return await scan()
+    finally:
+        await fetcher.aclose()  # type: ignore[attr-defined]
+
+
+async def _scan_and_invalidate(
+    container: object,
+    scan: Callable[[], Awaitable[ScanRegistration]],
+) -> ScanRegistration:
+    """Run a scan, then drop the in-process world-layer cache (M1).
+
+    The world layer graph is a pure projection of the catalog: a scan that
+    registered new profiles must not leave confirmation/planning reading a
+    stale graph. Only a *successful* scan invalidates — a failed one wrote
+    nothing, and the cache stays warm.
+    """
+
+    outcome = await scan()
+    container.invalidate_world_graph()  # type: ignore[attr-defined]
+    return outcome
+
+
 async def _drive(
     record: ScanTaskRecord, scan: Callable[[], Awaitable[ScanRegistration]]
 ) -> None:
@@ -216,7 +250,7 @@ def server_scan_credentials() -> tuple[str, str]:
     dependencies=[ACTION_TOKEN],
 )
 async def console_scan_organization(
-    body: ConsoleOrgScanRequest, catalog: CatalogDependency
+    body: ConsoleOrgScanRequest, catalog: CatalogDependency, request: Request
 ) -> ScanTaskView:
     """Start an organization scan; poll ``scan-tasks/{id}`` for the counts.
 
@@ -240,6 +274,7 @@ async def console_scan_organization(
         gitlab_token=gitlab_token,
     )
     max_workers = body.max_workers
+    container = request.app.state.container
 
     record = _start(
         kind="organization",
@@ -247,12 +282,18 @@ async def console_scan_organization(
         # Unknown until the platform lists the org; the console shows "n of ?"
         # rather than a total invented before anyone counted.
         total=0,
-        scan=lambda task: perform_org_scan(
-            url,
+        scan=lambda task: _scan_with_fetcher(
             fetcher,
-            catalog,
-            max_workers=max_workers,
-            on_progress=_progress_reporter(task),
+            lambda: _scan_and_invalidate(
+                container,
+                lambda: perform_org_scan(
+                    url,
+                    fetcher,
+                    catalog,
+                    max_workers=max_workers,
+                    on_progress=_progress_reporter(task),
+                ),
+            ),
         ),
     )
     return _as_view(record)
@@ -265,7 +306,7 @@ async def console_scan_organization(
     dependencies=[ACTION_TOKEN],
 )
 async def console_scan_repository(
-    body: ConsoleRepoScanRequest, catalog: CatalogDependency
+    body: ConsoleRepoScanRequest, catalog: CatalogDependency, request: Request
 ) -> ScanTaskView:
     """Start a single-repository scan; poll ``scan-tasks/{id}`` for the counts.
 
@@ -276,19 +317,26 @@ async def console_scan_repository(
 
     github_token, gitlab_token = server_scan_credentials()
     url = str(body.repo_url).rstrip("/")
-    require_single_repo_url(url)
     fetcher = build_scan_fetcher(
         url,
         target="repository",
         github_token=github_token,
         gitlab_token=gitlab_token,
     )
+    await require_single_repo_url(url, fetcher)
+    container = request.app.state.container
 
     record = _start(
         kind="repository",
         url=url,
         total=1,
-        scan=lambda _task: perform_repo_scan(url, fetcher, catalog),
+        scan=lambda _task: _scan_with_fetcher(
+            fetcher,
+            lambda: _scan_and_invalidate(
+                container,
+                lambda: perform_repo_scan(url, fetcher, catalog),
+            ),
+        ),
     )
     return _as_view(record)
 

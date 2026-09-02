@@ -5,7 +5,11 @@ import pytest_asyncio
 from sqlalchemy import func, select
 
 from repomesh.modules.repository_intelligence.application import RegisterRepository
-from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.repository_intelligence.domain import (
+    AutoCard,
+    DepEvidence,
+    RepositoryProfile,
+)
 from repomesh.modules.repository_intelligence.infrastructure import (
     PostgresRepositoryCatalog,
     RepositoryAlreadyExists,
@@ -116,3 +120,51 @@ async def test_a_repository_stores_and_returns_its_verification_commands(
         "checkout": ("python scripts/run_tests.py",),
         "legacy": (),
     }
+
+
+@pytest.mark.asyncio
+async def test_auto_card_evidence_survives_the_postgres_round_trip(
+    database: Database,
+) -> None:
+    """dep_evidence + identities must persist like every other card field.
+
+    The graph resolves evidence through the service registry, which is
+    rebuilt from the catalog on every query: a catalog row that drops
+    ``identities`` or ``dep_evidence`` silently turns confirmed edges into
+    missing edges on the next run.
+    """
+
+    catalog = PostgresRepositoryCatalog(database)
+    profile = RepositoryProfile(
+        name="ts-order-service",
+        url="https://github.com/example/ts-order-service",
+        auto_card=AutoCard(
+            top_dirs=("src",),
+            deps=("fastapi", "ts-payment-service"),
+            dep_evidence=(
+                DepEvidence(
+                    name="fastapi",
+                    mechanism="BUILD",
+                    confidence="confirmed",
+                ),
+                DepEvidence(
+                    name="ts-payment-service",
+                    mechanism="RUNTIME_CALL",
+                    confidence="confirmed",
+                ),
+            ),
+            identities=("com.example:order-service", "order-service"),
+            deploy_identities=("order-svc",),
+            recent_commits=("feat: checkout",),
+            low_signal=False,
+        ),
+    )
+
+    await RegisterRepository(catalog).execute(profile)
+    stored = await catalog.get(profile.id)
+
+    assert stored.auto_card is not None
+    assert stored.auto_card.dep_evidence == profile.auto_card.dep_evidence
+    assert stored.auto_card.identities == profile.auto_card.identities
+    assert stored.auto_card.deploy_identities == profile.auto_card.deploy_identities
+    assert stored.auto_card.deps == ("fastapi", "ts-payment-service")

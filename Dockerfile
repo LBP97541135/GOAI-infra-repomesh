@@ -1,6 +1,12 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+# PyPI is unreliably slow from this team's network: cryptography's large index
+# page regularly exceeds pip's resolver timeout, surfacing as "from versions:
+# none" and failing the build. Default to a fast regional mirror; override per
+# build with `docker compose build --build-arg PIP_INDEX_URL=...`.
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app

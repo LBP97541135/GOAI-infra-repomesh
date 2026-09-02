@@ -30,8 +30,15 @@ class WorkspaceContextVerifier:
             return "context_manifest_invalid"
 
         expected = task.context_bundle
+        # v2 carries per-skill versions and a snapshot id; v1 is accepted so
+        # already-materialized workspaces from a pre-upgrade runner verify.
+        schema_version = manifest.get("schemaVersion")
+        if schema_version not in (
+            "repomesh.context-manifest.v1",
+            "repomesh.context-manifest.v2",
+        ):
+            return "schema_mismatch"
         checks = (
-            (manifest.get("schemaVersion"), "repomesh.context-manifest.v1", "schema"),
             (manifest.get("bundleId"), str(expected.bundle_id), "bundle_id"),
             (manifest.get("bundleVersion"), expected.version, "bundle_version"),
             (manifest.get("contentHash"), expected.content_hash, "content_hash"),

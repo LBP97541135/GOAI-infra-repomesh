@@ -34,3 +34,19 @@ admininfo.txt
 # 本地生成物（演示产物、per-project 工作目录）
 output/
 projects/
+
+# AgentTeams 诊断残留（快照、二进制、env、日志）——绝不入库
+agentteams-root-snapshot/
+agentteams-controller-*.bin
+agentteams-controller.env
+manager-current.env
+.api-env-before.txt
+controller-error.log
+running.bin
+verify.bin
+team-*.json
+team-worker-*.json
+components/agentteams/agentteams-controller/build-output/
+components/agentteams/agentteams-controller/build.err
+components/agentteams/agentteams-controller/agentteams-controller-order-fix.bin
+**/kube-apiserver

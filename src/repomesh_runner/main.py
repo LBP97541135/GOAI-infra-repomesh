@@ -29,7 +29,7 @@ from .executor import build_default_executor
 from .runtime_env import RunnerRuntimeEnv, RuntimeEnvError, load_runtime_env
 from .state_store import TaskLedger
 from .task_source import HttpLongPollTaskSource, TaskSource
-from .telemetry import setup_tracing
+from .telemetry import setup_logs, setup_metrics, setup_tracing
 
 _logger = logging.getLogger(__name__)
 
@@ -150,7 +150,25 @@ def run(environ: Mapping[str, str] = os.environ, argv: Sequence[str] | None = No
     setup_tracing(
         environ.get("REPOMESH_OTLP_ENDPOINT"),
         service_name=environ.get("REPOMESH_OTLP_SERVICE_NAME") or "repomesh-runner",
+        headers=environ.get("REPOMESH_OTLP_HEADERS"),
     )
+    if environ.get("REPOMESH_OTLP_METRICS_ENABLED", "").lower() in ("1", "true", "yes"):
+        setup_metrics(
+            environ.get("REPOMESH_OTLP_ENDPOINT"),
+            service_name=environ.get("REPOMESH_OTLP_SERVICE_NAME") or "repomesh-runner",
+            headers=environ.get("REPOMESH_OTLP_HEADERS"),
+        )
+    if environ.get("REPOMESH_OTLP_LOGS_ENABLED", "").lower() in ("1", "true", "yes"):
+        setup_logs(
+            environ.get("REPOMESH_OTLP_ENDPOINT"),
+            service_name=environ.get("REPOMESH_OTLP_SERVICE_NAME") or "repomesh-runner",
+            headers=environ.get("REPOMESH_OTLP_HEADERS"),
+            level=getattr(
+                logging,
+                (environ.get("REPOMESH_OTLP_LOG_LEVEL") or "WARNING").upper(),
+                logging.WARNING,
+            ),
+        )
 
     _logger.info(
         "starting runner: workspace_root=%s state_dir=%s labels=%s",

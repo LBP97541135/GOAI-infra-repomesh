@@ -34,6 +34,12 @@ For local-only validation without Higress, set
 `REPOMESH_DIRECT_WORKER_MCP_ENABLED=true`, keep `REPOMESH_ENVIRONMENT` as `development` or `test`,
 and point `REPOMESH_WORKER_TASK_CONTROL_URL` directly at RepoMesh. Production refuses this mode.
 
+Before preparing a Worktree or Context Bundle, the start action atomically creates a durable
+execution reservation. Partial unique indexes allow one active execution per Task and one active
+Task per Worker. Concurrent retries wait for and return the winner's Runner payload, so they do not
+create duplicate runs or consume a second Worker slot. Runner terminal events release both unique
+guards in the same transaction that closes the dispatch.
+
 After a successful coding turn, the Runner validates every changed path, runs all Task Spec test
 commands, stages only the validated changed files and creates a Commit as `RepoMesh Worker`. The
 terminal event and Task result evidence include the full `commitSha`. Failed tests, forbidden paths

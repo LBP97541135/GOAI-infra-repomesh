@@ -10,6 +10,13 @@ from .application import (
     SCMPollCursorService,
     delivery_change_set_key,
 )
+from .conflicts import (
+    DeliveryConflictCase,
+    DeliveryConflictCaseRecord,
+    DeliveryConflictCaseStatus,
+    DeliveryConflictKind,
+    PostgresDeliveryConflictCaseStore,
+)
 from .contracts import ContractView
 from .domain import DeliveryConflict, DeliveryDenied, DeliveryError, DeliveryNotFound
 from .infrastructure import (
@@ -35,6 +42,10 @@ __all__ = [
     "DeliveryRollbackService",
     "DeliveryService",
     "DeliveryConflict",
+    "DeliveryConflictCase",
+    "DeliveryConflictCaseRecord",
+    "DeliveryConflictCaseStatus",
+    "DeliveryConflictKind",
     "DeliveryDenied",
     "DeliveryError",
     "DeliveryNotFound",
@@ -50,6 +61,7 @@ __all__ = [
     "PostgresChangeSetStore",
     "PostgresDeliveryArchiveStore",
     "PostgresDeliveryAuditLog",
+    "PostgresDeliveryConflictCaseStore",
     "PostgresDeliveryPolicyStore",
     "PostgresSCMObservationStore",
     "PostgresSCMPollCursorStore",

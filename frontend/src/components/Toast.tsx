@@ -24,3 +24,4 @@ export function Toast({ text }: { text: string }) {
     </div>
   );
 }
+

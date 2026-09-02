@@ -106,6 +106,10 @@ class DispatchWorkerTask:
                     permission_mode=RunnerPermissionMode(command.permission_mode),
                     resume_session_id=command.resume_session_id,
                     credential_refs=command.credential_refs,
+                    assignment_attempt_id=command.assignment_attempt_id,
+                    assignment_generation=command.assignment_generation,
+                    execution_id=command.execution_id,
+                    execution_version=command.execution_version,
                 )
             )
             self._materializer.materialize(runner_task, package, capabilities)

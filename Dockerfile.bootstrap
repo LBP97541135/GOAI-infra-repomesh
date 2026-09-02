@@ -1,0 +1,28 @@
+FROM python:3.12-slim
+
+# Same regional mirror rationale as the api Dockerfile: pip resolving
+# cryptography (and friends) against pypi.org times out from this network.
+# Override per build with --build-arg PIP_INDEX_URL=... .
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        docker-cli \
+        openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY components/agentteams/install ./components/agentteams/install
+
+RUN pip install --no-cache-dir .
+
+CMD ["python", "-m", "repomesh.bootstrap_worker"]

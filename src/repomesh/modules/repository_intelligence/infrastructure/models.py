@@ -95,6 +95,17 @@ class PlanSnapshotRecord(Base):
     NULL means the chain was never started, which is not the same as an empty
     object; ``{}`` would be a chain that ran and produced nothing.
     """
+    discovery_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    """Optimistic-lock version of the ``discovery`` block (v0.4 §4).
+
+    Every step reads the block, edits it, and writes it back whole; a version
+    guard makes two concurrent writers refuse instead of silently clobbering
+    each other. ``set_discovery`` updates ``WHERE discovery_version = <the
+    version the writer read>`` and bumps it; a zero rowcount means the block
+    moved while the writer was working and the write is refused (409).
+    """
 
 
 class HandoffDocRecord(Base):

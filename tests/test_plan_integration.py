@@ -23,7 +23,6 @@ from repomesh.modules.repository_intelligence.application.plan_integration impor
     PlanIntegrationService,
     TaskNode,
     _parse_integrated_plan,
-    _topological_batches,
     normalize_plan,
     plan_to_graph,
 )
@@ -79,58 +78,12 @@ def _make_summary(*results: ConfirmationResult) -> ConfirmationSummary:
         required=required,
         maybe=maybe,
         excluded=[],
-        supplemented_repos=[],
     )
 
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
-
-class TestTopologicalBatches:
-    def test_no_deps_single_batch(self):
-        dag = [
-            TaskNode(repository="A", instruction="", depends_on=()),
-            TaskNode(repository="B", instruction="", depends_on=()),
-        ]
-        batches = _topological_batches(dag)
-        assert len(batches) == 1
-        assert set(batches[0]) == {"A", "B"}
-
-    def test_linear_chain(self):
-        dag = [
-            TaskNode(repository="A", instruction="", depends_on=()),
-            TaskNode(repository="B", instruction="", depends_on=("A",)),
-            TaskNode(repository="C", instruction="", depends_on=("B",)),
-        ]
-        batches = _topological_batches(dag)
-        assert batches == [["A"], ["B"], ["C"]]
-
-    def test_parallel_branches(self):
-        dag = [
-            TaskNode(repository="A", instruction="", depends_on=()),
-            TaskNode(repository="B", instruction="", depends_on=("A",)),
-            TaskNode(repository="C", instruction="", depends_on=("A",)),
-            TaskNode(repository="D", instruction="", depends_on=("B", "C")),
-        ]
-        batches = _topological_batches(dag)
-        assert batches[0] == ["A"]
-        assert set(batches[1]) == {"B", "C"}
-        assert batches[2] == ["D"]
-
-    def test_circular_dependency_breaks(self):
-        dag = [
-            TaskNode(repository="A", instruction="", depends_on=("B",)),
-            TaskNode(repository="B", instruction="", depends_on=("A",)),
-        ]
-        batches = _topological_batches(dag)
-        # Should still produce all repos despite cycle
-        all_repos = {r for batch in batches for r in batch}
-        assert all_repos == {"A", "B"}
-
-    def test_empty_dag(self):
-        assert _topological_batches([]) == []
 
 
 class TestParseIntegratedPlan:
@@ -170,7 +123,10 @@ class TestParseIntegratedPlan:
         assert plan.contracts[0].producer == "ts-notification-service"
         assert plan.contracts[0].consumer == "ts-preserve-service"
         assert len(plan.task_dag) == 2
-        assert plan.execution_batches == [["ts-notification-service"], ["ts-preserve-service"]]
+        # Batches are a graph projection: normalize_plan recomputes them from
+        # the plan-layer graph's confirmed edges. The parser deliberately
+        # leaves them empty; see _parse_integrated_plan.
+        assert plan.execution_batches == []
 
     def test_parse_with_markdown_fence(self):
         raw = "```json\n" + json.dumps(
@@ -280,7 +236,7 @@ class TestPlanIntegrationService:
         llm = StubLLM("{}")
         service = PlanIntegrationService(llm)
 
-        summary = ConfirmationSummary(required=[], maybe=[], excluded=[], supplemented_repos=[])
+        summary = ConfirmationSummary(required=[], maybe=[], excluded=[])
         plan = service.integrate("test", summary)
 
         assert plan.engineering_spec == "No repositories confirmed."

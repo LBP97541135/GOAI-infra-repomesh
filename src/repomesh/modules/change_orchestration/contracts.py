@@ -19,7 +19,12 @@ ReplanMode = Literal["preview", "commit"]
 
 
 class ExecutionPlaneUnavailable(RuntimeError):
-    """The task orchestration plane is not configured; the workflow refused side effects."""
+    """The task orchestration plane is not configured; materialization refused.
+
+    A published refusal, not an internal one: every caller of ``materialize``
+    translates it into the same 503, and it lives here so they can name it
+    without importing this module's application layer.
+    """
 
 
 class RoundNotRecorded(RuntimeError):
@@ -34,7 +39,14 @@ class RoundNotRecorded(RuntimeError):
     a reloaded panel, a second operator — starts a *second* execution plan for
     the same round.
 
-    Raised instead of swallowed because the round is repairable: the failed
+    That failure mode is not hypothetical. The snapshot block used to swallow
+    every exception into a log line, and it has already hidden one bug that way
+    (``dict()`` over a slotted dataclass raised ``TypeError`` for every plan
+    that carried a contract; see the regression in
+    ``tests/test_plan_execution_bridge.py``). Leniency there is only defensible
+    while nothing has been started; once a plan exists, silence is the bug.
+
+    Raised instead of swallowed because the round is now repairable: the failed
     materialization receipt lends its prefix to the next attempt, whose
     ``start_plan`` recognises the plan it already wrote and returns it without
     reassigning anything, so the retry gets a second run at the link. The tasks
