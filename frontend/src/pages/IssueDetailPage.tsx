@@ -17,6 +17,7 @@ import { DiscoveryPanel, type MaterializeContext, type PolicyGate } from "../com
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { PlanDagPanel, type PlanDagState } from "../components/PlanDagPanel";
 import { RoundsPanel, type RoundHistoryState } from "../components/RoundsPanel";
+import { DatabaseTestHandoffPanel } from "../components/DatabaseTestHandoffPanel";
 import { ErrorPanel, LoadingLine } from "../components/StatusBlocks";
 import { CODE_ACCESS_LABEL, CONTROL_ACTION_ORDER, PHASE_SKIN, PHASE_SKIN_FALLBACK, ROLE_LABEL, TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, checkpointLabel, controlActionLabel, dayLabel, eventTime, openedBy, orderByFixed, orderCheckpoints, shortId } from "../display";
 
@@ -745,6 +746,7 @@ export function IssueDetailPage({
   onArchiveRound,
   onRollbackRound,
   onRedispatchRound,
+  databaseTaskIds,
 }: {
   detail: IssueDetailView;
   rooms: RoomListItemView[];
@@ -788,6 +790,7 @@ export function IssueDetailPage({
   onRollbackRound: (round: IssueRoundView, scope: RollbackScopeView) => void;
   /** 重新派工（§8.7.4）：派工卡上的动作，弹窗与提交态由容器持有 */
   onRedispatchRound: (round: IssueRoundView, tasks: DeliveryTaskView[]) => void;
+  databaseTaskIds: string[];
 }) {
   // 边界的复位键：容器不随 issue 切换重挂载，不复位的话 A 单的区块错误会挂在 B 单头上
   const key = detail.issue_id;
@@ -841,6 +844,7 @@ export function IssueDetailPage({
       <ErrorBoundary block="计划 DAG" resetKey={key}>
         <PlanDagPanel state={planState} execution={planExecution} onRetry={onRetryPlan} />
       </ErrorBoundary>
+      {databaseTaskIds.map((taskId) => <DatabaseTestHandoffPanel key={taskId} taskId={taskId} />)}
 
       {/* 决策夹：位置按设计定稿——关联仓库芯片之后、房间区之前。
           决策是轮次粒度，deckNote 说明取的是哪一轮，避免与 issue 级

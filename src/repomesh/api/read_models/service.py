@@ -2012,6 +2012,13 @@ class DeliveryReadModelService:
                     "depends_on": depends_on,
                     "result_summary": task.result_summary,
                     "evidence": _task_evidence(task),
+                    "database_change": {
+                        "declared": task.database_change.declared,
+                        "required": task.database_change.required,
+                        "change_kinds": [item.value for item in task.database_change.change_kinds],
+                        "affected_tables": list(task.database_change.affected_tables),
+                        "required_checks": list(task.database_change.required_checks),
+                    },
                     "repair_timeline": repair_timeline,
                     "escalated_to_human": escalated,
                     # §8.7.4. When the assignment message for this task was

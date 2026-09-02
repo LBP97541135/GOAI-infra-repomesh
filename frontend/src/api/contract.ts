@@ -706,6 +706,24 @@ export interface DeliveryTaskView {
    *  重新派工成功后这个时间会前移，那是控制台唯一能给的**事实**级反馈；
    *  「agent 醒没醒」不在读模型的射程内，界面也不猜。 */
   last_dispatched_at: string | null;
+  database_change?: { declared: boolean; required: boolean; change_kinds: string[]; affected_tables: string[]; required_checks: string[] };
+}
+
+export interface DatabaseTestHandoffView {
+  taskId: string;
+  organizationId: string;
+  projectId: string;
+  repositoryId: string;
+  candidateSha: string;
+  testTeamRepositoryId: string;
+  requiredChecks: string[];
+  affectedTables: string[];
+  evidencePrefix: string;
+  branchValidationKey: string;
+  status: string;
+  branchValidationId?: string;
+  branchValidationStatus?: string;
+  evidenceRef?: string | null;
 }
 
 /** §8.7.4 的两种范围。默认那个**不写任何任务行**——按错的代价是房间里多一条

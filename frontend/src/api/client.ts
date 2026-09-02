@@ -9,6 +9,7 @@ import type {
   ConsoleTeamsResponse,
   DecisionsResponse,
   DeliveryAggregate,
+  DatabaseTestHandoffView,
   DeliveryEventsPage,
   DiscoveryAnalysisRequest,
   DiscoveryApprovalRequest,
@@ -386,6 +387,13 @@ export function createApiClient(config: ApiClientConfig) {
       ),
 
     getIssueDetail: (issueId: string) => request<IssueDetailView>(config, "GET", `/issues/${issueId}`),
+
+    getDatabaseTestHandoff: (taskId: string) =>
+      request<DatabaseTestHandoffView>(
+        config,
+        "GET",
+        `/database-test-handoffs/${encodeURIComponent(taskId)}`,
+      ),
 
     getDecisions: (deliveryId: string) =>
       request<DecisionsResponse>(config, "GET", `/deliveries/${deliveryId}/decisions`),

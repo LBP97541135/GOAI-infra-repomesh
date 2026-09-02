@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     #: needs (ADR 0004 decision 6). Kept as an env document rather than a table
     #: because issuance is a deployment act this round, not a product feature.
     runner_worker_tokens: str | None = None
+    # Test-team Leader credentials are separate from worker/runtime credentials.
+    # JSON map: {"<leader-agent-id>": "<token>"}.
+    test_team_leader_tokens: str | None = None
     #: How long an external member's readiness report is believed for. Short on
     #: purpose: the lease is the only evidence that a Bridge on somebody's own
     #: machine is still running, and a long one is a promise about a process

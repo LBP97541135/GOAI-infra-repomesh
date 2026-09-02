@@ -677,6 +677,7 @@ export function IssueDetailContainer({
         onArchiveRound={handleArchiveRound}
         onRollbackRound={handleRollbackRound}
         onRedispatchRound={handleRedispatchRound}
+        databaseTaskIds={deckAggregate?.tasks.filter((task) => task.database_change?.required).map((task) => task.task_id) ?? []}
       />
       <RedispatchModal
         open={redispatchOpen}
