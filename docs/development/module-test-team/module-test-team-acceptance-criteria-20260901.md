@@ -89,12 +89,20 @@ AC-D2 因此只断言正向。
 |---|---|---|---|
 | P-1 | **FAIL** → 改道条款生效 | 在运行中的 AgentTeams 控制器（宿主单例 `agentteams-embedded:v1.2.0-rm3`，新栈接的也是它）上经 `POST /api/v1/workers` 亲建 `agentteams-worker-p1-probe`，容器内用其自身 `AGENTTEAMS_AUTH_TOKEN` 探针：`docker`/`docker compose`/socket 全无；HostConfig `Binds=null Privileged=false`；控制器 `/docker/` 直通对 worker 角色 6 项全部 403 `cannot gateway gateway`；管理员 token 下建网络/建卷 403、非 `agentteams-worker-` 前缀 403、bind 403、单容器 create/start/kill/delete 通。探针 worker 已删净。代码依据：`auth/authorizer.go` worker/team-leader 对 `gateway` 资源 default deny；`proxy/proxy.go` 白名单无 networks/volumes。runner 镜像亦无 Docker。详见 spec 修订 A.0 | 2026-09-01 |
 | AC-A1~A6 | **PASS**（双档） | in-memory 档：`tests/api/test_issue_materialize_test_team.py` 6 用例全绿（AC-A1/A2 合测、A3 拆 replay/换 key 两测、A4 双断言、A5 逐字段、另含 S-1 守卫序与去重两条冻结规则）；红验证：撤实现 4 红 2 绿（绿的两条守边界，独立于追加成立）。postgres 档：`tests/integration/test_postgres.py::test_postgres_test_team_supply_chain_converges_by_id` 于一次性 postgres:17（alembic head）全绿。AC-A6 对照组：`tests/api/test_issue_materialize.py` 35 用例全绿 | 2026-09-01 |
-| AC-B1 | 待 W4 | | |
-| AC-B2 | 待 W4 | | |
-| AC-B3 | 待 W4 | | |
-| AC-C1 | 待 W4 | | |
-| AC-C2 | 待 W4 | | |
-| AC-D1~D4 | **D4 静态半场 PASS**：`tsc -b` 零错、oxlint 受影响 6 文件零告警；replay 夹具浏览器点检过弹窗（两句冻结文案、双选项、选中态回显）、仓库卡档案回显、TeamsPage「测试团队」徽标正反向。**D1~D3 活体断言留 W4**，本波不冒充完成 | 2026-09-01 |
+| AC-B1 | **部分：闭环跑通到证据落盘，证据入仓被执行器顺序挡住（待裁决）** | W4 栈（`output/bridge-team/w4-live/`，一次性库 15547、后端 8077、Bridge worker `repomesh-test-worker`）。Manager 经 `/bridge/materialize` 对项目 `21899c3e` 投判据含 green.json 的任务 → server 拆解出 worker 任务 → Bridge 读团队房提及自动接单 `start-worker-task 202` → runner 执行 → 任务 `succeeded`（第 3 轮 run `1c1c6975`、第 4 轮 run `461699d9`），工作区 `evidence/itest-t582d850506d2/` 四节齐全、`overall=PASS`、`itest-` 根拆净。**未达**：证据未进提交/候选分支——runner `_collect_evidence` 在 test_commands **之前**收集 changed_files（`executor.py:295`），而 Bridge 受限 codex 的 PATH 按设计只含 node/codex（J-12），agent 阶段跑不了 `python`，配方只能在 test 阶段跑 → 证据落盘晚于收集 → `0 file(s) changed`。裁决见「W4 阻断点」 | 2026-09-01 |
+| AC-B2 | 未跑（载荷 `b2_red.json` 已备，等 B1 阻断解除） | | |
+| AC-B3 | **部分 PASS（路由已证）** | Manager→队长：派工消息落 leader room `!n53K…`，容器 copaw 队长在其中推理回应；队长→worker：派工提及落 team room `!sY1l…`，Bridge 从提及接单；`[accepted]/[started]/[tests]/[done]` 叙事进团队房，RoomView 实走可见。台账：`task_orchestration.tasks` 记有队长任务与 worker 任务及状态 | 2026-09-01 |
+| AC-C1 | 未跑（组合 `blocked-unknown-commit.json` 与载荷 `c1_blocked.json` 已备） | | |
+| AC-C2 | 未跑 | | |
+| AC-D1~D4 | **D1/D2/D3 活体 PASS + D4 PASS** | D1：登录 5281 控制台 → 仓库页 → 测试资产仓「团队档案」弹窗拨到 `cross-repo-test-team` 保存 → 卡片回显「档案 cross-repo-test-team」，后端日志 UI 发出的 `PATCH …/capability-profile 200`，API 回读一致；随后发现链 materialize 回执 `team_count=2, repositories=["pricing-fixture"]`（S-1 口径）。D2：TeamsPage 测试团队带「测试团队」徽标、业务团队不带（截图）。D3：测试团队在列表、`teamRoom` 打开 RoomView `repomesh-test-assets · teamRoom` live 轮询，派工消息与台账一致。D4：`tsc -b` 零错、oxlint 零告警（W2） | 2026-09-01 |
+
+### W4 实走中的发现（2026-09-01）
+
+1. **修复** `edd423f3`：`DispatchWorkerTask` 重算能力包时未传 `profile`，测试 worker 工作区挂载的技能没有 `integration-run`（live run `f375610a`）；已传入并加回归用例，第二轮起工作区含 `integration-run`。
+2. **缺陷（未修）**：外部成员 provisioning 路径（`PUT /runtime/v2/external-members`）不套档案覆盖，控制器侧 `repomesh-test-worker.skills=['coding']`；容器队长 `repomesh-test-leader` 正确得到 `cross-repo-test/worker-management/reporting`。对 Bridge 成员该字段是装饰性的，runner 侧技能按档案挂载（见 1）。
+3. **环境**：新工作区根必须 `icacls … /grant <user>:(OI)(CI)F`（Bridge 要给 worktree 打 Low 完整性标签），且 Git Bash 下要 `MSYS_NO_PATHCONV=1` 否则 `/grant` 被转成路径。
+4. **资产仓**：`.gitignore` 的 `itest-*/` 未锚定根目录曾把 `evidence/itest-<run-id>/` 一并忽略（已改 `/itest-*/`）；配方改为按任务 id 派生 run-id 并对已存在证据幂等回放（`971dc1d`）。
+5. **W4 阻断点（待裁决）**：见 AC-B1。可选：R1 执行器在 test_commands 之后再收集一次（建议只在 agent 阶段变更集为空时生效，且同样过 allowed/denied 校验）；R2 放宽 Bridge 受限 PATH 加 python/git（J-12 安全设计变更）；R3 证据不入 git、回执只指工作区路径（违背 S-3 冻结）。
 
 ---
 
