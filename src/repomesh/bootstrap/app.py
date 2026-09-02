@@ -791,6 +791,7 @@ def build_default_container(
             model_api_key,
             base_url=model_base_url,
             model=model_name,
+            timeout_seconds=settings.llm_timeout_seconds,
             usage_sink=usage_recorder.record,
         ),
         agent_team_control_plane=control_plane,

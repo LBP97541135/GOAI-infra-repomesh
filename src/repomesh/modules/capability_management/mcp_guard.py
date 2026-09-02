@@ -59,12 +59,22 @@ class McpCallResult:
     latency_ms: float
     attempts: int
     audit_id: str
+    #: The invoke's return value on success. The guard wraps a call, it does
+    #: not own the call's result — the Worker MCP endpoint needs the
+    #: ``WorkerExecutionStarted`` the execution service answered with.
+    value: object = None
+    #: The exception the invoke raised, when it did. The guard records a
+    #: failure as an ``error`` outcome instead of raising it, so this field is
+    #: the only place the cause survives for the caller to translate.
+    error: BaseException | None = None
 
 
 #: Operations whose names carry these verbs never retry: they mutate remote
 #: state and a blind retry can duplicate it. Idempotency keys are a per-tool
-#: contract RepoMesh cannot verify, so writes stay single-shot.
-_WRITE_VERBS = ("write", "create", "update", "delete", "merge", "submit", "push", "mutation")
+#: contract RepoMesh cannot verify, so writes stay single-shot. ``start`` is
+#: here because starting an execution mints a run — a re-fire after a lost
+#: response is a second run, whatever the executor's own dedup may promise.
+_WRITE_VERBS = ("write", "create", "start", "update", "delete", "merge", "submit", "push", "mutation")
 
 
 def _is_read_only(operation: str) -> bool:
@@ -138,9 +148,9 @@ class McpCallGuard:
             while attempts < max_attempts:
                 attempts += 1
                 try:
-                    await asyncio.wait_for(invoke(), timeout=policy.timeout_seconds)
+                    returned = await asyncio.wait_for(invoke(), timeout=policy.timeout_seconds)
                     latency = (time.monotonic() - start) * 1000
-                    result = McpCallResult("success", latency, attempts, audit_id)
+                    result = McpCallResult("success", latency, attempts, audit_id, value=returned)
                     break
                 except TimeoutError:
                     latency = (time.monotonic() - start) * 1000
@@ -150,9 +160,9 @@ class McpCallGuard:
                     continue
                 except McpDegradedRefused:
                     raise
-                except Exception:
+                except Exception as exc:
                     latency = (time.monotonic() - start) * 1000
-                    result = McpCallResult("error", latency, attempts, audit_id)
+                    result = McpCallResult("error", latency, attempts, audit_id, error=exc)
                     break
             span.set_attribute(_ATTR_OUTCOME, result.outcome)
             span.set_attribute(_ATTR_LATENCY, round(result.latency_ms, 1))

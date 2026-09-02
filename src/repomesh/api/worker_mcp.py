@@ -48,14 +48,16 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
                 StartAssignedWorkerTaskCommand(
                     task_id=UUID(str(arguments["task_id"])),
                     worker_agent_id=UUID(str(arguments["worker_agent_id"])),
-                    adapter_id=str(arguments.get("adapter_id") or "claude-code"),
+                    adapter_id=str(
+                        arguments.get("adapter_id")
+                        or get_settings().worker_default_adapter_id
+                    ),
                     base_revision=str(arguments.get("base_revision") or "main"),
                     task_features=frozenset(arguments.get("task_features") or ()),
                 )
             ),
             args=arguments,
         )
-        started = guard_result  # invoke returned the StartedWorkerTask directly
     except McpDegradedRefused as error:
         return _result(
             request_id,
@@ -69,6 +71,24 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             request_id,
             {"content": [{"type": "text", "text": str(error)}], "isError": True},
         )
+    if guard_result.outcome != "success":
+        # The guard records failures as outcomes instead of raising them, so
+        # the captured cause is the Worker's only actionable detail.
+        cause = guard_result.error
+        if guard_result.outcome == "timeout":
+            text = (
+                "start_assigned_task timed out — the start may still have taken "
+                "effect; check task status before retrying"
+            )
+        elif cause is not None:
+            text = f"start_assigned_task failed: {cause}"
+        else:
+            text = f"start_assigned_task failed ({guard_result.outcome})"
+        return _result(
+            request_id,
+            {"content": [{"type": "text", "text": text}], "isError": True},
+        )
+    started = guard_result.value
     workspace = started.task.workspace
     payload = {
         "task_id": str(started.task.task_id),
@@ -125,7 +145,10 @@ def _tool_definition() -> dict[str, Any]:
             "properties": {
                 "task_id": {"type": "string", "format": "uuid"},
                 "worker_agent_id": {"type": "string", "format": "uuid"},
-                "adapter_id": {"type": "string", "default": "claude-code"},
+                "adapter_id": {
+                    "type": "string",
+                    "default": get_settings().worker_default_adapter_id,
+                },
                 "base_revision": {"type": "string", "default": "main"},
                 "task_features": {"type": "array", "items": {"type": "string"}},
             },

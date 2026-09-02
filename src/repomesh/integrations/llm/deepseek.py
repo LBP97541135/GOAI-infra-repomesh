@@ -192,11 +192,17 @@ def make_llm_client(
     *,
     base_url: str = "https://api.deepseek.com/v1",
     model: str = "deepseek-chat",
+    timeout_seconds: float = 60.0,
     usage_sink: Callable[[dict[str, object]], None] | None = None,
 ) -> DeepSeekClient | None:
     if not api_key:
         return None
     return DeepSeekClient(
-        DeepSeekConfig(api_key=api_key, base_url=base_url, model=model),
+        DeepSeekConfig(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            timeout_seconds=timeout_seconds,
+        ),
         usage_sink=usage_sink,
     )

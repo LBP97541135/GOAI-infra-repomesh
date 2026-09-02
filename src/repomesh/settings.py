@@ -89,6 +89,16 @@ class Settings(BaseSettings):
     mcp_gateway_tokens: tuple[str, ...] = ()
     direct_worker_mcp_enabled: bool = False
     runner_workspace_root: Path = Path(".repomesh-workspaces")
+    #: Adapter a Worker's ``start_assigned_task`` call runs when the call does
+    #: not name one. The assignment message the Worker receives carries only
+    #: task and worker ids, so this setting — not the message — is where a
+    #: deployment declares which coding CLI its Runner image actually ships.
+    #: The runner's own profile catalog must contain the id: the runner image
+    #: installs the validation mock (``repomesh-mock-agent``), so a local
+    #: one-shot stack sets ``REPOMESH_WORKER_DEFAULT_ADAPTER_ID=mock``; a
+    #: deployment with a real CLI mounted names that instead. Defaulting to
+    #: ``claude-code`` keeps every existing caller's meaning unchanged.
+    worker_default_adapter_id: str = "claude-code"
     worker_execution_reservation_lease_seconds: int = Field(default=300, ge=30)
     worker_execution_reservation_wait_seconds: int = Field(default=30, ge=1)
     worker_recovery_enabled: bool = False
@@ -157,6 +167,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("REPOMESH_EMBEDDING_MODEL"),
     )
     embedding_timeout_seconds: float = Field(default=30.0, ge=1.0)
+    # Reasoning models routinely exceed 60s on spec-generation calls; the LLM
+    # chat timeout is the one that turned that into a hard 500.
+    llm_timeout_seconds: float = Field(default=120.0, ge=1.0)
     github_app_id: int | None = None
     github_app_private_key_file: Path | None = None
     github_app_private_key_base64: SecretStr | None = None
