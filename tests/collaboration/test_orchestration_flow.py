@@ -43,10 +43,18 @@ from repomesh.modules.task_orchestration import (
     AssignTaskCommand,
     InMemoryTaskStore,
     ReportTaskCommand,
+    TaskBlocked,
     TaskOrchestrator,
     TaskStatus,
 )
-from repomesh.modules.task_orchestration.contracts import PublishedTaskPackage
+from repomesh.modules.task_orchestration.contracts import (
+    DatabaseChangeKind,
+    DatabaseChangeRequirement,
+    PublishedTaskPackage,
+)
+from repomesh.modules.task_orchestration.database_automation import (
+    DatabaseAutomationDisposition,
+)
 
 
 class ReadyControlPlane:
@@ -185,7 +193,7 @@ class RecordingCheckpointGateway:
         return CheckpointGateDecision(False, "human_checkpoint_pending")
 
 
-async def build_flow(messenger=None, checkpoints=None):
+async def build_flow(messenger=None, checkpoints=None, database_automation=None):
     directory = InMemoryAgentDirectory()
     create = CreateAgent(directory)
     organization_id = uuid4()
@@ -246,6 +254,7 @@ async def build_flow(messenger=None, checkpoints=None):
         collaboration,
         RecordingTaskPublisher(),
         checkpoints,
+        database_automation=database_automation,
     )
     return (
         organization_id,
@@ -261,6 +270,98 @@ async def build_flow(messenger=None, checkpoints=None):
     )
 
 
+@pytest.mark.asyncio
+async def test_successful_database_task_automatically_requests_validation() -> None:
+    decisions = []
+
+    async def capture(decision) -> None:
+        decisions.append(decision)
+
+    (
+        organization_id,
+        repository_id,
+        project_id,
+        organization_leader,
+        repository_team,
+        _,
+        _,
+        orchestrator,
+        _,
+        _,
+    ) = await build_flow(database_automation=capture)
+    leader_task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            assigned_by_agent_id=organization_leader.id,
+            assignee_agent_id=repository_team.leader.id,
+            title="Plan database change",
+            instruction="Coordinate the database change",
+            acceptance=("worker evidence reviewed",),
+        ),
+        idempotency_key="database-leader-task",
+    )
+    worker = repository_team.workers[0]
+    worker_task = await orchestrator.assign(
+        AssignTaskCommand(
+            organization_id=organization_id,
+            project_id=project_id,
+            repository_id=repository_id,
+            assigned_by_agent_id=repository_team.leader.id,
+            assignee_agent_id=worker.id,
+            parent_task_id=leader_task.id,
+            title="Add users migration",
+            instruction="Add and validate the migration",
+            acceptance=("migration_apply passes",),
+            database_change=DatabaseChangeRequirement(
+                declared=True,
+                required=True,
+                change_kinds=(DatabaseChangeKind.MIGRATION,),
+                affected_tables=("users",),
+                migration_required=True,
+                required_checks=("migration_apply",),
+            ),
+        ),
+        idempotency_key="database-worker-task",
+    )
+    await orchestrator.start(worker_task.id, agent_id=worker.id)
+    with pytest.raises(TaskBlocked, match="worker_database_evidence_missing"):
+        await orchestrator.report(
+            ReportTaskCommand(
+                task_id=worker_task.id,
+                reporter_agent_id=worker.id,
+                status=TaskStatus.SUCCEEDED,
+                summary=json.dumps(
+                    {"commitSha": "a" * 40, "changedFiles": ["migrations/0053_users.py"]}
+                ),
+            ),
+            idempotency_key="database-worker-report-missing",
+        )
+    await orchestrator.report(
+        ReportTaskCommand(
+            task_id=worker_task.id,
+            reporter_agent_id=worker.id,
+            status=TaskStatus.SUCCEEDED,
+            summary=json.dumps(
+                {
+                    "commitSha": "a" * 40,
+                    "changedFiles": ["migrations/0053_users.py"],
+                    "databaseChange": {
+                        "migrationFiles": ["migrations/0053_users.py"],
+                        "backfillFiles": [],
+                        "affectedTables": ["users"],
+                        "checks": [{"name": "migration_apply", "exitCode": 0}],
+                    },
+                }
+            ),
+        ),
+        idempotency_key="database-worker-report",
+    )
+
+    assert len(decisions) == 1
+    assert decisions[0].disposition is DatabaseAutomationDisposition.REQUEST_VALIDATION
+    assert decisions[0].intent.candidate_sha == "a" * 40
 @pytest.mark.asyncio
 async def test_manager_leader_worker_assignment_and_report_flow() -> None:
     (

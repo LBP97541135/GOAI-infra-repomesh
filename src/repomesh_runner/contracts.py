@@ -253,6 +253,7 @@ class RunnerExecutionResult:
     changed_files: tuple[str, ...] = ()
     test_results: tuple[TestCommandResult, ...] = ()
     commit_sha: str | None = None
+    database_change: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         _validate_unique_strings("changed_files", self.changed_files)

@@ -1742,6 +1742,17 @@ class ApplicationContainer:
         )
 
     @cached_service
+    def database_test_team_handoff_service(self):
+        from repomesh.modules.task_orchestration import (
+            DatabaseTestTeamHandoffService,
+        )
+        from repomesh.modules.task_orchestration.database_test_team_store import (
+            PostgresDatabaseTestTeamHandoffStore,
+        )
+
+        return DatabaseTestTeamHandoffService(PostgresDatabaseTestTeamHandoffStore(self.database))
+
+    @cached_service
     def database_branch_validation_service(self):
         from repomesh.modules.review_validation import (
             DatabaseBranchValidationService,

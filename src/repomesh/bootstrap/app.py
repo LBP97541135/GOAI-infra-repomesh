@@ -4,7 +4,7 @@ import socket
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -360,6 +360,52 @@ def build_default_container(
     )
     task_report_gateway = None
     if messenger is not None:
+        from repomesh.modules.review_validation import (
+            DatabaseBranchValidationService,
+            DatabaseValidationCommand,
+            DatabaseValidationStage,
+            PostgresDatabaseBranchValidationStore,
+            StartDatabaseBranchValidation,
+            UnavailableDatabaseBranchProvider,
+        )
+
+        database_validations = DatabaseBranchValidationService(
+            PostgresDatabaseBranchValidationStore(database),
+            UnavailableDatabaseBranchProvider(),
+        )
+
+        async def request_database_validation(decision) -> None:
+            intent = decision.intent
+            if intent is None:
+                return
+            commands = tuple(
+                DatabaseValidationCommand(
+                    DatabaseValidationStage.MIGRATION, f"migration:{index}", path
+                )
+                for index, path in enumerate(intent.migration_files, 1)
+            ) + tuple(
+                DatabaseValidationCommand(
+                    DatabaseValidationStage.BACKFILL, f"backfill:{index}", path
+                )
+                for index, path in enumerate(intent.backfill_files, 1)
+            ) + tuple(
+                DatabaseValidationCommand(
+                    DatabaseValidationStage.VERIFICATION, check, f"check:{check}"
+                )
+                for check in intent.checks
+            )
+            await database_validations.start(
+                StartDatabaseBranchValidation(
+                    organization_id=UUID(intent.organization_id),
+                    project_id=UUID(intent.project_id),
+                    repository_id=UUID(intent.repository_id),
+                    candidate_sha=intent.candidate_sha,
+                    source_database_ref="repository-database-validation-policy",
+                    commands=commands,
+                    idempotency_key=intent.idempotency_key,
+                )
+            )
+
         collaboration = SendCollaborationMessage(
             agent_directory,
             topology_store,
@@ -380,6 +426,7 @@ def build_default_container(
             collaboration,
             task_publisher,
             checkpoint_service,
+            database_automation=request_database_validation,
         )
         task_report_gateway = tasks
         inbound = ProcessMatrixTaskReport(

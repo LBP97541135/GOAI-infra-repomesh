@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,11 @@ from repomesh_runner.drivers.base import (
     PermissionDecision,
 )
 from repomesh_runner.drivers.stream_json import build_arguments
-from repomesh_runner.executor import AllowlistPermissionPolicy, DriverExecutor
+from repomesh_runner.executor import (
+    AllowlistPermissionPolicy,
+    DriverExecutor,
+    _database_change_report,
+)
 from repomesh_runner.profiles import get_profile
 
 
@@ -662,3 +667,32 @@ class TestExecutionEvidence:
         assert result.commit_sha is None
         assert git_head(workspace) is None
         assert git_porcelain(workspace) == "?? evidence.txt"
+
+def test_database_change_report_is_structured_and_removed_from_workspace(tmp_path: Path) -> None:
+    report_path = tmp_path / ".repomesh" / "database-change-report.json"
+    report_path.parent.mkdir()
+    document = {
+        "migrationFiles": ["migrations/0053_users.py"],
+        "backfillFiles": ["jobs/backfill_users.py"],
+        "affectedTables": ["users"],
+        "checks": [{"name": "migration_apply", "exitCode": 0}],
+    }
+    report_path.write_text(json.dumps(document), encoding="utf-8")
+
+    report, error = _database_change_report(tmp_path)
+
+    assert error is None
+    assert report == document
+    assert not report_path.exists()
+
+
+def test_database_change_report_rejects_undeclared_fields(tmp_path: Path) -> None:
+    report_path = tmp_path / ".repomesh" / "database-change-report.json"
+    report_path.parent.mkdir()
+    report_path.write_text('{"databaseUrl":"postgresql://secret"}', encoding="utf-8")
+
+    report, error = _database_change_report(tmp_path)
+
+    assert report is None
+    assert error == "report contains unsupported fields"
+    assert not report_path.exists()

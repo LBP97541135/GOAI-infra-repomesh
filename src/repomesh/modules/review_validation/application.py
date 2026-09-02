@@ -278,8 +278,6 @@ class DatabaseBranchValidationService:
         if not command.commands:
             raise ValueError("database validation requires commands")
         stages = [item.stage for item in command.commands]
-        if DatabaseValidationStage.MIGRATION not in stages:
-            raise ValueError("database validation requires a migration command")
         if DatabaseValidationStage.VERIFICATION not in stages:
             raise ValueError("database validation requires a verification command")
         order = {stage: index for index, stage in enumerate(DatabaseValidationStage)}

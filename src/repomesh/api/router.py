@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from repomesh.api.database_test_team import router as database_test_team_router
 from repomesh.api.dynamic_plan import router as dynamic_plan_router
 from repomesh.api.health import router as health_router
 from repomesh.api.human_control import router as human_control_router
@@ -39,6 +40,7 @@ api_router.include_router(capability_governance_router)
 api_router.include_router(platform_credentials_router)
 api_router.include_router(platform_bootstrap_router)
 api_router.include_router(worker_mcp_router)
+api_router.include_router(database_test_team_router)
 api_router.include_router(repository_intelligence_router, prefix="/api/v1")
 # Shares the /console prefix with the read model's grid router and with
 # identity_access; the paths are disjoint, and a console *write* belongs to the

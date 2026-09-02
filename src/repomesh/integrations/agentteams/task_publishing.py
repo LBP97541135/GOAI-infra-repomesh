@@ -54,6 +54,7 @@ class AgentTeamsTaskPublisher(TaskAssignmentPublisher):
             "room_id": room_id,
             "status": "assigned",
             "depends_on": [],
+            "database_change": self._database_change(task),
             "repomesh": {
                 "organization_id": str(task.organization_id),
                 "repository_id": str(task.repository_id),
@@ -93,11 +94,41 @@ class AgentTeamsTaskPublisher(TaskAssignmentPublisher):
     @staticmethod
     def _render_spec(task: TaskView) -> str:
         acceptance = "\n".join(f"- {item}" for item in task.acceptance)
+        database = task.database_change
+        database_section = (
+            "\n## Database change requirements\n\n"
+            f"- Declared: {str(database.declared).lower()}\n"
+            f"- Required: {str(database.required).lower()}\n"
+            f"- Change kinds: {', '.join(item.value for item in database.change_kinds) or 'none'}\n"
+            f"- Affected tables: {', '.join(database.affected_tables) or 'none'}\n"
+            f"- Migration required: {str(database.migration_required).lower()}\n"
+            f"- Backfill required: {str(database.backfill_required).lower()}\n"
+            f"- Required checks: {', '.join(database.required_checks) or 'none'}\n"
+        )
+        if database.required:
+            database_section += (
+                "\nWrite structured evidence to `.repomesh/database-change-report.json` "
+                "with migrationFiles, backfillFiles, affectedTables, and checks "
+                "[{name, exitCode}]. RepoMesh removes this control report before committing.\n"
+            )
         return (
             f"# {task.title}\n\n"
             f"## Current task\n\n{task.instruction}\n\n"
-            f"## Acceptance criteria\n\n{acceptance}\n"
+            f"## Acceptance criteria\n\n{acceptance}\n{database_section}"
         )
+
+    @staticmethod
+    def _database_change(task: TaskView) -> dict[str, object]:
+        requirement = task.database_change
+        return {
+            "declared": requirement.declared,
+            "required": requirement.required,
+            "change_kinds": [item.value for item in requirement.change_kinds],
+            "affected_tables": list(requirement.affected_tables),
+            "migration_required": requirement.migration_required,
+            "backfill_required": requirement.backfill_required,
+            "required_checks": list(requirement.required_checks),
+        }
 
     @staticmethod
     def _digest(spec: str, meta: str) -> str:
@@ -164,6 +195,7 @@ class AgentTeamsObjectTaskPublisher(AgentTeamsTaskPublisher):
             "room_id": room_id,
             "status": "assigned",
             "depends_on": [],
+            "database_change": AgentTeamsTaskPublisher._database_change(task),
             "repomesh": {
                 "organization_id": str(task.organization_id),
                 "repository_id": str(task.repository_id),

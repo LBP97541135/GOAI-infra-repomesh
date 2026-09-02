@@ -20,7 +20,8 @@
       "title": "Extend the quote contract with currency and rounding rules",
       "instruction": "Add a currency field to the Quote contract and declare the rounding-rule table: USD/EUR two decimal places, JPY zero. Keep existing USD behavior unchanged.",
       "allowedPaths": ["src/pricing_core/contracts/", "tests/"],
-      "tests": ["python scripts/run_tests.py"]
+      "tests": ["python scripts/run_tests.py"],
+      "databaseChange": {"declared": true, "required": false}
     },
     {
       "nodeId": "rounding",
@@ -28,7 +29,8 @@
       "title": "Implement per-currency rounding",
       "instruction": "Implement round_amount(amount, currency) against the contract's rounding-rule table and apply it in quote pricing.",
       "allowedPaths": ["src/pricing_core/", "tests/"],
-      "tests": ["python scripts/run_tests.py"]
+      "tests": ["python scripts/run_tests.py"],
+      "databaseChange": {"declared": true, "required": false}
     }
   ],
   "provenance": {

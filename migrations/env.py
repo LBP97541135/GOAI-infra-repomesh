@@ -74,7 +74,10 @@ from repomesh.modules.specification.infrastructure import (
 )
 from repomesh.modules.task_orchestration.assignment import TaskAssignmentAttemptRecord
 from repomesh.modules.task_orchestration.dynamic_revision import ExecutionPlanRevisionRecord
-from repomesh.modules.task_orchestration.infrastructure import TaskRecord
+from repomesh.modules.task_orchestration.infrastructure import (
+    DatabaseTestTeamHandoffRecord,
+    TaskRecord,
+)
 from repomesh.persistence.base import Base
 from repomesh.persistence.models import (
     AuditEventRecord,
@@ -131,6 +134,7 @@ _REGISTERED_MODELS = (
     SpecificationVersionRecord,
     TaskRecord,
     TaskAssignmentAttemptRecord,
+    DatabaseTestTeamHandoffRecord,
     ExecutionPlanRevisionRecord,
     StateEventRecord,
     AuditEventRecord,

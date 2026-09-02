@@ -81,6 +81,9 @@ class ExecuteRunnerTask:
                     {"command": entry.command, "exitCode": entry.exit_code}
                     for entry in result.test_results
                 ],
+                "databaseChange": (
+                    dict(result.database_change) if result.database_change is not None else None
+                ),
             },
         )
         return result

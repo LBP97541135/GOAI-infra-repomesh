@@ -70,6 +70,11 @@ from repomesh.modules.task_orchestration.contracts import (
     WorkerRosterEntryView,
     WorkerTaskExecutionStatus,
 )
+from repomesh.modules.task_orchestration.database_automation import (
+    DatabaseAutomationDecision,
+    DatabaseAutomationDisposition,
+    evaluate_database_automation,
+)
 from repomesh.modules.task_orchestration.domain import (
     _REDOABLE_TASK_STATUSES,
     FINAL_TASK_STATUSES,
@@ -131,6 +136,7 @@ def _worker_evidence(task: TaskView) -> WorkerEvidenceView:
         diff_stat=None,
         summary=evidence.summary_text if evidence is not None else task.result_summary,
     )
+
 
 #: Every ``idempotency_key`` column in the schema is ``String(200)`` — the task
 #: and execution-plan stores here, the collaboration message store a dispatch
@@ -365,6 +371,7 @@ class TaskOrchestrator:
         publisher: TaskAssignmentPublisher | None = None,
         checkpoints: ProjectCheckpointGateway | None = None,
         audit: TaskAuditLog | None = None,
+        database_automation: Callable[[DatabaseAutomationDecision], Awaitable[None]] | None = None,
     ) -> None:
         self._directory = directory
         self._topologies = topologies
@@ -373,6 +380,7 @@ class TaskOrchestrator:
         self._publisher = publisher
         self._checkpoints = checkpoints or TopologyAwareCheckpointFallback(topologies)
         self._audit = audit
+        self._database_automation = database_automation
 
     async def assign(
         self,
@@ -441,6 +449,7 @@ class TaskOrchestrator:
             instruction=command.instruction.strip(),
             acceptance=tuple(item.strip() for item in command.acceptance),
             origin=origin,
+            database_change=command.database_change,
         )
         await self._tasks.add(
             task,
@@ -529,8 +538,6 @@ class TaskOrchestrator:
             )
         await self._deliver_assignment(task, key)
 
-
-
     async def _deliver_assignment(
         self, task: Task, key: str, *, dispatch_attempt: str | None = None
     ) -> None:
@@ -588,9 +595,7 @@ class TaskOrchestrator:
             idempotency_key=_dispatch_message_key(key, dispatch_attempt),
         )
 
-    async def redispatch(
-        self, task_id: UUID, *, attempt: str, redo: bool = False
-    ) -> TaskView:
+    async def redispatch(self, task_id: UUID, *, attempt: str, redo: bool = False) -> TaskView:
         """Dispatch an already-assigned task again, under a new attempt (§8.7.4).
 
         Everything a first dispatch does except create the task: the package is
@@ -673,6 +678,21 @@ class TaskOrchestrator:
             updated = task
         else:
             updated = task.report(command.status, command.summary)
+            if command.status is TaskStatus.SUCCEEDED:
+                database_decision = evaluate_database_automation(updated.to_view())
+                should_block = (
+                    database_decision.disposition is DatabaseAutomationDisposition.WORKER_REWORK
+                    or (
+                        database_decision.disposition
+                        is DatabaseAutomationDisposition.MANAGER_REVIEW
+                        and database_decision.reasons != ("database_impact_not_declared",)
+                    )
+                )
+                if should_block:
+                    raise TaskBlocked(
+                        "database automation blocked success: "
+                        + ", ".join(database_decision.reasons)
+                    )
             await self._tasks.update(updated, expected_version=task.version)
         kind = (
             CollaborationMessageKind.PROGRESS
@@ -716,6 +736,10 @@ class TaskOrchestrator:
                 title=f"{task.title}：仓库异常升级",
                 summary=command.summary.strip(),
             )
+        if command.status is TaskStatus.SUCCEEDED and self._database_automation is not None:
+            decision = evaluate_database_automation(updated.to_view())
+            if decision.disposition is DatabaseAutomationDisposition.REQUEST_VALIDATION:
+                await self._database_automation(decision)
         return updated.to_view()
 
     async def supersede(self, command: SupersedeTaskCommand, *, idempotency_key: str) -> TaskView:
@@ -1545,9 +1569,7 @@ class AdvanceExecutionPlan:
             return True
         evidence = LeaderReviewEvidenceView(
             review_revision=assignment.review_revision,
-            worker_evidence=tuple(
-                _worker_evidence(child.to_view()) for child in children
-            ),
+            worker_evidence=tuple(_worker_evidence(child.to_view()) for child in children),
         )
         await self._leader_lane.assignments.save(
             replace(
@@ -1595,9 +1617,7 @@ class AdvanceExecutionPlan:
                 ),
                 correlation_id=parent.id,
             ),
-            idempotency_key=(
-                f"leader-review:{parent.id}:r{evidence.review_revision}:due"
-            ),
+            idempotency_key=(f"leader-review:{parent.id}:r{evidence.review_revision}:due"),
         )
 
     async def _batch_succeeded(self, plan: ExecutionPlan) -> bool:
@@ -1740,9 +1760,7 @@ class LeaderAssignmentAuthorizer:
                 LeaderActionErrorCode.FORBIDDEN_NOT_ASSIGNEE,
                 "this leader assignment belongs to another repository leader",
             )
-        mode = await self._modes.decomposition_mode(
-            assignment.project_id, assignment.repository_id
-        )
+        mode = await self._modes.decomposition_mode(assignment.project_id, assignment.repository_id)
         if mode is not TeamDecompositionMode.LEADER:
             raise LeaderActionRefused(
                 LeaderActionErrorCode.DECOMPOSITION_MODE_CONFLICT,
@@ -1860,6 +1878,7 @@ class SubmitRepositoryPlan:
                     instruction=draft.instruction,
                     acceptance=task.acceptance,
                     parent_task_id=leader_task_id,
+                    database_change=draft.database_change,
                 ),
                 idempotency_key=key,
                 origin=task.origin,
@@ -1919,7 +1938,14 @@ class SubmitRepositoryPlan:
             raise TaskDenied("worker agent is missing or disabled")
         await self._spec_author.ensure_approved(
             worker_task,
-            allowed_paths=draft.allowed_paths,
+            allowed_paths=(
+                *draft.allowed_paths,
+                *(
+                    (".repomesh/database-change-report.json",)
+                    if draft.database_change.required
+                    else ()
+                ),
+            ),
             tests=draft.tests,
             idempotency_key=f"{key}:spec",
         )
@@ -2041,6 +2067,7 @@ class SubmitRepositoryReview:
     ) -> None:
         self._authorizer = LeaderAssignmentAuthorizer(assignments, tasks, directory, modes)
         self._assignments = assignments
+        self._tasks = tasks
         self._directory = directory
         self._assigner = assigner
         self._reporter = reporter
@@ -2199,6 +2226,9 @@ class SubmitRepositoryReview:
         }
         for index, finding in enumerate(decision.rework_findings):
             reviewed = evidence_by_task[finding.worker_task_id]
+            original = await self._tasks.get(finding.worker_task_id)
+            if original is None:
+                raise TaskNotFound("reviewed worker task does not exist")
             key = f"leader-review:{assignment.leader_task_id}:r{revision}:{index}"
             worker_task = await self._assigner.assign(
                 AssignTaskCommand(
@@ -2214,6 +2244,7 @@ class SubmitRepositoryReview:
                     ),
                     acceptance=task.acceptance,
                     parent_task_id=assignment.leader_task_id,
+                    database_change=original.database_change,
                 ),
                 idempotency_key=key,
                 origin=TaskOrigin.REWORK,
@@ -2405,8 +2436,7 @@ class RedispatchRound:
             [
                 task
                 for task in settled
-                if task.status in _REDOABLE_TASK_STATUSES
-                and task.id not in review_rounds
+                if task.status in _REDOABLE_TASK_STATUSES and task.id not in review_rounds
             ]
             if scope is RedispatchScope.RERUN
             else []

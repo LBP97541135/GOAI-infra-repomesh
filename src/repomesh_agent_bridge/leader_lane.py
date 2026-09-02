@@ -258,7 +258,8 @@ def render_plan_instructions(package: RepositoryAssignmentPackage) -> str:
             "versa; edges point from a prerequisite to what depends on it; the graph is "
             "acyclic; every assignee is on the roster above; every allowedPaths entry is "
             "under an envelope root; every worker task's tests include every envelope test "
-            "command.",
+            "command. Every worker task must explicitly include databaseChange; use "
+            "declared=true, required=false when the task has no database impact.",
             "# Output shape",
             json.dumps(
                 {
@@ -275,6 +276,15 @@ def render_plan_instructions(package: RepositoryAssignmentPackage) -> str:
                             "instruction": "<what to do>",
                             "allowedPaths": ["<under an envelope root>"],
                             "tests": ["<every envelope test command>"],
+                            "databaseChange": {
+                                "declared": True,
+                                "required": False,
+                                "changeKinds": [],
+                                "affectedTables": [],
+                                "migrationRequired": False,
+                                "backfillRequired": False,
+                                "requiredChecks": [],
+                            },
                         }
                     ],
                 },

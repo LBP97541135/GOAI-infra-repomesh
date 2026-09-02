@@ -1858,6 +1858,7 @@ class PlannedWorkerTask:
     instruction: str
     allowed_paths: tuple[str, ...]
     tests: tuple[str, ...]
+    database_change: dict[str, object] | None = None
 
     @classmethod
     def from_wire(cls, payload: object, *, document: str) -> "PlannedWorkerTask":
@@ -1873,6 +1874,7 @@ class PlannedWorkerTask:
                 "allowedPaths",
                 "tests",
             ),
+            optional=("databaseChange",),
             error=LeaderDocumentInvalid,
         )
         return cls(
@@ -1903,10 +1905,21 @@ class PlannedWorkerTask:
             tests=_string_array(
                 body, "tests", document=document, error=LeaderDocumentInvalid
             ),
+            database_change=(
+                dict(
+                    _mapping(
+                        body["databaseChange"],
+                        document=f"{document}.databaseChange",
+                        error=LeaderDocumentInvalid,
+                    )
+                )
+                if "databaseChange" in body
+                else None
+            ),
         )
 
     def to_wire(self) -> dict[str, object]:
-        return {
+        wire: dict[str, object] = {
             "nodeId": self.node_id,
             "assigneeWorkerAgentId": str(self.assignee_worker_agent_id),
             "title": self.title,
@@ -1914,6 +1927,9 @@ class PlannedWorkerTask:
             "allowedPaths": list(self.allowed_paths),
             "tests": list(self.tests),
         }
+        if self.database_change is not None:
+            wire["databaseChange"] = self.database_change
+        return wire
 
 
 @dataclass(frozen=True, slots=True)
