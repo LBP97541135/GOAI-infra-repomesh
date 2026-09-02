@@ -80,6 +80,10 @@
       # 只装了校验用 mock 编码代理（repomesh-mock-agent），所以默认 mock；接入
       # 真实 CLI 的部署把它改成该 CLI 在 runner profile 目录里的 id。
       REPOMESH_WORKER_DEFAULT_ADAPTER_ID: ${REPOMESH_WORKER_DEFAULT_ADAPTER_ID:-mock}
+      # 告警触达风险边界时的自动姿态：none 只告警不动手；degrade_writes /
+      # pause_intake 会让 OperationalGate 真正咬合（如 pause_intake 拒绝新建
+      # issue）。部署自己声明愿意让告警联动多深，默认只观测不干预。
+      REPOMESH_OPERATIONS_ALERT_ACTION: ${REPOMESH_OPERATIONS_ALERT_ACTION:-none}
       # STORAGE_ROOT 只服务 LocalTraceSource：从共享卷里直接读 MinIO 桶目录做可观测
       # 性 trace 采集（api 与 controller/MinIO 共享 agentteams-data 卷）。它不是任务包
       # 的投递路径——Worker 走 S3（mc mirror agentteams/<桶>/teams/.../shared/tasks/...）
