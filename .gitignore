@@ -50,3 +50,6 @@ components/agentteams/agentteams-controller/build-output/
 components/agentteams/agentteams-controller/build.err
 components/agentteams/agentteams-controller/agentteams-controller-order-fix.bin
 **/kube-apiserver
+
+# 本机抓取的端到端演示截图与抓图脚本（PPT 素材，不入库）
+tmp/

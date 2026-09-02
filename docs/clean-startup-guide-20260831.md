@@ -1,6 +1,6 @@
 # RepoMesh 当前可用启动方式
 
-更新时间：2026-08-31
+更新时间：2026-09-03
 
 ## 1. 结论
 
@@ -228,5 +228,7 @@ docker exec agentteams-controller curl -sf http://127.0.0.1:8001/v1/consumers
   -> 小批次物化
   -> 验证 Worker 消费
 ```
+
+要在本地不接外部 git 托管、不接真实编码 CLI 的前提下把「issue → 发现链 → 计划 → 派单 → Runner 执行 → succeeded」整条执行链一次性跑通，按 `docs/one-shot-e2e-guide.md` 执行（平台现在自带 runner 服务与 mock 编码代理，fixture 仓库用 `scripts/seed_e2e_fixtures.py` 播种）。
 
 本文只记录源码定义的启动入口和隔离规则，不把临时容器恢复、手工替换二进制、旧数据库迁移、旧镜像修补或历史快照恢复当作正常启动方式。

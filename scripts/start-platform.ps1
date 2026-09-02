@@ -297,7 +297,7 @@ if ($AgentTeamsReady -and
 }
 
 try {
-    docker compose --profile platform up -d --build api web bootstrap 2>&1 | Out-Null
+    docker compose --profile platform up -d --build api web runner bootstrap 2>&1 | Out-Null
     $ComposeExitCode = $LASTEXITCODE
 } finally {
     if ($InjectedControllerToken) {

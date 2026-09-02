@@ -149,6 +149,11 @@ On Linux:
 ./scripts/start-platform.sh
 ~~~
 
+To verify the whole execution chain locally — issue through discovery,
+planning, dispatch, and the bundled runner executing the task with the
+validation mock coding agent — follow `docs/one-shot-e2e-guide.md`
+(seed the fixture repositories first with `scripts/seed_e2e_fixtures.py`).
+
 If the Docker engine restarts (or crashes) while a stack is up, re-run the
 `docker compose ... up -d` command for that stack rather than waiting: the
 containers restart themselves (`restart: unless-stopped`), but a dependent
