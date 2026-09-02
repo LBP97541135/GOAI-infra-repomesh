@@ -11,7 +11,7 @@
 W1/W2/W0b/W3 完成；W0a 实测 **P-1 FAIL** 已改道（runner 轨 + 取 A + Bridge 轨）；W4 活体 **A/B/C/D 四组全部有名字的结果**：
 A1–A6 PASS、D1–D4 PASS、B1/B2/B3/C1/C2 PASS——其中 B2/C1「轮次结论写进任务回执摘要」子句**未达**（Bridge 形态的结构性缺口，
 spec A.5 已知局限 + AC 发现 8，未修）。前一会话的阻断（证据进不了提交）已按用户裁决 **R1** 解掉；交付 push 403 已查明是 E0b token 只读并已换 token。
-剩余：两稿对读、拆环境、四个 PR/候选分支去留（用户决定）。
+补充轮 r2 从 issue 起跑通并全程盯三间房留档（`w4-issue-round-room-transcript-20260902.md`）。剩余：两稿对读、拆环境、五个 PR/候选分支去留（用户决定）。
 
 ---
 
@@ -122,8 +122,9 @@ team room `!sY1lFBp4hiErPGFPd6:matrix-local.agentteams.io:18080`，leader room `
 | **`w4-b2-red`** | `0bc734f1` | `5ea75598` | `c997cb39` | `itest-t5ea7559844d3` **FAIL**（`199.99 != 200.0`） | `784a3eaa` → `repomesh/0bc734f1/55555555` → **PR #2** |
 | **`w4-c1-blocked`** | `16127733` | `812db753` | `ed806252` | `itest-t812db753fb7d` **BLOCKED**（`unable to read tree (0000…)`） | `1ca21e00` → `repomesh/16127733/55555555` → **PR #3** |
 | **`w4-c2-sweep`** | `6a1c4faa` | `9db7e001` | — | `itest-t9db7e001b276` PASS + 清扫 stale 清/fresh 留 | `57c7a10e` → `repomesh/6a1c4faa/55555555` → **PR #4** |
+| **`w4-r2-issue-green`**（项目 = 新 issue `8782a8db`，从发现链起） | `be0f747e` | `d8c6051c` | `8391de65` | `itest-td8c6051ceec4` **PASS**；三间房全程留档 | `91c3c43e` → `repomesh/be0f747e/55555555` → **PR #5** |
 
-变更集：`3f1c9237`/`07f73728`/`64d71cc8`/`2b7c84af`，全部 `pr_open`；四个 PR 都被平台 `undraft_when_allowed` 提升为 ready（非 draft），因必需检查 `evidence-review` 不存在而停在未合并。
+变更集：`3f1c9237`/`07f73728`/`64d71cc8`/`2b7c84af`（+ r2 的一个），全部 `pr_open`；五个 PR 都被平台 `undraft_when_allowed` 提升为 ready（非 draft），因必需检查 `evidence-review` 不存在而停在未合并。
 本会话的原始回执/证据 JSON 与轮询日志在 `output/bridge-team/w4-live/logs/{b1-5,b2,c1,c2}.*`（gitignored）。
 
 ---
@@ -142,7 +143,8 @@ team room `!sY1lFBp4hiErPGFPd6:matrix-local.agentteams.io:18080`，leader room `
 2. **SCM poller 每轮 ERROR**：`SCM observation identity was reused for another external fact`（`external_id` 含 `:open:-` 但 payload 含可变字段）。交付线待修，与本线无关。
 3. **外部成员 provisioning 不套档案覆盖**（发现 2，未修）：控制器侧 `repomesh-test-worker.skills=['coding']`，runner 侧按档案挂载正确。
 4. **两稿对读**未做：`docs/development/test-team-tiered-route-spec-20260831.md` vs 本线四件套。
-5. **前端 D 组**本会话未重跑（上一会话 D1–D4 PASS 的事实未变；新增的四个 PR 在交付页可见但未截图）。
+5. **前端 RoomView 分页不带 cursor**（AC 发现 12）：轮询与「加载后续」只发 `stream?limit=50`，超过 50 条的房间只显示最早 50 条；本会话在 r2 轮实看时发现，前端线待修。
+6. **补充轮 r2** 的三间房档案在 `output/bridge-team/w4-live/logs/rooms/r2/`（gitignored），摘要在 `w4-issue-round-room-transcript-20260902.md`；issue `8782a8db` 的业务计划任务（pricing-fixture）停驻在未起的 M7 业务队长上，与 `21899c3e` 同。
 
 ---
 

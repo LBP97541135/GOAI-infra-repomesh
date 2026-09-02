@@ -109,6 +109,8 @@ AC-D2 因此只断言正向。
 9. **PR 不保持 draft**：交付以 `draft=True` 开 PR，但 `undraft_when_allowed` 在下一个 15s 重放周期把无生产者依赖的 PR 提升为 ready（四个 PR 均如此）。不合并的闸门是 `REPOMESH_DELIVERY_REQUIRED_CHECKS=["evidence-review"]`（检查不存在）+ 1 approval，验证有效。
 10. **SCM poller 每轮报错**：`GitHub observation polling failed … DeliveryConflict: SCM observation identity was reused for another external fact`（`integrations/scm/poller.py::_record` → `delivery/application.py::_validate_duplicate`）：观测 `external_id` 为 `<cs>:<repo>:pr:<n>:<sha>:open:-`，而 PR 载荷含可变字段（draft→ready、updated_at），同一 id 不同 payload_hash 即冲突。不阻断本线，属交付线待修。
 11. **Windows 控制台编码**：从 API 读含中文的 JSON 时用 `PYTHONIOENCODING=utf-8` 或按 bytes 解码，否则误判为「JSON 损坏」；psql 输出用 `row_to_json` 而非 tab 拼接。
+12. **RoomView 分页不带 cursor（前端缺陷，未修）**：补充轮 r2（从 issue `8782a8db` 起，全程盯三间房，见 `w4-issue-round-room-transcript-20260902.md`）在控制台实看时发现 RoomView 的 5 s 轮询与「加载后续」都只发 `GET /rooms/{id}/stream?limit=50` 不带 `cursor`，读模型是 offset 分页，所以超过 50 条的房间永远只显示最早 50 条；右侧「事件对照线 · 本轮」与环境栏（changeset/PR）正确。上一会话 D3 PASS 时房间不足 50 条未暴露。
+13. **补充轮 r2（从 issue 起）**：`w4_chain.py W4_RUN=r2` 新建 issue → 四步发现链 + 审批 + materialize（`team_count=2`，新项目复用同名 Team 与同三间房）→ `/bridge/materialize` 绿轮 plan `be0f747e` → worker 任务 `d8c6051c` 79 s `succeeded` → `overall=PASS` → 提交 `91c3c43e` → `repomesh/be0f747e/55555555` → PR #5。三间房 Matrix 事件与控制台房间流全程留档（worker DM 房无流量；队长本轮未回复）。
 
 ---
 
