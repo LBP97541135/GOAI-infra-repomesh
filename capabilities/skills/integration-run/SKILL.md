@@ -52,11 +52,14 @@ recipe's to keep and the Worker's to check in the receipt.
    automatic dispatch when your resource runs the Runner runtime). The task's
    `test_commands` invoke the recipe; you add nothing to it and touch no
    business repository.
-3. Wait for the receipt. Read the exit code by the frozen convention
-   (`0` all PASS, `1` any FAIL, `2` BLOCKED) and the artifact pointers to
-   `evidence/<run-id>/` on the candidate branch the platform delivered.
-   Confirm the round's `itest-<run-id>/` root is gone and that the evidence
-   directory has all four sections before you treat the run as finished.
+3. Wait for the receipt. A succeeded run means only that the round ran and
+   its evidence was written — the recipe exits 0 for PASS, FAIL and BLOCKED
+   alike, so the verdict is read from `steps.json.overall` / `round.md` §4
+   at the artifact pointers on the candidate branch the platform delivered,
+   never from the run's status. Confirm the round's `itest-<run-id>/` root
+   is gone and that the evidence directory has all four sections before you
+   treat the run as finished. A run that *failed* (non-zero exit, no
+   pointer) is a recipe failure, not a round verdict: report it as such.
 4. Report raw evidence upward: exit code, per-step results, request-ids of
    every FAIL, and the evidence pointers. No attribution, no verdict on the
    release — those belong to the team leader.
@@ -68,12 +71,14 @@ recipe's to keep and the Worker's to check in the receipt.
 - Scenario is flaky → mark INCONCLUSIVE, rerun once, record both runs.
 - Dependency rewrite is impossible for an ecosystem → report a blocker naming the
    repository and ecosystem; do not approximate with an unpinned dependency.
-- Round is BLOCKED (exit 2: unbuildable combination, missing pin, dead
-   prerequisite) → the recipe still writes `evidence/<run-id>/` with the
-   blocking reason and whatever partial evidence exists, and the platform
-   still delivers it; report BLOCKED with the pointer. A blocked round with no
-   evidence directory is indistinguishable from a round that never ran —
-   if the receipt has no pointer, say so explicitly.
+- Round verdict is BLOCKED (`overall=BLOCKED`: unbuildable combination,
+   missing pin, dead prerequisite) → the recipe still writes
+   `evidence/<run-id>/` with the blocking reason and whatever partial
+   evidence exists, exits 0, and the platform delivers it like any round;
+   you relay BLOCKED upward with the pointer — the task ledger does not
+   carry the verdict for you. A blocked round with no evidence directory is
+   indistinguishable from a round that never ran — if the receipt has no
+   pointer, say so explicitly.
 - The run died mid-round (Runner or Worker) → the task ledger settles that
    round; the rerun takes a **new** run-id and nothing is back-filled into the
    dead round's directory. The next round's sweep reclaims its leftovers.

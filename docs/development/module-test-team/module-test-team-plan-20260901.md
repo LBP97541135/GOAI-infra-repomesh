@@ -120,8 +120,13 @@ postgres。
 > 运行时的 worker 成员在位（`REPOMESH_AGENTTEAMS_WORKER_RUNTIME=repomesh-runner` 或
 > 该仓 worker 的运行时按仓指定）+ 新栈 + 配方在 runner 工作区干跑一遍。
 
+> **2026-09-01 二次裁决（用户）**：改道后核出 runner 只在 SUCCEEDED 时提交、红/阻塞轮证据
+> 送不进仓，且纯 runner 轨无人执行 worker 技能步骤。裁决**取 A + Bridge 轨**：配方跑完即退出 0、
+> 结论进证据与回执（spec A.2 改版）；W4 的 worker 以 Bridge 成员在位（spec A.5），环境照
+> 交接 §7.6 重建。AC-B1/B2/C1 已按此改写。
+
 **W0a 之后的实际状态**：W0a 已执行（FAIL）；W1/W2/W0b/W3 完成；W3 配方已按 runner 形态
-改写；W4 待活体。
+改写并按「取 A」改版退出语义；W4 待活体（Bridge 形态）。
 
 ---
 

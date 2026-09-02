@@ -105,15 +105,16 @@ AC-D2 因此只断言正向。
 
 | 编号 | runner 形态的执行步骤 | 断言的事实（不变） |
 |---|---|---|
-| AC-B1 绿轮 | Manager 在测试资产仓上派联调任务，判据含绿组合（`scenarios/multi-currency-joint/combinations/green.json` 的钉死表）；worker 经批准入口发起 governed run；runner 在测试资产仓工作区执行 `run_round.py` | 退出码 0；工作区 `evidence/<run-id>/` 四节齐全且经平台交付推成 `repomesh/<plan8>/<repo8>` 候选分支；回执 `verified=true`、artifacts 指针指向该分支路径且 contentHash 对账；工作区内 `itest-<run-id>/` 根已拆净 |
-| AC-B2 红轮 | 同上，判据含红组合（`red.json`） | 退出码 1；`round.md` 中 `joint-multi-currency` 为 FAIL，摘录含失败测试名 + `AssertionError: 199.99 != 200.0` + 三条 `src` 路径行（证明装配的正是钉死的三处检出）；request-id `<run-id>/multi-currency-joint/joint-multi-currency` 在证据行；三个 unit 步 PASS（对照组成立）；队长的归因（生产者）引用依赖图与对照组而非 traceback（traceback 停在联调测试文件，本机干跑已核实）；回执 `verified=false`；**判据文件与任务体未动** |
+| AC-B1 绿轮 | Manager 在测试资产仓上派联调任务，判据含绿组合（`scenarios/multi-currency-joint/combinations/green.json` 的钉死表）；worker（Bridge 成员）经批准入口发起 governed run；其 Bridge runner 在测试资产仓工作区执行 `run_round.py` | 配方退出 0 且 `steps.json.overall=PASS`、`round.md` §4 全 PASS；工作区 `evidence/<run-id>/` 四节齐全且经平台交付推成 `repomesh/<plan8>/<repo8>` 候选分支；回执 `verified=true`、artifacts 指针指向该分支路径且 contentHash 对账；工作区内 `itest-<run-id>/` 根已拆净 |
+| AC-B2 红轮 | 同上，判据含红组合（`red.json`） | 配方退出 0（轮次跑完）且 `steps.json.overall=FAIL`；`round.md` 中 `joint-multi-currency` 为 FAIL，摘录含失败测试名 + `AssertionError: 199.99 != 200.0` + 三条 `src` 路径行（证明装配的正是钉死的三处检出）；request-id `<run-id>/multi-currency-joint/joint-multi-currency` 在证据行；三个 unit 步 PASS（对照组成立）；**证据目录照样经平台交付入仓**（这正是取 A 的理由）；队长的归因（生产者）引用依赖图与对照组而非 traceback（traceback 停在联调测试文件，本机干跑已核实）；回执摘要写明 FAIL——原表的 `verified=false` 断言按 spec A.2 改版**作废**，`verified` 此后只表示「这一轮跑了且证据成形」；**判据文件与任务体未动** |
 | AC-B3 派工链 | 不变 | 两轮台账与路由不变 |
-| AC-C1 阻塞轮 | 判据组合钉一个不存在的 commit | 退出码 2；`evidence/<run-id>/` **照样成形**（原因 = 该仓 checkout 失败的 git 原话 + 已跑部分）；任务 BLOCKED |
+| AC-C1 阻塞轮 | 判据组合钉一个不存在的 commit | 配方退出 0 且 `steps.json.overall=BLOCKED`；`evidence/<run-id>/` **照样成形并入仓**（原因 = 该仓 checkout 失败的 git 原话 + 已跑部分）；worker 按 `integration-run` 第 4 步把 BLOCKED 与证据指针上报，队长台账里该轮结论为 BLOCKED——原表「任务以 BLOCKED 上报」在取 A 下改为「结论 BLOCKED 由上报方转述、指针可解引用」 |
 | AC-C2 清扫双向 | 在 runner 工作区根（该仓 worktree 目录）伪造两份 `itest-*` 目录，一份 mtime 做旧 >24h、一份新鲜；再起一轮 | `round.md` 第 3 节的清扫输出：旧的 `removing`、新鲜的 `keeping`；文件系统核对一致 |
 
-**新增前置**（替代 P-1 的位置）：runner 运行时的 worker 成员在位并能接单（`start-worker-task`
-202 或自动投递），这是既有 runner 轨的能力，不是本线新验。**v1 局限**（已接受，spec A.4）：
-B/C 组只对源组装型环境成立；compose 型环境在两条执行面上都不可执行。
+**新增前置**（替代 P-1 的位置，2026-09-01 用户裁决）：测试团队的 worker 以 **Bridge 成员**
+在位并能接单（读通知 → `start-worker-task` 202 → 其 Bridge runner 执行），即 M7 已跑通的
+形态（spec A.5），环境照交接文档 §7.6 重建。**v1 局限**（已接受，spec A.4）：B/C 组只对
+源组装型环境成立；compose 型环境在两条执行面上都不可执行。
 
 ## 备注
 

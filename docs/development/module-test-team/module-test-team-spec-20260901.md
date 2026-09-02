@@ -252,8 +252,16 @@ plan 的改道条款与设计稿 §5.2 预案在此生效。本节是留痕：**
   改道把它提前了。回执的 artifacts 指针指向该分支上的 `evidence/<run-id>/` 路径。
 - **收尾顺序保持不可逆**，只是主语换了：脚本写完证据 →（脚本）拆 `itest-` 根 → runner 回传
   退出码 → 平台交付推分支 → 任务回执。证据在拆除之前落盘这一条没有变。
-- **退出码约定（冻结）**：`0` = 全 PASS；`1` = 有 FAIL/INCONCLUSIVE；`2` = BLOCKED
-  （组合不可建等），BLOCKED 同样写出证据目录（含原因与已跑部分）。
+- **退出码约定（冻结；2026-09-01 用户裁决「取 A」改版）**：配方脚本**只要这一轮跑完且
+  `evidence/<run-id>/` 已写出就退出 0**，轮次结论（PASS / FAIL / BLOCKED）写在
+  `steps.json.overall`、`round.md` §4 与任务回执摘要里；非零退出只表示配方自身没跑完
+  （崩溃、证据未写出），那是任务失败，不是轮次结论。**理由**：runner 只在任务 SUCCEEDED 时
+  提交变更（`executor.py:320`），test_command 非零即判任务 FAILED 且不提交——按原 0/1/2
+  约定，红轮与阻塞轮的证据会滞留在工作区永远进不了仓，AC-B2/AC-C1「证据照样入仓」落空。
+  被拒的替代：改 runner 让证据路径失败时也提交（动冻结的 runtime.v1 与交付链）、配方自推
+  分支（runner 镜像按契约不带凭据）。语义上「任务成功 = 这一轮跑了」也更诚实：组合好不好
+  是这轮的**产出**，不是任务的成败。BLOCKED 同样写出证据目录（含原因与已跑部分）。
+  本机干跑仍可用 `--verdict-exit` 取 0/1/2 做脚本化断言。
 - **TTL 清扫**：脚本开工第一步调用 `environments/sweep-itest.sh` 清同工作区根下的 `itest-*`
   残留；judge 仍是 24h 时间戳、新鲜不动。docker 类残留在 v1 不会产生（见 A.4）。
 
@@ -272,3 +280,14 @@ plan 的改道条款与设计稿 §5.2 预案在此生效。本节是留痕：**
   runner 镜像挂 socket，二者都是平台外/上游决策，本线不做）。
 - `agentteams_skills` 覆盖表、S-1 追加、S-2 三处对改道**零感知**：测试团队依旧是贴档仓上的
   仓库团队，只是它的 worker 干活的方式变了。
+
+### A.5 W4 的执行形态：worker 以 Bridge 成员在位（2026-09-01 用户裁决）
+
+runner 运行时的容器不是读技能的 agent，A.3 改写的四步在纯 runner 轨里没有执行者。W4 因此按
+M7 已跑通的 **Bridge 轨**执行：测试团队的 worker 是经 `repomesh-agent-bridge` 接入的本地 CLI
+成员（`containerManaged:false`），它读房间通知、按 `integration-run` 调批准入口
+`POST /agent-actions/start-worker-task`，平台为测试资产仓准备工作区并投递 `RunnerTask`，
+由该成员的 Bridge runner 执行 `test_commands`（即配方）。**A.1/A.2 的全部条文在此形态下不变**
+（单仓信封、脚本检出组合、脚本写证据、平台交付推候选分支）；Bridge runner 跑在宿主机上恰好
+有 Docker 只是巧合，**v1 不依赖它**，源组装型环境的局限（A.4）照旧。环境重建照
+`docs/development/room-native-bridge-handoff-20260829-wave3-m7.md` §7.6。
