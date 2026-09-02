@@ -1,0 +1,24 @@
+{
+  "project_id": "21899c3e-989f-5173-b6b7-838c6ca8a492",
+  "leader_agent_id": "22222222-0000-4000-8000-000000000002",
+  "idempotency_prefix": "w4-b1-green-4",
+  "requirement": "联调轮 B1（绿组合）：对报价多币种组合执行跨仓联调场景 multi-currency-joint，产出轮次证据。",
+  "engineering_spec": "Integration round on the test-asset repository. The combination is frozen in the acceptance basis and must not be re-pinned by the team.",
+  "contracts": [],
+  "task_dag": [
+    {
+      "repository": "repomesh-test-assets",
+      "instruction": "判据（Manager 冻结，不得改钉）：组合文件 scenarios/multi-currency-joint/combinations/green.json —— repomesh-e2e-pricing-core@d453ffd9e2410a5e78f4f8fc4eefa53655dc2e69、repomesh-e2e-checkout@dede7398e1570896f442bcd08e5c9fa6fa0a4ceb、repomesh-e2e-billing@32c803fd2ddc85876b14e138dfdea6eeead54268；场景 multi-currency-joint；环境 environments/e2e-fixture-joint。执行方式（必须照做）：在仓库根目录运行一次命令 `python environments/e2e-fixture-joint/run_round.py`，它从本任务上下文读取组合、按钉死 commit 检出到 itest-<run-id>/、跑场景并把证据写进 evidence/<run-id>/（然后自行拆除 itest 根）。运行结束后把它打印的最后一行结论原样报告，不要重复运行，不要修改任何业务仓库或组合文件，不要编辑或删除 evidence/ 下的文件，不要提交。平台的测试命令会再调用同一脚本做幂等复核。",
+      "depends_on": [],
+      "parallelizable_with": [],
+      "tests": [
+        "python environments/e2e-fixture-joint/run_round.py"
+      ]
+    }
+  ],
+  "execution_batches": [
+    [
+      "repomesh-test-assets"
+    ]
+  ]
+}
