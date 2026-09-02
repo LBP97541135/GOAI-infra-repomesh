@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -25,7 +26,11 @@ from repomesh_runner.drivers.base import (
     PermissionDecision,
 )
 from repomesh_runner.drivers.stream_json import build_arguments
-from repomesh_runner.executor import AllowlistPermissionPolicy, DriverExecutor
+from repomesh_runner.executor import (
+    AllowlistPermissionPolicy,
+    DriverExecutor,
+    _database_change_report,
+)
 from repomesh_runner.profiles import get_profile
 
 
@@ -85,6 +90,23 @@ def make_git_workspace(tmp_path: Path, name: str = "ws") -> Path:
     workspace.mkdir()
     subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
     return workspace
+
+
+def git_porcelain(workspace: Path) -> str:
+    return subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def git_head(workspace: Path) -> str | None:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=workspace, capture_output=True, text=True
+    )
+    return completed.stdout.strip() if completed.returncode == 0 else None
 
 
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
@@ -534,3 +556,143 @@ class TestExecutionEvidence:
 
         assert result.status is RunnerResultStatus.SUCCEEDED
         assert [entry.exit_code for entry in result.test_results] == [0]
+
+    @needs_git
+    async def test_evidence_written_by_a_test_command_is_collected_and_committed(
+        self, tmp_path: Path
+    ) -> None:
+        """The verification phase may be the producer (module-test-team spec A.2)."""
+
+        workspace = make_git_workspace(tmp_path)
+        driver = RecordingDriver(DriverResult(status=DriverResultStatus.SUCCEEDED, summary="ok"))
+        task = make_task(
+            permissions=RunnerPermissions(
+                mode=RunnerPermissionMode.ACCEPT_EDITS,
+                allowed_paths=("evidence/**",),
+            ),
+            workspace=WorkspaceAssignment(
+                workspace_id="ws-late", path=str(workspace), base_sha="abc123"
+            ),
+            test_commands=(
+                python_command(
+                    "import pathlib; d = pathlib.Path('evidence/itest-r1'); "
+                    "d.mkdir(parents=True); (d / 'steps.json').write_text('ok')"
+                ),
+            ),
+        )
+
+        result = await make_executor(driver, tmp_path).execute(task)
+
+        assert result.status is RunnerResultStatus.SUCCEEDED
+        assert [entry.exit_code for entry in result.test_results] == [0]
+        assert result.changed_files == ("evidence/itest-r1/steps.json",)
+        assert result.commit_sha is not None
+        assert result.commit_sha == git_head(workspace)
+        assert git_porcelain(workspace) == ""
+
+    @needs_git
+    async def test_late_evidence_still_obeys_the_path_rules(self, tmp_path: Path) -> None:
+        workspace = make_git_workspace(tmp_path)
+        driver = RecordingDriver(DriverResult(status=DriverResultStatus.SUCCEEDED, summary="ok"))
+        task = make_task(
+            permissions=RunnerPermissions(
+                mode=RunnerPermissionMode.ACCEPT_EDITS,
+                allowed_paths=("evidence/**",),
+            ),
+            workspace=WorkspaceAssignment(
+                workspace_id="ws-late-denied", path=str(workspace), base_sha="abc123"
+            ),
+            test_commands=(
+                python_command("import pathlib; pathlib.Path('forbidden.py').write_text('x = 1')"),
+            ),
+        )
+
+        result = await make_executor(driver, tmp_path).execute(task)
+
+        assert result.status is RunnerResultStatus.FAILED
+        assert result.summary == "changed_path_denied: forbidden.py"
+        assert result.commit_sha is None
+        assert git_head(workspace) is None
+
+    @needs_git
+    async def test_late_collection_is_skipped_when_the_agent_phase_changed_files(
+        self, tmp_path: Path
+    ) -> None:
+        """An agent that did change files keeps exactly its own set."""
+
+        workspace = make_git_workspace(tmp_path)
+        (workspace / "added.py").write_text("x = 1\n", encoding="utf-8")
+        driver = RecordingDriver(DriverResult(status=DriverResultStatus.SUCCEEDED, summary="ok"))
+        task = make_task(
+            workspace=WorkspaceAssignment(
+                workspace_id="ws-agent-first", path=str(workspace), base_sha="abc123"
+            ),
+            test_commands=(
+                python_command("import pathlib; pathlib.Path('late.py').write_text('y = 2')"),
+            ),
+        )
+
+        result = await make_executor(driver, tmp_path).execute(task)
+
+        assert result.status is RunnerResultStatus.SUCCEEDED
+        assert result.changed_files == ("added.py",)
+        assert result.commit_sha == git_head(workspace)
+        assert git_porcelain(workspace) == "?? late.py"
+
+    @needs_git
+    async def test_late_evidence_is_not_committed_when_a_test_command_failed(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-zero exit is a failed task, whatever the command left behind."""
+
+        workspace = make_git_workspace(tmp_path)
+        driver = RecordingDriver(DriverResult(status=DriverResultStatus.SUCCEEDED, summary="ok"))
+        task = make_task(
+            workspace=WorkspaceAssignment(
+                workspace_id="ws-late-failed", path=str(workspace), base_sha="abc123"
+            ),
+            test_commands=(
+                python_command(
+                    "import pathlib, sys; pathlib.Path('evidence.txt').write_text('x'); "
+                    "sys.exit(2)"
+                ),
+            ),
+        )
+
+        result = await make_executor(driver, tmp_path).execute(task)
+
+        assert result.status is RunnerResultStatus.FAILED
+        assert "exit code 2" in result.summary
+        assert result.changed_files == ()
+        assert result.commit_sha is None
+        assert git_head(workspace) is None
+        assert git_porcelain(workspace) == "?? evidence.txt"
+
+def test_database_change_report_is_structured_and_removed_from_workspace(tmp_path: Path) -> None:
+    report_path = tmp_path / ".repomesh" / "database-change-report.json"
+    report_path.parent.mkdir()
+    document = {
+        "migrationFiles": ["migrations/0053_users.py"],
+        "backfillFiles": ["jobs/backfill_users.py"],
+        "affectedTables": ["users"],
+        "checks": [{"name": "migration_apply", "exitCode": 0}],
+    }
+    report_path.write_text(json.dumps(document), encoding="utf-8")
+
+    report, error = _database_change_report(tmp_path)
+
+    assert error is None
+    assert report == document
+    assert not report_path.exists()
+
+
+def test_database_change_report_rejects_undeclared_fields(tmp_path: Path) -> None:
+    report_path = tmp_path / ".repomesh" / "database-change-report.json"
+    report_path.parent.mkdir()
+    report_path.write_text('{"databaseUrl":"postgresql://secret"}', encoding="utf-8")
+
+    report, error = _database_change_report(tmp_path)
+
+    assert report is None
+    assert error == "report contains unsupported fields"
+    assert not report_path.exists()

@@ -56,7 +56,14 @@ function Get-RepoMeshEnvValue([string]$Name) {
 
 function New-SecureToken {
     $Bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
+    # Create()/GetBytes, not the static ::Fill — the latter is .NET Core only
+    # and this script must run under Windows PowerShell 5.1 (.NET Framework).
+    $Rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $Rng.GetBytes($Bytes)
+    } finally {
+        $Rng.Dispose()
+    }
     return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 }
 

@@ -532,6 +532,50 @@ def _register_and_discover(
         )
         assert unauthorized.status_code == 401
 
+        profiled = client.patch(
+            f"/api/v1/repositories/{repository_id}/capability-profile",
+            headers=headers,
+            json={"capability_profile": "cross-repo-test-team"},
+        )
+        assert profiled.status_code == 200
+        assert profiled.json()["capability_profile"] == "cross-repo-test-team"
+
+        replayed_profile = client.patch(
+            f"/api/v1/repositories/{repository_id}/capability-profile",
+            headers=headers,
+            json={"capability_profile": "cross-repo-test-team"},
+        )
+        assert replayed_profile.status_code == 200
+        assert replayed_profile.json() == profiled.json()
+
+        unknown_profile = client.patch(
+            f"/api/v1/repositories/{repository_id}/capability-profile",
+            headers=headers,
+            json={"capability_profile": "team-x"},
+        )
+        assert unknown_profile.status_code == 422
+
+        cleared = client.patch(
+            f"/api/v1/repositories/{repository_id}/capability-profile",
+            headers=headers,
+            json={"capability_profile": None},
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["capability_profile"] is None
+
+        missing_profile = client.patch(
+            f"/api/v1/repositories/{uuid4()}/capability-profile",
+            headers=headers,
+            json={"capability_profile": "cross-repo-test-team"},
+        )
+        assert missing_profile.status_code == 404
+
+        unauthenticated_profile = client.patch(
+            f"/api/v1/repositories/{repository_id}/capability-profile",
+            json={"capability_profile": None},
+        )
+        assert unauthenticated_profile.status_code == 401
+
         discovered = client.post(
             "/api/v1/discovery",
             headers=headers,

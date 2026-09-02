@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     #: needs (ADR 0004 decision 6). Kept as an env document rather than a table
     #: because issuance is a deployment act this round, not a product feature.
     runner_worker_tokens: str | None = None
+    #: How long an external member's readiness report is believed for. Short on
+    #: purpose: the lease is the only evidence that a Bridge on somebody's own
+    #: machine is still running, and a long one is a promise about a process
+    #: nobody has heard from. A reporter is told to renew after a third of it,
+    #: so it may miss two reports before its lease runs out.
+    external_readiness_ttl_seconds: int = 45
     agent_action_token: str | None = None
     #: Hosts the scan endpoints may reach, comma separated. Anything else is
     #: refused before a request leaves this process. Known hosting platforms
@@ -205,6 +211,15 @@ class Settings(BaseSettings):
     #: the command still executes.
     scm_command_lease_seconds: int = Field(default=300, ge=10)
     scm_command_lease_renew_interval_seconds: int = Field(default=60, ge=1)
+    operations_alert_action: Literal["none", "degrade_writes", "pause_intake"] = "none"
+    operations_capacity_retry_after_seconds: int = Field(default=30, ge=1, le=3600)
+    operations_backup_configured: bool = False
+    operations_last_backup_age_hours: int | None = Field(default=None, ge=0)
+    operations_restore_drill_age_days: int | None = Field(default=None, ge=0)
+    operations_usage_retention_days: int = Field(default=90, ge=7, le=3650)
+    operations_log_retention_days: int = Field(default=30, ge=7, le=3650)
+    operations_trace_retention_days: int = Field(default=30, ge=7, le=3650)
+    operations_retention_batch_size: int = Field(default=500, ge=1, le=10000)
 
 
 @lru_cache

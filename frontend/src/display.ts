@@ -5,6 +5,7 @@ import type {
   DeliveryTaskView,
   DiscoveryTier,
   DiscoveryTierStatus,
+  ExternalMemberReadinessStatus,
   GovernanceDecisionView,
   IssueListItemView,
   Phase,
@@ -293,6 +294,26 @@ export const CONTROL_ACTION_LABEL: Record<HumanControlAction, string> = {
 export function controlActionLabel(value: string): string {
   return CONTROL_ACTION_LABEL[value as HumanControlAction] ?? value;
 }
+
+/** 本机 CLI 成员就绪三态的措辞与皮肤唯一表（本地 CLI 页 + 物化弹窗共用一份）。
+ *
+ *  三色沿既有语义、不新增：橄榄绿 = 能派工，琥珀 = 租约过期但还在一个 TTL 内（重启
+ *  一下就回来），赭红 = 已经不在了。措辞落在**租约**上而不是「在线/离线」——就绪是
+ *  服务端按租约派生的判定，不是一次连通性探测，写成「在线」会让人以为界面 ping 过它。
+ *
+ *  `stale` 与 `offline` 在物化门前是同一个结果（只有 ready 过门），但对操作者不是
+ *  同一件事：一个是进程还在、心跳断了，另一个是进程报过停或从没报过。 */
+export const READINESS_LABEL: Record<ExternalMemberReadinessStatus, string> = {
+  ready: "就绪",
+  stale: "租约过期",
+  offline: "离线",
+};
+
+export const READINESS_SKIN: Record<ExternalMemberReadinessStatus, string> = {
+  ready: "border-olive text-olive",
+  stale: "border-amber text-amber",
+  offline: "border-salmon text-salmon",
+};
 
 /** uuid 短版。`issue_key` 恒 null（无 Project 注册表，§0/§6.1），所以 issue 的
  *  人类可读标识只能是它，不得自造 GitHub 式序号。 */

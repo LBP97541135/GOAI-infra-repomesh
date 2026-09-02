@@ -72,12 +72,26 @@ class TaskRecord(Base):
     title: Mapped[str] = mapped_column(String(500))
     instruction: Mapped[str] = mapped_column(Text)
     acceptance: Mapped[list[str]] = mapped_column(JSON_DOCUMENT)
+    database_change: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
     status: Mapped[str] = mapped_column(String(30), index=True)
     result_summary: Mapped[str | None] = mapped_column(Text)
     version: Mapped[int] = mapped_column(Integer)
     origin: Mapped[str] = mapped_column(String(30), server_default=TaskOrigin.PLANNED.value)
     idempotency_key: Mapped[str] = mapped_column(String(200))
     request_fingerprint: Mapped[str] = mapped_column(String(71))
+
+
+class DatabaseTestTeamHandoffRecord(Base):
+    __tablename__ = "database_test_team_handoffs"
+    __table_args__ = (
+        UniqueConstraint("branch_validation_key", name="uq_database_test_team_handoffs_key"),
+        {"schema": "task_orchestration"},
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    branch_validation_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    evidence: Mapped[dict[str, object] | None] = mapped_column(JSON_DOCUMENT)
 
 
 class ExecutionPlanRecord(Base):
@@ -590,6 +604,15 @@ class PostgresTaskStore:
             "title": task.title,
             "instruction": task.instruction,
             "acceptance": list(task.acceptance),
+            "database_change": {
+                "declared": task.database_change.declared,
+                "required": task.database_change.required,
+                "change_kinds": [item.value for item in task.database_change.change_kinds],
+                "affected_tables": list(task.database_change.affected_tables),
+                "migration_required": task.database_change.migration_required,
+                "backfill_required": task.database_change.backfill_required,
+                "required_checks": list(task.database_change.required_checks),
+            },
             "status": task.status.value,
             "result_summary": task.result_summary,
             "version": task.version,
@@ -598,6 +621,9 @@ class PostgresTaskStore:
 
     @staticmethod
     def _to_domain(record: TaskRecord) -> Task:
+        from .contracts import DatabaseChangeKind, DatabaseChangeRequirement
+
+        database_change = record.database_change or {}
         return Task(
             id=record.id,
             organization_id=record.organization_id,
@@ -615,6 +641,18 @@ class PostgresTaskStore:
             # Rows written before origin existed read back as the column
             # default; the migration backfills the rework ones.
             origin=TaskOrigin(record.origin or TaskOrigin.PLANNED.value),
+            database_change=DatabaseChangeRequirement(
+                declared=bool(database_change.get("declared", False)),
+                required=bool(database_change.get("required", False)),
+                change_kinds=tuple(
+                    DatabaseChangeKind(str(item))
+                    for item in database_change.get("change_kinds", ())
+                ),
+                affected_tables=tuple(database_change.get("affected_tables", ())),
+                migration_required=bool(database_change.get("migration_required", False)),
+                backfill_required=bool(database_change.get("backfill_required", False)),
+                required_checks=tuple(database_change.get("required_checks", ())),
+            ),
         )
 
 

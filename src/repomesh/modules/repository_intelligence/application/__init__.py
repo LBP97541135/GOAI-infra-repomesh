@@ -34,6 +34,7 @@ from .registration import (
     RegisterRepository,
     RepositoryNotFound,
     ScanRegistration,
+    UpdateRepositoryCapabilityProfile,
     UpdateRepositoryVerification,
     register_scanned_profiles,
 )
@@ -80,6 +81,7 @@ __all__ = [
     "ScanRegistration",
     "ServiceAliases",
     "ServiceRegistry",
+    "UpdateRepositoryCapabilityProfile",
     "UpdateRepositoryVerification",
     "TaskNode",
     "TopoResult",

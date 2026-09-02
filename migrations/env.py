@@ -39,6 +39,15 @@ from repomesh.modules.delivery.infrastructure import (
     SCMObservationRecord,
     SCMPollCursorRecord,
 )
+from repomesh.modules.observability.infrastructure.models import (
+    AlertEventRecord,
+    AlertRuleRecord,
+    LLMUsageRecord,
+    LogEntryRecord,
+    OperationalResponseRecord,
+    TraceEventRecord,
+    TraceSessionRecord,
+)
 from repomesh.modules.platform_config.bootstrap_store import BootstrapOperationRecord
 from repomesh.modules.platform_config.store import PlatformCredentialRecord
 from repomesh.modules.project.infrastructure import (
@@ -56,14 +65,20 @@ from repomesh.modules.repository_intelligence.infrastructure.models import (
     PlanSnapshotRecord,
     RepositoryRecord,
 )
-from repomesh.modules.review_validation.infrastructure import ValidationSnapshotRecord
+from repomesh.modules.review_validation.infrastructure import (
+    DatabaseBranchValidationRecord,
+    ValidationSnapshotRecord,
+)
 from repomesh.modules.specification.infrastructure import (
     SpecificationRecord,
     SpecificationVersionRecord,
 )
 from repomesh.modules.task_orchestration.assignment import TaskAssignmentAttemptRecord
 from repomesh.modules.task_orchestration.dynamic_revision import ExecutionPlanRevisionRecord
-from repomesh.modules.task_orchestration.infrastructure import TaskRecord
+from repomesh.modules.task_orchestration.infrastructure import (
+    DatabaseTestTeamHandoffRecord,
+    TaskRecord,
+)
 from repomesh.persistence.base import Base
 from repomesh.persistence.models import (
     AuditEventRecord,
@@ -75,13 +90,20 @@ from repomesh.persistence.models import (
 from repomesh.settings import get_settings
 
 _REGISTERED_MODELS = (
+    SkillVersionRecord,
+    SkillEvaluationRecord,
+    SkillSnapshotRecord,
+    McpServerPolicyRecord,
+    LLMUsageRecord,
+    AlertRuleRecord,
+    AlertEventRecord,
+    OperationalResponseRecord,
+    TraceSessionRecord,
+    TraceEventRecord,
+    LogEntryRecord,
     AgentPrincipalRecord,
     WorkerExecutionReservationRecord,
     WorkerRecoveryOperationRecord,
-    McpServerPolicyRecord,
-    SkillEvaluationRecord,
-    SkillSnapshotRecord,
-    SkillVersionRecord,
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
     ContextObjectRecord,
@@ -103,6 +125,7 @@ _REGISTERED_MODELS = (
     PlanSnapshotRecord,
     HandoffDocRecord,
     ValidationSnapshotRecord,
+    DatabaseBranchValidationRecord,
     RecoveryCaseRecord,
     RecoveryDecisionRecord,
     RecoveryOperationRecord,
@@ -113,6 +136,7 @@ _REGISTERED_MODELS = (
     SpecificationVersionRecord,
     TaskRecord,
     TaskAssignmentAttemptRecord,
+    DatabaseTestTeamHandoffRecord,
     ExecutionPlanRevisionRecord,
     StateEventRecord,
     AuditEventRecord,

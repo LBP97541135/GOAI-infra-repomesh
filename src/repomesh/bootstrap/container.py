@@ -393,6 +393,8 @@ class ApplicationContainer:
     scm_adapter: SCMAdapter | None = None
     scm_token_provider: Callable[[RepositoryRef], Awaitable[str]] | None = None
     project_checkpoint_service_instance: object | None = None
+    operational_gate_instance: object | None = None
+    operational_response_coordinator_instance: object | None = None
     _service_cache: dict[str, object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -520,6 +522,7 @@ class ApplicationContainer:
         store = self.project_topology_store
         directory = self.agent_directory
         settings = get_settings()
+        repository_catalog = self.repository_catalog
 
         class _RuntimeProjection:
             async def project(self, project_id: UUID) -> None:
@@ -545,6 +548,7 @@ class ApplicationContainer:
                         manager_runtime=settings.agentteams_manager_runtime,
                         worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
+                        repository_catalog=repository_catalog,
                     ).project(project_id)
                 except AgentTeamsRoomsPending as error:
                     # A subclass of AgentTeamsError and *not* a conflict: the
@@ -1012,11 +1016,56 @@ class ApplicationContainer:
         return AlertingStore(self.database)
 
     @cached_service
+    def operational_gate(self):
+        from repomesh.modules.observability.operations import InMemoryOperationalGate
+
+        if self.operational_gate_instance is not None:
+            return self.operational_gate_instance
+        return InMemoryOperationalGate()
+
+    @cached_service
+    def operational_response_coordinator(self):
+        from repomesh.modules.observability.operations import (
+            LoggingNotificationSink,
+            OperationalAction,
+            OperationalResponseCoordinator,
+            OperationalResponseStore,
+        )
+
+        if self.operational_response_coordinator_instance is not None:
+            return self.operational_response_coordinator_instance
+        return OperationalResponseCoordinator(
+            OperationalResponseStore(self.database),
+            LoggingNotificationSink(),
+            self.operational_gate(),
+            default_action=OperationalAction(get_settings().operations_alert_action),
+        )
+
+    @cached_service
+    def observability_retention_service(self):
+        from repomesh.modules.observability.operations import (
+            ObservabilityRetentionService,
+            RetentionPolicy,
+        )
+
+        settings = get_settings()
+        return ObservabilityRetentionService(
+            self.database,
+            RetentionPolicy(
+                usage_days=settings.operations_usage_retention_days,
+                log_days=settings.operations_log_retention_days,
+                trace_days=settings.operations_trace_retention_days,
+                batch_size=settings.operations_retention_batch_size,
+            ),
+        )
+
+    @cached_service
     def alerting_evaluator(self) -> AlertingEvaluator:
         return AlertingEvaluator(
             self.alerting_store(),
             self.usage_query_store(),
             trace_query=self.trace_query_store(),
+            transition_handler=self.operational_response_coordinator(),
         )
 
     @cached_service
@@ -1322,6 +1371,7 @@ class ApplicationContainer:
                         test_commands=tuple(profile.test_commands),
                         test_paths=tuple(profile.test_paths),
                         profiled_at=profile.profiled_at,
+                        capability_profile=profile.capability_profile,
                     )
                     for profile in await container.repository_catalog.list()
                 )
@@ -1641,6 +1691,7 @@ class ApplicationContainer:
             self.project_topology_provisioner(),
             self.plan_execution_bridge(),
             self.topology_runtime_projector(),
+            self.external_member_readiness_gate(),
         )
 
     def issue_intake_service(self):
@@ -1706,11 +1757,39 @@ class ApplicationContainer:
     @cached_service
     def validation_snapshot_service(self):
         from repomesh.modules.review_validation import (
+            PostgresDatabaseBranchValidationStore,
             PostgresValidationSnapshotStore,
             ValidationSnapshotService,
         )
 
-        return ValidationSnapshotService(PostgresValidationSnapshotStore(self.database))
+        return ValidationSnapshotService(
+            PostgresValidationSnapshotStore(self.database),
+            PostgresDatabaseBranchValidationStore(self.database),
+        )
+
+    @cached_service
+    def database_test_team_handoff_service(self):
+        from repomesh.modules.task_orchestration import (
+            DatabaseTestTeamHandoffService,
+        )
+        from repomesh.modules.task_orchestration.database_test_team_store import (
+            PostgresDatabaseTestTeamHandoffStore,
+        )
+
+        return DatabaseTestTeamHandoffService(PostgresDatabaseTestTeamHandoffStore(self.database))
+
+    @cached_service
+    def database_branch_validation_service(self):
+        from repomesh.modules.review_validation import (
+            DatabaseBranchValidationService,
+            PostgresDatabaseBranchValidationStore,
+            UnavailableDatabaseBranchProvider,
+        )
+
+        return DatabaseBranchValidationService(
+            PostgresDatabaseBranchValidationStore(self.database),
+            UnavailableDatabaseBranchProvider(),
+        )
 
     def scm_webhook_event_store(self):
         return self.scm_observation_service()
@@ -2258,6 +2337,53 @@ class ApplicationContainer:
             task_reader=self.project_task_reader(),
             handoff_docs=self.handoff_doc_service(),
             checkpoints=self.project_checkpoint_service(),
+        )
+
+    @cached_service
+    def external_member_readiness_store(self):
+        """The readiness lease table, and there is exactly one of it.
+
+        Cached for the process lifetime because the store *is* the state: a
+        factory that built a new one per request would answer an empty table to
+        every reader, and a per-request lock guards nothing. Being a process
+        singleton is also the whole extent of its durability — the leases are
+        held in memory on purpose (see ``application/readiness``), so a restart
+        empties the table and the next round of renews refills it.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            ExternalMemberReadinessStore,
+        )
+
+        return ExternalMemberReadinessStore(
+            ttl_seconds=get_settings().external_readiness_ttl_seconds
+        )
+
+    def external_member_readiness_gate(self):
+        """The join materialize refuses on, and the console's precheck reads.
+
+        Three dependencies, one per layer of "is this member there": the
+        directory says who it is, ``external_worker_binding_control_plane`` says
+        whether RepoMesh runs its body, and the lease store says whether the
+        body RepoMesh does not run is running now. Only the last holds state,
+        and it is the cached one above; this is rebuilt per call because it has
+        none of its own.
+
+        The control plane is passed exactly as it comes, ``None`` included. A
+        deployment without one cannot tell an external member from a managed
+        one, and the gate is written to refuse rather than guess — substituting
+        anything here would be the composition root deciding a question the
+        module already answered.
+        """
+
+        from repomesh.modules.agent_runtime.application.readiness import (
+            RequireExternalMembersReady,
+        )
+
+        return RequireExternalMembersReady(
+            self.agent_directory,
+            self.external_worker_binding_control_plane(),
+            self.external_member_readiness_store(),
         )
 
     def runner_gateway(self):

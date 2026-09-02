@@ -24,18 +24,24 @@ const REPO_WEB = "b1c2d3e4-0002-4a2b-9c3d-4e5f6a7b8c02";
 const REPO_DOCS = "b1c2d3e4-0003-4a2b-9c3d-4e5f6a7b8c03";
 /** 第四个仓库：catalog 里有、但没有任何团队驻扎——「无驻扎团队」不是错误态 */
 const REPO_IDLE = "b1c2d3e4-0004-4a2b-9c3d-4e5f6a7b8c04";
+/** 第五个仓库：测试资产仓，贴 `cross-repo-test-team` 档——TeamsPage 徽标 join
+ *  的正样本（其余仓 null 即反样本），也是 RepositoriesPage 档案回显的样本 */
+const REPO_TEST = "b1c2d3e4-0005-4a2b-9c3d-4e5f6a7b8c05";
 
 const TEAM_API = "c2d3e4f5-0001-4a2b-9c3d-4e5f6a7b8c01";
 const TEAM_WEB = "c2d3e4f5-0002-4a2b-9c3d-4e5f6a7b8c02";
 const TEAM_DOCS = "c2d3e4f5-0003-4a2b-9c3d-4e5f6a7b8c03";
+const TEAM_TEST = "c2d3e4f5-0004-4a2b-9c3d-4e5f6a7b8c04";
 
 const AGENT_ORG = "d3e4f5a6-0000-4a2b-9c3d-4e5f6a7b8c00";
 const AGENT_LEAD_API = "d3e4f5a6-0001-4a2b-9c3d-4e5f6a7b8c01";
 const AGENT_LEAD_WEB = "d3e4f5a6-0002-4a2b-9c3d-4e5f6a7b8c02";
 const AGENT_LEAD_DOCS = "d3e4f5a6-0003-4a2b-9c3d-4e5f6a7b8c03";
+const AGENT_LEAD_TEST = "d3e4f5a6-0004-4a2b-9c3d-4e5f6a7b8c04";
 const AGENT_WORK_API = "d3e4f5a6-0011-4a2b-9c3d-4e5f6a7b8c11";
 const AGENT_WORK_WEB = "d3e4f5a6-0012-4a2b-9c3d-4e5f6a7b8c12";
 const AGENT_WORK_DOCS = "d3e4f5a6-0013-4a2b-9c3d-4e5f6a7b8c13";
+const AGENT_WORK_TEST = "d3e4f5a6-0014-4a2b-9c3d-4e5f6a7b8c14";
 
 export const consoleRepositoriesFixture: ConsoleRepositoryView[] = [
   {
@@ -47,6 +53,7 @@ export const consoleRepositoriesFixture: ConsoleRepositoryView[] = [
     languages: ["Python"],
     test_commands: ["python scripts/run_tests.py"],
     test_paths: ["tests/**"],
+    capability_profile: null,
     profiled_at: "2026-08-09T09:12:00Z",
     resident_team_count: 1,
     open_issue_count: 1,
@@ -63,6 +70,7 @@ export const consoleRepositoriesFixture: ConsoleRepositoryView[] = [
     languages: ["TypeScript"],
     test_commands: ["npm test"],
     test_paths: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    capability_profile: null,
     profiled_at: "2026-08-09T09:14:00Z",
     resident_team_count: 1,
     open_issue_count: 1,
@@ -79,6 +87,7 @@ export const consoleRepositoriesFixture: ConsoleRepositoryView[] = [
     languages: ["MDX"],
     test_commands: [],
     test_paths: [],
+    capability_profile: null,
     profiled_at: "2026-08-09T09:15:00Z",
     resident_team_count: 1,
     open_issue_count: 1,
@@ -95,12 +104,31 @@ export const consoleRepositoriesFixture: ConsoleRepositoryView[] = [
     languages: ["TypeScript"],
     test_commands: [],
     test_paths: [],
+    capability_profile: null,
     profiled_at: "2026-08-09T09:16:00Z",
     resident_team_count: 0,
     open_issue_count: 0,
     active_task_count: 0,
     last_delivery_at: null,
     teams: [],
+  },
+  {
+    repository_id: REPO_TEST,
+    name: "repomesh-test-assets",
+    url: "https://github.example/demo/repomesh-test-assets.git",
+    description: "测试资产仓：场景库、环境定义与联调证据的唯一归宿",
+    topics: ["integration-test"],
+    languages: [],
+    test_commands: [],
+    test_paths: [],
+    // 档案开关拨在测试团队档上：TeamsPage 徽标 join 的正样本
+    capability_profile: "cross-repo-test-team",
+    profiled_at: "2026-08-09T09:18:00Z",
+    resident_team_count: 1,
+    open_issue_count: 0,
+    active_task_count: 0,
+    last_delivery_at: null,
+    teams: [{ team_id: TEAM_TEST, issue_id: ISSUE_ID, runtime_status: "ready" }],
   },
 ];
 
@@ -150,6 +178,27 @@ export const consoleTeamsFixture: ConsoleTeamView[] = [
     workers: [{ agent_id: AGENT_WORK_DOCS, name: "repomesh-worker-docs", role: "worker" }],
     // Controller 没有这个资源（404）或未配置代理：无事实可报
     runtime: null,
+  },
+  {
+    team_id: TEAM_TEST,
+    agentteams_team_name: "repomesh-team-test-assets",
+    issue_id: ISSUE_ID,
+    repository_id: REPO_TEST,
+    repository_name: "repomesh-test-assets",
+    runtime_status: "ready",
+    decomposition_mode: "server",
+    team_room_id: "!repomesh-team-test-assets:matrix.local",
+    leader_room_id: "!repomesh-leader-test-assets:matrix.local",
+    leader: {
+      agent_id: AGENT_LEAD_TEST,
+      name: "repomesh-leader-test-assets",
+      role: "repository_leader",
+    },
+    workers: [
+      { agent_id: AGENT_WORK_TEST, name: "repomesh-worker-test-assets", role: "worker" },
+    ],
+    // 锚定在贴档仓上的团队：徽标来自仓库档案的 join，不来自本视图的任何字段
+    runtime: { reachable: true, phase: "Running", ready_workers: 1, total_workers: 1 },
   },
 ];
 
@@ -293,5 +342,35 @@ export const consoleAgentsFixture: ConsoleAgentView[] = [
     issue_id: ISSUE_ID,
     active_task_count: 0,
     runtime: null,
+  },
+  {
+    agent_id: AGENT_LEAD_TEST,
+    organization_id: ORG_ID,
+    role: "repository_leader",
+    status: "active",
+    agentteams_resource_name: "repomesh-leader-test-assets",
+    leader_agent_id: AGENT_ORG,
+    repository_id: REPO_TEST,
+    repository_name: "repomesh-test-assets",
+    responsibility_paths: ["scenarios/**", "environments/**"],
+    team_id: TEAM_TEST,
+    issue_id: ISSUE_ID,
+    active_task_count: 0,
+    runtime: { reachable: false },
+  },
+  {
+    agent_id: AGENT_WORK_TEST,
+    organization_id: ORG_ID,
+    role: "worker",
+    status: "active",
+    agentteams_resource_name: "repomesh-worker-test-assets",
+    leader_agent_id: AGENT_LEAD_TEST,
+    repository_id: REPO_TEST,
+    repository_name: "repomesh-test-assets",
+    responsibility_paths: ["evidence/**"],
+    team_id: TEAM_TEST,
+    issue_id: ISSUE_ID,
+    active_task_count: 0,
+    runtime: { reachable: false },
   },
 ];

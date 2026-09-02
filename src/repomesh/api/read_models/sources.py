@@ -178,6 +178,11 @@ class RepositoryProfileData:
     """Defect A-19: the verification commands every round over this repo inherits."""
     test_paths: tuple[str, ...] = ()
     """Defect A-21: where those commands read from; added to a task's allowed paths."""
+    capability_profile: str | None = None
+    """The supply-side switch (CONTEXT.md: 档案开关): which team capability
+    profile new topologies assemble this repository's team under. The console
+    joins the teams grid against it for the test-team badge, so the grid's
+    right table has to actually carry the column."""
 
 
 @dataclass(frozen=True, slots=True)

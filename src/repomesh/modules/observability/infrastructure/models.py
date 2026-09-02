@@ -9,7 +9,7 @@ are what the aggregation endpoints read.
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     JSON,
@@ -108,6 +108,32 @@ class AlertEventRecord(Base):
     )
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class OperationalResponseRecord(Base):
+    __tablename__ = "operational_responses"
+    __table_args__ = (
+        UniqueConstraint("alert_event_id", name="uq_operational_responses_alert_event"),
+        {"schema": "observability"},
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    alert_event_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("observability.alert_events.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    notification_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    action_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

@@ -44,10 +44,22 @@ from .contracts import (
     TaskView,
     WorkerRosterEntryView,
 )
+from .database_test_team import (
+    DatabaseTestHandoffStatus,
+    DatabaseTestTeamEvidence,
+    DatabaseTestTeamHandoffError,
+    DatabaseTestTeamHandoffService,
+    DatabaseTestTeamPlan,
+    InMemoryDatabaseTestTeamHandoffStore,
+    build_database_test_team_plan,
+    validate_test_team_evidence,
+)
+from .database_test_team_store import PostgresDatabaseTestTeamHandoffStore
 from .domain import (
     FINAL_TASK_STATUSES,
     ExecutionPlan,
     PlannedRepositoryTask,
+    TaskBlocked,
     TaskConflict,
     TaskDenied,
     TaskNotFound,
@@ -115,6 +127,7 @@ __all__ = [
     "TaskAssignmentAttempt",
     "TaskAssignmentAttemptRecord",
     "TaskConflict",
+    "TaskBlocked",
     "TaskDenied",
     "TaskNotFound",
     "TaskOrchestrationError",
@@ -126,4 +139,13 @@ __all__ = [
     "TaskView",
     "WorkerRosterEntryView",
     "derive_allowed_paths",
+    "DatabaseTestHandoffStatus",
+    "DatabaseTestTeamHandoffError",
+    "DatabaseTestTeamHandoffService",
+    "DatabaseTestTeamEvidence",
+    "DatabaseTestTeamPlan",
+    "InMemoryDatabaseTestTeamHandoffStore",
+    "PostgresDatabaseTestTeamHandoffStore",
+    "build_database_test_team_plan",
+    "validate_test_team_evidence",
 ]

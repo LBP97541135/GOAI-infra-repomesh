@@ -1,6 +1,8 @@
 from repomesh.modules.agent_directory.contracts import AgentPrincipalView, AgentRole
 
 from .contracts import (
+    CROSS_REPO_TEST_TEAM_PROFILE,
+    DEFAULT_TEAM_PROFILE,
     AgentCapabilityBundle,
     CapabilityAccess,
     CapabilityDefinition,
@@ -33,6 +35,12 @@ ANTHROPIC_PLUGINS = CapabilitySource(
     "https://github.com/anthropics/claude-plugins-official",
     maintainer="Anthropic",
 )
+SUPERPOWERS = CapabilitySource(
+    "https://github.com/obra/superpowers",
+    "skills/test-driven-development",
+    "Jesse Vincent",
+)
+REPOMESH_INTERNAL = CapabilitySource("internal://repomesh", maintainer="RepoMesh")
 
 SKILLS = {
     item.id: item
@@ -97,6 +105,19 @@ SKILLS = {
         _skill("task-execution", "当前任务执行", AgentRole.WORKER, SPEC_KIT),
         _skill("self-test", "代码自测", AgentRole.WORKER, SPEC_KIT),
         _skill("blocker-reporting", "阻塞上报", AgentRole.WORKER, AWESOME_COPILOT),
+        _skill("tdd", "测试驱动开发", AgentRole.WORKER, SUPERPOWERS),
+        _skill(
+            "cross-repo-test",
+            "跨仓联调队长",
+            AgentRole.REPOSITORY_LEADER,
+            REPOMESH_INTERNAL,
+        ),
+        _skill(
+            "integration-run",
+            "联调测试执行",
+            AgentRole.WORKER,
+            REPOMESH_INTERNAL,
+        ),
     )
 }
 
@@ -188,7 +209,19 @@ ROLE_SKILLS = {
         "worker-dispatch",
         "worker-result-evaluation",
     ),
-    AgentRole.WORKER: ("task-execution", "self-test", "blocker-reporting"),
+    AgentRole.WORKER: ("task-execution", "self-test", "blocker-reporting", "tdd"),
+}
+
+#: Extra skills assembled *on top of* the role presets for teams whose
+#: repository carries the profile. Additive by design: a specialised team is a
+#: repository team with a charter, not a new role, so its leader keeps the
+#: leader presets and its Workers keep the worker presets.
+TEAM_PROFILES: dict[str, dict[AgentRole, tuple[str, ...]]] = {
+    DEFAULT_TEAM_PROFILE: {},
+    CROSS_REPO_TEST_TEAM_PROFILE: {
+        AgentRole.REPOSITORY_LEADER: ("cross-repo-test",),
+        AgentRole.WORKER: ("integration-run",),
+    },
 }
 
 ROLE_MCP = {
@@ -206,8 +239,14 @@ class PresetCapabilityAssembler:
         principal: AgentPrincipalView,
         *,
         task_features: frozenset[str] = frozenset(),
+        profile: str | None = None,
     ) -> AgentCapabilityBundle:
-        skills = tuple(SKILLS[skill_id] for skill_id in ROLE_SKILLS[principal.role])
+        profile_name = profile or DEFAULT_TEAM_PROFILE
+        if profile_name not in TEAM_PROFILES:
+            raise ValueError(f"unknown team capability profile: {profile_name}")
+        extra_skills = TEAM_PROFILES[profile_name].get(principal.role, ())
+        skill_ids = tuple(dict.fromkeys((*ROLE_SKILLS[principal.role], *extra_skills)))
+        skills = tuple(SKILLS[skill_id] for skill_id in skill_ids)
         servers = tuple(
             server
             for server in ROLE_MCP[principal.role]

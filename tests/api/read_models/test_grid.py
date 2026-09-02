@@ -158,7 +158,13 @@ async def test_repository_grid_counts_only_open_issues_and_active_tasks() -> Non
         StubTasks(worker, done),
         StubChangeSets({closed_plan.id: delivered}),
         StubArchives(),
-        repositories=StubProfiles(_profile("repomesh-e2e-api", api), _profile("idle", idle)),
+        repositories=StubProfiles(
+            replace(
+                _profile("repomesh-e2e-api", api),
+                capability_profile="cross-repo-test-team",
+            ),
+            _profile("idle", idle),
+        ),
         topology=StubTopology({open_project: _topology(open_project, api)}),
     )
 
@@ -167,6 +173,9 @@ async def test_repository_grid_counts_only_open_issues_and_active_tasks() -> Non
     by_name = {item["name"]: item for item in payload["repositories"]}
     assert list(by_name) == ["idle", "repomesh-e2e-api"]  # sorted by name
     grid = by_name["repomesh-e2e-api"]
+    # 档案开关 surfaces on the grid row (S-2a): the badge join's right table.
+    assert grid["capability_profile"] == "cross-repo-test-team"
+    assert by_name["idle"]["capability_profile"] is None
     assert grid["url"].endswith("repomesh-e2e-api.git")
     assert grid["topics"] == ["pricing"] and grid["languages"] == ["python"]
     # Two issues carry this repository, but only one of them is open.

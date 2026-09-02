@@ -154,8 +154,10 @@ class PackagesStub:
 class CapabilitiesStub:
     def __init__(self, capabilities) -> None:
         self.capabilities = capabilities
+        self.profiles: list[str | None] = []
 
-    async def execute(self, agent_id, *, task_features):
+    async def execute(self, agent_id, *, task_features, profile=None):
+        self.profiles.append(profile)
         return self.capabilities
 
 
@@ -169,8 +171,11 @@ class RepositoriesStub:
     what it did.
     """
 
-    def __init__(self, *, test_paths: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, *, test_paths: tuple[str, ...] = (), capability_profile: str | None = None
+    ) -> None:
         self.test_paths = test_paths
+        self.capability_profile = capability_profile
 
     async def get(self, repository_id):
         return RepositoryProfile(
@@ -178,6 +183,7 @@ class RepositoriesStub:
             name="pricing",
             url="https://example.test/pricing.git",
             test_paths=self.test_paths,
+            capability_profile=self.capability_profile,
         )
 
 
@@ -222,6 +228,8 @@ class AssignedTaskHarness:
     bundles: BundlesStub
     execution: ExecutionStub
     states: StateStub
+    capabilities: CapabilitiesStub
+    repositories: RepositoriesStub
 
     def command(self, worker_agent_id: UUID | None = None) -> StartAssignedWorkerTaskCommand:
         return StartAssignedWorkerTaskCommand(
@@ -256,13 +264,15 @@ def assigned_task_harness(
     bundles = BundlesStub()
     execution = ExecutionStub(runner_task, store)
     states = StateStub()
+    capabilities_stub = CapabilitiesStub(capabilities)
+    repositories_stub = RepositoriesStub(test_paths=catalog_test_paths)
     return AssignedTaskHarness(
         service=StartAssignedWorkerTask(
             DirectoryStub(task_view),
             TasksStub(task_view),
             PackagesStub(package),
-            CapabilitiesStub(capabilities),
-            RepositoriesStub(test_paths=catalog_test_paths),
+            capabilities_stub,
+            repositories_stub,
             workspaces,
             bundles,
             execution,
@@ -276,6 +286,8 @@ def assigned_task_harness(
         bundles=bundles,
         execution=execution,
         states=states,
+        capabilities=capabilities_stub,
+        repositories=repositories_stub,
     )
 
 
@@ -323,6 +335,22 @@ async def test_assigned_task_derives_run_workspace_and_context_bundle(tmp_path: 
     assert published.id == dispatched.bundle_id
     assert published.workspace_id is not None
     assert result.task.run_id == dispatched.run_id
+
+
+@pytest.mark.asyncio
+async def test_the_repository_s_capability_profile_reaches_the_assembly(tmp_path: Path) -> None:
+    """A test-asset repository's team assembles under its profile, at dispatch.
+
+    The bundle is resolved per run, so — unlike the controller-side skill lists,
+    chosen at creation — a profile set later reaches the very next dispatch.
+    """
+
+    harness = assigned_task_harness(tmp_path)
+    harness.repositories.capability_profile = "cross-repo-test-team"
+
+    await harness.service.execute(harness.command())
+
+    assert harness.capabilities.profiles == ["cross-repo-test-team"]
 
 
 @pytest.mark.asyncio

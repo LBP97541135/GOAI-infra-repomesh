@@ -12,6 +12,9 @@
     coding execution path. Secrets are loaded by start_members.ps1 from the
     gitignored env file and are never printed.
 
+    -Only passes a single roster key through to start_members.ps1, which is how
+    the Local Launcher starts a member without touching the ones already running.
+
 .EXAMPLE
     powershell -NoProfile -File .\scripts\start-local-cli.ps1
 
@@ -27,6 +30,7 @@ param(
     [string]$WorkspaceRoot,
     [string]$StateDir,
     [string]$Subset,
+    [string]$Only,
     [string]$Python,
     [switch]$DryRun
 )
@@ -94,12 +98,14 @@ $arguments = @{
 }
 if ($StateDir) { $arguments.StateDir = $StateDir }
 if ($Subset) { $arguments.Subset = $Subset }
+if ($Only) { $arguments.Only = $Only }
 
 Write-Host "RepoMesh local CLI"
 Write-Host "  members:       $Members"
 Write-Host "  workspaceRoot: $WorkspaceRoot"
 Write-Host "  runtimeDir:    $RuntimeDir"
 if ($Subset) { Write-Host "  subset:        $Subset" }
+if ($Only) { Write-Host "  only:          $Only" }
 if ($DryRun) { Write-Host "  mode:          dry-run (no Bridge process will start)" }
 
 & $startScript @arguments

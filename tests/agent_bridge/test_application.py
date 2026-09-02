@@ -24,6 +24,7 @@ from repomesh_agent_bridge.adapters.memory import (
     InertCodingSession,
     InMemoryRoomPort,
     InMemoryWorkerBindingPort,
+    MemoryReadinessReporter,
     ScriptedCodingSession,
 )
 from repomesh_agent_bridge.application import RoomNativeAgent, _single_failure
@@ -67,6 +68,11 @@ def _agent(
         binding_port=binding_port,
         room_port=room or InMemoryRoomPort(),
         coding_session=session or InertCodingSession(),
+        # Answers from memory and leaves its default renew period alone: what
+        # every test in this module is about happens before the first renewal,
+        # and readiness has its own module. ``test_readiness`` is where the
+        # reporter is the subject rather than a dependency.
+        readiness=MemoryReadinessReporter(),
         state_dir=tmp_path,
         **extra,
     )
@@ -376,7 +382,7 @@ async def test_run_blocks_until_cancelled_and_then_unwinds_cleanly(
 
     assert room.closed
     assert session.closed
-    assert not (asyncio.all_tasks() - before), "the supervisor starts no background task"
+    assert not (asyncio.all_tasks() - before), "nothing this run started outlives it"
 
 
 def test_one_failure_out_of_the_dual_loop_arrives_as_itself_and_two_do_not() -> None:

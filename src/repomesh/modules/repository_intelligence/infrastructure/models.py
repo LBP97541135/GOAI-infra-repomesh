@@ -40,6 +40,13 @@ class RepositoryRecord(Base):
     Beside ``test_commands`` because they are one fact in two halves — a
     command without the path it reads is the trap that voided a whole run.
     """
+    capability_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    """Which team capability profile this repository's agents assemble under.
+
+    Operator-owned and set before a team is onboarded: the AgentTeams skill
+    lists are chosen when a worker resource is created, so a profile changed
+    afterwards reaches new resources only. NULL means the default profile.
+    """
     profiled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

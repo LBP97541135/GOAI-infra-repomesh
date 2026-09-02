@@ -71,7 +71,13 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
 #: Which RepoMesh role becomes which wire role. The absent key is the point:
 #: ``ORGANIZATION_LEADER`` has no external-member spelling (v2 README), so a
 #: lookup miss is the refusal rather than something a branch has to remember.
-_MEMBER_ROLES: dict[AgentRole, ExternalMemberRole] = {
+#:
+#: Public because ``readiness`` asks the same question and must get the same
+#: answer: which principals may be served by a Bridge at all. Only the refusal
+#: differs between the two — a binding and a readiness report are refused
+#: through different exception types — so the *mapping* is shared and the
+#: ``raise`` is not.
+MEMBER_ROLES: dict[AgentRole, ExternalMemberRole] = {
     AgentRole.WORKER: ExternalMemberRole.WORKER,
     AgentRole.REPOSITORY_LEADER: ExternalMemberRole.REPOSITORY_LEADER,
 }
@@ -390,7 +396,7 @@ def _member_role(principal: AgentPrincipalView) -> ExternalMemberRole:
     the documents, not the identities.
     """
 
-    role = _MEMBER_ROLES.get(principal.role)
+    role = MEMBER_ROLES.get(principal.role)
     if role is None:
         raise ExternalMemberRefused(
             f"agent {principal.id} is a {principal.role.value}, which stays on the "

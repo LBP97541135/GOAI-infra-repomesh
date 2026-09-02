@@ -193,6 +193,7 @@ class RecordingOrchestrator:
             acceptance=command.acceptance,
             status=TaskStatus.ASSIGNED,
             origin=origin,
+            database_change=command.database_change,
         )
         await self._tasks.add(task, idempotency_key=idempotency_key, request_fingerprint="fp")
         self.assigned.append((idempotency_key, command, origin))
@@ -582,6 +583,26 @@ def test_a_plan_may_add_tests_but_not_remove_them(world: World) -> None:
         draft["tests"] = ["python scripts/run_tests.py", "ruff check ."]
 
     assert world.post_plan(body).status_code == 200
+
+
+def test_manager_database_declaration_is_copied_to_worker_task(world: World) -> None:
+    body = plan_body()
+    body["workerTasks"][0]["databaseChange"] = {
+        "declared": True,
+        "required": True,
+        "changeKinds": ["schema", "migration"],
+        "affectedTables": ["quotes"],
+        "migrationRequired": True,
+        "backfillRequired": False,
+        "requiredChecks": ["migration_apply"],
+    }
+
+    assert world.post_plan(body).status_code == 200
+    command = world.orchestrator.assigned[0][1]
+    assert command.database_change.required
+    assert command.database_change.affected_tables == ("quotes",)
+    assert command.database_change.required_checks == ("migration_apply",)
+    assert ".repomesh/database-change-report.json" in world.orchestrator.permits[0][1]
 
 
 def test_provenance_that_is_not_a_leader_session_is_refused(world: World) -> None:

@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from repomesh.modules.task_orchestration.contracts import (
+    DatabaseChangeEvidence,
+    DatabaseChangeRequirement,
     DeliveryRefusalView,
     ExecutionPlanStatus,
     ExecutionPlanView,
@@ -142,6 +144,35 @@ def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
     workspace_path = document.get("workspacePath")
     summary_text = document.get("summary")
     test_command = document.get("testCommand")
+    database_document = document.get("databaseChange")
+    database_evidence = None
+    if isinstance(database_document, dict):
+        checks: list[TaskTestResultView] = []
+        for entry in database_document.get("checks", ()):
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            exit_code = entry.get("exitCode")
+            if isinstance(name, str) and isinstance(exit_code, int):
+                checks.append(
+                    TaskTestResultView(
+                        command=name,
+                        exit_code=exit_code,
+                        summary=str(entry.get("summary") or ""),
+                    )
+                )
+        database_evidence = DatabaseChangeEvidence(
+            migration_files=tuple(
+                str(item) for item in database_document.get("migrationFiles", ())
+            ),
+            backfill_files=tuple(
+                str(item) for item in database_document.get("backfillFiles", ())
+            ),
+            affected_tables=tuple(
+                str(item) for item in database_document.get("affectedTables", ())
+            ),
+            checks=tuple(checks),
+        )
     return TaskEvidenceView(
         commit_sha=commit_sha,
         run_id=run_id,
@@ -155,6 +186,7 @@ def _parse_evidence(result_summary: str | None) -> TaskEvidenceView | None:
         artifact_count=(
             len(document["artifacts"]) if isinstance(document.get("artifacts"), list) else 0
         ),
+        database_change=database_evidence,
     )
 
 
@@ -221,6 +253,7 @@ class Task:
     result_summary: str | None = None
     version: int = 1
     origin: TaskOrigin = TaskOrigin.PLANNED
+    database_change: DatabaseChangeRequirement = DatabaseChangeRequirement()
 
     def __post_init__(self) -> None:
         if not self.title.strip() or not self.instruction.strip():
@@ -328,6 +361,7 @@ class Task:
             version=self.version,
             origin=self.origin,
             evidence=_parse_evidence(self.result_summary),
+            database_change=self.database_change,
         )
 
 

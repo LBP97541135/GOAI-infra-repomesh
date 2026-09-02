@@ -17,6 +17,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.capability_management import PresetCapabilityAssembler
+from repomesh.modules.capability_management.contracts import AgentCapabilityBundle
 from repomesh.modules.context.contracts import ExecutionContextGrant
 from repomesh.modules.specification.contracts import (
     CodingAgentPackage,
@@ -119,6 +120,24 @@ def test_project_materialize_and_verify_context(tmp_path: Path) -> None:
     assert mounted.manifest_path.is_file()
     assert WorkspaceContextVerifier()(task) is None
     assert (tmp_path / ".repomesh/skills/self-test/SKILL.md").is_file()
+
+
+def test_the_instruction_names_the_tdd_skill_when_the_bundle_carries_it(tmp_path: Path) -> None:
+    """Mounting a skill changes nothing unless the instruction sends the agent to it."""
+
+    request, _, _ = scenario(tmp_path)
+    task = RunnerTaskProjector().project(request)
+    assert ".repomesh/skills/tdd/SKILL.md" in task.instruction
+
+    bare = replace(
+        request,
+        capabilities=AgentCapabilityBundle(AgentRole.WORKER, (), ()),
+    )
+    bare_task = RunnerTaskProjector().project(bare)
+    assert ".repomesh/skills/tdd/SKILL.md" not in bare_task.instruction
+    assert bare_task.instruction.startswith(
+        "Read .repomesh/context/current-task.md and the mounted RepoMesh skills."
+    )
 
 
 def test_tampered_skill_is_rejected_before_execution(tmp_path: Path) -> None:

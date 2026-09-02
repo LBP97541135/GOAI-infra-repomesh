@@ -39,6 +39,48 @@ class TaskOrigin(StrEnum):
     REWORK = "rework"  # created to repair a failed delivery candidate
 
 
+class DatabaseChangeKind(StrEnum):
+    SCHEMA = "schema"
+    MIGRATION = "migration"
+    BACKFILL = "backfill"
+    QUERY = "query"
+    DATA = "data"
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseChangeRequirement:
+    declared: bool = False
+    required: bool = False
+    change_kinds: tuple[DatabaseChangeKind, ...] = ()
+    affected_tables: tuple[str, ...] = ()
+    migration_required: bool = False
+    backfill_required: bool = False
+    required_checks: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.required and not self.declared:
+            raise ValueError("required database change must be explicitly declared")
+        if not self.required and (
+            self.change_kinds
+            or self.affected_tables
+            or self.migration_required
+            or self.backfill_required
+            or self.required_checks
+        ):
+            raise ValueError("database change details require required=true")
+        if self.required and not self.required_checks:
+            raise ValueError("required database change needs at least one verification check")
+        values = (*self.affected_tables, *self.required_checks)
+        if any(not value.strip() for value in values):
+            raise ValueError("database table and check names must be non-empty")
+        if len(set(self.change_kinds)) != len(self.change_kinds):
+            raise ValueError("database change kinds must be unique")
+        if len(set(self.affected_tables)) != len(self.affected_tables):
+            raise ValueError("affected database tables must be unique")
+        if len(set(self.required_checks)) != len(self.required_checks):
+            raise ValueError("required database checks must be unique")
+
+
 @dataclass(frozen=True, slots=True)
 class TaskTestResultView:
     """One test command the Runner reports as executed.
@@ -53,6 +95,14 @@ class TaskTestResultView:
     command: str
     exit_code: int
     summary: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseChangeEvidence:
+    migration_files: tuple[str, ...] = ()
+    backfill_files: tuple[str, ...] = ()
+    affected_tables: tuple[str, ...] = ()
+    checks: tuple[TaskTestResultView, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +161,7 @@ class TaskEvidenceView:
     # Presence only. The wire carries ``{kind, uri, contentHash}`` per artifact;
     # nothing downstream can fetch one yet, so counting them is the whole claim.
     artifact_count: int = 0
+    database_change: DatabaseChangeEvidence | None = None
 
     @property
     def verified(self) -> bool:
@@ -145,6 +196,7 @@ class TaskView:
     version: int
     origin: TaskOrigin = TaskOrigin.PLANNED
     evidence: TaskEvidenceView | None = None
+    database_change: DatabaseChangeRequirement = DatabaseChangeRequirement()
 
 
 class ExecutionPlanStatus(StrEnum):
@@ -345,6 +397,7 @@ class AssignTaskCommand:
     instruction: str
     acceptance: tuple[str, ...]
     parent_task_id: UUID | None = None
+    database_change: DatabaseChangeRequirement = DatabaseChangeRequirement()
 
 
 @dataclass(frozen=True, slots=True)
@@ -972,6 +1025,7 @@ class LeaderWorkerTaskDraft:
     instruction: str
     allowed_paths: tuple[str, ...]
     tests: tuple[str, ...]
+    database_change: DatabaseChangeRequirement = DatabaseChangeRequirement()
 
 
 @dataclass(frozen=True, slots=True)

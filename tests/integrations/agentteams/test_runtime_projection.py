@@ -78,6 +78,10 @@ from repomesh.modules.project import (
 )
 from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
+from repomesh.modules.repository_intelligence.domain import RepositoryProfile
+from repomesh.modules.repository_intelligence.infrastructure import (
+    InMemoryRepositoryCatalog,
+)
 from repomesh.settings import Settings
 
 from .fakes import StubDirectory
@@ -390,6 +394,52 @@ async def test_the_projections_match_the_pipeline_script() -> None:
         assert [(s.name, s.url) for s in worker.mcp_servers] == [
             ("repomesh-task-control", "http://task-control.internal/mcp")
         ]
+
+
+@pytest.mark.asyncio
+async def test_a_profiled_repository_s_team_is_created_with_its_own_skills() -> None:
+    """The cross-repo test team's controller-side story, at creation time.
+
+    The repository carries ``cross-repo-test-team`` in the catalog, so the
+    *fresh* resources this pass creates present the test team's skills instead
+    of the coding defaults — a test Worker that answers "coding" is the wrong
+    story even with ``integration-run`` appended after it. The organization
+    leader has no repository and keeps the default tuple; existing resources
+    keep the read-first rule (the tests below cover that nothing is re-ensured).
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+    topology = await store.get(project_id)
+    repository_id = topology.repository_teams[0].repository_id
+
+    catalog = InMemoryRepositoryCatalog()
+    await catalog.add(
+        RepositoryProfile(
+            id=repository_id,
+            name="test-assets",
+            url="https://github.com/example/test-assets",
+            capability_profile="cross-repo-test-team",
+        )
+    )
+
+    control_plane = RecordingControlPlane()
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **_RUNTIMES,
+        repository_catalog=catalog,
+    ).project(project_id)
+
+    assert control_plane.managers[0].skills == ("planning", "coordination")
+    by_skills = {worker.skills for worker in control_plane.workers}
+    assert by_skills == {
+        ("cross-repo-test", "worker-management", "reporting"),
+        ("integration-run", "task-execution"),
+    }
 
 
 @pytest.mark.asyncio

@@ -21,6 +21,7 @@ from repomesh.modules.repository_intelligence.application import (
     RepositoryDiscoveryService,
     RepositoryNotFound,
     ScanRegistration,
+    UpdateRepositoryCapabilityProfile,
     UpdateRepositoryVerification,
     register_scanned_profiles,
     render_markdown,
@@ -84,6 +85,7 @@ from .models import (
     ReplanResponse,
     RepoScanRequest,
     RepoScanResult,
+    RepositoryCapabilityProfileUpdate,
     RepositoryCreate,
     RepositoryVerificationUpdate,
     RepositoryView,
@@ -376,7 +378,16 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     with the delivery write endpoints — an architecture change, not part of
     this containment."""
 
-    service = request.app.state.container.issue_intake_service()
+    container = request.app.state.container
+    if container.operational_gate().intake_paused():
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "intake_paused", "detail": "new issue intake is paused"},
+            headers={
+                "Retry-After": str(get_settings().operations_capacity_retry_after_seconds)
+            },
+        )
+    service = container.issue_intake_service()
     try:
         receipt = await service.execute(
             IssueIntakeCommand(
@@ -506,6 +517,36 @@ async def register_repository(
 @router.get("/repositories", response_model=list[RepositoryView])
 async def list_repositories(catalog: CatalogDependency) -> list[RepositoryProfile]:
     return await catalog.list()
+
+
+@router.patch(
+    "/repositories/{repository_id}/capability-profile",
+    response_model=RepositoryView,
+    dependencies=[ACTION_TOKEN],
+)
+async def update_repository_capability_profile(
+    repository_id: UUID,
+    body: RepositoryCapabilityProfileUpdate,
+    catalog: CatalogDependency,
+) -> RepositoryProfile:
+    """Set the team capability profile this repository's agents assemble under.
+
+    Set it before onboarding the repository's team: capability bundles are
+    resolved at dispatch (so those follow a later change) but AgentTeams skill
+    lists are chosen when a worker resource is created, and a profile changed
+    afterwards reaches only resources that do not exist yet.
+    """
+
+    profile = body.capability_profile.strip() if body.capability_profile else None
+    try:
+        return await UpdateRepositoryCapabilityProfile(catalog).execute(
+            repository_id,
+            capability_profile=profile or None,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except RepositoryNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.get("/repositories/url-type", response_model=UrlIdentification)

@@ -402,6 +402,10 @@ export interface ConsoleRepositoryView {
   test_commands: string[];
   /** 验证命令读取/写入的测试路径，与命令作为一个配置对维护。 */
   test_paths: string[];
+  /** 档案开关（供给侧），见 CONTEXT.md：只决定之后新建的拓扑建不建测试团队，
+   *  对存量已建团队无追溯力。null = default 档。TeamsPage 的「测试团队」徽标
+   *  以本字段为 join 右表（裁决：身份字段不进 team view，前端 join）。 */
+  capability_profile: string | null;
   profiled_at: string;
   /** 拓扑派生：该仓库被多少 team 驻扎 */
   resident_team_count: number;
@@ -421,6 +425,18 @@ export interface RepositoryVerificationUpdate {
 /** 更新端点只需由调用方消费这三个回显字段。 */
 export interface RepositoryVerificationView extends RepositoryVerificationUpdate {
   id: string;
+}
+
+/** `PATCH /repositories/{id}/capability-profile` 的请求体。`default` 档以 null
+ *  拼写——后端把 "default" 字面量当 422 拒绝，存储侧只有 NULL 一种写法。 */
+export interface RepositoryCapabilityProfileUpdate {
+  capability_profile: string | null;
+}
+
+/** 回显消费面：端点返回全量 RepositoryView，前端只消费这两个字段。 */
+export interface RepositoryCapabilityProfileView {
+  id: string;
+  capability_profile: string | null;
 }
 
 /** §4.2。`runtime_status`（拓扑记录的**建团结果**，历史事实）与 `runtime.phase`
@@ -1797,4 +1813,65 @@ export interface SemanticSearchView {
 /** L3 批量向量化回执。无 embedding 端点时服务端返回 {refreshed: 0}（no-op 不是错误）。 */
 export interface EmbeddingRefreshView {
   refreshed: number;
+}
+
+/* ── 本机 CLI 成员就绪（`repomesh.agent-bridge.readiness.v1`）───────────────
+   这一族的三个形状**都是 camelCase**，与本文件其余读模型的 snake_case 不同：
+   服务端两处（`ExternalMemberReadinessView.to_wire()` 与 `member_readiness_wire()`）
+   就是这么出线的，前端照抄字面不改名。
+
+   租约语义（TTL 45s，判定在服务端）：`ready` = 租约未过期且未停报；`stale` =
+   过期但还在一个 TTL 内；`offline` = 更晚，或已报 shutdown。**只有 ready 过物化门**，
+   这条判定前端不重算，一律读服务端给的 `status`。 */
+
+export type ExternalMemberReadinessStatus = "ready" | "stale" | "offline";
+
+/** Bridge 能承担的两个角色。组织 leader 不在其中——它驻在 AgentTeams Manager 上，
+ *  不跑本机 CLI，所以就绪列表里永远没有它。 */
+export type ExternalMemberRole = "repository_leader" | "worker";
+
+/** `GET /runtime/v1/external-members/readiness` 的一行：租约事实 + 服务端此刻派生的
+ *  状态。刻意没有 `instanceId` 与 `workspaceRoot`——那是进程身份与操作者机器上的路径，
+ *  状态板不发布这两样。 */
+export interface ExternalMemberReadinessView {
+  agentId: string;
+  status: ExternalMemberReadinessStatus;
+  role: ExternalMemberRole;
+  leaderLane: boolean;
+  governedLane: boolean;
+  reportedAt: string;
+  expiresAt: string;
+  /** 报过 shutdown 的时刻；没报过为 null */
+  stoppedAt: string | null;
+}
+
+export interface ExternalMemberReadinessResponse {
+  members: ExternalMemberReadinessView[];
+}
+
+/** 就绪门对一个成员的判定。**预检与物化 409 是同一个 wire helper 出的**（服务端注释：
+ *  「操作者读回的那一行与拒绝他的那份 body 不能互相打架」），所以这里也是同一个类型。
+ *  `reason` 是服务端英文原句（`the readiness lease expired without a renewal` /
+ *  `no readiness report` 等），原样展示不翻译。 */
+export interface MemberReadinessFact {
+  agentId: string;
+  role: ExternalMemberRole;
+  status: ExternalMemberReadinessStatus;
+  reason: string;
+}
+
+/** `GET /issues/{issue_id}/discovery/readiness`：物化前的**无副作用**预检。
+ *  服务端自述「仅供参考」——租约是关于此刻的断言，渲染出来时它已经旧了一瞬，
+ *  真正的权威是物化里那道门。404 = 该 issue 没有进行中的发现轮次。 */
+export interface DiscoveryReadinessView {
+  checkedAt: string;
+  members: MemberReadinessFact[];
+}
+
+/** 物化 409 的**结构化** detail（新家族）。这一族与其他 409（检查点未过、计划未生成…）
+ *  不同：它可自助解决，且解法就写在成员行里，所以不能糊成一句 detail 原文。 */
+export interface ExternalMembersNotReadyDetail {
+  code: "external_members_not_ready";
+  message: string;
+  members: MemberReadinessFact[];
 }

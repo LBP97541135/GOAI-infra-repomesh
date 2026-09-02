@@ -55,8 +55,15 @@ class DispatchWorkerTask:
             run_id=command.run_id,
             agent_id=command.worker_agent_id,
         )
+        # The profile decides which skills get mounted into the workspace, so
+        # it has to reach this resolution too — not only the one that sized
+        # the context bundle upstream. Live W4 run f375610a: without it the
+        # test team's worker had every coder preset mounted and not
+        # ``integration-run``.
         capabilities = await self._capabilities.execute(
-            command.worker_agent_id, task_features=command.task_features
+            command.worker_agent_id,
+            task_features=command.task_features,
+            profile=repository.capability_profile,
         )
         workspace = await self._workspaces.prepare(
             repository_id=command.repository_id,

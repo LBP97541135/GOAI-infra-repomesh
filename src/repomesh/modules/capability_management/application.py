@@ -1,3 +1,6 @@
+import inspect
+from collections.abc import Awaitable
+from typing import Protocol
 from uuid import UUID
 
 from repomesh.modules.agent_directory.contracts import (
@@ -14,29 +17,50 @@ class AgentCapabilityNotFound(LookupError):
     pass
 
 
+class CapabilityAssembler(Protocol):
+    """What :class:`ResolveAgentCapabilities` needs from an assembler.
+
+    Two implementations exist: the preset assembler answers synchronously, the
+    registry-backed one has to await the version store. The resolver accepts
+    either, so the container can swap them without the callers noticing.
+    """
+
+    def assemble(
+        self,
+        principal: AgentPrincipalView,
+        *,
+        task_features: frozenset[str] = ...,
+        profile: str | None = ...,
+    ) -> AgentCapabilityBundle | Awaitable[AgentCapabilityBundle]: ...
+
+
 class ResolveAgentCapabilities:
     """Resolve presets for a concrete registered agent at runtime."""
 
     def __init__(
         self,
         directory: AgentPrincipalReader,
-        assembler: PresetCapabilityAssembler | None = None,
+        assembler: CapabilityAssembler | None = None,
     ) -> None:
         self._directory = directory
-        self._assembler = assembler or PresetCapabilityAssembler()
+        self._assembler: CapabilityAssembler = assembler or PresetCapabilityAssembler()
 
     async def execute(
         self,
         agent_id: UUID,
         *,
         task_features: frozenset[str] = frozenset(),
+        profile: str | None = None,
     ) -> AgentCapabilityBundle:
         principal = await self._directory.get_view(agent_id)
         if principal is None:
             raise AgentCapabilityNotFound(f"agent {agent_id} is not registered")
         if principal.status is not AgentPrincipalStatus.ACTIVE:
             raise AgentCapabilityNotFound(f"agent {agent_id} is disabled")
-        return self._assembler.assemble(principal, task_features=task_features)
+        bundle = self._assembler.assemble(principal, task_features=task_features, profile=profile)
+        if inspect.isawaitable(bundle):
+            bundle = await bundle
+        return bundle
 
 
 class RegistryCapabilityAssembler:
@@ -57,8 +81,12 @@ class RegistryCapabilityAssembler:
         principal: AgentPrincipalView,
         *,
         task_features: frozenset[str] = frozenset(),
+        profile: str | None = None,
     ) -> AgentCapabilityBundle:
-        bundle = self._delegate.assemble(principal, task_features=task_features)
+        # The repository's capability profile (档案开关) decides which extra
+        # skills the presets carry, so it has to reach the delegate; the
+        # registry lookup below then versions whatever the presets answered.
+        bundle = self._delegate.assemble(principal, task_features=task_features, profile=profile)
         organization_id = getattr(principal, "organization_id", None)
         resolved: list[CapabilityDefinition] = []
         for skill in bundle.skills:

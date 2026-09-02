@@ -64,6 +64,21 @@ REVIEW_DECISION_SCHEMA_VERSION = "repomesh.leader-actions.review-decision.v1"
 PLAN_RECEIPT_SCHEMA_VERSION = "repomesh.leader-actions.plan-receipt.v1"
 REVIEW_RECEIPT_SCHEMA_VERSION = "repomesh.leader-actions.review-receipt.v1"
 
+READINESS_SCHEMA_VERSION = "repomesh.agent-bridge.readiness.v1"
+"""The document one Bridge instance reports its own liveness with.
+
+A new family rather than a field on an existing one: the enrollment and the
+binding describe a *member*, they are frozen, and every deployed Bridge already
+round-trips them — while this describes a *process*, which is the thing that
+comes and goes.
+
+It is the one document here with no dataclass beside it, and that is not an
+omission. The report is written by this side and read by the server, and the
+answer that comes back is a receipt whose only field this process acts on is an
+integer number of seconds. A wire model for a document nothing here parses would
+be a validation boundary with no untrusted bytes on the other side of it.
+"""
+
 ROLE_WORKER = "worker"
 ROLE_REPOSITORY_LEADER = "repository_leader"
 MEMBER_ROLES: tuple[str, ...] = (ROLE_WORKER, ROLE_REPOSITORY_LEADER)
@@ -1843,6 +1858,7 @@ class PlannedWorkerTask:
     instruction: str
     allowed_paths: tuple[str, ...]
     tests: tuple[str, ...]
+    database_change: dict[str, object] | None = None
 
     @classmethod
     def from_wire(cls, payload: object, *, document: str) -> "PlannedWorkerTask":
@@ -1858,6 +1874,7 @@ class PlannedWorkerTask:
                 "allowedPaths",
                 "tests",
             ),
+            optional=("databaseChange",),
             error=LeaderDocumentInvalid,
         )
         return cls(
@@ -1888,10 +1905,21 @@ class PlannedWorkerTask:
             tests=_string_array(
                 body, "tests", document=document, error=LeaderDocumentInvalid
             ),
+            database_change=(
+                dict(
+                    _mapping(
+                        body["databaseChange"],
+                        document=f"{document}.databaseChange",
+                        error=LeaderDocumentInvalid,
+                    )
+                )
+                if "databaseChange" in body
+                else None
+            ),
         )
 
     def to_wire(self) -> dict[str, object]:
-        return {
+        wire: dict[str, object] = {
             "nodeId": self.node_id,
             "assigneeWorkerAgentId": str(self.assignee_worker_agent_id),
             "title": self.title,
@@ -1899,6 +1927,9 @@ class PlannedWorkerTask:
             "allowedPaths": list(self.allowed_paths),
             "tests": list(self.tests),
         }
+        if self.database_change is not None:
+            wire["databaseChange"] = self.database_change
+        return wire
 
 
 @dataclass(frozen=True, slots=True)

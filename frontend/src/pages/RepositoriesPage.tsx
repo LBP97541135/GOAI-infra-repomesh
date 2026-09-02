@@ -4,6 +4,7 @@ import { fetchConsoleAgents, fetchConsoleRepositories, gridSourceMode } from "..
 import { TEAM_STATUS_LABEL, TEAM_STATUS_SKIN, dayLabel, errText, shortId } from "../display";
 import { AddRepositoryCard } from "../components/AddRepositoryCard";
 import { ProvisionTeamModal } from "../components/ProvisionTeamModal";
+import { RepositoryProfileDialog } from "../components/RepositoryProfileDialog";
 import { RepositoryVerificationDialog } from "../components/RepositoryVerificationDialog";
 import { ErrorPanel, LoadingLine, ProbeNote } from "../components/StatusBlocks";
 
@@ -30,6 +31,7 @@ function RepositoryCard({
   onOpenIssue,
   onProvision,
   onEditVerification,
+  onEditProfile,
 }: {
   repo: ConsoleRepositoryView;
   /** 该仓库在花名册里是否已有活跃 repository leader；null = 花名册还没取到 */
@@ -39,6 +41,7 @@ function RepositoryCard({
   onOpenIssue: (issueId: string) => void;
   onProvision: () => void;
   onEditVerification: () => void;
+  onEditProfile: () => void;
 }) {
   const idle = repo.resident_team_count === 0;
 
@@ -62,6 +65,13 @@ function RepositoryCard({
         >
           验证配置
         </button>
+        <button
+          className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2 hover:border-amber hover:text-amber-hi"
+          title="档案开关（供给侧）：只影响之后新建的团队编制"
+          onClick={onEditProfile}
+        >
+          团队档案
+        </button>
         <span className={`text-[11.5px] ${idle ? "text-tx3" : "text-tx2"}`}>
           {repo.resident_team_count} 团队
         </span>
@@ -72,6 +82,10 @@ function RepositoryCard({
       <div className="mt-1.5 text-[11px] text-tx3">{facts}</div>
       <div className="mt-1 font-mono text-[10.5px] text-tx3">
         验证：{repo.test_commands.length} 条命令 · {repo.test_paths.length} 条路径
+        {/* 档案回显：null 即 default，是常态，不值得每张卡写一遍 */}
+        {repo.capability_profile && (
+          <span className="text-amber"> · 档案 {repo.capability_profile}</span>
+        )}
       </div>
 
       {repo.teams.length > 0 ? (
@@ -131,6 +145,7 @@ export function RepositoriesPage({
   const [agents, setAgents] = useState<ConsoleAgentView[] | null>(null);
   const [provisionFor, setProvisionFor] = useState<ConsoleRepositoryView | null>(null);
   const [verificationFor, setVerificationFor] = useState<ConsoleRepositoryView | null>(null);
+  const [profileFor, setProfileFor] = useState<ConsoleRepositoryView | null>(null);
 
   /** 扫描走到终态后刷新列表。**引用必须稳定**：卡片把它作为轮询 effect 的依赖，
    *  每次 render 换一个新函数会让轮询不断重启。 */
@@ -211,6 +226,7 @@ export function RepositoriesPage({
               onOpenIssue={onOpenIssue}
               onProvision={() => setProvisionFor(repo)}
               onEditVerification={() => setVerificationFor(repo)}
+              onEditProfile={() => setProfileFor(repo)}
             />
           ))}
         </div>
@@ -232,6 +248,15 @@ export function RepositoriesPage({
         <RepositoryVerificationDialog
           repo={verificationFor}
           onClose={() => setVerificationFor(null)}
+          onSaved={refresh}
+          onToast={onToast}
+        />
+      )}
+
+      {profileFor !== null && (
+        <RepositoryProfileDialog
+          repo={profileFor}
+          onClose={() => setProfileFor(null)}
           onSaved={refresh}
           onToast={onToast}
         />

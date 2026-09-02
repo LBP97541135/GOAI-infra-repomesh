@@ -4,7 +4,7 @@ import socket
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -73,16 +73,9 @@ from repomesh.modules.collaboration import (
     SendCollaborationMessage,
 )
 from repomesh.modules.context.infrastructure import PostgresContextStore
-from repomesh.modules.decision_chain import (
-    DecisionChainProjectionService,
-    DecisionChainProjector,
-    PostgresDecisionChainStore,
-    PostgresDecisionEventSource,
-)
 from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
-    PostgresDeliveryAuditLog,
     PostgresDeliveryConflictCaseStore,
     PostgresSCMCommandStore,
     PostgresSCMObservationStore,
@@ -142,8 +135,8 @@ from repomesh.modules.task_orchestration import (
 from repomesh.modules.task_orchestration.contracts import TaskAssignmentPublisher
 from repomesh.persistence import Database
 from repomesh.persistence.outbox import OutboxStore
-from repomesh.settings import Settings, get_settings
-from repomesh_runner.telemetry import setup_logs, setup_metrics, setup_tracing
+from repomesh.settings import get_settings
+from repomesh_runner.telemetry import setup_tracing
 
 _API_LOGGER = logging.getLogger("repomesh.api")
 
@@ -330,6 +323,21 @@ def build_default_container(
     recovery_case_store = PostgresRecoveryCaseStore(database)
     worker_recovery_projection_store = PostgresWorkerRecoveryStore(database)
     delivery_conflict_projection_store = PostgresDeliveryConflictCaseStore(database)
+    from repomesh.modules.observability.operations import (
+        InMemoryOperationalGate,
+        LoggingNotificationSink,
+        OperationalAction,
+        OperationalResponseCoordinator,
+        OperationalResponseStore,
+    )
+
+    operational_gate = InMemoryOperationalGate()
+    operational_coordinator = OperationalResponseCoordinator(
+        OperationalResponseStore(database),
+        LoggingNotificationSink(),
+        operational_gate,
+        default_action=OperationalAction(settings.operations_alert_action),
+    )
     background_services = (
         RecoverySourceProjector(
             recovery_case_store,
@@ -352,6 +360,52 @@ def build_default_container(
     )
     task_report_gateway = None
     if messenger is not None:
+        from repomesh.modules.review_validation import (
+            DatabaseBranchValidationService,
+            DatabaseValidationCommand,
+            DatabaseValidationStage,
+            PostgresDatabaseBranchValidationStore,
+            StartDatabaseBranchValidation,
+            UnavailableDatabaseBranchProvider,
+        )
+
+        database_validations = DatabaseBranchValidationService(
+            PostgresDatabaseBranchValidationStore(database),
+            UnavailableDatabaseBranchProvider(),
+        )
+
+        async def request_database_validation(decision) -> None:
+            intent = decision.intent
+            if intent is None:
+                return
+            commands = tuple(
+                DatabaseValidationCommand(
+                    DatabaseValidationStage.MIGRATION, f"migration:{index}", path
+                )
+                for index, path in enumerate(intent.migration_files, 1)
+            ) + tuple(
+                DatabaseValidationCommand(
+                    DatabaseValidationStage.BACKFILL, f"backfill:{index}", path
+                )
+                for index, path in enumerate(intent.backfill_files, 1)
+            ) + tuple(
+                DatabaseValidationCommand(
+                    DatabaseValidationStage.VERIFICATION, check, f"check:{check}"
+                )
+                for check in intent.checks
+            )
+            await database_validations.start(
+                StartDatabaseBranchValidation(
+                    organization_id=UUID(intent.organization_id),
+                    project_id=UUID(intent.project_id),
+                    repository_id=UUID(intent.repository_id),
+                    candidate_sha=intent.candidate_sha,
+                    source_database_ref="repository-database-validation-policy",
+                    commands=commands,
+                    idempotency_key=intent.idempotency_key,
+                )
+            )
+
         collaboration = SendCollaborationMessage(
             agent_directory,
             topology_store,
@@ -372,7 +426,7 @@ def build_default_container(
             collaboration,
             task_publisher,
             checkpoint_service,
-            PostgresDeliveryAuditLog(database),
+            database_automation=request_database_validation,
         )
         task_report_gateway = tasks
         inbound = ProcessMatrixTaskReport(
@@ -407,7 +461,6 @@ def build_default_container(
             require_governance=settings.delivery_auto_enabled,
             require_validation=settings.delivery_auto_enabled,
             validation_reader=validation,
-            audit=PostgresDeliveryAuditLog(database),
             conflict_cases=conflict_cases,
         )
         observations = SCMObservationService(PostgresSCMObservationStore(database))
@@ -503,7 +556,6 @@ def build_default_container(
             require_governance=True,
             require_validation=True,
             validation_reader=validation,
-            audit=PostgresDeliveryAuditLog(database),
             conflict_cases=forward_conflict_cases,
         )
         commands = SCMCommandService(PostgresSCMCommandStore(database))
@@ -574,6 +626,7 @@ def build_default_container(
             AlertingStore(database),
             UsageQueryStore(database),
             trace_query=TraceQueryStore(database),
+            transition_handler=operational_coordinator,
         ),
     )
     # Trace ingest projects CoPaw session files into the observability schema;
@@ -581,18 +634,6 @@ def build_default_container(
     background_services = (
         *background_services,
         TraceIngester(TraceStore(database), _trace_source(settings)),
-    )
-    # Decision-chain projection subscribes to the five chain events; drain is
-    # idempotent (event_id unique) and incremental (the source skips projected
-    # ids), so the interval loop is safe to run continuously.
-    background_services = (
-        *background_services,
-        DecisionChainProjector(
-            DecisionChainProjectionService(
-                PostgresDecisionChainStore(database),
-                PostgresDecisionEventSource(database),
-            )
-        ),
     )
     container_holder: dict[str, ApplicationContainer] = {}
     if settings.worker_recovery_enabled:
@@ -764,6 +805,8 @@ def build_default_container(
         project_checkpoint_service_instance=checkpoint_service,
         usage_recorder=usage_recorder,
         log_recorder=log_recorder,
+        operational_gate_instance=operational_gate,
+        operational_response_coordinator_instance=operational_coordinator,
     )
     container_holder["container"] = container
     return container
@@ -788,51 +831,9 @@ async def _unhandled_exception_envelope(request: Request, exc: Exception) -> JSO
     )
 
 
-_PUBLIC_DEV_ACTION_TOKEN = "console-dev-token"
-
-
-def _guard_deployment_defaults(settings: Settings) -> None:
-    """Fail fast when a non-development environment keeps the public default
-    agent action token.
-
-    ``console-dev-token`` is the shared default across compose.yaml, the
-    frontend build args and the dev scripts, and it is embedded in the built
-    frontend bundle. Fine as a development convenience; in staging or
-    production it means every write endpoint is protected by a publicly-known
-    credential, so the process refuses to start rather than serve with it.
-    """
-
-    if settings.environment not in {"staging", "production"}:
-        return
-    if settings.agent_action_token == _PUBLIC_DEV_ACTION_TOKEN:
-        raise RuntimeError(
-            "REPOMESH_AGENT_ACTION_TOKEN is still the public default "
-            f"'{_PUBLIC_DEV_ACTION_TOKEN}'; set a real token for the "
-            f"{settings.environment} environment"
-        )
-
-
 def create_app(container: ApplicationContainer | None = None) -> FastAPI:
     settings = get_settings()
-    _guard_deployment_defaults(settings)
-    setup_tracing(
-        settings.otlp_endpoint,
-        service_name=settings.otlp_service_name,
-        headers=settings.otlp_headers,
-    )
-    if settings.otlp_metrics_enabled:
-        setup_metrics(
-            settings.otlp_endpoint,
-            service_name=settings.otlp_service_name,
-            headers=settings.otlp_headers,
-        )
-    if settings.otlp_logs_enabled:
-        setup_logs(
-            settings.otlp_endpoint,
-            service_name=settings.otlp_service_name,
-            headers=settings.otlp_headers,
-            level=getattr(logging, settings.otlp_log_level.upper(), logging.WARNING),
-        )
+    setup_tracing(settings.otlp_endpoint, service_name=settings.otlp_service_name)
     application = FastAPI(
         title=settings.app_name,
         version="0.1.0",

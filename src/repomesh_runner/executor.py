@@ -12,7 +12,9 @@ The permission callbacks are a cooperative boundary, not the boundary — see
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fnmatch
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 
@@ -292,13 +294,18 @@ class DriverExecutor:
         result: DriverResult,
     ) -> RunnerExecutionResult:
         mapped = self._to_runner_result(result)
+        database_change, database_error = _database_change_report(workspace)
         changed_files = await _changed_files(workspace)
         test_results: tuple[TestCommandResult, ...] = ()
         commit_sha: str | None = None
         status = mapped.status
         summary = mapped.summary
 
-        if result.status is DriverResultStatus.SUCCEEDED:
+        if database_error is not None:
+            status = RunnerResultStatus.FAILED
+            summary = f"database_change_report_invalid: {database_error}"
+
+        if result.status is DriverResultStatus.SUCCEEDED and database_error is None:
             violation = _changed_path_violation(changed_files, task.permissions)
             if violation is not None:
                 status = RunnerResultStatus.FAILED
@@ -316,6 +323,20 @@ class DriverExecutor:
                         f"test_command_failed: {failure.command} "
                         f"(exit code {failure.exit_code})"
                     )
+                elif not changed_files:
+                    # The verification phase may be the producer: a recipe that
+                    # only runs as a test command (module-test-team spec A.2)
+                    # writes its evidence after the collection above, and an
+                    # agent phase that changed nothing would otherwise report a
+                    # clean run with nothing to commit. Look once more -- only
+                    # when the agent phase left nothing, so an agent that did
+                    # change files keeps exactly its own set -- under the same
+                    # path rules the first collection was held to.
+                    changed_files = await _changed_files(workspace)
+                    violation = _changed_path_violation(changed_files, task.permissions)
+                    if violation is not None:
+                        status = RunnerResultStatus.FAILED
+                        summary = f"changed_path_denied: {violation}"
 
             if status is RunnerResultStatus.SUCCEEDED and changed_files:
                 commit_sha, commit_error = await _commit_changes(
@@ -334,6 +355,7 @@ class DriverExecutor:
             changed_files=changed_files,
             test_results=test_results,
             commit_sha=commit_sha,
+            database_change=database_change,
         )
 
     @staticmethod
@@ -385,6 +407,43 @@ async def _changed_files(workspace: Path) -> tuple[str, ...]:
     if output is None:
         return ()
     return _parse_porcelain(output)
+
+
+def _database_change_report(workspace: Path) -> tuple[dict[str, object] | None, str | None]:
+    path = workspace / ".repomesh" / "database-change-report.json"
+    if not path.is_file():
+        return None, None
+    try:
+        if path.stat().st_size > 65_536:
+            return None, "report exceeds 65536 bytes"
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None, "report is not readable JSON"
+    finally:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+    if not isinstance(raw, dict):
+        return None, "report must be an object"
+    allowed = {"migrationFiles", "backfillFiles", "affectedTables", "checks"}
+    if set(raw) - allowed:
+        return None, "report contains unsupported fields"
+    for field in ("migrationFiles", "backfillFiles", "affectedTables"):
+        value = raw.get(field, [])
+        if not isinstance(value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in value
+        ):
+            return None, f"{field} must contain non-empty strings"
+    checks = raw.get("checks", [])
+    if not isinstance(checks, list):
+        return None, "checks must be an array"
+    for check in checks:
+        if (
+            not isinstance(check, dict)
+            or not isinstance(check.get("name"), str)
+            or not isinstance(check.get("exitCode"), int)
+        ):
+            return None, "checks must contain name and integer exitCode"
+    return raw, None
 
 
 async def _git_output(workspace: Path, *arguments: str) -> str | None:

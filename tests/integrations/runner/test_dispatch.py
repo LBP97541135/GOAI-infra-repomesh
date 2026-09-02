@@ -41,11 +41,13 @@ class RepositoryCatalogStub:
         *,
         test_commands: tuple[str, ...] = (),
         test_paths: tuple[str, ...] = (),
+        capability_profile: str | None = None,
     ) -> None:
         self.repository_id = repository_id
         self.url = url
         self.test_commands = test_commands
         self.test_paths = test_paths
+        self.capability_profile = capability_profile
 
     async def get(self, repository_id):
         if repository_id != self.repository_id:
@@ -56,6 +58,7 @@ class RepositoryCatalogStub:
             url=self.url,
             test_commands=self.test_commands,
             test_paths=self.test_paths,
+            capability_profile=self.capability_profile,
         )
 
 
@@ -266,3 +269,63 @@ async def test_a_repository_with_no_declared_test_paths_dispatches_unchanged(
 
     assert task.permissions.allowed_paths == ("src/checkout/**",)
 
+
+class RecordingService:
+    """``ReturningService`` that also remembers how it was asked."""
+
+    def __init__(self, value) -> None:
+        self.value = value
+        self.calls: list[tuple[tuple, dict]] = []
+
+    async def execute(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return self.value
+
+
+@pytest.mark.asyncio
+async def test_the_dispatch_resolves_capabilities_under_the_repository_profile(
+    tmp_path: Path,
+) -> None:
+    """The profile must reach the resolution whose skills get mounted.
+
+    Found live (W4 run f375610a, 2026-09-01): ``StartAssignedWorkerTask``
+    resolved the bundle under the repository's profile, but this dispatch
+    resolved it again without one — and it is *this* bundle the context
+    materializer mounts, so the cross-repo test team's worker got every coder
+    preset and never ``integration-run``. Asserted on the call, because the
+    mounted files are whatever the stub answers.
+    """
+
+    projection, package, capabilities = scenario(tmp_path)
+    grant = projection.context_grant
+    capability_service = RecordingService(capabilities)
+    dispatcher = DispatchWorkerTask(
+        ReturningService(package),
+        ReturningService(grant),
+        capability_service,
+        RepositoryCatalogStub(
+            package.repository_id,
+            projection.repository_url,
+            capability_profile="cross-repo-test-team",
+        ),
+        WorkspaceStub(tmp_path),
+        RunnerContextMaterializer(Path.cwd()),
+        GatewayStub(),
+    )
+    await dispatcher.execute(
+        DispatchWorkerTaskCommand(
+            organization_id=projection.organization_id,
+            project_id=package.project_id,
+            repository_id=package.repository_id,
+            task_id=package.task_id,
+            worker_agent_id=package.worker_agent_id,
+            bundle_id=grant.bundle_id,
+            run_id=grant.run_id,
+            correlation_id=uuid4(),
+            adapter_id="claude-code",
+        )
+    )
+
+    assert len(capability_service.calls) == 1
+    _, kwargs = capability_service.calls[0]
+    assert kwargs["profile"] == "cross-repo-test-team"

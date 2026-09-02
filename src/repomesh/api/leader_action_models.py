@@ -35,6 +35,8 @@ from repomesh.modules.task_orchestration.contracts import (
     LEADER_PROVENANCE_SOURCE,
     PLAN_DECISION_SCHEMA_VERSION,
     REVIEW_DECISION_SCHEMA_VERSION,
+    DatabaseChangeKind,
+    DatabaseChangeRequirement,
     LeaderProvenanceView,
     LeaderReviewFinding,
     LeaderReviewVerdict,
@@ -87,6 +89,27 @@ class TaskDagBody(_Frozen):
     edges: list[DagEdgeBody]
 
 
+class DatabaseChangeBody(_Frozen):
+    declared: bool
+    required: bool
+    change_kinds: Annotated[list[DatabaseChangeKind], Field(alias="changeKinds")] = []
+    affected_tables: Annotated[list[str], Field(alias="affectedTables")] = []
+    migration_required: Annotated[bool, Field(alias="migrationRequired")] = False
+    backfill_required: Annotated[bool, Field(alias="backfillRequired")] = False
+    required_checks: Annotated[list[str], Field(alias="requiredChecks")] = []
+
+    def to_requirement(self) -> DatabaseChangeRequirement:
+        return DatabaseChangeRequirement(
+            declared=self.declared,
+            required=self.required,
+            change_kinds=tuple(self.change_kinds),
+            affected_tables=tuple(self.affected_tables),
+            migration_required=self.migration_required,
+            backfill_required=self.backfill_required,
+            required_checks=tuple(self.required_checks),
+        )
+
+
 class WorkerTaskDraftBody(_Frozen):
     node_id: Annotated[str, Field(alias="nodeId", min_length=1, max_length=100)]
     assignee_worker_agent_id: Annotated[UUID, Field(alias="assigneeWorkerAgentId")]
@@ -94,6 +117,9 @@ class WorkerTaskDraftBody(_Frozen):
     instruction: str = Field(min_length=1)
     allowed_paths: Annotated[list[str], Field(alias="allowedPaths", min_length=1)]
     tests: list[str]
+    database_change: Annotated[
+        DatabaseChangeBody | None, Field(alias="databaseChange")
+    ] = None
 
 
 class PlanDecisionBody(_Frozen):
@@ -126,6 +152,11 @@ class PlanDecisionBody(_Frozen):
                     instruction=draft.instruction,
                     allowed_paths=tuple(draft.allowed_paths),
                     tests=tuple(draft.tests),
+                    database_change=(
+                        draft.database_change.to_requirement()
+                        if draft.database_change is not None
+                        else DatabaseChangeRequirement()
+                    ),
                 )
                 for draft in self.worker_tasks
             ),

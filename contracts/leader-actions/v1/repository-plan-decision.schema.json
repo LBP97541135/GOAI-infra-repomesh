@@ -75,6 +75,29 @@
           "tests": {
             "type": "array",
             "items": {"type": "string", "minLength": 1}
+          },
+          "databaseChange": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["declared", "required"],
+            "properties": {
+              "declared": {"type": "boolean"},
+              "required": {"type": "boolean"},
+              "changeKinds": {
+                "type": "array", "uniqueItems": true,
+                "items": {"enum": ["schema", "migration", "backfill", "query", "data"]}
+              },
+              "affectedTables": {
+                "type": "array", "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1}
+              },
+              "migrationRequired": {"type": "boolean"},
+              "backfillRequired": {"type": "boolean"},
+              "requiredChecks": {
+                "type": "array", "uniqueItems": true,
+                "items": {"type": "string", "minLength": 1}
+              }
+            }
           }
         }
       }
