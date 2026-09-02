@@ -27,12 +27,12 @@ from dataclasses import replace
 from uuid import UUID
 
 from fastapi.testclient import TestClient
-
 from integrations.agentteams.test_runtime_projection import (
     _RUNTIMES,
     MODEL,
     RecordingControlPlane,
 )
+
 from repomesh.bootstrap.app import create_app
 from repomesh.bootstrap.container import ApplicationContainer
 from repomesh.integrations.agentteams.runtime_projection import (
