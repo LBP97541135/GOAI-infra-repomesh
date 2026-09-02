@@ -113,6 +113,16 @@ postgres。
 - W4 的 B/C 组按 runner 形态重写执行步骤；A/D 组与 W1/W2 交付物**原样有效**。
 - 改道本身回设计稿留痕（§5.2 预案生效），并同步验收标准。
 
+> **2026-09-01 生效记录**：W0a 实测 P-1 FAIL（现象与依据见 spec 修订 A.0）。已执行：
+> spec 修订 A（执行者、证据映射、退出码约定、v1 局限）；设计稿 §5.2 留痕；验收标准
+> P-1 行 + 「改道修订」节（B/C 组 runner 形态步骤）；W3 配方改写（`run_round.py` +
+> runner 任务模板 + 机器可读组合文件）；技能文档按 A.3 改写。**W4 前置改为**：runner
+> 运行时的 worker 成员在位（`REPOMESH_AGENTTEAMS_WORKER_RUNTIME=repomesh-runner` 或
+> 该仓 worker 的运行时按仓指定）+ 新栈 + 配方在 runner 工作区干跑一遍。
+
+**W0a 之后的实际状态**：W0a 已执行（FAIL）；W1/W2/W0b/W3 完成；W3 配方已按 runner 形态
+改写；W4 待活体。
+
 ---
 
 ## 完成定义

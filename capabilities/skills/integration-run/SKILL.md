@@ -33,28 +33,33 @@ out.
 
 ## Workflow
 
-1. Sweep before you build: remove leftover `itest-*` resources (containers,
-   networks, volumes, worktree directories) older than 24h; leave fresh ones
-   alone — they may belong to a round that is still running. There is no
-   daemon; this sweep at round start is the only cleaner.
-2. Build the combination in one-time worktrees: each repository at its pinned commit,
-   with cross-repo dependencies locally rewritten toward the candidate commit
-   (Go `replace`, npm `file:`, pip editable — per ecosystem).
-3. Run the contract gate first when the touch-point list names contracts; report
-   incompatibilities before provisioning anything.
-4. Bring the environment up from the catalog's test commands and the repository's
-   own dev/compose entry points, under the test-asset repository's
-   parameterisation conventions: every resource named with the
-   `itest-<run-id>` prefix, ports injected via environment variables or
-   randomly allocated and read back — never hard-coded — and the environment
-   definition's concurrency cap respected.
-5. Execute scenarios: inject a request-id at the entry point, require every
-   repository to propagate it, and collect structured logs per repository.
-6. Close out in this order, which is irreversible: commit and push
-   `evidence/<run-id>/` to the test-asset repository → tear the environment
-   down and discard the one-time worktrees → file the task receipt (verdict
-   plus artifact pointers to the committed paths, contentHash-checked).
-   Evidence before teardown, always.
+The Worker does not build, run or tear down anything itself: Worker
+containers have no Docker and no host access, so the round executes as a
+**governed run on the platform's Runner execution plane** from the test-asset
+repository's recipe (`environments/<env>/run_round.py`). The Worker's job is
+the four steps below; the recipe's own discipline — TTL sweep first, every
+resource under the `itest-<run-id>` prefix, ports injected never hard-coded,
+the environment's concurrency cap, evidence written before teardown — is the
+recipe's to keep and the Worker's to check in the receipt.
+
+1. Check the assignment: it names a frozen combination file
+   (`scenarios/<scenario>/combinations/<name>.json`) that the Manager froze
+   into the acceptance basis. No combination named, or a request to "just
+   use trunk", is not an assignment — report it back rather than inventing
+   pins.
+2. Start the governed run through the approved entry
+   (`POST /agent-actions/start-worker-task` when you run as a Bridge member;
+   automatic dispatch when your resource runs the Runner runtime). The task's
+   `test_commands` invoke the recipe; you add nothing to it and touch no
+   business repository.
+3. Wait for the receipt. Read the exit code by the frozen convention
+   (`0` all PASS, `1` any FAIL, `2` BLOCKED) and the artifact pointers to
+   `evidence/<run-id>/` on the candidate branch the platform delivered.
+   Confirm the round's `itest-<run-id>/` root is gone and that the evidence
+   directory has all four sections before you treat the run as finished.
+4. Report raw evidence upward: exit code, per-step results, request-ids of
+   every FAIL, and the evidence pointers. No attribution, no verdict on the
+   release — those belong to the team leader.
 
 ## Failure Handling
 
@@ -63,13 +68,18 @@ out.
 - Scenario is flaky → mark INCONCLUSIVE, rerun once, record both runs.
 - Dependency rewrite is impossible for an ecosystem → report a blocker naming the
    repository and ecosystem; do not approximate with an unpinned dependency.
-- Round is BLOCKED (unbuildable combination, missing pin, dead prerequisite) →
-   still commit `evidence/<run-id>/` with the blocking reason and whatever
-   partial evidence exists, then report BLOCKED. A blocked round with no
-   evidence directory is indistinguishable from a round that never ran.
-- The Worker died mid-round → the task ledger settles that round; the rerun
-   takes a **new** run-id and nothing is back-filled into the dead round's
-   directory.
+- Round is BLOCKED (exit 2: unbuildable combination, missing pin, dead
+   prerequisite) → the recipe still writes `evidence/<run-id>/` with the
+   blocking reason and whatever partial evidence exists, and the platform
+   still delivers it; report BLOCKED with the pointer. A blocked round with no
+   evidence directory is indistinguishable from a round that never ran —
+   if the receipt has no pointer, say so explicitly.
+- The run died mid-round (Runner or Worker) → the task ledger settles that
+   round; the rerun takes a **new** run-id and nothing is back-filled into the
+   dead round's directory. The next round's sweep reclaims its leftovers.
+- The environment is compose-based → not executable in v1 on any plane;
+   report SCENARIO_UNRUNNABLE with the environment name instead of
+   improvising a substitute.
 
 ## Safety
 

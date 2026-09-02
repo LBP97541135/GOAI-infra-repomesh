@@ -44,9 +44,11 @@ influence-scope trade-offs, attribution discipline, and report wording.
    different combination means asking the Manager for a new round. The frozen
    combination list is part of the round's idempotency key.
 3. Dispatch scenario work to test Workers with `integration-run`; contract gates run
-   before environments are provisioned. Dispatch within the environment
-   definition's stated concurrency cap — parallel rounds share hosts, and a
-   cap nobody wrote down is not a cap.
+   before environments are provisioned. The assignment names the frozen
+   combination file in the test-asset repository and the recipe the Runner
+   executes — the Worker starts a governed run, it does not build anything
+   itself. Dispatch within the environment definition's stated concurrency
+   cap — parallel rounds share hosts, and a cap nobody wrote down is not a cap.
 4. For each failure, attribute it using the dependency graph plus the request-id
    chain: exactly one repository, or INCONCLUSIVE with all evidence attached.
 5. Write the report and file return tasks for attributed failures.

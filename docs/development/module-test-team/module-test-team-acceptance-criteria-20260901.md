@@ -87,7 +87,7 @@ AC-D2 因此只断言正向。
 
 | 编号 | 结果 | 证据 | 日期 |
 |---|---|---|---|
-| P-1 | 未执行（W0a 待活体新栈，另行安排） | | |
+| P-1 | **FAIL** → 改道条款生效 | 在运行中的 AgentTeams 控制器（宿主单例 `agentteams-embedded:v1.2.0-rm3`，新栈接的也是它）上经 `POST /api/v1/workers` 亲建 `agentteams-worker-p1-probe`，容器内用其自身 `AGENTTEAMS_AUTH_TOKEN` 探针：`docker`/`docker compose`/socket 全无；HostConfig `Binds=null Privileged=false`；控制器 `/docker/` 直通对 worker 角色 6 项全部 403 `cannot gateway gateway`；管理员 token 下建网络/建卷 403、非 `agentteams-worker-` 前缀 403、bind 403、单容器 create/start/kill/delete 通。探针 worker 已删净。代码依据：`auth/authorizer.go` worker/team-leader 对 `gateway` 资源 default deny；`proxy/proxy.go` 白名单无 networks/volumes。runner 镜像亦无 Docker。详见 spec 修订 A.0 | 2026-09-01 |
 | AC-A1~A6 | **PASS**（双档） | in-memory 档：`tests/api/test_issue_materialize_test_team.py` 6 用例全绿（AC-A1/A2 合测、A3 拆 replay/换 key 两测、A4 双断言、A5 逐字段、另含 S-1 守卫序与去重两条冻结规则）；红验证：撤实现 4 红 2 绿（绿的两条守边界，独立于追加成立）。postgres 档：`tests/integration/test_postgres.py::test_postgres_test_team_supply_chain_converges_by_id` 于一次性 postgres:17（alembic head）全绿。AC-A6 对照组：`tests/api/test_issue_materialize.py` 35 用例全绿 | 2026-09-01 |
 | AC-B1 | 待 W4 | | |
 | AC-B2 | 待 W4 | | |
@@ -97,6 +97,23 @@ AC-D2 因此只断言正向。
 | AC-D1~D4 | **D4 静态半场 PASS**：`tsc -b` 零错、oxlint 受影响 6 文件零告警；replay 夹具浏览器点检过弹窗（两句冻结文案、双选项、选中态回显）、仓库卡档案回显、TeamsPage「测试团队」徽标正反向。**D1~D3 活体断言留 W4**，本波不冒充完成 | 2026-09-01 |
 
 ---
+
+## 改道修订（2026-09-01，P-1 FAIL 后 B/C 组的 runner 形态执行步骤）
+
+依据 spec 修订 A。A/D 组断言与执行方式**不变**。B/C 组的**断言不变**，执行步骤按 runner
+形态重写；每条仍写明断言的是什么事实。
+
+| 编号 | runner 形态的执行步骤 | 断言的事实（不变） |
+|---|---|---|
+| AC-B1 绿轮 | Manager 在测试资产仓上派联调任务，判据含绿组合（`scenarios/multi-currency-joint/combinations/green.json` 的钉死表）；worker 经批准入口发起 governed run；runner 在测试资产仓工作区执行 `run_round.py` | 退出码 0；工作区 `evidence/<run-id>/` 四节齐全且经平台交付推成 `repomesh/<plan8>/<repo8>` 候选分支；回执 `verified=true`、artifacts 指针指向该分支路径且 contentHash 对账；工作区内 `itest-<run-id>/` 根已拆净 |
+| AC-B2 红轮 | 同上，判据含红组合（`red.json`） | 退出码 1；`round.md` 中 `joint-multi-currency` 为 FAIL，摘录含失败测试名 + `AssertionError: 199.99 != 200.0` + 三条 `src` 路径行（证明装配的正是钉死的三处检出）；request-id `<run-id>/multi-currency-joint/joint-multi-currency` 在证据行；三个 unit 步 PASS（对照组成立）；队长的归因（生产者）引用依赖图与对照组而非 traceback（traceback 停在联调测试文件，本机干跑已核实）；回执 `verified=false`；**判据文件与任务体未动** |
+| AC-B3 派工链 | 不变 | 两轮台账与路由不变 |
+| AC-C1 阻塞轮 | 判据组合钉一个不存在的 commit | 退出码 2；`evidence/<run-id>/` **照样成形**（原因 = 该仓 checkout 失败的 git 原话 + 已跑部分）；任务 BLOCKED |
+| AC-C2 清扫双向 | 在 runner 工作区根（该仓 worktree 目录）伪造两份 `itest-*` 目录，一份 mtime 做旧 >24h、一份新鲜；再起一轮 | `round.md` 第 3 节的清扫输出：旧的 `removing`、新鲜的 `keeping`；文件系统核对一致 |
+
+**新增前置**（替代 P-1 的位置）：runner 运行时的 worker 成员在位并能接单（`start-worker-task`
+202 或自动投递），这是既有 runner 轨的能力，不是本线新验。**v1 局限**（已接受，spec A.4）：
+B/C 组只对源组装型环境成立；compose 型环境在两条执行面上都不可执行。
 
 ## 备注
 

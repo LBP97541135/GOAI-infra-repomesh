@@ -199,3 +199,76 @@ BLOCKED 轮同样提交（原因 + 已跑部分）；worker 暴毙轮以任务�
 
 **冻结**：S-1 行为规格全部、S-2b 文案两句与错误态、S-3 各「冻结」小节、S-5 断言纪律。
 **不冻结**（施工自由度）：S-2 组件命名与样式、S-3 目录内层格式与文件名、测试夹具组织。
+
+---
+
+## 修订 A（2026-09-01）：P-1 FAIL，改道条款生效 —— 联调执行下 runner 轨
+
+plan 的改道条款与设计稿 §5.2 预案在此生效。本节是留痕：**S-1/S-2/S-5 一字不改**
+（A/D 组交付物原样有效）；S-3、S-4 中「worker 自建自拆」的执行者假设被下面的条文替换，
+其余冻结条文（前缀、端口、并发上限、证据 schema、TTL、收尾顺序）**继续有效**——它们约束
+的是环境定义与证据，不管由谁执行。
+
+### A.0 实测事实（P-1 的现象，改道依据）
+
+在运行中的 AgentTeams 控制器（`agentteams-embedded:v1.2.0-rm3`，宿主单例，任何新栈接的
+都是它）上，用控制器**亲自建出的** worker 容器（`POST /api/v1/workers` → 
+`agentteams-worker-p1-probe`）在容器内用它**自己的** `AGENTTEAMS_AUTH_TOKEN` 实测：
+
+| 项 | 结果 |
+|---|---|
+| 容器 HostConfig | `Binds=null Privileged=false CapAdd=null`（controller `backend/docker.go` 只按 `req.Volumes` 挂卷，worker 创建路径不传） |
+| 镜像内 `docker` / `docker compose` / `/var/run/docker.sock` | 全无（`agentteams-copaw-worker:v1.2.0`） |
+| 控制器 `/docker/` 受限直通（embedded 模式，`server/http.go`） | worker 角色 **403 `cannot gateway gateway`**（`auth/authorizer.go`：worker 与 team-leader 对 `gateway` 资源均落 `default: deny`） |
+| 同一直通用管理员 token | 建网络/建卷 **403**（`proxy.go` 白名单无 `/networks/create`、`/volumes/create`）；容器名强制 `agentteams-worker-` 前缀；bind mount 403；单容器 create/start/kill/delete 通 |
+
+结论：worker 容器**不可能** `compose up`，也无法经控制器代建；`itest-<run-id>` 命名与代理的强制前缀
+还直接冲突。P-1 = FAIL。runner 镜像（`components/repomesh-runner/Dockerfile`：`python:3.13-slim`
++ git）**同样没有 Docker**。
+
+### A.1 执行者改为 runner 执行面（替换 S-3「worker 自建自拆」的隐含前提）
+
+- 联调轮的执行体是**平台 Runner 执行面上的一次受治理运行**（governed run）：平台按既有
+  `StartAssignedWorkerTask → DispatchWorkerTask` 链，在 `.repomesh-workspaces/w/<run>/<repo>`
+  为**测试资产仓**准备 git worktree，投递 `RunnerTask`，runner 在该工作区执行
+  `instruction` 与 `test_commands`。
+- `RunnerTask` 是**单仓信封**（`repository` + `workspace` + `instruction` + `test_commands`），
+  没有多仓组合的一等字段（`src/repomesh_runner/contracts.py:127`）。因此**组合由测试资产仓的
+  配方脚本在工作区内自行检出**：`environments/<env>/run_round.py` 读组合文件、把各仓按钉死
+  commit 检出到工作区内 `itest-<run-id>/`（`.gitignore` 排除）、跑场景、写证据、拆 `itest-` 根。
+- worker 的 `integration-run` 技能从「自建自拆」改为「核对判据 → 经批准入口发起 governed run
+  → 守候回执 → 上报」（S-4 修订见 A.3）。批准入口 = `POST /agent-actions/start-worker-task`
+  （Bridge 成员）或平台派工时的自动投递（runner 运行时成员）；两者都走同一条
+  `worker_execution.py` 链。
+
+### A.2 证据与收尾的重新映射（S-3「证据目录 schema」与「收尾顺序」在 runner 形态下的落点）
+
+- **摘录由配方脚本写**：runner 的 `_run_test_commands` 只回传 `command + exit_code`
+  （stdout/stderr 均 DEVNULL，`executor.py:482-505`）。最小证据集四元组因此全部由
+  `run_round.py` 写进工作区的 `evidence/<run-id>/`，64KB 上限与截断注明由脚本保证。
+- **入仓由平台交付写**：脚本不 push。工作区里新增的 `evidence/<run-id>/` 经 runner 的
+  `changed_files` 与既有交付链（`scm/plan_delivery.py`）推成测试资产仓的候选分支
+  `repomesh/<plan8>/<repo8>`——即证据实体由平台侧写入，正是设计稿 §7 表中 v3 才想要的形态，
+  改道把它提前了。回执的 artifacts 指针指向该分支上的 `evidence/<run-id>/` 路径。
+- **收尾顺序保持不可逆**，只是主语换了：脚本写完证据 →（脚本）拆 `itest-` 根 → runner 回传
+  退出码 → 平台交付推分支 → 任务回执。证据在拆除之前落盘这一条没有变。
+- **退出码约定（冻结）**：`0` = 全 PASS；`1` = 有 FAIL/INCONCLUSIVE；`2` = BLOCKED
+  （组合不可建等），BLOCKED 同样写出证据目录（含原因与已跑部分）。
+- **TTL 清扫**：脚本开工第一步调用 `environments/sweep-itest.sh` 清同工作区根下的 `itest-*`
+  残留；judge 仍是 24h 时间戳、新鲜不动。docker 类残留在 v1 不会产生（见 A.4）。
+
+### A.3 S-4 技能文档修订的对应调整
+
+`integration-run` 的 Workflow 改为四步（核对判据含冻结组合 → 经批准入口发起 governed run →
+守候回执与证据指针 → 上报原始证据不下结论）；S-4 条 1（端口参数化）、条 2（TTL）、条 3
+（证据入仓与收尾）、条 4（BLOCKED/暴毙）、条 5（64KB/禁全量日志）**全部保留**，但主语从
+「worker 亲手做」改为「配方脚本做、worker 核对回执里有没有」。`cross-repo-test` 条 6、条 7 不变。
+
+### A.4 v1 已知局限（如实声明，不藏）
+
+- **v1 只能执行源组装型环境**（python + git 即可组装的联调，如 `e2e-fixture-joint`）。
+  基于 compose 的环境定义可以按 S-3 约定**写**进 `environments/`，但在两条执行面上都**跑不了**
+  ——直到出现一个带 Docker 能力的执行面（AgentTeams 侧放开代理授权且允许建网络/卷，或
+  runner 镜像挂 socket，二者都是平台外/上游决策，本线不做）。
+- `agentteams_skills` 覆盖表、S-1 追加、S-2 三处对改道**零感知**：测试团队依旧是贴档仓上的
+  仓库团队，只是它的 worker 干活的方式变了。
