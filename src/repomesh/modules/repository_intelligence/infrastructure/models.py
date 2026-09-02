@@ -74,6 +74,7 @@ class PlanSnapshotRecord(Base):
     graph_edges: Mapped[list[dict[str, Any]]] = mapped_column(JSON_DOCUMENT, default=list)
     execution_plan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
     requirement_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     integration_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
     discovery: Mapped[dict[str, Any] | None] = mapped_column(
         JSON_DOCUMENT, nullable=True, default=None

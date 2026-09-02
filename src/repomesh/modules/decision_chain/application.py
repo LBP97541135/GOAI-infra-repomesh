@@ -35,9 +35,25 @@ from repomesh.modules.decision_chain.ports import (
     EmbeddingLookup,
     RequirementReader,
 )
+from repomesh.shared.domain import DomainError
 from repomesh.shared.events import EventEnvelope
 
 _logger = logging.getLogger(__name__)
+
+
+class DecisionChainOrganizationUnknown(DomainError):
+    """§6.1: no organization pinned and the chain proves no ownership.
+
+    ``organization_id`` is mandatory on every decision sheet (§3.1: the
+    projection carries L1 itself, E2) and on the §6.1 trace output. When the
+    caller does not pin one and neither the chain nodes nor the requirement
+    origin can resolve it, the trace cannot prove ownership — it fails rather
+    than fabricate an org it cannot show (red line 7).
+    """
+
+    def __init__(self, project_id: UUID) -> None:
+        super().__init__(f"organization unresolved for project {project_id}")
+        self.project_id = project_id
 
 
 class DecisionChainProjectionService:
@@ -186,14 +202,21 @@ class DecisionChainTraceService:
         self,
         store: DecisionChainStore,
         requirement_reader: RequirementReader,
+        organization_resolver=None,
     ) -> None:
+        """``organization_resolver`` resolves a project's org when the caller
+        does not pin one (audit persona "input a requirement id" may not know
+        which org owns it). It is consulted only after the chain nodes have
+        already proven an org — node rows carry it themselves (E2).
+        """
         self._store = store
         self._requirement_reader = requirement_reader
+        self._organization_resolver = organization_resolver
 
     async def trace(
         self,
         *,
-        organization_id: UUID,
+        organization_id: UUID | None,
         project_id: UUID,
     ) -> DecisionChainView:
         nodes: DecisionChainNodes = await self._store.trace(
@@ -201,9 +224,19 @@ class DecisionChainTraceService:
             project_id=project_id,
         )
         requirement = await self._requirement_reader.get_requirement(project_id)
+        resolved_org = organization_id
+        if resolved_org is None:
+            resolved_org = next(
+                (node.organization_id for node in nodes.nodes if node.organization_id),
+                None,
+            )
+            if resolved_org is None and self._organization_resolver is not None:
+                resolved_org = await self._organization_resolver(project_id)
+        if resolved_org is None:
+            raise DecisionChainOrganizationUnknown(project_id)
         return DecisionChainView(
             project_id=project_id,
-            organization_id=organization_id,
+            organization_id=resolved_org,
             requirement=requirement,
             nodes=nodes.nodes,
             legacy_gaps=nodes.legacy_gaps,
@@ -331,14 +364,17 @@ class DecisionEmbeddingService:
 class DecisionChainSemanticSearchService:
     """L3 read path: cosine Top-K over the project-collapsed embeddings.
 
-    The aggregation rule is the same as structural similarity (Phase 4): a
-    project is the unit, each other project contributes its newest decision
-    sheet, ordered by cosine closeness to the query vector. An explicit
-    repository scope (the classification pipeline's candidate slugs) acts as
-    a hard filter first — the hybrid mode — so a requirement is not offered a
-    semantically close decision on repositories it never touched. The corpus
-    is small, so ranking runs in Python over the store's organization slice —
-    the same portable, dialect-free pattern ``find_similar_structural`` uses.
+    The unit of retrieval is the requirement (``project_id``), not the sheet:
+    every project contributes the sheet whose embedding is closest to the
+    query — the match evidence the audit surface headlines — with ties broken
+    to the newest sheet. Ranking a project by its newest sheet alone would let
+    a semantically empty PR sheet bury a requirement whose classification
+    sheet matches the probe. An explicit repository scope (the classification
+    pipeline's candidate slugs) acts as a hard filter first — the hybrid mode
+    — so a requirement is not offered a semantically close decision on
+    repositories it never touched. The corpus is small, so ranking runs in
+    Python over the store's organization slice — the same portable,
+    dialect-free pattern ``find_similar_structural`` uses.
     """
 
     def __init__(self, store: DecisionEmbeddingStore) -> None:
@@ -347,8 +383,8 @@ class DecisionChainSemanticSearchService:
     async def find_similar(
         self,
         *,
-        organization_id: UUID,
-        project_id: UUID,
+        organization_id: UUID | None = None,
+        project_id: UUID | None = None,
         query_embedding: list[float],
         top_k: int = 5,
         same_repository_ids: tuple[str, ...] = (),
@@ -357,22 +393,31 @@ class DecisionChainSemanticSearchService:
             organization_id=organization_id
         )
         scope = set(same_repository_ids)
-        latest: dict[UUID, EmbeddedDecision] = {}
+        # Per project keep the best-matching sheet (cosine), ties to the
+        # newest — the requirement is the retrieval unit, the sheet is only
+        # the evidence of why it matched.
+        best: dict[UUID, tuple[float, EmbeddedDecision]] = {}
         for hit in candidates:
-            if hit.node.project_id == project_id:
+            if project_id is not None and hit.node.project_id == project_id:
                 continue
             if scope and not (scope & set(hit.node.affected_repository_ids)):
                 continue
-            previous = latest.get(hit.node.project_id)
+            score = _cosine(query_embedding, hit.embedding)
+            previous = best.get(hit.node.project_id)
             if previous is None or (
+                score,
                 hit.node.business_time,
                 hit.node.version,
-            ) > (previous.node.business_time, previous.node.version):
-                latest[hit.node.project_id] = hit
+            ) > (
+                previous[0],
+                previous[1].node.business_time,
+                previous[1].node.version,
+            ):
+                best[hit.node.project_id] = (score, hit)
         scored = sorted(
             (
                 SemanticDecisionHit(
-                    score=_cosine(query_embedding, hit.embedding),
+                    score=score,
                     decision=DecisionChainSummaryView(
                         decision_id=hit.node.decision_id,
                         project_id=hit.node.project_id,
@@ -387,7 +432,7 @@ class DecisionChainSemanticSearchService:
                         business_time=hit.node.business_time,
                     ),
                 )
-                for hit in latest.values()
+                for score, hit in best.values()
             ),
             key=lambda result: result.score,
             reverse=True,

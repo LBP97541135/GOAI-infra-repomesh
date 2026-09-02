@@ -68,21 +68,23 @@ class PostgresDecisionEmbeddingStore:
         return [_hydrate(record) for record in records]
 
     async def embedded_nodes(
-        self, *, organization_id: UUID
+        self, *, organization_id: UUID | None
     ) -> list[EmbeddedDecision]:
-        """Every vectorized decision sheet of one organization (read path)."""
+        """Every vectorized decision sheet (``organization_id`` None = all)."""
         async with self._database.transaction() as session:
-            rows = (
-                await session.execute(
-                    select(DecisionNodeRecord, DecisionEmbeddingRecord.embedding)
-                    .join(
-                        DecisionEmbeddingRecord,
-                        DecisionEmbeddingRecord.decision_id
-                        == DecisionNodeRecord.decision_id,
-                    )
-                    .where(DecisionNodeRecord.organization_id == organization_id)
+            query = (
+                select(DecisionNodeRecord, DecisionEmbeddingRecord.embedding)
+                .join(
+                    DecisionEmbeddingRecord,
+                    DecisionEmbeddingRecord.decision_id
+                    == DecisionNodeRecord.decision_id,
                 )
-            ).all()
+            )
+            if organization_id is not None:
+                query = query.where(
+                    DecisionNodeRecord.organization_id == organization_id
+                )
+            rows = (await session.execute(query)).all()
         return [
             EmbeddedDecision(
                 node=_hydrate(record),

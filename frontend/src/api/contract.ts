@@ -58,6 +58,8 @@ export interface IssueListItemView {
   organization_id: string | null;
   title: string;
   requirement_text: string | null;
+  /** 需求文档的文件名（上传解析时记录；未上传/旧数据为 null） */
+  document_filename: string | null;
   /** §2.1 读模型派生，前端禁止另行映射 */
   state: "open" | "closed";
   /** §2.2 读模型派生，八相枚举，issue 层不得新增第 9 相 */
@@ -105,6 +107,8 @@ export interface IssueIntakeRequest {
   created_by_agent_id: string;
   idempotency_key: string;
   organization_id?: string;
+  /** 上传的需求文档文件名（用户可见；未上传文档时省略） */
+  document_filename?: string;
 }
 
 /** 需求文档解析结果（POST /issues/parse-document）：上传真实文件后取回的文本。
@@ -1679,4 +1683,118 @@ export interface PlanSnapshotView {
   /** `graph_assisted` = 图里有扫描出的边参与；`llm_only` = 全靠模型给。
    *  null = 老快照没记这一列。 */
   integration_method: string | null;
+}
+
+/* ── 历史决策（decision_chain · /api/v1/decision-chains）───────────────────
+ * 唯一事实源：src/repomesh/modules/decision_chain/api/models.py —— 后端加字段
+ * 必须同步改这里（observability 同款约定）。形状由决策链投影器产出：每步一个
+ * 决策单（node），payload_summary 只带指针级摘要，完整事件留在 audit_events。 */
+
+/** §4.1 决策链五步。链内数组即 chain_order；同 (project, step) 重做 version 递增。 */
+export type DecisionStep = "classification" | "confirmation" | "integration" | "task" | "pr";
+
+/** §4.1 决策单状态。confirmation 由 approval.state 映射（approved→confirmed 等）；
+ *  其余步落第一判词 proposed。merged/closed 出现在后续裁决扩展。 */
+export type DecisionStatus =
+  | "proposed"
+  | "adjusted"
+  | "confirmed"
+  | "rejected"
+  | "changes_requested"
+  | "blocked"
+  | "superseded"
+  | "merged"
+  | "closed";
+
+/** §4.1 节点来源：event=事件源投影 / backfill=补投影 / legacy=历史数据。 */
+export type DecisionNodeSource = "event" | "backfill" | "legacy";
+
+/** §4.1 actor：llm | human | service；agent_id 对 llm/human 存在。 */
+export interface DecisionNodeActorView {
+  type: string;
+  agent_id: string | null;
+}
+
+/** §6.1 链根：需求文本 + 持有它的快照。 */
+export interface DecisionRequirementView {
+  text: string;
+  plan_version: number;
+  snapshot_id: string;
+}
+
+/** §4.1 一个已投影的决策单。 */
+export interface DecisionNodeView {
+  decision_id: string;
+  event_id: string;
+  project_id: string;
+  organization_id: string;
+  step: DecisionStep;
+  version: number;
+  status: DecisionStatus;
+  actor: DecisionNodeActorView;
+  /** 链上父决策（链根的父为 null） */
+  upstream_ref: string | null;
+  /** §6.2 result/process 指针分账（audit_events / Room 消息） */
+  evidence_refs: Record<string, string[]>;
+  payload_summary: Record<string, unknown>;
+  affected_repository_ids: string[];
+  business_time: string;
+  recorded_at: string;
+  source: DecisionNodeSource;
+  event_type: string;
+}
+
+/** §6.1 完整追溯输出（审计面消费）。 */
+export interface DecisionChainView {
+  project_id: string;
+  organization_id: string;
+  requirement: DecisionRequirementView | null;
+  nodes: DecisionNodeView[];
+  /** §7 中段缺口：链上有后步节点却缺前步时列出缺失步（缺尾不是缺口） */
+  legacy_gaps: string[];
+}
+
+/** §6.5 一条相似历史命中（需求级卡片）：检索单位是需求（project_id），
+ *  `requirement_text` 是该需求根句（无快照时为 null，卡头回退决策单行）；
+ *  卡片次行展示命中依据——与查询最相似的决策单。`score` 为 L3 余弦相似度，
+ *  仅语义命中时有值。 */
+export interface SimilarDecisionView {
+  decision_id: string;
+  project_id: string;
+  organization_id: string;
+  step: DecisionStep;
+  version: number;
+  status: DecisionStatus;
+  affected_repository_ids: string[];
+  payload_summary: Record<string, unknown>;
+  business_time: string;
+  score: number | null;
+  requirement_text: string | null;
+}
+
+/** §6.5 相似结果：命中最新优先、top_k 截断。空 hits 是合法 200（还没有相似历史
+ *  是诚实数据）；`mode` 报告实际服务的方式——semantic 缺 embedding 端点时后端
+ *  回退 structural，mode 如实标注。 */
+export interface SimilarDecisionsView {
+  project_id: string;
+  organization_id: string;
+  mode: string;
+  hits: SimilarDecisionView[];
+}
+
+/** §6.5 扩展：跨组织语义检索（按文本搜历史决策）。与按项目锚定的
+ *  `SimilarDecisionsView` 不同，这是无锚入口——跨组织按需求检索：每个项目
+ *  贡献与其查询最相似的决策单作为命中依据（除非钉死一个 org）。
+ *  **无 structural 回退**：缺 embedding 端点 503、embedding 服务错误 502，
+ *  诚实配置失败。 */
+export interface SemanticSearchView {
+  organization_id: string | null;
+  query_text: string;
+  mode: "semantic";
+  hits: SimilarDecisionView[];
+}
+
+/** L3 批量向量化回执。无 embedding 端点时服务端返回 {refreshed: 0}（no-op 不是错误）。 */
+export interface EmbeddingRefreshView {
+  refreshed: number;
 }

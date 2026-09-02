@@ -17,11 +17,13 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 
 from repomesh.modules.decision_chain import SemanticDecisionHit
+from repomesh.modules.decision_chain.application import DecisionChainOrganizationUnknown
 from repomesh.settings import get_settings
 
 from .models import (
     DecisionChainView,
     EmbeddingRefreshView,
+    SemanticSearchView,
     SimilarDecisionsView,
     SimilarDecisionView,
 )
@@ -48,28 +50,86 @@ def _authorized_container(request: Request):
     return request.app.state.container
 
 
+@router.get("/semantic-search", response_model=SemanticSearchView)
+async def semantic_search(
+    request: Request,
+    query_text: str,
+    organization_id: UUID | None = None,
+    top_k: int = 5,
+) -> SemanticSearchView:
+    """Corpus-wide semantic probe: "search historical decisions by text".
+
+    The unanchored sibling of ``/{project_id}/similar``: embed ``query_text``
+    and rank every other project by its best-matching decision sheet (the
+    requirement is the retrieval unit; the sheet is the evidence line shown
+    under it), across organizations unless one is pinned. No structural
+    fallback exists here — without a configured embedding endpoint this is a
+    503 (honest configuration failure), and an embedding error surfaces as
+    502 rather than silently returning structural results the caller did not
+    ask for.
+    """
+
+    container = _authorized_container(request)
+    client = container.embedding_client()
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="embedding endpoint is not configured (REPOMESH_EMBEDDING_BASE_URL)",
+        )
+    try:
+        vectors = await client.embed([query_text])
+    except Exception:
+        _logger.exception("semantic search embedding failed")
+        raise HTTPException(status_code=502, detail="embedding service error") from None
+    hits = await container.decision_chain_semantic_search_service().find_similar(
+        organization_id=organization_id,
+        project_id=None,
+        query_embedding=vectors[0],
+        top_k=top_k,
+    )
+    views = [_semantic_sheet(hit) for hit in hits]
+    await _attach_requirement_text(container, views)
+    return SemanticSearchView(
+        organization_id=organization_id,
+        query_text=query_text,
+        mode="semantic",
+        hits=views,
+    )
+
+
 @router.get("/{project_id}", response_model=DecisionChainView)
 async def trace_decision_chain(
     project_id: UUID,
     request: Request,
-    organization_id: UUID,
+    organization_id: UUID | None = None,
 ) -> DecisionChainView:
     """Contract decision-chain-v0.1 §6.1: the complete trace for one project.
 
     The audit walkthrough's single entry point: given a requirement id
-    (``project_id``) and its L1 namespace, return the ordered chain with
-    evidence pointers and the requirement root. 404 only when the org-scoped
-    trace names nothing at all (no nodes and no requirement); an empty chain
-    on a project that exists is a valid 200 — the projector may not have
-    drained yet, and the audit surface must be able to show "no evidence yet"
-    rather than pretend the project does not exist.
+    (``project_id``), return the ordered chain with evidence pointers and the
+    requirement root. ``organization_id`` is the L1 namespace when known;
+    omitted, the trace searches across organizations — the audit persona
+    "input a requirement id" does not always know which org owns it. 404 only
+    when the trace names nothing at all (no nodes and no requirement); an
+    empty chain on a project that exists is a valid 200 — the projector may
+    not have drained yet, and the audit surface must be able to show "no
+    evidence yet" rather than pretend the project does not exist.
     """
 
     container = _authorized_container(request)
-    view = await container.decision_chain_trace_service().trace(
-        organization_id=organization_id,
-        project_id=project_id,
-    )
+    try:
+        view = await container.decision_chain_trace_service().trace(
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+    except DecisionChainOrganizationUnknown as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "no decision chain found for this project"
+                f" (ownership unresolved: {exc.project_id})"
+            ),
+        ) from exc
     if not view.nodes and view.requirement is None:
         raise HTTPException(
             status_code=404,
@@ -121,11 +181,13 @@ async def similar_decisions(
         project_id=project_id,
         top_k=top_k,
     )
+    views = [SimilarDecisionView.model_validate(hit) for hit in hits]
+    await _attach_requirement_text(container, views)
     return SimilarDecisionsView(
         project_id=project_id,
         organization_id=organization_id,
         mode="structural",
-        hits=hits,
+        hits=views,
     )
 
 
@@ -158,12 +220,45 @@ async def _semantic_hits(
         return None
     if not hits:
         return None
+    views = [_semantic_sheet(hit) for hit in hits]
+    await _attach_requirement_text(container, views)
     return SimilarDecisionsView(
         project_id=project_id,
         organization_id=organization_id,
         mode="semantic",
-        hits=[_semantic_sheet(hit) for hit in hits],
+        hits=views,
     )
+
+
+async def _attach_requirement_text(
+    container: Any, views: list[SimilarDecisionView]
+) -> None:
+    """Headline each hit card with the project's requirement root sentence.
+
+    Hit lists are requirement-level surfaces: the card leads with what the
+    requirement *was* and keeps the matched sheet as the evidence line. The
+    reader is the same RequirementReader port the trace uses (composition
+    root wires PlanSnapshotStore); a project with no snapshot is an honest
+    ``None`` — the card falls back to the sheet header rather than guessing
+    a title from payload fragments. A reader failure degrades one card's
+    headline, never the whole search.
+    """
+
+    reader = container.decision_chain_requirement_reader()
+    cache: dict[UUID, str | None] = {}
+    for view in views:
+        if view.project_id not in cache:
+            try:
+                requirement = await reader.get_requirement(view.project_id)
+                cache[view.project_id] = (
+                    requirement.text if requirement is not None else None
+                )
+            except Exception:
+                _logger.exception(
+                    "requirement text lookup failed for %s", view.project_id
+                )
+                cache[view.project_id] = None
+        view.requirement_text = cache[view.project_id]
 
 
 def _semantic_sheet(hit: SemanticDecisionHit) -> SimilarDecisionView:

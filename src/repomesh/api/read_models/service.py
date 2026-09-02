@@ -799,6 +799,9 @@ class DeliveryReadModelService:
                 earliest.requirement_text if earliest is not None else None, project_id
             ),
             "requirement_text": (earliest.requirement_text if earliest is not None else None),
+            "document_filename": (
+                earliest.document_filename if earliest is not None else None
+            ),
             "state": state.value,
             "phase": phase.value,
             "phase_note": phase_note,

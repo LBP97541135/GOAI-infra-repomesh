@@ -7,6 +7,7 @@ import type {
   ConsoleRepoScanRequest,
   ConsoleRepositoriesResponse,
   ConsoleTeamsResponse,
+  DecisionChainView,
   DecisionsResponse,
   DeliveryAggregate,
   DeliveryEventsPage,
@@ -18,6 +19,7 @@ import type {
   DiscoveryStepRequest,
   DiscoveryTaskView,
   DiscoveryWriteReceipt,
+  EmbeddingRefreshView,
   AlertEventsResponse,
   AlertRule,
   AlertRulePayload,
@@ -49,6 +51,8 @@ import type {
   RoundRedispatchReceipt,
   RoundRedispatchRequest,
   ScanTaskView,
+  SemanticSearchView,
+  SimilarDecisionsView,
   TraceEventsResponse,
   TraceIssueGroupsResponse,
   TraceSessionsResponse,
@@ -505,5 +509,63 @@ export function createApiClient(config: ApiClientConfig) {
         `/observe/logs${q ? `?${q}` : ""}`,
       );
     },
+
+    /* ── 历史决策（decision_chain · /api/v1/decision-chains）────────────── */
+
+    /** §6.1 完整决策链追溯。organization_id 是 L1 命名空间，**可省略**——
+     *  审计人员按需求 id 追溯时不一定知道归属组织，省略即跨组织搜索。
+     *  未知项目（无节点且无需求）→ 404。要求 Bearer agent_action_token。 */
+    getDecisionChain: (projectId: string, organizationId?: string | null) => {
+      const q = organizationId ? `?organization_id=${encodeURIComponent(organizationId)}` : "";
+      return request<DecisionChainView>(
+        config,
+        "GET",
+        `/decision-chains/${encodeURIComponent(projectId)}${q}`,
+      );
+    },
+
+    /** §6.5 相似历史：structural（同仓 + 最近，默认）/ semantic（余弦）。
+     *  semantic 缺 embedding 端点时后端回退 structural，`mode` 字段如实报告
+     *  实际服务的方式；空 hits 是合法 200（还没有相似历史）。 */
+    getSimilarDecisions: (
+      projectId: string,
+      organizationId?: string | null,
+      opts?: { mode?: "structural" | "semantic"; queryText?: string; topK?: number },
+    ) => {
+      const params = new URLSearchParams();
+      if (organizationId) params.set("organization_id", organizationId);
+      if (opts?.mode) params.set("mode", opts.mode);
+      if (opts?.queryText) params.set("query_text", opts.queryText);
+      if (opts?.topK !== undefined) params.set("top_k", String(opts.topK));
+      const q = params.toString();
+      return request<SimilarDecisionsView>(
+        config,
+        "GET",
+        `/decision-chains/${encodeURIComponent(projectId)}/similar${q ? `?${q}` : ""}`,
+      );
+    },
+
+    /** §6.5 扩展：跨组织语义检索（按文本搜历史决策）。**无 structural 回退**：
+     *  缺 embedding 端点 503、embedding 服务错误 502——诚实配置失败，不拿
+     *  结构相似冒充语义命中。 */
+    semanticSearchDecisions: (
+      queryText: string,
+      opts?: { organizationId?: string | null; topK?: number },
+    ) => {
+      const params = new URLSearchParams({ query_text: queryText });
+      if (opts?.organizationId) params.set("organization_id", opts.organizationId);
+      if (opts?.topK !== undefined) params.set("top_k", String(opts.topK));
+      const q = params.toString();
+      return request<SemanticSearchView>(
+        config,
+        "GET",
+        `/decision-chains/semantic-search${q ? `?${q}` : ""}`,
+      );
+    },
+
+    /** L3 管理端点：一次批量向量化全部存量决策单。无 embedding 端点 →
+     *  {refreshed: 0}（no-op，不是错误）。要求 Bearer agent_action_token。 */
+    refreshDecisionEmbeddings: () =>
+      request<EmbeddingRefreshView>(config, "POST", `/decision-chains/embeddings/refresh`),
   };
 }

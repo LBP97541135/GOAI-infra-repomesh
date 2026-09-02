@@ -140,6 +140,7 @@ class PlanSnapshotStore:
         created_by_agent_id: UUID | None = None,
         execution_plan_id: UUID | None = None,
         requirement_text: str | None = None,
+        document_filename: str | None = None,
         integration_method: str | None = None,
         discovery: dict | None = None,
     ) -> PlanSnapshotRecord:
@@ -159,6 +160,7 @@ class PlanSnapshotStore:
             graph_edges=graph_edges,
             execution_plan_id=execution_plan_id,
             requirement_text=requirement_text,
+            document_filename=document_filename,
             integration_method=integration_method,
             discovery=discovery,
         )

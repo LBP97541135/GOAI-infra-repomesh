@@ -7,6 +7,9 @@
     # platform api keeps it as a dependency under the platform profile.
     profiles: ["dev", "platform"]
     image: postgres:17-alpine
+    # Crash resilience: restart the database automatically after a host/Docker
+    # restart or an unexpected exit instead of leaving the platform down.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: repomesh
       POSTGRES_USER: repomesh
@@ -38,11 +41,17 @@
       REPOMESH_DATABASE_URL: postgresql+asyncpg://repomesh:repomesh@postgres:5432/repomesh
       REPOMESH_LOCAL_SESSION_TTL_SECONDS: ${REPOMESH_LOCAL_SESSION_TTL_SECONDS:-28800}
       REPOMESH_MODEL_API_KEY: ${REPOMESH_MODEL_API_KEY:-}
-      REPOMESH_MODEL_BASE_URL: ${REPOMESH_MODEL_BASE_URL:-https://api.deepseek.com/v1}
-      REPOMESH_MODEL: ${REPOMESH_MODEL:-deepseek-chat}
+      REPOMESH_MODEL_BASE_URL: ${REPOMESH_MODEL_BASE_URL:-https://www.vibeapi.cn/v1}
+      REPOMESH_MODEL: ${REPOMESH_MODEL:-gpt-5.6-luna}
       REPOMESH_DEEPSEEK_API_KEY: ${REPOMESH_DEEPSEEK_API_KEY:-${REPOMESH_MODEL_API_KEY:-}}
-      REPOMESH_DEEPSEEK_BASE_URL: ${REPOMESH_DEEPSEEK_BASE_URL:-${REPOMESH_MODEL_BASE_URL:-https://api.deepseek.com/v1}}
-      REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-deepseek-chat}}
+      REPOMESH_DEEPSEEK_BASE_URL: ${REPOMESH_DEEPSEEK_BASE_URL:-${REPOMESH_MODEL_BASE_URL:-https://www.vibeapi.cn/v1}}
+      REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-gpt-5.6-luna}}
+      # L3 semantic retrieval（decision-chain RAG）：从宿主机 .env 透传。
+      # 留空 = 后端如实 503/structural 回退，语义检索不可用。
+      REPOMESH_EMBEDDING_BASE_URL: ${REPOMESH_EMBEDDING_BASE_URL:-}
+      REPOMESH_EMBEDDING_API_KEY: ${REPOMESH_EMBEDDING_API_KEY:-}
+      REPOMESH_EMBEDDING_MODEL: ${REPOMESH_EMBEDDING_MODEL:-text-embedding-3-small}
+      REPOMESH_EMBEDDING_TIMEOUT_SECONDS: ${REPOMESH_EMBEDDING_TIMEOUT_SECONDS:-30}
       REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
       REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_AGENT_ACTION_TOKEN:-}
       # 非空才会让 principal_registration.with_task_control 把 repomesh-task-control
@@ -165,6 +174,8 @@
   console-postgres:
     profiles: ["console"]
     image: postgres:17-alpine
+    # Same crash resilience as the platform postgres above.
+    restart: unless-stopped
     environment:
       POSTGRES_DB: repomesh
       POSTGRES_USER: repomesh

@@ -883,10 +883,35 @@ class ApplicationContainer:
     def decision_chain_trace_service(self):
         from repomesh.modules.decision_chain import DecisionChainTraceService
 
+        read_models = self.delivery_read_model_service()
+
+        async def _resolve_organization(project_id):
+            """§6.1 audit persona: caller does not know the org. Resolve the
+            project's owning org from the issue read model (L1 projection),
+            never fabricate it — ``issue_summary`` returns None when the
+            project has no provable issue origin.
+            """
+            summary = await read_models.issue_summary(project_id)
+            if summary is None:
+                return None
+            return summary.get("organization_id")
+
         return DecisionChainTraceService(
             self.decision_chain_store(),
             self.plan_snapshot_requirement_reader(),
+            organization_resolver=_resolve_organization,
         )
+
+    def decision_chain_requirement_reader(self):
+        """§6.1 RequirementReader port, shared by trace and §6.5 hit cards.
+
+        The similarity/semantic hit lists are requirement-level surfaces:
+        each card headlines the project's requirement root text, so both the
+        trace and the hit enrichment read the same adapter (PlanSnapshotStore)
+        — wired here, never imported by the module itself.
+        """
+
+        return self.plan_snapshot_requirement_reader()
 
     @cached_service
     def decision_chain_similarity_service(self):
@@ -1172,6 +1197,7 @@ class ApplicationContainer:
                         task_dag=tuple(record.task_dag),
                         execution_plan_id=record.execution_plan_id,
                         created_by_agent_id=record.created_by_agent_id,
+                        document_filename=record.document_filename,
                         contracts=tuple(record.contracts or ()),
                         discovery=record.discovery,
                     )

@@ -143,6 +143,8 @@ function HeaderBlock({ detail }: { detail: IssueDetailView }) {
  *   2. 它只在卡点非空时才出现——而活体库 14 个项目里 12 个卡点为空，于是这一行
  *      恒不渲染，「这个项目没有任何人工把关」这条最该说的事实反而一个字都没有。 */
 function RequirementBlock({ detail }: { detail: IssueDetailView }) {
+  const chars = detail.requirement_text?.length ?? null;
+  const sourceName = detail.document_filename;
   return (
     <div className="mt-3.5 rounded-hard border border-line bg-panel px-3.5 py-3">
       <div className="microlabel pb-2">
@@ -151,9 +153,15 @@ function RequirementBlock({ detail }: { detail: IssueDetailView }) {
           ? ` · 工程契约 ${shortId(detail.contract.specification_id)} · v${detail.contract.version} · ${detail.contract.status}`
           : " · 工程契约未接入"}
       </div>
-      <p className="text-[12.5px] leading-[1.7] text-kraft">
-        {detail.requirement_text ?? "需求文本未接入（无 Project 注册表，取自最早 PlanSnapshot）"}
-      </p>
+      {chars === null ? (
+        <p className="text-[12.5px] leading-[1.7] text-tx3">
+          需求文本未接入（无 Project 注册表，取自最早 PlanSnapshot）
+        </p>
+      ) : (
+        <p className="text-[12.5px] leading-[1.7] text-tx2">
+          需求文本已记录{sourceName ? ` · ${sourceName}` : ""} · {chars} 字符
+        </p>
+      )}
     </div>
   );
 }

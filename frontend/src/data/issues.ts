@@ -21,6 +21,7 @@ function issue(over: Partial<IssueListItemView> & Pick<IssueListItemView, "issue
     issue_key: null,
     organization_id: ORG,
     requirement_text: null,
+    document_filename: null,
     round_count: 1,
     active_round_id: null,
     latest_round_id: null,

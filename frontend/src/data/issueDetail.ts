@@ -30,6 +30,7 @@ export const issueDetailFixture: IssueDetailView = {
   title: "结账价格修改原因：记录、暴露并在后台展示",
   requirement_text:
     "运营侧需要在订单结账时记录价格被修改的原因（促销、议价、纠错），原因随订单落库并在后台订单详情页展示。价格修改入口不变，新增原因必填校验与审计字段。",
+  document_filename: null,
   state: "open",
   phase: "release",
   phase_note: "发布门禁",

@@ -143,6 +143,20 @@ def test_similar_walkthrough_returns_sharing_projects(
     assert hit["affected_repository_ids"] == ["ts-notify"]
     assert UUID(hit["decision_id"])
     assert hit["payload_summary"]["required"] == ["ts-notify"]
+    # 命中卡是需求级的：peer 没有需求快照 → requirement_text 为 None
+    # （诚实缺口，卡头回退到决策单行），绝不从 payload 碎片里杜撰标题。
+    assert hit["requirement_text"] is None
+
+    # 反向走查（peer → 项目 A）：项目 A 有需求快照，命中必须带回需求根句。
+    reverse = client.get(
+        f"/api/v1/decision-chains/{peer_project}/similar?organization_id={org}",
+        headers=_HEADERS,
+    )
+    assert reverse.status_code == 200, reverse.text
+    reverse_hits = reverse.json()["hits"]
+    assert [UUID(h["project_id"]) for h in reverse_hits] == [project_a]
+    assert isinstance(reverse_hits[0]["requirement_text"], str)
+    assert reverse_hits[0]["requirement_text"].strip()
 
 
 def test_similar_respects_top_k_and_excludes_self(

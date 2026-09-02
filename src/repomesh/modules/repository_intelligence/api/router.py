@@ -384,6 +384,7 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
                 created_by_agent_id=body.created_by_agent_id,
                 idempotency_key=body.idempotency_key,
                 organization_id=body.organization_id,
+                document_filename=body.document_filename,
             )
         )
     except IssueIntakeActorNotFound as error:
