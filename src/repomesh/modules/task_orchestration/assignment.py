@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Index, Integer, String, UniqueConstraint, select, text
+from sqlalchemy import DateTime, Index, Integer, String, UniqueConstraint, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
@@ -103,6 +103,16 @@ class PostgresTaskAssignmentStore:
                 )
                 if task is None:
                     raise TaskConflict("task does not exist")
+                # A task whose earlier attempt already finished (failed run,
+                # recovered execution, redispatch) has no *active* attempt but
+                # does have history; the fresh attempt continues that history
+                # at the next generation rather than colliding with the
+                # generation the finished attempt already occupies.
+                previous_generation = await session.scalar(
+                    select(func.max(TaskAssignmentAttemptRecord.generation)).where(
+                        TaskAssignmentAttemptRecord.task_id == task_id
+                    )
+                )
                 record = TaskAssignmentAttemptRecord(
                     id=uuid4(),
                     organization_id=task.organization_id,
@@ -110,7 +120,7 @@ class PostgresTaskAssignmentStore:
                     repository_id=task.repository_id,
                     task_id=task.id,
                     worker_agent_id=task.assignee_agent_id,
-                    generation=1,
+                    generation=(previous_generation or 0) + 1,
                     state=AssignmentAttemptState.ACTIVE.value,
                     reason=AssignmentReason.INITIAL.value,
                     assigned_by=AssignmentActorKind.AGENT.value,

@@ -76,6 +76,10 @@
       REPOMESH_SCM_POLL_SCAN_INTERVAL_SECONDS: ${REPOMESH_SCM_POLL_SCAN_INTERVAL_SECONDS:-15}
       REPOMESH_SCM_COMMAND_DISPATCH_INTERVAL_SECONDS: ${REPOMESH_SCM_COMMAND_DISPATCH_INTERVAL_SECONDS:-5}
       REPOMESH_RUNNER_WORKSPACE_ROOT: /runner-workspaces
+      # start_assigned_task 未显式给 adapter 时的回退。本地一键栈的 Runner 镜像
+      # 只装了校验用 mock 编码代理（repomesh-mock-agent），所以默认 mock；接入
+      # 真实 CLI 的部署把它改成该 CLI 在 runner profile 目录里的 id。
+      REPOMESH_WORKER_DEFAULT_ADAPTER_ID: ${REPOMESH_WORKER_DEFAULT_ADAPTER_ID:-mock}
       # STORAGE_ROOT 只服务 LocalTraceSource：从共享卷里直接读 MinIO 桶目录做可观测
       # 性 trace 采集（api 与 controller/MinIO 共享 agentteams-data 卷）。它不是任务包
       # 的投递路径——Worker 走 S3（mc mirror agentteams/<桶>/teams/.../shared/tasks/...）
@@ -131,6 +135,36 @@
       interval: 5s
       timeout: 3s
       retries: 12
+
+  # ------------------------------------------------------------------ runner
+  # The execution plane: long-polls a leased RunnerTask from the api and posts
+  # ordered RunnerEvents back (contracts/runtime/v1). The image ships the
+  # validation mock coding agent (profile `mock`) — no model, no credentials —
+  # so the local stack exercises the whole task path; mount a real CLI and set
+  # REPOMESH_WORKER_DEFAULT_ADAPTER_ID on the api to use one.
+  #
+  # The api prepares each workspace under /runner-workspaces and the task
+  # carries that path; the runner remaps it into its own /workspace mount of
+  # the same host directory (WORKSPACE_PATH_FROM/TO), and the worktree's .git
+  # pointer is written relative (git_worktree._make_gitdir_portable) so one
+  # tree serves both containers.
+  runner:
+    profiles: ["platform"]
+    build:
+      context: .
+      dockerfile: components/repomesh-runner/Dockerfile
+    restart: unless-stopped
+    environment:
+      REPOMESH_RUNNER_TASK_SOURCE_URL: http://api:8000/api/v1/runtime/runner-tasks/next
+      REPOMESH_RUNNER_EVENT_SINK_URL: http://api:8000/api/v1/runtime/runner-events
+      REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
+      REPOMESH_RUNNER_WORKSPACE_PATH_FROM: /runner-workspaces
+      REPOMESH_RUNNER_WORKSPACE_PATH_TO: /workspace
+    volumes:
+      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/workspace
+    depends_on:
+      api:
+        condition: service_healthy
 
   bootstrap:
     profiles: ["platform"]
