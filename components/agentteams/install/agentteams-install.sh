@@ -1563,6 +1563,17 @@ detect_socket() {
                 echo "/var/run/docker.sock"
                 return 0
             fi
+
+            # Docker Desktop (Windows): the daemon-side socket lives inside the
+            # Linux VM, so it never satisfies a host-side [ -S ] check even
+            # though `-v /var/run/docker.sock:...` mounts it fine. The
+            # PowerShell installer has always mounted that path verbatim.
+            case "$(uname -s)" in
+                MINGW*|MSYS*|CYGWIN*)
+                    echo "//var/run/docker.sock"
+                    return 0
+                    ;;
+            esac
             ;;
         podman)
             # Podman path handling
@@ -4016,7 +4027,7 @@ CREDEOF
             --network-alias aigw-local.agentteams.io \
             --network-alias fs-local.agentteams.io \
             "${_ctrl_env_args[@]}" \
-            -v "${CONTAINER_SOCK}:/var/run/docker.sock" \
+            ${CONTAINER_SOCK:+-v "${CONTAINER_SOCK}:/var/run/docker.sock"} \
             --security-opt label=disable \
             -v "${AGENTTEAMS_DATA_DIR}:/data" \
             -v "${AGENTTEAMS_WORKSPACE_DIR}:/root/agentteams-fs/agents/manager" \

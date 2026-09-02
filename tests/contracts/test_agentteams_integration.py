@@ -145,6 +145,117 @@ async def test_ensure_worker_reuses_matching_projection_without_post() -> None:
 
 
 @pytest.mark.asyncio
+async def test_ensure_worker_mcp_servers_updates_a_worker_missing_them() -> None:
+    """Workers provisioned before the task-control URL was configured carry no
+    ``mcpServers`` — ``ensure_worker`` may not touch them (the read-first rule
+    exists to protect their onboarded spec), so the alignment is its own verb:
+    a PUT that preserves the worker's own document and overwrites only the
+    servers, under a distinct idempotency key."""
+    requests: list[httpx.Request] = []
+    servers = [
+        {"name": "repomesh-task-control", "url": "http://api:8000/api/v1/mcp/worker", "transport": "http"}
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET":
+            return response(
+                200,
+                {
+                    "name": "repomesh-worker-api",
+                    "model": "qwen3.6-plus",
+                    "runtime": "hermes",
+                    "skills": ["testing"],
+                    "phase": "Ready",
+                },
+            )
+        return response(200, {**json.loads(request.content), "phase": "Ready"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        ref = await client.ensure_worker_mcp_servers(
+            "repomesh-worker-api",
+            (McpServerProjection("repomesh-task-control", "http://api:8000/api/v1/mcp/worker"),),
+            idempotency_key="project-1-worker-api-v1",
+        )
+    finally:
+        await client.close()
+
+    assert ref is not None
+    assert [(item.method, item.url.path) for item in requests] == [
+        ("GET", "/api/v1/workers/repomesh-worker-api"),
+        ("PUT", "/api/v1/workers/repomesh-worker-api"),
+    ]
+    assert requests[1].headers["Idempotency-Key"] == "project-1-worker-api-v1:mcp"
+    put_payload = json.loads(requests[1].content)
+    # The worker's own spec survives untouched; only the servers are overlaid.
+    assert put_payload["model"] == "qwen3.6-plus"
+    assert put_payload["runtime"] == "hermes"
+    assert put_payload["skills"] == ["testing"]
+    assert put_payload["mcpServers"] == servers
+
+
+@pytest.mark.asyncio
+async def test_ensure_worker_mcp_servers_is_a_no_op_when_they_already_match() -> None:
+    methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        methods.append(request.method)
+        return response(
+            200,
+            {
+                "name": "repomesh-worker-api",
+                "model": "qwen3.6-plus",
+                "runtime": "hermes",
+                "mcpServers": [
+                    {
+                        "name": "repomesh-task-control",
+                        "url": "http://api:8000/api/v1/mcp/worker",
+                        "transport": "http",
+                    }
+                ],
+                "phase": "Ready",
+            },
+        )
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await client.ensure_worker_mcp_servers(
+            "repomesh-worker-api",
+            (McpServerProjection("repomesh-task-control", "http://api:8000/api/v1/mcp/worker"),),
+            idempotency_key="same-request",
+        )
+    finally:
+        await client.close()
+
+    assert methods == ["GET"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_worker_mcp_servers_answers_none_for_an_unknown_worker() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return response(404, {"error": "not found"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        ref = await client.ensure_worker_mcp_servers(
+            "repomesh-worker-api",
+            (McpServerProjection("repomesh-task-control", "http://api:8000/api/v1/mcp/worker"),),
+            idempotency_key="same-request",
+        )
+    finally:
+        await client.close()
+
+    assert ref is None
+
+
+@pytest.mark.asyncio
 async def test_worker_creation_projects_identity_prompts_mcp_and_channel_policy() -> None:
     posted: dict[str, object] = {}
 

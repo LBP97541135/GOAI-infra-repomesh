@@ -9,6 +9,7 @@ import httpx
 from repomesh.modules.agent_runtime.ports.agent_team import (
     ManagerProjection,
     ManagerRuntimeRef,
+    McpServerProjection,
     TeamProjection,
     TeamRole,
     TeamRuntimeRef,
@@ -122,6 +123,89 @@ class AgentTeamsControlPlaneClient:
         if existing := await self._get_optional(path):
             self._assert_worker_matches(existing, projection)
             return self._worker_ref(existing)
+        body = await self._create_or_reconcile(
+            "/api/v1/workers",
+            path,
+            self._worker_payload(projection),
+            idempotency_key,
+            lambda value: self._assert_worker_matches(value, projection),
+        )
+        return self._worker_ref(body)
+
+    async def ensure_worker_mcp_servers(
+        self,
+        name: str,
+        servers: tuple[McpServerProjection, ...],
+        *,
+        idempotency_key: str,
+    ) -> WorkerRuntimeRef | None:
+        """Align an existing worker's MCP servers without touching its spec.
+
+        The worker predates the task-control wiring — created by an earlier
+        bootstrap before the URL was configured, or by any path that never
+        carried the projection. ``ensure_worker`` cannot heal it: the
+        read-first rule routes existing workers around it precisely so their
+        onboarded model/runtime/skills are never re-asserted (T2 §6), and
+        re-asserting them against a drifted legacy worker is the 409 that
+        once made materialize unreachable. This verb owns exactly one field:
+        the PUT preserves the document's own spec and overwrites only
+        ``mcpServers``. The GET document omits the field exactly when the
+        resource carries none — absent is not "empty", but it *is* the
+        detectable signal. Distinct idempotency key because this is a
+        different side effect than the create that first claimed the
+        resource.
+        """
+
+        if not servers:
+            return None
+        path = self._resource_path("workers", name)
+        existing = await self._get_optional(path)
+        if existing is None:
+            return None
+        wanted = [
+            {"name": server.name, "url": server.url, "transport": server.transport}
+            for server in servers
+        ]
+        if existing.get("mcpServers") == wanted:
+            return self._worker_ref(existing)
+        body = await self._json(
+            "PUT",
+            path,
+            json=self._align_worker_payload(existing, wanted),
+            headers=self._idempotency_headers(f"{idempotency_key}:mcp"),
+        )
+        return self._worker_ref(body)
+
+    @staticmethod
+    def _align_worker_payload(
+        existing: dict[str, Any], servers: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        """The worker's own document, re-sent with the servers overlaid.
+
+        Built from what the controller holds, not from the projection, so a
+        legacy worker whose model/runtime drifted from the global defaults is
+        healed in place instead of colliding with them.
+        """
+
+        payload: dict[str, Any] = {
+            "name": existing.get("name"),
+            "model": existing.get("model"),
+            "runtime": existing.get("runtime"),
+            "skills": list(existing.get("skills") or []),
+            "state": existing.get("state", "Running"),
+            "mcpServers": servers,
+        }
+        AgentTeamsControlPlaneClient._set_optional(payload, "identity", existing.get("identity"))
+        AgentTeamsControlPlaneClient._set_optional(payload, "soul", existing.get("soul"))
+        AgentTeamsControlPlaneClient._set_optional(payload, "agents", existing.get("agents"))
+        if existing.get("containerManaged") is False:
+            payload["containerManaged"] = False
+        if existing.get("channelPolicy") is not None:
+            payload["channelPolicy"] = existing["channelPolicy"]
+        return payload
+
+    @staticmethod
+    def _worker_payload(projection: WorkerProjection) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": projection.name,
             "model": projection.model,
@@ -129,9 +213,9 @@ class AgentTeamsControlPlaneClient:
             "skills": list(projection.skills),
             "state": projection.state.value,
         }
-        self._set_optional(payload, "identity", projection.identity)
-        self._set_optional(payload, "soul", projection.soul)
-        self._set_optional(payload, "agents", projection.agents)
+        AgentTeamsControlPlaneClient._set_optional(payload, "identity", projection.identity)
+        AgentTeamsControlPlaneClient._set_optional(payload, "soul", projection.soul)
+        AgentTeamsControlPlaneClient._set_optional(payload, "agents", projection.agents)
         if not projection.container_managed:
             # Sent only by the explicit external path. The controller defaults
             # the field to true (``resource_handler.go``), so a managed worker's
@@ -155,14 +239,7 @@ class AgentTeamsControlPlaneClient:
                 "dmAllowExtra": list(projection.channel_policy.dm_allow_extra),
                 "dmDenyExtra": list(projection.channel_policy.dm_deny_extra),
             }
-        body = await self._create_or_reconcile(
-            "/api/v1/workers",
-            path,
-            payload,
-            idempotency_key,
-            lambda value: self._assert_worker_matches(value, projection),
-        )
-        return self._worker_ref(body)
+        return payload
 
     async def ensure_team(
         self, projection: TeamProjection, *, idempotency_key: str
@@ -449,6 +526,15 @@ class AgentTeamsControlPlaneClient:
             # into the exclusive-membership 400 (A-8).
             team=body.get("team"),
             container_managed=observed if isinstance(observed, bool) else None,
+            mcp_servers=tuple(
+                McpServerProjection(
+                    name=str(server.get("name", "")),
+                    url=str(server.get("url", "")),
+                    transport=str(server.get("transport", "http")),
+                )
+                for server in (body.get("mcpServers") or [])
+                if isinstance(server, dict)
+            ),
         )
 
     @staticmethod

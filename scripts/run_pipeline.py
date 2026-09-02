@@ -299,7 +299,6 @@ def _ensure_topology(
 
         from repomesh.bootstrap.app import build_default_container
         from repomesh.integrations.agentteams.principal_registration import (
-            RegisterNativeAgent,
             RegisterNativeAgentRequest,
         )
         from repomesh.integrations.agentteams.project_topology import (
@@ -335,11 +334,11 @@ def _ensure_topology(
             print("\n[Topology] ERROR: AgentTeams control plane not configured.")
             return
 
-        # Create the native agent registrar
-        registrar = RegisterNativeAgent(
-            control_plane,
-            container.agent_directory,
-        )
+        # The container's registrar carries the worker task-control MCP URL;
+        # constructing RegisterNativeAgent bare is how every bootstrap-created
+        # worker lost its ``mcpServers`` projection and could never accept a
+        # dispatched task.
+        registrar = container.native_agent_registration()
 
         # Get repository IDs from catalog
         all_profiles = await catalog.list()
@@ -351,12 +350,14 @@ def _ensure_topology(
             repo_names = set(name_to_id.keys())
 
         org_id = new_id()
-        model = "deepseek-chat"
         # The same source the console's ProjectRuntimeProjection reads. These
         # two paths must ask for field-identical resources (contract §8.7) and
         # `runtime` used to be OPENCLAW written out in both; one setting means
         # there is no second value left to drift.
         runtimes = get_settings()
+        # ... and the same model the projection registers with: a hardcoded
+        # one here produced workers the gateway refuses to serve.
+        model = runtimes.deepseek_model
         teams = []
 
         # --- Register Org Leader (Manager) ---
@@ -374,7 +375,6 @@ def _ensure_topology(
                     organization_id=org_id,
                     role=AgentRole.ORGANIZATION_LEADER,
                     leader_agent_id=None,
-                    singleton_key=f"org-leader-{org_id.hex}",
                     repository_id=None,
                     responsibility_paths=("*",),
                     agentteams_resource_name=org_leader_name,
@@ -383,7 +383,7 @@ def _ensure_topology(
             ),
             idempotency_key=f"bootstrap-org-{org_id.hex}",
         )
-        actual_org_leader_id = org_result.agent_id
+        actual_org_leader_id = org_result.principal.id
         print(f"  → org leader agent: {actual_org_leader_id}")
 
         # --- Register repo leaders + workers ---
@@ -402,7 +402,6 @@ def _ensure_topology(
                         organization_id=org_id,
                         role=AgentRole.REPOSITORY_LEADER,
                         leader_agent_id=actual_org_leader_id,
-                        singleton_key=f"leader-{repo_id.hex}",
                         repository_id=repo_id,
                         responsibility_paths=("*",),
                         agentteams_resource_name=repo_leader_name,
@@ -417,7 +416,7 @@ def _ensure_topology(
                 ),
                 idempotency_key=f"bootstrap-leader-{short}",
             )
-            actual_repo_leader_id = leader_result.agent_id
+            actual_repo_leader_id = leader_result.principal.id
 
             # Worker (reports to repo leader)
             worker_name = f"agt-worker-{short}"
@@ -428,7 +427,6 @@ def _ensure_topology(
                         organization_id=org_id,
                         role=AgentRole.WORKER,
                         leader_agent_id=actual_repo_leader_id,
-                        singleton_key=f"worker-{repo_id.hex}",
                         repository_id=repo_id,
                         responsibility_paths=("*",),
                         agentteams_resource_name=worker_name,
@@ -443,7 +441,7 @@ def _ensure_topology(
                 ),
                 idempotency_key=f"bootstrap-worker-{short}",
             )
-            actual_worker_id = worker_result.agent_id
+            actual_worker_id = worker_result.principal.id
 
             teams.append(RepositoryTeam(
                 project_id=uuid.UUID(project_id),

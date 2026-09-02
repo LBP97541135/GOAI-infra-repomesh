@@ -154,6 +154,11 @@ class WorkerRuntimeRef:
     #: "external". The bridge preflight is the caller that cares: it confirms
     #: this is exactly ``False`` before it will bind anything to the worker.
     container_managed: bool | None = None
+    #: The MCP servers the controller reports on this worker, empty when the
+    #: document carries none (the field is omitted exactly then — absent is
+    #: not "empty", but it *is* the detectable signal the projection uses to
+    #: heal workers provisioned before the task-control wiring existed).
+    mcp_servers: tuple[McpServerProjection, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +235,24 @@ class AgentTeamControlPlane(WorkerBindingReader, Protocol):
     async def ensure_worker_ready(
         self, name: str, *, idempotency_key: str
     ) -> WorkerRuntimeRef: ...
+
+    async def ensure_worker_mcp_servers(
+        self,
+        name: str,
+        servers: tuple[McpServerProjection, ...],
+        *,
+        idempotency_key: str,
+    ) -> WorkerRuntimeRef | None:
+        """Align one field of an existing worker: its MCP servers.
+
+        ``ensure_worker`` may not touch a worker somebody else's pass created —
+        the read-first rule exists so onboarded model/runtime/skills choices
+        are never re-asserted. The task-control server is the one exception
+        materialize owns outright, so it gets its own verb: overwrite the
+        servers, preserve everything else. ``None`` answers "no such worker";
+        a ref answers with the servers now in place.
+        """
+        ...
 
 
 class ExternalWorkerProvisioner(Protocol):

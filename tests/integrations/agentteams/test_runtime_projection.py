@@ -66,6 +66,7 @@ from repomesh.modules.agent_runtime.contracts import (
 from repomesh.modules.agent_runtime.ports.agent_team import (
     ManagerProjection,
     ManagerRuntimeRef,
+    McpServerProjection,
     TeamProjection,
     TeamRuntimeRef,
     WorkerProjection,
@@ -132,6 +133,11 @@ class RecordingControlPlane:
         #: forget them between passes, and ``_register`` reads before it
         #: ensures, so a replay has to find them present.
         self._created: set[str] = set()
+        #: The MCP servers the controller holds per worker — what ``ensure_worker``
+        #: projected, and what ``ensure_worker_mcp_servers`` aligns.
+        self._worker_servers: dict[str, tuple] = {}
+        #: Every server alignment this double performed, as (name, servers).
+        self.worker_heals: list[tuple[str, tuple]] = []
 
     async def get_manager(self, name: str) -> ManagerRuntimeRef | None:
         self.manager_reads.append(name)
@@ -159,6 +165,7 @@ class RecordingControlPlane:
             "Ready",
             matrix_user_id=f"@{name}:matrix.local" if self._identities else None,
             team=self._memberships.get(name),
+            mcp_servers=self._worker_servers.get(name, ()),
         )
 
     async def ensure_manager(
@@ -175,7 +182,21 @@ class RecordingControlPlane:
         self.workers.append(projection)
         self.keys.append(idempotency_key)
         self._created.add(projection.name)
+        self._worker_servers[projection.name] = projection.mcp_servers
         return WorkerRuntimeRef(projection.name, "Ready")
+
+    async def ensure_worker_mcp_servers(
+        self,
+        name: str,
+        servers: tuple,
+        *,
+        idempotency_key: str,
+    ) -> WorkerRuntimeRef | None:
+        if name not in self._created and name not in self._memberships:
+            return None
+        self.worker_heals.append((name, servers))
+        self._worker_servers[name] = servers
+        return await self.get_worker(name)
 
     async def ensure_team(
         self, projection: TeamProjection, *, idempotency_key: str
@@ -394,6 +415,88 @@ async def test_the_projections_match_the_pipeline_script() -> None:
         assert [(s.name, s.url) for s in worker.mcp_servers] == [
             ("repomesh-task-control", "http://task-control.internal/mcp")
         ]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_created_before_the_task_control_url_gets_it_on_a_later_pass() -> None:
+    """The bootstrap-bug story, end to end.
+
+    Workers provisioned while ``REPOMESH_WORKER_TASK_CONTROL_URL`` was unset —
+    run_pipeline's bootstrap constructed its registrar without it — carry no
+    ``mcpServers`` and can never accept a dispatched task. The controller holds
+    them, so the read-first rule routes them around ``ensure_worker``; the
+    servers are the one field materialize owns outright, and they are aligned
+    through their own verb instead.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    # One controller across both passes: a controller does not forget what a
+    # previous pass created, and the read-first rule reads *this* controller.
+    control_plane = RecordingControlPlane()
+
+    # The pass that created them knew nothing of task-control.
+    await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+    assert all(not worker.mcp_servers for worker in control_plane.workers)
+    created = len(control_plane.workers)
+
+    # A later pass, after the URL was configured.
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **_RUNTIMES,
+        worker_task_control_url="http://task-control.internal/mcp",
+    ).project(project_id)
+
+    assert len(control_plane.workers) == created  # read-first: nothing re-ensured
+    assert len(control_plane.worker_heals) == created  # leader + worker per repo
+    for name, servers in control_plane.worker_heals:
+        assert name.startswith(("agt-leader-", "agt-worker-"))
+        assert [(s.name, s.url) for s in servers] == [
+            ("repomesh-task-control", "http://task-control.internal/mcp")
+        ]
+
+
+@pytest.mark.asyncio
+async def test_an_already_healed_worker_is_not_healed_twice() -> None:
+    """The alignment is idempotent: a worker whose servers are in place draws
+    no second write, on this pass or any replay of it."""
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    control_plane = RecordingControlPlane()
+    await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **_RUNTIMES,
+        worker_task_control_url="http://task-control.internal/mcp",
+    ).project(project_id)
+    healed = len(control_plane.worker_heals)
+    assert healed > 0
+
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **_RUNTIMES,
+        worker_task_control_url="http://task-control.internal/mcp",
+    ).project(project_id)
+
+    assert len(control_plane.worker_heals) == healed
 
 
 @pytest.mark.asyncio
@@ -757,6 +860,7 @@ class ExistingWorker:
     skills: tuple[str, ...]
     team: str
     matrix_user_id: str
+    mcp_servers: tuple[McpServerProjection, ...] = ()
 
 
 class ExistingResourcesControlPlane:
@@ -791,6 +895,9 @@ class ExistingResourcesControlPlane:
         #: by resource name. The assertion is that it stays empty: an existing
         #: resource is somebody else's to define.
         self.ensure_calls: list[str] = []
+        #: Worker names whose MCP servers were aligned — the one field
+        #: materialize owns outright even on an existing worker.
+        self.mcp_heals: list[str] = []
         self.teams: list[TeamProjection] = []
 
     def snapshot(self) -> tuple[dict[str, tuple[str, str]], dict[str, ExistingWorker]]:
@@ -815,6 +922,7 @@ class ExistingResourcesControlPlane:
             matrix_user_id=existing.matrix_user_id,
             team=existing.team,
             container_managed=True,
+            mcp_servers=existing.mcp_servers,
         )
 
     async def ensure_manager(
@@ -868,6 +976,20 @@ class ExistingResourcesControlPlane:
             matrix_user_id=f"@{projection.name}:matrix.local",
         )
         return WorkerRuntimeRef(projection.name, "Ready")
+
+    async def ensure_worker_mcp_servers(
+        self,
+        name: str,
+        servers: tuple[McpServerProjection, ...],
+        *,
+        idempotency_key: str,
+    ) -> WorkerRuntimeRef | None:
+        existing = self._workers.get(name)
+        if existing is None:
+            return None
+        self.mcp_heals.append(name)
+        self._workers[name] = replace(existing, mcp_servers=servers)
+        return await self.get_worker(name)
 
     async def ensure_team(
         self, projection: TeamProjection, *, idempotency_key: str

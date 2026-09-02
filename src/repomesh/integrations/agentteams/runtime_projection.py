@@ -272,23 +272,36 @@ class ProjectRuntimeProjection:
                 idempotency_key=f"{key}:agentteams",
             )
             return name
+        projection = with_task_control(
+            WorkerProjection(
+                name=name,
+                model=self._model,
+                runtime=self._worker_runtime,
+                skills=agentteams_skills(
+                    principal.role, _SKILLS[principal.role], profile=profile
+                ),
+                state=DesiredRuntimeState.RUNNING,
+            ),
+            self._worker_task_control_url,
+        )
         worker = await self._control_plane.get_worker(name)
         if worker is not None:
             _assert_bound("worker", worker.name, name)
+            if projection.mcp_servers and not worker.mcp_servers:
+                # The worker predates the task-control wiring — created by an
+                # earlier bootstrap before the URL was set, or by any path that
+                # never carried the projection. ensure_worker must not be asked
+                # for it (that re-asserts the onboarded spec, the 409 this
+                # read-first rule exists to prevent), so the one field this pass
+                # owns outright is aligned through its own verb.
+                await self._control_plane.ensure_worker_mcp_servers(
+                    name,
+                    projection.mcp_servers,
+                    idempotency_key=f"{key}:agentteams",
+                )
             return name
         await self._control_plane.ensure_worker(
-            with_task_control(
-                WorkerProjection(
-                    name=name,
-                    model=self._model,
-                    runtime=self._worker_runtime,
-                    skills=agentteams_skills(
-                        principal.role, _SKILLS[principal.role], profile=profile
-                    ),
-                    state=DesiredRuntimeState.RUNNING,
-                ),
-                self._worker_task_control_url,
-            ),
+            projection,
             idempotency_key=f"{key}:agentteams",
         )
         return name
