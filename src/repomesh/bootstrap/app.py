@@ -73,6 +73,12 @@ from repomesh.modules.collaboration import (
     SendCollaborationMessage,
 )
 from repomesh.modules.context.infrastructure import PostgresContextStore
+from repomesh.modules.decision_chain import (
+    DecisionChainProjectionService,
+    DecisionChainProjector,
+    PostgresDecisionChainStore,
+    PostgresDecisionEventSource,
+)
 from repomesh.modules.delivery import (
     DeliveryService,
     PostgresChangeSetStore,
@@ -634,6 +640,18 @@ def build_default_container(
     background_services = (
         *background_services,
         TraceIngester(TraceStore(database), _trace_source(settings)),
+    )
+    # Decision-chain projection subscribes to the five chain events; drain is
+    # idempotent (event_id unique) and incremental (the source skips projected
+    # ids), so the interval loop is safe to run continuously.
+    background_services = (
+        *background_services,
+        DecisionChainProjector(
+            DecisionChainProjectionService(
+                PostgresDecisionChainStore(database),
+                PostgresDecisionEventSource(database),
+            )
+        ),
     )
     container_holder: dict[str, ApplicationContainer] = {}
     if settings.worker_recovery_enabled:
