@@ -1,6 +1,6 @@
 # 测试团队 v1 交接（2026-09-01，W4 活体 B/C 组已走完）
 
-分支 `feat/module-test-team-v1`（自 `codex/v2-stage-fixes@18cf6169` 切出，**未推 GitHub**；头以 `git log` 为准）。
+分支 `feat/module-test-team-v1`（自 `codex/v2-stage-fixes@18cf6169` 切出，**已推 GitHub** `origin/feat/module-test-team-v1`，2026-09-02；头以 `git log` 为准）。
 资产仓 `catbobyman/repomesh-test-assets` main 头 `955f652`（未动）；四条候选分支 `repomesh/<plan8>/55555555` 与 PR #1–#4 由平台交付开出（见 §4）。
 本文件是会话恢复入口：先按 §1 的顺序读文件，再照 §3 对账环境，然后从 §7 继续。
 
