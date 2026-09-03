@@ -74,6 +74,16 @@ class ManagerProjection:
     skills: tuple[str, ...] = ()
     soul: str | None = None
     agents: str | None = None
+    #: Container image the projected Manager must run. The controller's image
+    #: fallback is role-blind: a Manager CR whose spec image is empty is
+    #: handed the *worker* image of its runtime, whose entrypoint demands
+    #: ``AGENTTEAMS_WORKER_NAME`` — an env only the worker env builder sets —
+    #: so the container exits(1) on boot and the Manager never gains a
+    #: Matrix identity. The controller's initializer defaults an image only
+    #: for its own built-in manager, so a projected one has to name its
+    #: image itself. None keeps the controller's choice for deployments that
+    #: pair a manager-capable default.
+    image: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

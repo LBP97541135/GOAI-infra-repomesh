@@ -91,6 +91,12 @@
       # Worker 的 mirror 什么也读不到。桶名两处共用，必须与 AgentTeams 实际注册的桶一致
       # （本环境是 agentteams-storage，mc ls 只列出它）。
       REPOMESH_AGENTTEAMS_STORAGE_ROOT: /agentteams-data/minio/${REPOMESH_AGENTTEAMS_STORAGE_BUCKET:-agentteams-storage}
+      # Manager 容器镜像（§8.7.5）：controller 的镜像 fallback 不分角色，spec.image
+      # 为空的 Manager 会被发给 copaw 的 *worker* 镜像，其入口要求
+      # AGENTTEAMS_WORKER_NAME 而即刻退出。默认值直接内联而非留空——空串在 pydantic
+      # 里是 "" 而非 None，会误触发投影端的 image 确认断言。要换镜像就覆盖此变量；
+      # 要回到「控制器自选」则删除本行。
+      REPOMESH_AGENTTEAMS_MANAGER_IMAGE: ${REPOMESH_AGENTTEAMS_MANAGER_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0}
     ports:
       - "${REPOMESH_API_PORT:-8000}:8000"
     volumes:

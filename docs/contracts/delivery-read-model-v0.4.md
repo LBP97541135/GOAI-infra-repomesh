@@ -1458,6 +1458,47 @@ content")`。§8.7.3 **有意不把 `ValueError` 翻成 503**（重试改变不�
    命中已有行、房间零新增。被"加版本"的那条守卫在重放路径上**原样成立**——它没有被削弱，
    是被绕开的。
 
+### 8.7.5 Manager 镜像与 runtime 成对，同样不是我们能替控制器决定的（**已裁决 · 2026-09-03**，承 §8.7.1 A-6）
+
+> 主脑裁决（2026-09-03）：「按你的建议来」——RepoMesh 侧先落 `ensure_manager` 显式传
+> image；上游 Go 修复（controller 镜像 fallback 分角色）留到下次 AgentTeams 同步一起提。
+> 本节承 §8.7.1：A-6 那句「runtime 与镜像是控制器侧成对的配置」当时只把 runtime 半边
+> 升为设置，本节补上镜像半边——同一句话的另一半。
+
+核实事实（2026-09-02 重建 controller 后发现，2026-09-03 重启复验）：`ensure_manager`
+从不传 image → Manager CR `spec.image` 为空 → controller 的 docker 镜像 fallback
+**不分 manager/worker 角色**（runtime=copaw 一律兜到 copaw 的 *worker* 镜像）→
+worker 镜像入口要求 `AGENTTEAMS_WORKER_NAME`，而 manager 的 env 构造只生成 manager
+风格 env → 容器 exit(1) 崩溃循环，manager 永远拿不到 Matrix 身份。controller 的
+initializer 只为**它自带的 default manager** 默认 image，投影出来的 manager 不在其列。
+这正是 A-6 当年 worker 侧同款事故的 manager 翻版：入口要的 env，另一角色的构造器
+从不生成。
+
+裁决（与 A-6 同构）：
+
+1. **`image` 升为投影字段 + 设置**：`ManagerProjection.image: str | None = None`
+   （port 契约，默认 None=保持控制器自选，向后兼容），设置
+   `REPOMESH_AGENTTEAMS_MANAGER_IMAGE`（`settings.agentteams_manager_image`）。三条创建
+   路径读**同一个**设置：`ProjectRuntimeProjection` 由 composition root 注入
+   （integrations 仍不读 settings）、`run_pipeline.py` 直接 `get_settings()`、控制台原生
+   注册（`/agents/native`）取 `body.manager_image or settings.agentteams_manager_image`。
+   §8.7 的「逐字段一致」对 image 而言**由结构保证，不再由抄写保证**。
+2. **assert 语义沿用「缺席不是同意」**（worker `containerManaged` 先例）：manager 文档
+   的 `image` 在 controller 侧是 `omitempty`，GET 回来字段缺失正是崩溃循环住过的那个
+   状态。因此 expected 有 image 而文档缺该字段 → 直接 `AgentTeamsConflict`
+   （"does not confirm image"），不确认看不见的东西；expected 为 None → **完全不受该
+   字段影响**——`agt update manager --image` 建出的存量 manager 不会因此开始冲突。
+3. **收敛已做（带外）**：部署态控制器上 `agt update manager --image
+   …agentteams-manager-copaw:v1.2.0` 已就地改 spec，reconciler 用正确镜像重建容器，
+   跨重启持久（2026-09-03 重启验证）。设置项落地后投影与存量对齐，不再漂。
+
+验证：`tests/contracts/test_agentteams_integration.py` 增 4 例（payload 带/不带 image、
+409 路径文档缺席→refuse、错值→differs in: image、expected None 不看该字段）；
+`tests/integrations/agentteams/test_runtime_projection.py` 增 1 例（注入非 None image
+到达 ManagerProjection）并在 parity 例补 `manager.image` 断言，`_RUNTIMES` 随组合根
+注入加 `manager_image` 键。上游修复方向（fallback 分角色，或 controller 为投影
+manager 提供默认镜像）记录在案，随下次 AgentTeams 同步提交。
+
 ---
 
 ## 附录 A：两条既有勘误（**已批准并同批实施**，2026-08-12）

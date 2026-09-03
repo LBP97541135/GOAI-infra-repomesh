@@ -165,6 +165,7 @@ class ProjectRuntimeProjection:
         model: str,
         manager_runtime: ManagerRuntime,
         worker_runtime: WorkerRuntime,
+        manager_image: str | None = None,
         worker_task_control_url: str | None = None,
         repository_catalog: RepositoryCatalog | None = None,
     ) -> None:
@@ -179,6 +180,13 @@ class ProjectRuntimeProjection:
         # ``REPOMESH_AGENTTEAMS_{MANAGER,WORKER}_RUNTIME``.
         self._manager_runtime = manager_runtime
         self._worker_runtime = worker_runtime
+        # Same injection rule, same single source
+        # (``REPOMESH_AGENTTEAMS_MANAGER_IMAGE``): the controller's image
+        # fallback is role-blind, so an imageless manager CR boots on the
+        # worker image and exits before its first Matrix sync. Optional and
+        # None by default — a deployment whose controller pairs a
+        # manager-capable default keeps the controller's choice.
+        self._manager_image = manager_image
         self._worker_task_control_url = worker_task_control_url
         # Optional because the skills overlay is the only thing this class
         # wants from the catalog, and a composition root without one (tests)
@@ -267,6 +275,7 @@ class ProjectRuntimeProjection:
                     name=name,
                     model=self._model,
                     runtime=self._manager_runtime,
+                    image=self._manager_image,
                     skills=_SKILLS[AgentRole.ORGANIZATION_LEADER],
                 ),
                 idempotency_key=f"{key}:agentteams",

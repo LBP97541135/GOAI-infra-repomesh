@@ -546,6 +546,7 @@ class ApplicationContainer:
                         control_plane,
                         model=settings.deepseek_model,
                         manager_runtime=settings.agentteams_manager_runtime,
+                        manager_image=settings.agentteams_manager_image,
                         worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
                         repository_catalog=repository_catalog,

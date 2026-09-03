@@ -95,6 +95,7 @@ _DEFAULTS = Settings()
 _RUNTIMES = {
     "manager_runtime": _DEFAULTS.agentteams_manager_runtime,
     "worker_runtime": _DEFAULTS.agentteams_worker_runtime,
+    "manager_image": _DEFAULTS.agentteams_manager_image,
 }
 
 
@@ -381,6 +382,10 @@ async def test_the_projections_match_the_pipeline_script() -> None:
     manager = control_plane.managers[0]
     assert manager.model == MODEL
     assert manager.runtime is _RUNTIMES["manager_runtime"]
+    # The script asks for ``image=runtimes.agentteams_manager_image`` from the
+    # same settings object, so whatever the deployment names — or None — has
+    # to be the value this pass asks for too, or the two paths conflict.
+    assert manager.image == _RUNTIMES["manager_image"]
     assert manager.skills == ("planning", "coordination")
 
     by_skills = {worker.skills: worker for worker in control_plane.workers}
@@ -394,6 +399,31 @@ async def test_the_projections_match_the_pipeline_script() -> None:
         assert [(s.name, s.url) for s in worker.mcp_servers] == [
             ("repomesh-task-control", "http://task-control.internal/mcp")
         ]
+
+
+@pytest.mark.asyncio
+async def test_the_injected_manager_image_reaches_the_manager_projection() -> None:
+    """The durable fix for the crash-loop: an imageless manager CR is handed
+    the *worker* image by the controller's role-blind fallback and exits for
+    want of ``AGENTTEAMS_WORKER_NAME`` — so a copaw deployment names its
+    manager image, and this is the injection that has to carry it through.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    control_plane = RecordingControlPlane()
+    image = "registry/agentteams-manager-copaw:v1.2.0"
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **{**_RUNTIMES, "manager_image": image},
+    ).project(project_id)
+
+    assert control_plane.managers[0].image == image
 
 
 @pytest.mark.asyncio

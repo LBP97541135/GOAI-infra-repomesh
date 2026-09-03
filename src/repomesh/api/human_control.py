@@ -198,6 +198,13 @@ async def create_native_agent(body: NativeAgentCreate, request: Request) -> dict
             name=body.resource_name,
             model=model,
             runtime=body.manager_runtime,
+            # The image question is not cosmetic (see the projection port):
+            # the controller's image fallback is role-blind, so a manager
+            # asked for without one boots on the worker image and exits.
+            # Falls back to the same setting the materialize path reads, so
+            # the console and the projection cannot ask for two different
+            # bodies for the same role.
+            image=body.manager_image or get_settings().agentteams_manager_image,
             skills=("project-management", "task-coordination"),
         )
     else:

@@ -106,6 +106,7 @@ class AgentTeamsControlPlaneClient:
         }
         self._set_optional(payload, "soul", projection.soul)
         self._set_optional(payload, "agents", projection.agents)
+        self._set_optional(payload, "image", projection.image)
         body = await self._create_or_reconcile(
             "/api/v1/managers",
             path,
@@ -316,6 +317,21 @@ class AgentTeamsControlPlaneClient:
     @staticmethod
     def _assert_manager_matches(body: dict[str, Any], expected: ManagerProjection) -> None:
         fields = {"model": expected.model, "runtime": expected.runtime.value}
+        # ``image`` is ``omitempty`` on the controller's manager document
+        # (types.go), so a manager created before its projection named one
+        # answers with the field absent — and that absence is precisely the
+        # state the crash-loop bug lived in: the role-blind image fallback
+        # hands an imageless manager the worker image, whose entrypoint
+        # exits for want of ``AGENTTEAMS_WORKER_NAME``. A projection that
+        # names an image therefore refuses over an absent one rather than
+        # confirm what it cannot see (the containerManaged precedent), while
+        # one that does not is untouched by the field.
+        if expected.image is not None:
+            if "image" not in body:
+                raise AgentTeamsConflict(
+                    f"existing AgentTeams manager does not confirm image: {expected.image}"
+                )
+            fields["image"] = expected.image
         AgentTeamsControlPlaneClient._assert_fields("manager", body, fields)
 
     @staticmethod
