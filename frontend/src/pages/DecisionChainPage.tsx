@@ -291,9 +291,34 @@ function ConfirmationBody({ node }: { node: DecisionNodeView }) {
 }
 
 /** 排执行顺序正文：每条契约一行——提供方 定义 接口 → 消费方 消费（v3 契约行）。 */
+/** 集成单的两种线上形状：契约既可能是对象 `{provider, interface, consumers}`，也可能是投影
+ *  压成的字符串 `provider->consumer:接口`；批次既可能是 `string[][]`，也可能是
+ *  `{index, repository_ids}[]`。两种都收，缺哪个字段就空着，不让一张卡把整页拖垮。 */
+function normalizeContract(c: unknown): Record<string, unknown> {
+  if (c && typeof c === "object") return c as Record<string, unknown>;
+  if (typeof c === "string") {
+    const [edge, iface] = c.split(/:(.*)/s);
+    const [provider, consumer] = edge.split("->");
+    return {
+      provider: provider?.trim() || null,
+      interface: iface?.trim() || edge,
+      consumers: consumer ? [consumer.trim()] : [],
+    };
+  }
+  return {};
+}
+
+function normalizeBatch(b: unknown): string[] {
+  if (Array.isArray(b)) return b.filter((x): x is string => typeof x === "string");
+  if (b && typeof b === "object") return strArr((b as Record<string, unknown>).repository_ids);
+  return [];
+}
+
 function IntegrationBody({ p }: { p: Record<string, unknown> }) {
-  const contracts = Array.isArray(p.contracts) ? (p.contracts as Record<string, unknown>[]) : [];
-  const batches = Array.isArray(p.execution_batches) ? (p.execution_batches as string[][]) : [];
+  const contracts = Array.isArray(p.contracts) ? (p.contracts as unknown[]).map(normalizeContract) : [];
+  const batches = Array.isArray(p.execution_batches)
+    ? (p.execution_batches as unknown[]).map(normalizeBatch)
+    : [];
   return (
     <div>
       {contracts.map((c, i) => {
