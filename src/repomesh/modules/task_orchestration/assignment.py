@@ -103,6 +103,18 @@ class PostgresTaskAssignmentStore:
                 )
                 if task is None:
                     raise TaskConflict("task does not exist")
+                # A rerun redispatch reopens a task whose attempts have all
+                # reached a terminal state. There is nothing active to return,
+                # and inserting generation=1 again would violate the
+                # (task_id, generation) unique constraint, so the reopened run
+                # continues the lineage with a fresh generation instead of
+                # failing every start_assigned_task call.
+                latest = await session.scalar(
+                    select(TaskAssignmentAttemptRecord)
+                    .where(TaskAssignmentAttemptRecord.task_id == task_id)
+                    .order_by(TaskAssignmentAttemptRecord.generation.desc())
+                    .limit(1)
+                )
                 record = TaskAssignmentAttemptRecord(
                     id=uuid4(),
                     organization_id=task.organization_id,
@@ -110,12 +122,16 @@ class PostgresTaskAssignmentStore:
                     repository_id=task.repository_id,
                     task_id=task.id,
                     worker_agent_id=task.assignee_agent_id,
-                    generation=1,
+                    generation=1 if latest is None else latest.generation + 1,
                     state=AssignmentAttemptState.ACTIVE.value,
-                    reason=AssignmentReason.INITIAL.value,
+                    reason=(
+                        AssignmentReason.INITIAL.value
+                        if latest is None
+                        else AssignmentReason.OPERATOR.value
+                    ),
                     assigned_by=AssignmentActorKind.AGENT.value,
                     assigned_by_id=task.assigned_by_agent_id,
-                    previous_attempt_id=None,
+                    previous_attempt_id=None if latest is None else latest.id,
                     execution_id=None,
                     created_at=datetime.now(UTC),
                     finished_at=None,

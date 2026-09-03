@@ -55,7 +55,6 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             ),
             args=arguments,
         )
-        started = guard_result  # invoke returned the StartedWorkerTask directly
     except McpDegradedRefused as error:
         return _result(
             request_id,
@@ -69,6 +68,27 @@ async def worker_mcp(request: Request, body: dict[str, Any]) -> dict[str, Any]:
             request_id,
             {"content": [{"type": "text", "text": str(error)}], "isError": True},
         )
+    if guard_result.outcome != "success" or guard_result.value is None:
+        # The guard swallows invoke exceptions into outcome=error/timeout so
+        # callers cannot bypass policy; surface that outcome as a tool error
+        # with the audit id for log correlation.
+        return _result(
+            request_id,
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"start_assigned_task outcome={guard_result.outcome} "
+                            f"after {guard_result.attempts} attempt(s) "
+                            f"(audit_id={guard_result.audit_id}); see unified logs"
+                        ),
+                    }
+                ],
+                "isError": True,
+            },
+        )
+    started = guard_result.value  # WorkerExecutionStarted returned by execute()
     workspace = started.task.workspace
     payload = {
         "task_id": str(started.task.task_id),

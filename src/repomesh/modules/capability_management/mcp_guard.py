@@ -59,6 +59,10 @@ class McpCallResult:
     latency_ms: float
     attempts: int
     audit_id: str
+    #: The invoke callable's return value on success. The guard wraps calls
+    #: (policy enforcement must not be bypassed), so callers recover their
+    #: result object through this field; None for timeout/error outcomes.
+    value: object | None = None
 
 
 #: Operations whose names carry these verbs never retry: they mutate remote
@@ -135,12 +139,13 @@ class McpCallGuard:
         with _tracer.start_as_current_span(f"mcp.{server_id}.{operation}") as span:
             span.set_attribute(_ATTR_SERVER, server_id)
             span.set_attribute(_ATTR_TOOL, operation)
+            value: object | None = None
             while attempts < max_attempts:
                 attempts += 1
                 try:
-                    await asyncio.wait_for(invoke(), timeout=policy.timeout_seconds)
+                    value = await asyncio.wait_for(invoke(), timeout=policy.timeout_seconds)
                     latency = (time.monotonic() - start) * 1000
-                    result = McpCallResult("success", latency, attempts, audit_id)
+                    result = McpCallResult("success", latency, attempts, audit_id, value)
                     break
                 except TimeoutError:
                     latency = (time.monotonic() - start) * 1000
