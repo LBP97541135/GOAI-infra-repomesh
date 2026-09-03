@@ -160,17 +160,19 @@ class PostgresDecisionChainStore:
         return _hydrate(record) if record is not None else None
 
     async def trace(
-        self, *, organization_id: UUID, project_id: UUID
+        self, *, organization_id: UUID | None, project_id: UUID
     ) -> DecisionChainNodes:
         async with self._database.transaction() as session:
+            query = select(DecisionNodeRecord).where(
+                DecisionNodeRecord.project_id == project_id
+            )
+            if organization_id is not None:
+                query = query.where(
+                    DecisionNodeRecord.organization_id == organization_id
+                )
             records = (
                 await session.scalars(
-                    select(DecisionNodeRecord)
-                    .where(
-                        DecisionNodeRecord.organization_id == organization_id,
-                        DecisionNodeRecord.project_id == project_id,
-                    )
-                    .order_by(
+                    query.order_by(
                         DecisionNodeRecord.business_time,
                         DecisionNodeRecord.step,
                         DecisionNodeRecord.version,

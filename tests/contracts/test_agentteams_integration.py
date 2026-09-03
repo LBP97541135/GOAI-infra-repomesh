@@ -28,6 +28,7 @@ from repomesh.modules.agent_runtime.contracts import (
 from repomesh.modules.agent_runtime.ports.agent_team import (
     ChannelPolicyProjection,
     ManagerProjection,
+    ManagerRuntime,
     McpServerProjection,
     TeamMemberProjection,
     TeamProjection,
@@ -411,6 +412,154 @@ async def test_manager_and_worker_lifecycle_use_distinct_endpoints() -> None:
     assert manager.name == "repomesh-manager-main"
     assert worker.phase == "Ready"
     assert calls[-1] == ("POST", "/api/v1/workers/repomesh-worker-api/ensure-ready")
+
+
+@pytest.mark.asyncio
+async def test_ensure_manager_sends_image_only_when_the_projection_names_one() -> None:
+    posted: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return response(404, {"error": "not found"})
+        posted.append(json.loads(request.content))
+        return response(201, {**posted[-1], "phase": "Pending"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        await client.ensure_manager(
+            ManagerProjection(
+                name="repomesh-manager-main",
+                model="qwen3.6-plus",
+                image="registry/agentteams-manager-copaw:v1.2.0",
+            ),
+            idempotency_key="manager-image-v1",
+        )
+        await client.ensure_manager(
+            ManagerProjection(name="repomesh-manager-main", model="qwen3.6-plus"),
+            idempotency_key="manager-image-v2",
+        )
+    finally:
+        await client.close()
+
+    # The controller's image fallback is role-blind: a manager created
+    # without an image is handed the *worker* image and exits before its
+    # first Matrix sync. So a projection that names one must say so on the
+    # wire — and one that does not must keep the payload byte-identical to
+    # the pre-image one, or a deployment pairing a manager-capable default
+    # would suddenly start drifting.
+    assert posted[0]["image"] == "registry/agentteams-manager-copaw:v1.2.0"
+    assert "image" not in posted[1]
+
+
+@pytest.mark.asyncio
+async def test_ensure_manager_reconcile_refuses_an_image_the_document_will_not_confirm() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            # The shape a manager created before its projection named an
+            # image answers in: ``image`` is ``omitempty`` on the controller's
+            # manager document (types.go), so the field is absent — the exact
+            # state the crash-loop bug lived in.
+            return response(
+                200,
+                {
+                    "name": "repomesh-manager-main",
+                    "model": "qwen3.6-plus",
+                    "runtime": "copaw",
+                    "phase": "Ready",
+                },
+            )
+        return response(409, {"error": "already exists"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        with pytest.raises(AgentTeamsConflict, match="does not confirm image"):
+            await client.ensure_manager(
+                ManagerProjection(
+                    name="repomesh-manager-main",
+                    model="qwen3.6-plus",
+                    runtime=ManagerRuntime.COPAW,
+                    image="registry/agentteams-manager-copaw:v1.2.0",
+                ),
+                idempotency_key="manager-image-v1",
+            )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ensure_manager_reconcile_differs_on_a_mismatched_image() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return response(
+                200,
+                {
+                    "name": "repomesh-manager-main",
+                    "model": "qwen3.6-plus",
+                    "runtime": "copaw",
+                    "image": "registry/agentteams-manager-copaw:v1.1.0",
+                    "phase": "Ready",
+                },
+            )
+        return response(409, {"error": "already exists"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        with pytest.raises(AgentTeamsConflict, match="differs in: image"):
+            await client.ensure_manager(
+                ManagerProjection(
+                    name="repomesh-manager-main",
+                    model="qwen3.6-plus",
+                    runtime=ManagerRuntime.COPAW,
+                    image="registry/agentteams-manager-copaw:v1.2.0",
+                ),
+                idempotency_key="manager-image-v1",
+            )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_ensure_manager_reconcile_ignores_image_when_projection_names_none() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return response(
+                200,
+                {
+                    "name": "repomesh-manager-main",
+                    "model": "qwen3.6-plus",
+                    "runtime": "copaw",
+                    "image": "registry/agentteams-manager-copaw:v1.2.0",
+                    "phase": "Ready",
+                },
+            )
+        return response(409, {"error": "already exists"})
+
+    client = AgentTeamsControlPlaneClient(
+        "http://agentteams:8090", transport=httpx.MockTransport(handler)
+    )
+    try:
+        manager = await client.ensure_manager(
+            ManagerProjection(
+                name="repomesh-manager-main",
+                model="qwen3.6-plus",
+                runtime=ManagerRuntime.COPAW,
+            ),
+            idempotency_key="manager-image-v1",
+        )
+    finally:
+        await client.close()
+
+    # A projection that does not name an image is untouched by the field:
+    # managers created out-of-band (``agt update manager --image``, the
+    # controller's own default) must not start conflicting on it.
+    assert manager.name == "repomesh-manager-main"
+    assert manager.phase == "Ready"
 
 
 @pytest.mark.asyncio

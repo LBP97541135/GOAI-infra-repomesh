@@ -403,7 +403,48 @@ async def test_semantic_ranks_by_cosine_collapses_projects_and_excludes_self() -
     assert all(hit.decision.project_id != project_a for hit in hits)
 
 
-async def test_semantic_collapses_each_project_to_its_latest_sheet() -> None:
+async def test_semantic_collapses_each_project_to_its_best_matching_sheet() -> None:
+    """需求是检索单：每项目取与查询最相似的决策单作为命中依据。
+
+    回归护栏（audit 反馈）：按"最新单"聚合会让语义空洞的后续单（如
+    payload 只剩 PR 链接的 pr 单）埋掉真正命中的 classification 单。
+    """
+
+    org, leader = uuid4(), uuid4()
+    project_a, peer = uuid4(), uuid4()
+    base = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
+    task_event, _ = _task_event(org, peer, leader, at=base + timedelta(minutes=10))
+    projection, chain_store = _store_services(
+        _chain_events(org, project_a, leader)
+        + [_classification_event(org, peer, leader, at=base), task_event]
+    )
+    await projection.drain()
+
+    embed_store = InMemoryDecisionEmbeddingStore(chain_store)
+    for node in chain_store._nodes.values():  # noqa: SLF001 (test twin)
+        if node.project_id != peer:
+            continue
+        direction = (
+            [1.0, 0.0, 0.0]
+            if node.step == DecisionStep.CLASSIFICATION
+            else [0.0, 1.0, 0.0]
+        )
+        await embed_store.upsert(node.decision_id, direction)
+
+    service = DecisionChainSemanticSearchService(embed_store)
+    hits = await service.find_similar(
+        organization_id=org, project_id=project_a, query_embedding=[1.0, 0.0, 0.0]
+    )
+    assert len(hits) == 1, "每个其他项目只贡献一条决策单"
+    assert hits[0].decision.project_id == peer
+    assert hits[0].decision.step == DecisionStep.CLASSIFICATION, (
+        "命中依据是与查询最相似的决策单，而非业务时间最新的节点"
+    )
+
+
+async def test_semantic_breaks_score_ties_toward_the_newest_sheet() -> None:
+    """平局守卫：两单余弦相同 → 取业务时间最新的决策单。"""
+
     org, leader = uuid4(), uuid4()
     project_a, peer = uuid4(), uuid4()
     base = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
@@ -423,8 +464,7 @@ async def test_semantic_collapses_each_project_to_its_latest_sheet() -> None:
         organization_id=org, project_id=project_a, query_embedding=[1.0, 0.0, 0.0]
     )
     assert len(hits) == 1, "每个其他项目只贡献一条决策单"
-    assert hits[0].decision.project_id == peer
-    assert hits[0].decision.step == DecisionStep.TASK, "折叠取业务时间最新的节点"
+    assert hits[0].decision.step == DecisionStep.TASK, "平局时取业务时间最新的节点"
 
 
 async def test_semantic_hard_filters_candidates_by_repository_scope() -> None:

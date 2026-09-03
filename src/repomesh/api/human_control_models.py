@@ -110,6 +110,7 @@ class NativeAgentCreate(BaseModel):
     resource_name: str = Field(min_length=3, max_length=100)
     model: str | None = Field(default=None, min_length=1, max_length=100)
     manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
+    manager_image: str | None = Field(default=None, min_length=1, max_length=255)
     worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
     leader_agent_id: UUID | None = None
     repository_id: UUID | None = None

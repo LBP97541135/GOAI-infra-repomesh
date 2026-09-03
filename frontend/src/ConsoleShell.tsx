@@ -11,6 +11,7 @@ import { errText, shortId } from "./display";
 import type { HumanReviewRequestView } from "./api/reviewDesk";
 import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
+import { DecisionChainPage } from "./pages/DecisionChainPage";
 import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
 import { LocalCliPage } from "./pages/LocalCliPage";
@@ -239,8 +240,12 @@ export default function ConsoleShell() {
   /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
    *  处理者按当前工作区派生（选「全部」时 null = 花名册唯一活跃 Org Leader）；
    *  幂等键由弹窗持有（A2）。 */
-  const handleCreateIssue = async (text: string, idempotencyKey: string) => {
-    const issue = await createIssue(text, workspaceId, idempotencyKey);
+  const handleCreateIssue = async (
+    text: string,
+    idempotencyKey: string,
+    documentFilename: string | null,
+  ) => {
+    const issue = await createIssue(text, workspaceId, idempotencyKey, documentFilename);
     setNewIssueOpen(false);
     showToast(`issue 已创建：#${shortId(issue.issue_id)}（虚拟草稿，等待规划）`);
     setIssuesReload((n) => n + 1);
@@ -398,6 +403,9 @@ export default function ConsoleShell() {
           ) : (
             <ObserveTrace />
           ))}
+        {route.nav === "decision-chains" && (
+          <DecisionChainPage organizationId={workspaceId} onToast={showToast} />
+        )}
         {route.nav === "settings" &&
           (route.settingsSection === "local-cli" ? (
             <LocalCliPage />

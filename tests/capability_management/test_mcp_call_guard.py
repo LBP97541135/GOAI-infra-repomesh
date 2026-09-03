@@ -51,6 +51,44 @@ async def test_success_records_one_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_success_returns_invoke_value() -> None:
+    guard = McpCallGuard(policy_provider=lambda server_id: _policy())
+
+    async def fetch_issue() -> dict[str, int]:
+        return {"number": 7}
+
+    result = await guard.call(
+        server_id="github", operation="github.issues.read", invoke=fetch_issue
+    )
+
+    assert result.outcome == "success"
+    assert result.value == {"number": 7}
+
+
+@pytest.mark.asyncio
+async def test_failed_and_timed_out_calls_have_no_value() -> None:
+    guard = McpCallGuard(policy_provider=lambda server_id: _policy(max_retries=1))
+
+    async def fail() -> dict[str, int]:
+        raise RuntimeError("boom")
+
+    async def hang() -> dict[str, int]:
+        await asyncio.sleep(10)
+
+    failed = await guard.call(
+        server_id="github", operation="github.issues.read", invoke=fail
+    )
+    timed_out = await guard.call(
+        server_id="github", operation="github.issues.read", invoke=hang
+    )
+
+    assert failed.outcome == "error"
+    assert failed.value is None
+    assert timed_out.outcome == "timeout"
+    assert timed_out.value is None
+
+
+@pytest.mark.asyncio
 async def test_timeout_retries_read_only_then_reports(caplog: pytest.LogCaptureFixture) -> None:
     guard = McpCallGuard(policy_provider=lambda server_id: _policy(max_retries=2))
 

@@ -8,6 +8,7 @@ change here (same rule as ``observability/api/models.py``).
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
@@ -72,9 +73,14 @@ class DecisionChainView(BaseModel):
 class SimilarDecisionView(BaseModel):
     """§6.5 one similar historical decision sheet (Phase 4 consumer shape).
 
-    The collapsed ``DecisionChainSummaryView`` (§4/§5): the latest decision of
-    another project sharing a repository, light enough to render in a list.
-    ``score`` is the L3 cosine similarity, present only on semantic hits.
+    The collapsed ``DecisionChainSummaryView`` (§4/§5): for structural hits
+    the latest decision of another project sharing a repository; for semantic
+    hits the sheet whose embedding is closest to the probe (the match
+    evidence). ``score`` is the L3 cosine similarity, present only on semantic
+    hits. ``requirement_text`` is the project's requirement root sentence —
+    hit cards are requirement-level ("similar requirements"), the sheet stays
+    the evidence line; ``None`` is an honest gap, the card falls back to the
+    sheet header.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -89,6 +95,25 @@ class SimilarDecisionView(BaseModel):
     payload_summary: dict
     business_time: datetime
     score: float | None = None
+    requirement_text: str | None = None
+
+
+class SemanticSearchView(BaseModel):
+    """Corpus-wide semantic probe (§6.5 extension, audit "search by text").
+
+    Unlike ``SimilarDecisionsView`` (anchored to one project), this is the
+    unanchored entry: embed a probe phrase and rank every other project by
+    its best-matching decision sheet, across organizations unless one is
+    pinned. There is no structural fallback — semantic retrieval without an
+    embedding endpoint is a 503, honest configuration failure.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    organization_id: UUID | None = None
+    query_text: str
+    mode: Literal["semantic"] = "semantic"
+    hits: list[SimilarDecisionView]
 
 
 class SimilarDecisionsView(BaseModel):

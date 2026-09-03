@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     #: dispatch, and so the allowed set is not copied here.
     agentteams_manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
     agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
+    #: Container image the projected Manager asks the controller to run
+    #: (``image`` on the Manager CR). The controller's image fallback is
+    #: role-blind: a Manager created without one is handed the *worker*
+    #: image of its runtime, whose entrypoint requires
+    #: ``AGENTTEAMS_WORKER_NAME`` — an env only the worker env builder
+    #: sets — so the container exits(1) on boot and the Manager never
+    #: gains a Matrix identity. The initializer defaults an image only for
+    #: the controller's own built-in manager. None keeps the controller's
+    #: choice; a copaw deployment sets the manager image of its tag, e.g.
+    #: ``higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0``.
+    agentteams_manager_image: str | None = None
     runner_control_token: str | None = None
     #: Worker-scoped runner credentials: a JSON object mapping worker agent id
     #: to that worker's own bearer token, e.g. ``{"<uuid>": "<token>"}``. The

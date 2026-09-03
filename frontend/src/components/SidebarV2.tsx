@@ -21,6 +21,7 @@ export type NavKey =
   | "teams"
   | "agents"
   | "observe"
+  | "decision-chains"
   | "settings";
 
 const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
@@ -30,6 +31,7 @@ const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
   { key: "teams", label: "团队" },
   { key: "agents", label: "智能体" },
   { key: "observe", label: "观测" },
+  { key: "decision-chains", label: "历史决策" },
 ];
 
 function NavIcon({ nav }: { nav: NavKey }) {
@@ -74,6 +76,15 @@ function NavIcon({ nav }: { nav: NavKey }) {
     return (
       <svg viewBox="0 0 24 24" {...common}>
         <path d="M3 12h4l2.5-6 4 12L16 8l2 4h3" />
+      </svg>
+    );
+  if (nav === "decision-chains")
+    // 回退时钟/时间线：历史决策 = 往回看谁在何时定了什么。
+    return (
+      <svg viewBox="0 0 24 24" {...common}>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M12 7.5V12l3.2 2" />
+        <path d="M3.8 7.5 6 4.5M20.2 7.5 18 4.5" />
       </svg>
     );
   return (

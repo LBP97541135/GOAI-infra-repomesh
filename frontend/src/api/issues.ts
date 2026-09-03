@@ -47,6 +47,7 @@ export async function createIssue(
   requirementText: string,
   organizationId: string | null,
   idempotencyKey: string,
+  documentFilename: string | null,
 ): Promise<IssueListItemView> {
   const principal = await resolveGovernanceAgent(organizationId);
   if (!principal) {
@@ -59,6 +60,8 @@ export async function createIssue(
     // §6 S-4 交叉校验位：声明「当前工作区」，服务端与主体所属组织比对，
     // 不一致即 403——防 leader id 取错工作区花名册。未选工作区时不带。
     ...(organizationId !== null ? { organization_id: organizationId } : {}),
+    // 需求文档文件名（随需求落库，后续审计/溯源/分析均可用；手输文本时省略）
+    ...(documentFilename ? { document_filename: documentFilename } : {}),
   });
 }
 

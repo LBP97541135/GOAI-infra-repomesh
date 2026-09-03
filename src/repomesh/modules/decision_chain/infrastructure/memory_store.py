@@ -81,13 +81,13 @@ class InMemoryDecisionChainStore:
         return max(same_step, key=lambda view: view.version, default=None)
 
     async def trace(
-        self, *, organization_id: UUID, project_id: UUID
+        self, *, organization_id: UUID | None, project_id: UUID
     ) -> DecisionChainNodes:
         nodes = sorted(
             (
                 view
                 for view in self._nodes.values()
-                if view.organization_id == organization_id
+                if (organization_id is None or view.organization_id == organization_id)
                 and view.project_id == project_id
             ),
             key=lambda view: (view.business_time, view.step.chain_order, view.version),
@@ -181,11 +181,11 @@ class InMemoryDecisionEmbeddingStore:
         return pending[:limit]
 
     async def embedded_nodes(
-        self, *, organization_id: UUID
+        self, *, organization_id: UUID | None
     ) -> list[EmbeddedDecision]:
         return [
             EmbeddedDecision(node=view, embedding=list(self._embeddings[view.decision_id]))
             for view in self._chain._nodes.values()  # noqa: SLF001 (test twin)
-            if view.organization_id == organization_id
+            if (organization_id is None or view.organization_id == organization_id)
             and view.decision_id in self._embeddings
         ]

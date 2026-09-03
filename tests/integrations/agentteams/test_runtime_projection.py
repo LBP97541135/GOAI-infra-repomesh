@@ -418,6 +418,31 @@ async def test_the_projections_match_the_pipeline_script() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_injected_manager_image_reaches_the_manager_projection() -> None:
+    """The durable fix for the crash-loop: an imageless manager CR is handed
+    the *worker* image by the controller's role-blind fallback and exits for
+    want of ``AGENTTEAMS_WORKER_NAME`` — so a copaw deployment names its
+    manager image, and this is the injection that has to carry it through.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(directory, store, repositories=1)
+
+    control_plane = RecordingControlPlane()
+    image = "registry/agentteams-manager-copaw:v1.2.0"
+    await ProjectRuntimeProjection(
+        directory,
+        store,
+        control_plane,  # type: ignore[arg-type]
+        model=MODEL,
+        **{**_RUNTIMES, "manager_image": image},
+    ).project(project_id)
+
+    assert control_plane.managers[0].image == image
+
+
+@pytest.mark.asyncio
 async def test_a_worker_created_before_the_task_control_url_gets_it_on_a_later_pass() -> None:
     """The bootstrap-bug story, end to end.
 

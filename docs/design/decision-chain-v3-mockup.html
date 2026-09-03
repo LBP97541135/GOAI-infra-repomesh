@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>决策链详情页</title>
+<style>
+  /* ============ 设计令牌：与 frontend/src/index.css @theme 完全一致 ============ */
+  :root {
+    --ink: #16130d;
+    --ink-deep: #131009;
+    --panel: #201b12;
+    --panel-2: #262013;
+    --line: #3b3323;
+    --amber: #c99e52;
+    --amber-hi: #e3c078;
+    --cream: #e9dec2;
+    --kraft: #dcc99c;
+    --salmon: #c26d51;
+    --olive: #94a35a;
+    --bluegray: #8aa0b4;
+    --tx: #d8cdb2;
+    --tx2: #93876c;
+    --tx3: #6b6046;
+    --radius: 2px;
+    --mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    background: var(--ink);
+    color: var(--tx);
+  }
+  .stage { max-width: 940px; margin: 0 auto; padding: 20px 20px 90px; }
+
+  /* ============ 顶部导航 ============ */
+  .topbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .brand { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em; color: var(--amber); text-transform: uppercase; }
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tab {
+    font-family: inherit; font-size: 12.5px; color: var(--tx2);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 6px 12px; cursor: pointer;
+  }
+  .tab.active { color: var(--amber-hi); border-color: var(--amber); background: var(--panel-2); }
+
+  /* ============ 链头 ============ */
+  .head-card { margin-top: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px 22px 16px; }
+  .eyebrow { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em; color: var(--amber); text-transform: uppercase; }
+  .req { margin: 10px 0 0; font-size: 15.5px; line-height: 1.7; color: var(--cream); }
+  .outcome-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+  .outcome-badge {
+    font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .08em;
+    padding: 4px 12px; border-radius: var(--radius); border: 1px solid;
+  }
+  .outcome-badge.t-olive { color: var(--olive); border-color: rgba(148,163,90,.55); background: rgba(148,163,90,.08); }
+  .outcome-badge.t-dim   { color: var(--tx2); border-color: var(--line); }
+  .ids-line { margin-top: 14px; font-family: var(--mono); font-size: 10.5px; color: var(--tx3); }
+
+  /* ============ 五步进度条 ============ */
+  .progress { display: flex; align-items: flex-start; margin: 20px 0 4px; }
+  .pnode { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 84px; flex: none; background: none; border: none; cursor: pointer; padding: 0; font-family: inherit; }
+  .pdot {
+    width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+  }
+  .pnode.done .pdot { background: var(--amber); border-color: var(--amber); color: var(--ink); }
+  .pnode.gap  .pdot { border-color: var(--salmon); color: var(--salmon); }
+  .pnode.todo .pdot { border-color: var(--line); color: var(--tx3); }
+  .plabel { font-size: 12px; color: var(--tx2); white-space: nowrap; }
+  .pnode.done .plabel { color: var(--amber-hi); }
+  .pnode.gap  .plabel { color: var(--salmon); }
+  .pnode.todo .plabel { color: var(--tx3); }
+  .pdate { font-family: var(--mono); font-size: 10px; color: var(--tx3); }
+  .pnode.gap .pdate { color: rgba(194,109,81,.75); }
+  .pline { flex: 1; height: 2px; background: var(--line); margin-top: 12px; min-width: 12px; }
+  .pline.l-done { background: rgba(201,158,82,.55); }
+  .pline.l-gap  { background: repeating-linear-gradient(90deg, var(--salmon) 0 6px, transparent 6px 12px); }
+
+  /* ============ 步骤卡片（版本聚合：每步一张生效卡） ============ */
+  .card { margin-top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .card-head { display: flex; justify-content: space-between; gap: 12px; padding: 14px 18px 0; }
+  .title-row { display: flex; align-items: baseline; gap: 10px; }
+  .num { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--amber); }
+  .ctitle { font-size: 15.5px; font-weight: 600; color: var(--cream); }
+  .meta-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex: none; }
+  .actor-badge { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .04em; padding: 3px 9px; border-radius: var(--radius); border: 1px solid; white-space: nowrap; }
+  .actor-badge.model { color: var(--bluegray); border-color: rgba(138,160,180,.45); }
+  .actor-badge.human { color: var(--amber-hi); border-color: rgba(201,158,82,.55); background: rgba(201,158,82,.07); }
+  .cdate { font-family: var(--mono); font-size: 11px; color: var(--tx2); }
+  .card-body { padding: 10px 18px 16px; }
+
+  /* 三档范围 */
+  .tier-group { margin: 8px 0; }
+  .tier-chip { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: var(--radius); border: 1px solid; }
+  .tier-chip.t-required { color: var(--olive); border-color: rgba(148,163,90,.5); }
+  .tier-chip.t-maybe    { color: var(--amber); border-color: rgba(201,158,82,.5); }
+  .tier-chip.t-excluded { color: var(--tx3); border-color: var(--line); }
+  .tier-items { list-style: none; margin: 6px 0 0; padding: 0; }
+  .tier-items li { padding: 2px 0; }
+  .tier-items li.i-required { color: var(--tx); }
+  .tier-items li.i-maybe    { color: var(--tx2); }
+  .tier-items li.i-excluded { color: var(--tx3); }
+  details.minor-tiers { margin-top: 8px; }
+  details.minor-tiers > summary { cursor: pointer; font-family: var(--mono); font-size: 11.5px; color: var(--tx2); }
+  details.minor-tiers > summary:hover { color: var(--tx); }
+  details.minor-tiers[open] > summary { margin-bottom: 4px; }
+
+  /* 人工确认 */
+  .result-line { display: flex; gap: 8px; align-items: center; margin: 4px 0 10px; }
+  .rdot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .rdot.ok { background: var(--olive); }
+  .result-text { color: var(--cream); font-weight: 600; }
+  .microlabel { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .16em; color: var(--tx2); text-transform: uppercase; }
+  .reason { margin: 6px 0 0; padding-left: 12px; border-left: 2px solid var(--line); color: var(--tx); line-height: 1.75; }
+  .adjust-row { margin-top: 12px; }
+  .adjust-chip {
+    display: inline-block; margin: 5px 6px 0 0; padding: 3px 10px; border-radius: var(--radius);
+    font-family: var(--mono); font-size: 11.5px; color: var(--amber-hi);
+    background: rgba(201,158,82,.08); border: 1px dashed rgba(201,158,82,.4);
+  }
+
+  /* 版本记录时间线 */
+  .vhist { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  .vrow { display: flex; gap: 10px; }
+  .vcol { display: flex; flex-direction: column; align-items: center; flex: none; }
+  .vdot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--line); flex: none; margin-top: 5px; }
+  .vline { width: 2px; flex: 1; background: var(--line); min-height: 8px; }
+  .vmain { padding-bottom: 10px; flex: 1; }
+  .vhead { font-size: 13px; color: var(--tx); }
+  .vhead .vdate { font-family: var(--mono); font-size: 11px; color: var(--tx2); margin-right: 8px; }
+  .vtag { font-family: var(--mono); font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: var(--radius); margin-left: 8px; border: 1px solid; }
+  .vtag.current { color: var(--olive); border-color: rgba(148,163,90,.5); }
+  .vtag.super   { color: var(--tx3); border-color: var(--line); }
+  details.vold > summary { cursor: pointer; font-family: var(--mono); font-size: 11px; color: var(--tx2); margin-top: 4px; }
+  details.vold > summary:hover { color: var(--tx); }
+  .vold-body { margin-top: 6px; background: var(--ink-deep); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; font-family: var(--mono); font-size: 11px; color: var(--tx2); line-height: 1.8; }
+
+  /* 契约 / 任务 / PR */
+  .contract-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+  .party { font-family: var(--mono); font-size: 12px; color: var(--tx); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 9px; }
+  .iface { font-family: var(--mono); font-size: 12px; color: var(--amber-hi); background: rgba(201,158,82,.07); border: 1px solid rgba(201,158,82,.35); border-radius: var(--radius); padding: 2px 9px; }
+  .carrow { color: var(--tx3); }
+  .task-title { font-size: 14.5px; font-weight: 600; color: var(--cream); margin-top: 2px; }
+  .task-ids { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .task-id { font-family: var(--mono); font-size: 11.5px; color: var(--tx2); border: 1px solid var(--line); border-radius: var(--radius); padding: 2px 8px; background: var(--panel-2); }
+  .pr-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 2px; }
+  .pr-state { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--olive); border: 1px solid rgba(148,163,90,.55); background: rgba(148,163,90,.08); border-radius: var(--radius); padding: 3px 10px; }
+  .pr-link { font-family: var(--mono); font-size: 12px; color: var(--amber); }
+  .pr-link a { color: inherit; }
+
+  /* 仓库 chips */
+  .repos { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .repo-chip { font-family: var(--mono); font-size: 11.5px; color: var(--tx); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 3px 9px; }
+
+  /* 溯源折叠 */
+  details.prov { margin-top: 12px; }
+  details.prov > summary { cursor: pointer; }
+  details.prov > summary:hover { color: var(--tx); }
+  .prov-body { margin-top: 6px; background: var(--ink-deep); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; font-family: var(--mono); font-size: 11px; color: var(--tx3); line-height: 1.9; }
+  .prov-body .k { color: var(--tx2); display: inline-block; width: 108px; }
+  .prov-body .ev { color: var(--tx2); }
+
+  /* 幽灵卡：缺口 / 未到达 */
+  .ghost { margin-top: 16px; border-radius: var(--radius); }
+  .ghost.g-gap { border: 1px dashed rgba(194,109,81,.55); }
+  .ghost.g-todo { border: 1px dashed var(--line); }
+  .ghost-inner { padding: 13px 18px; }
+  .g-gap .gtitle { color: var(--salmon); }
+  .g-todo .gtitle { color: var(--tx2); }
+  .gtitle { font-size: 14px; font-weight: 600; }
+  .gtitle .num { color: inherit; opacity: .85; }
+  .gnote { font-size: 12.5px; color: var(--tx2); margin-top: 4px; }
+  .g-todo .gnote { color: var(--tx3); }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div class="topbar">
+    <span class="brand">REPOMESH</span>
+    <div class="tabs" id="tabs"></div>
+  </div>
+
+  <div id="chain"></div>
+</div>
+
+<script>
+/* ================= 真实数据（来自 API trace，仅重组为聚合形态） ================= */
+const STEP_NAMES = ["圈定范围", "人工确认", "排执行顺序", "拆成任务", "提交代码"];
+
+const scenarios = {
+  returns: {
+    tabLabel: "退货部分退款",
+    requirement: "当前退货流程只支持整单退款，用户因部分商品问题退货时必须整单退回；需支持按商品行部分退款，并保留退款金额审计记录。",
+    ids: "项目 9d1e4c56-1b39-4f72-a4e5-88fd30de0037 · 需求快照 d604427a-7f19-4859-9933-5e2fae93bc52 · 计划版本 v1",
+    outcome: { label: "未提交代码", tone: "t-dim" },
+    progress: ["done", "done", "gap", "done", "todo"],
+    cards: [
+      {
+        kind: "classification", num: 1, date: "07-01", actor: { k: "model", t: "模型决策" },
+        tiers: {
+          required: ["退货流程支持部分退款", "按商品行退款", "退款金额审计"],
+          maybe: ["部分退款审批", "退款单拆分"],
+          excluded: ["物流拦截", "库存回补"]
+        },
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "classification · v1", d: "330f5063-fc71-413a-81a2-d40f73c90eae", e: "a968bffc-31d0-5047-9946-5f5528a61f10", biz: "2026-07-01 00:00:00 UTC", rec: "2026-09-01 13:00:49 UTC", et: "ClassificationDecided", ev: "ev:classification-9d1e4c-a1 → seed://demo/9d1e4c/classification/1" }
+      },
+      {
+        kind: "confirmation", num: 2, date: "07-03", actor: { k: "human", t: "人 · product-owner" },
+        result: { label: "批准" },
+        reason: "按商品行退款是本次需求的核心，退款金额审计直接服务合规，两项必须做；审批流与退款单拆分先挂待定，等首版上线后按反馈再定；物流拦截要动履约系统、库存回补牵扯财务对账，都超出本次边界。",
+        adjustLabel: "批准时附加",
+        adjustments: ["仅支持发货后 30 天内部分退款"],
+        versions: [
+          { v: 1, date: "07-02", head: "批准 · 未留理由", current: false,
+            old: "state=approved · decided_by=product-owner\n附加条件: 仅支持发货后 30 天内部分退款\n批准理由: （未记录）\nevent=ConfirmationDecided · 2026-07-02" },
+          { v: 2, date: "07-03", head: "批准 · 补录批准理由", current: true }
+        ],
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "confirmation · v2（生效）", d: "ad0decb0-2fa8-4a7e-89b5-98c87fc9d343", e: "fe421144-b8a6-5240-960f-6415567b738e", biz: "2026-07-03 00:00:00 UTC", rec: "2026-09-02 05:59:15 UTC（补录）", et: "ConfirmationDecided", ev: "ev:confirmation-9d1e4c-a4 → seed://demo/9d1e4c/confirmation/4" }
+      },
+      { kind: "ghost", num: 3, variant: "gap", title: "排执行顺序", note: "这一步没有留下决策记录；前后步骤都在（数据如此，非展示缺漏）。" },
+      {
+        kind: "task", num: 4, date: "07-04", actor: { k: "model", t: "模型决策" },
+        title: "退货部分退款：订单行级退款计算与审计记录",
+        taskIds: ["dc-return-partial-01"],
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "task · v1", d: "40670473-f7d8-411d-99f3-ec3c2340b752", e: "5454aefd-3f09-56c0-b663-2900333f9254", biz: "2026-07-04 00:00:00 UTC", rec: "2026-09-01 13:00:49 UTC", et: "TasksPlanned", ev: "ev:task-9d1e4c-a3 → seed://demo/9d1e4c/task/3" }
+      },
+      { kind: "ghost", num: 5, variant: "todo", title: "提交代码", note: "这条链还没走到这一步。" }
+    ]
+  },
+
+  pricing: {
+    tabLabel: "价格修改审计",
+    requirement: "结账阶段价格修改（优惠、调价、后台干预）必须记录修改原因，并在后台对订单展示修改历史，保证价格修改可审计。",
+    ids: "项目 7f3d2a10-93d0-4c8e-9b21-5aa1c0de0042 · 需求快照 f58c4c4e-6cca-4b14-b487-e50606fd733c · 计划版本 v1",
+    outcome: { label: "已落地 · PR #4821", tone: "t-olive" },
+    progress: ["done", "done", "done", "done", "done"],
+    cards: [
+      {
+        kind: "classification", num: 1, date: "07-10", actor: { k: "model", t: "模型决策" },
+        tiers: {
+          required: ["结账价格修改原因记录", "后台展示价格修改历史", "价格修改审计"],
+          maybe: ["价格修改原因表单", "结账备注"],
+          excluded: ["运费计算", "优惠券核销"]
+        },
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "classification · v1", d: "07d2de95-1c76-4066-82e8-382365a3c3fe", e: "13cce371-1926-58f2-bfcc-5cf56a968630", biz: "2026-07-10 00:00:00 UTC", rec: "2026-09-01 13:00:49 UTC", et: "ClassificationDecided", ev: "ev:classification-7f3d2a-a1 → seed://demo/7f3d2a/classification/1" }
+      },
+      {
+        kind: "confirmation", num: 2, date: "07-12", actor: { k: "human", t: "人 · product-owner" },
+        result: { label: "批准" },
+        reason: "价格修改全程可审计是合规底线，记录、展示、审计三项必改缺一不可；原因表单与结账备注先看运营反馈再定；运费计算与优惠券核销属于定价域，不在本需求边界内。",
+        adjustLabel: "批准时附加",
+        adjustments: ["原因必填，覆盖后台与 API 两种修改入口"],
+        versions: [
+          { v: 1, date: "07-11", head: "批准 · 未留理由", current: false,
+            old: "state=approved · decided_by=product-owner\n附加条件: 原因必填，覆盖后台与 API 两种修改入口\n批准理由: （未记录）\nevent=ConfirmationDecided · 2026-07-11" },
+          { v: 2, date: "07-12", head: "批准 · 补录批准理由", current: true }
+        ],
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "confirmation · v2（生效）", d: "d8e34583-bfbe-423b-9a29-b505f6e174c1", e: "abbacc37-8da3-5519-acee-db0e688702ba", biz: "2026-07-12 00:00:00 UTC", rec: "2026-09-02 05:59:15 UTC（补录）", et: "ConfirmationDecided", ev: "ev:confirmation-7f3d2a-a6 → seed://demo/7f3d2a/confirmation/6" }
+      },
+      {
+        kind: "integration", num: 3, date: "07-13", actor: { k: "model", t: "模型决策" },
+        contracts: [{ provider: "saleor-core", consumers: ["saleor-dashboard"], iface: "IPriceChangeReason" }],
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "integration · v1", d: "a38059c3-82e2-4563-95cc-f3f615db2538", e: "37adb1da-ecaa-5468-ae99-2a71cee1f683", biz: "2026-07-13 00:00:00 UTC", rec: "2026-09-01 13:00:49 UTC", et: "IntegrationDecided", ev: "ev:integration-7f3d2a-a3 → seed://demo/7f3d2a/integration/3" }
+      },
+      {
+        kind: "task", num: 4, date: "07-15", actor: { k: "model", t: "模型决策" },
+        title: "结账价格修改原因：记录字段、后台展示与 API 暴露",
+        taskIds: ["dc-price-reason-01", "dc-price-reason-02"],
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "task · v1", d: "c9c65f96-0ae6-4cdc-b328-924601b05cff", e: "be38cace-c1c6-5911-a6cf-c4a306281d7e", biz: "2026-07-15 00:00:00 UTC", rec: "2026-09-01 13:00:49 UTC", et: "TasksPlanned", ev: "ev:task-7f3d2a-a4 → seed://demo/7f3d2a/task/4" }
+      },
+      {
+        kind: "pr", num: 5, date: "07-17", actor: { k: "model", t: "服务同步" },
+        pr: { number: 4821, url: "https://github.com/demo/saleor/pull/4821", stateLabel: "已合入" },
+        repos: ["saleor-core", "saleor-dashboard"],
+        prov: { step: "pr · v1", d: "dc6393d1-b91b-4cb0-8ca5-1d79685dc32c", e: "f58ec473-6b62-532d-83f8-af700b570271", biz: "2026-07-17 00:00:00 UTC", rec: "2026-09-01 13:00:49 UTC", et: "PullRequestObserved", ev: "ev:pr-7f3d2a-a5 → seed://demo/7f3d2a/pr/5" }
+      }
+    ]
+  }
+};
+
+/* ================= 渲染 ================= */
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function reposHtml(repos) {
+  if (!repos || !repos.length) return "";
+  return '<div class="repos"><span class="microlabel">影响仓库</span>' +
+    repos.map(r => '<span class="repo-chip">' + esc(r) + "</span>").join("") + "</div>";
+}
+
+function provHtml(p) {
+  return '<details class="prov"><summary class="microlabel">溯源 · 原始事件与证据</summary><div class="prov-body">' +
+    '<div><span class="k">系统步骤</span>' + esc(p.step) + "</div>" +
+    '<div><span class="k">decision_id</span>' + esc(p.d) + "</div>" +
+    '<div><span class="k">event_id</span>' + esc(p.e) + "</div>" +
+    '<div><span class="k">业务时间</span>' + esc(p.biz) + "</div>" +
+    '<div><span class="k">入库时间</span>' + esc(p.rec) + "</div>" +
+    '<div><span class="k">事件类型</span>' + esc(p.et) + "</div>" +
+    '<div><span class="k">证据引用</span><span class="ev">' + esc(p.ev) + "</span></div>" +
+    "</div></details>";
+}
+
+function headHtml(c) {
+  return '<div class="card-head"><div class="title-row"><span class="num">' + c.num + ".</span>" +
+    '<span class="ctitle">' + esc(STEP_NAMES[c.num - 1]) + "</span></div>" +
+    '<div class="meta-right"><span class="actor-badge ' + c.actor.k + '">' + esc(c.actor.t) + "</span>" +
+    '<span class="cdate">' + esc(c.date) + "</span></div></div>";
+}
+
+function bodyClassification(c) {
+  const t = c.tiers;
+  let h = '<div class="tier-group"><span class="tier-chip t-required">必改 ' + t.required.length + "</span>" +
+    '<ul class="tier-items">' + t.required.map(x => '<li class="i-required">· ' + esc(x) + "</li>").join("") + "</ul></div>";
+  h += '<details class="minor-tiers"><summary>待定 ' + t.maybe.length + " · 不做 " + t.excluded.length + " ▸</summary>" +
+    '<div class="tier-group"><span class="tier-chip t-maybe">待定</span><ul class="tier-items">' +
+    t.maybe.map(x => '<li class="i-maybe">· ' + esc(x) + "</li>").join("") + "</ul></div>" +
+    '<div class="tier-group"><span class="tier-chip t-excluded">不做</span><ul class="tier-items">' +
+    t.excluded.map(x => '<li class="i-excluded">· ' + esc(x) + "</li>").join("") + "</ul></div></details>";
+  return h;
+}
+
+function bodyConfirmation(c) {
+  let h = '<div class="result-line"><span class="rdot ok"></span><span class="result-text">' + esc(c.result.label) + "</span></div>";
+  if (c.reason) h += '<div class="microlabel">批准理由</div><p class="reason">' + esc(c.reason) + "</p>";
+  if (c.adjustments && c.adjustments.length) {
+    h += '<div class="adjust-row"><span class="microlabel">' + esc(c.adjustLabel || "批准时附加") + "</span><br>" +
+      c.adjustments.map(a => '<span class="adjust-chip">' + esc(a) + "</span>").join("") + "</div>";
+  }
+  h += '<div class="vhist"><div class="microlabel">版本记录</div>';
+  c.versions.forEach((v, i) => {
+    h += '<div class="vrow"><div class="vcol"><span class="vdot" style="' + (v.current ? "background:var(--amber-hi);border-color:var(--amber-hi)" : "") + '"></span>' +
+      (i < c.versions.length - 1 ? '<span class="vline"></span>' : "") + "</div>" +
+      '<div class="vmain"><div class="vhead"><span class="vdate">' + esc(v.date) + "</span>v" + v.v + " · " + esc(v.head) +
+      '<span class="vtag ' + (v.current ? "current" : "super") + '">' + (v.current ? "当前生效" : "已被取代") + "</span></div>";
+    if (!v.current && v.old) {
+      h += '<details class="vold"><summary>v' + v.v + " 完整内容 ▸</summary><pre class=\"vold-body\">" + esc(v.old) + "</pre></details>";
+    }
+    h += "</div></div>";
+  });
+  h += "</div>";
+  return h;
+}
+
+function bodyIntegration(c) {
+  return c.contracts.map(k =>
+    '<div class="contract-row"><span class="party">' + esc(k.provider) + "</span>" +
+    '<span class="microlabel">定义</span><span class="iface">' + esc(k.iface) + "</span>" +
+    '<span class="carrow">→</span>' +
+    k.consumers.map(x => '<span class="party">' + esc(x) + "</span>").join("") +
+    '<span class="microlabel">消费</span></div>'
+  ).join("");
+}
+
+function bodyTask(c) {
+  return '<div class="task-title">' + esc(c.title) + "</div>" +
+    '<div class="task-ids"><span class="microlabel">任务 ' + c.taskIds.length + " 个</span>" +
+    c.taskIds.map(t => '<span class="task-id">' + esc(t) + "</span>").join("") + "</div>";
+}
+
+function bodyPr(c) {
+  return '<div class="pr-row"><span class="pr-state">' + esc(c.pr.stateLabel) + "</span>" +
+    '<span class="pr-link">PR <a href="' + esc(c.pr.url) + '" target="_blank" rel="noreferrer">#' + c.pr.number + "</a></span></div>";
+}
+
+function cardHtml(c) {
+  let body = "";
+  if (c.kind === "classification") body = bodyClassification(c);
+  else if (c.kind === "confirmation") body = bodyConfirmation(c);
+  else if (c.kind === "integration") body = bodyIntegration(c);
+  else if (c.kind === "task") body = bodyTask(c);
+  else if (c.kind === "pr") body = bodyPr(c);
+  return '<section class="card" id="card-' + c.num + '">' + headHtml(c) +
+    '<div class="card-body">' + body + reposHtml(c.repos) + provHtml(c.prov) + "</div></section>";
+}
+
+function ghostHtml(c) {
+  const icon = c.variant === "gap" ? "⚠ " : "";
+  return '<section class="ghost g-' + c.variant + '" id="card-' + c.num + '"><div class="ghost-inner">' +
+    '<div class="gtitle"><span class="num">' + c.num + ".</span> " + icon + esc(c.title) + " · 无记录</div>" +
+    '<div class="gnote">' + esc(c.note) + "</div></div></section>";
+}
+
+function progressHtml(sc) {
+  const dates = {};
+  sc.cards.forEach(c => { if (c.kind !== "ghost") dates[c.num] = c.date; });
+  let h = '<div class="progress">';
+  sc.progress.forEach((st, i) => {
+    const n = i + 1;
+    const mark = st === "done" ? "✓" : st === "gap" ? "!" : "·";
+    h += '<button class="pnode ' + st + '" onclick="jump(' + n + ')" title="跳到这一步">' +
+      '<span class="pdot">' + mark + "</span>" +
+      '<span class="plabel">' + STEP_NAMES[i] + "</span>" +
+      '<span class="pdate">' + (dates[n] || (st === "gap" ? "缺记录" : "未到达")) + "</span></button>";
+    if (i < sc.progress.length - 1) {
+      const next = sc.progress[i + 1];
+      const cls = st === "done" && next === "done" ? "l-done" : (st === "done" || next === "done") ? "l-gap" : "";
+      h += '<span class="pline ' + cls + '"></span>';
+    }
+  });
+  return h + "</div>";
+}
+
+function render(key) {
+  const sc = scenarios[key];
+  let h = '<div class="head-card">' +
+    '<span class="eyebrow">决策链 · ' + esc(sc.tabLabel) + "</span>" +
+    '<p class="req">' + esc(sc.requirement) + "</p>" +
+    '<div class="outcome-row"><span class="outcome-badge ' + sc.outcome.tone + '">' + esc(sc.outcome.label) + "</span></div>" +
+    '<div class="ids-line">' + esc(sc.ids) + "</div></div>";
+
+  h += progressHtml(sc);
+
+  sc.cards.forEach(c => {
+    h += c.kind === "ghost" ? ghostHtml(c) : cardHtml(c);
+  });
+
+  document.getElementById("chain").innerHTML = h;
+  document.querySelectorAll("#tabs .tab").forEach(b => b.classList.toggle("active", b.dataset.key === key));
+}
+
+function jump(n) {
+  const el = document.getElementById("card-" + n);
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* 标签页 */
+const tabsEl = document.getElementById("tabs");
+Object.entries(scenarios).forEach(([key, sc]) => {
+  const b = document.createElement("button");
+  b.className = "tab";
+  b.dataset.key = key;
+  b.textContent = sc.tabLabel;
+  b.onclick = () => render(key);
+  tabsEl.appendChild(b);
+});
+
+render("returns");
+</script>
+</body>
+</html>

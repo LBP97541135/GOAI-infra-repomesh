@@ -165,6 +165,7 @@ class IssueIntakeService:
                 created_by_agent_id=actor.id,
                 execution_plan_id=None,
                 requirement_text=text,
+                document_filename=command.document_filename,
             )
         except PlanSnapshotAlreadyExists:
             # Same key replay: the original snapshot (and its text) stands —

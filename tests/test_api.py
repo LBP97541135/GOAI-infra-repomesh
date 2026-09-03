@@ -727,6 +727,104 @@ def test_worker_mcp_can_be_explicitly_enabled_for_local_direct_mode(
         get_settings.cache_clear()
 
 
+def test_worker_mcp_tools_call_success_returns_started_payload(
+    application_container: ApplicationContainer, monkeypatch
+) -> None:
+    """Regression: the endpoint must unwrap McpCallResult.value.
+
+    The guard wraps every invoke (policy enforcement cannot be bypassed), so
+    ``call_gated`` returns ``McpCallResult`` — not the service's
+    ``WorkerExecutionStarted``. The endpoint used to treat the wrapper as the
+    result object and crashed with AttributeError after the execution side
+    effects had already committed. It must read ``guard_result.value`` and map
+    non-success outcomes to an isError tool result instead.
+    """
+
+    from types import SimpleNamespace
+
+    from repomesh.modules.capability_management.mcp_guard import McpCallGuard
+    from repomesh.modules.task_orchestration.contracts import TaskStatus
+
+    monkeypatch.setenv("REPOMESH_ENVIRONMENT", "test")
+    monkeypatch.setenv("REPOMESH_DIRECT_WORKER_MCP_ENABLED", "true")
+
+    task_id = uuid4()
+    run_id = uuid4()
+
+    class FakeExecutionService:
+        def __init__(self) -> None:
+            self.commands = []
+
+        async def execute(self, command):
+            self.commands.append(command)
+            return SimpleNamespace(
+                task=SimpleNamespace(
+                    task_id=command.task_id,
+                    run_id=run_id,
+                    workspace=SimpleNamespace(
+                        workspace_id="ws-1", base_sha="0" * 40
+                    ),
+                ),
+                status=TaskStatus.IN_PROGRESS,
+            )
+
+    class ContainerOverride:
+        """Delegate everything to the real container except the two services.
+
+        ApplicationContainer is a frozen slotted dataclass, so services cannot
+        be patched onto the instance; a proxy keeps the test hermetic without
+        rebuilding the whole dependency graph.
+        """
+
+        def __init__(self, base: ApplicationContainer, guard, service) -> None:
+            self._base = base
+            self._guard = guard
+            self._service = service
+
+        def __getattr__(self, name):
+            if name == "mcp_call_guard":
+                return lambda: self._guard
+            if name == "worker_execution_service":
+                return lambda: self._service
+            return getattr(self._base, name)
+
+    fake_service = FakeExecutionService()
+    # A bare guard without a policy provider: defaults (no retry, 30s) keep
+    # the test hermetic — no registry/DB round trip for the policy.
+    overridden = ContainerOverride(application_container, McpCallGuard(), fake_service)
+    get_settings.cache_clear()
+    try:
+        with TestClient(create_app(overridden)) as client:
+            response = client.post(
+                "/api/v1/mcp/worker",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "start_assigned_task",
+                        "arguments": {
+                            "task_id": str(task_id),
+                            "worker_agent_id": str(uuid4()),
+                            "adapter_id": "claude-code",
+                        },
+                    },
+                },
+            )
+        assert response.status_code == 200
+        body = response.json()["result"]
+        assert body.get("isError") is None
+        payload = body["structuredContent"]
+        assert payload["task_id"] == str(task_id)
+        assert payload["run_id"] == str(run_id)
+        assert payload["status"] == "in_progress"
+        assert payload["workspace_id"] == "ws-1"
+        assert payload["base_sha"] == "0" * 40
+        assert len(fake_service.commands) == 1
+    finally:
+        get_settings.cache_clear()
+
+
 def test_worker_mcp_direct_mode_is_forbidden_in_production(
     application_container: ApplicationContainer, monkeypatch
 ) -> None:

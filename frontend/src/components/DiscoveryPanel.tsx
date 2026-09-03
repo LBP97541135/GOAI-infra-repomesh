@@ -3,6 +3,7 @@ import type {
   DiscoveryAnalysisBlock,
   DiscoveryCandidateItem,
   DiscoveryCandidatesBlock,
+  DiscoveryEffectiveTier,
   DiscoveryStepError,
   DiscoveryTaskView,
   DiscoveryTier,
@@ -27,9 +28,10 @@ import {
 } from "../api/discovery";
 import { resolveGovernanceAgent } from "../api/decisions";
 import { resolveDataSourceMode } from "../api/source";
-import { agentLabel, errText, shortId } from "../display";
+import { agentLabel, errText, shortId, TIER_LABEL, TIER_SKIN } from "../display";
 import { DiscoveryApproval, type ApprovalPrincipal } from "./DiscoveryApproval";
 import { MaterializeModal } from "./MaterializeModal";
+import { Modal } from "./Modal";
 import { SupervisionPolicyCard, type PolicyDraftState } from "./SupervisionPolicyCard";
 import { SupervisionPolicyDialog } from "./SupervisionPolicyDialog";
 
@@ -41,9 +43,15 @@ import { SupervisionPolicyDialog } from "./SupervisionPolicyDialog";
  *  ── 本面最要紧的一条 ───────────────────────────────────────────────
  *  **步进器走到哪，前端一个字都不判。** 契约 §3.2 的七条按序判定唯一实现在读模型，
  *  投影成 `step`(1..4) 与 `step_state`。本文件里搜不到那七条规则的任何影子实现：
- *  步进器渲染 `view.step`，每一步的触发按钮也只按 `view.step >= N` 开闭——那个 N
+ *  渐进披露只渲染 `1..step`，每一步的触发按钮也只按 `view.step >= N` 开闭——那个 N
  *  的比较用的是读模型给的数，不是前端从 analysis/candidates 是否为空推出来的。
  *  两份判定一旦并存，漂移的那天界面会理直气壮地指错步。
+ *
+ *  ── 渐进披露（版式）───────────────────────────────────────────────
+ *  完成一步才出现下一步：只渲染 `1..step`，`n < step` 的步折叠成一行「✓ 标题 · 结果
+ *  摘要」，点开只读详情；未到的步不出场，由顶部的四点迷你进度暗示。重跑上游会自动
+ *  作废下游（Q8），所以已完成步的重跑入口收在展开详情里，且确有下游可作废时先弹
+ *  确认再发请求。前置未满足之类的 409 不在前端预告——真实报错原文如实显示即可。
  *
  *  ── 其余几条 ──────────────────────────────────────────────────────
  *  **不留本地结果副本。**每一步的结果一律现读 `view`。Q8 裁决上游重跑**自动作废
@@ -61,10 +69,13 @@ type StepKey = "analysis" | "candidates" | "classification" | "plan" | "approval
 
 const STEP_TITLES = ["需求分析", "候选评分", "分档审批", "生成计划"];
 
+/** 步号 → 触发用的幂等键位。只盖发现链四步；审批与物化另有键位。 */
+const STEP_KEYS = ["analysis", "candidates", "classification", "plan"] as const;
+
 /** 物化开工（C-3）要用的、发现读投影**之外**的事实。都来自 issue 详情与计划纸面，
  *  由容器持有并传进来——发现面板自己再取一遍 issue 详情就成了第二个取数点。
  *
- *  步进器仍只有四格：物化不是发现链的第五步（发现四步改的是同一份草稿快照，
+ *  渐进披露仍只有四步：物化不是发现链的第五步（发现四步改的是同一份草稿快照，
  *  物化建的是执行面的实体）。 */
 export interface MaterializeContext {
   /** `detail.rounds.length`。非 0 = 已物化，按钮不再出现，改显已物化留痕。 */
@@ -91,45 +102,83 @@ export interface MaterializeContext {
  *     背后押一把「多半还没物化」，押错就是让人对着一份已锁死的档案填半天表。 */
 export type PolicyGate = "resolving" | "open" | "sealed" | "unknown";
 
-/* ── 步进器 ─────────────────────────────────────────────────────────────── */
+/* ── 步进器（渐进披露版）────────────────────────────────────────────────── */
 
-/** 态色照设计定稿：完成 = 橄榄绿、当前 = 琥珀、未到 = 弱化。全部取既有令牌。
- *  失败态用赭红——那是本仓既有的失败语义（不是新增颜色语义），把失败画成「当前」
- *  会让人以为还在正常推进。 */
-function Stepper({ step, stepState }: { step: DiscoveryView["step"]; stepState: DiscoveryView["step_state"] }) {
+/** 四点迷你进度：未到的步不展开成区块，只用点暗示「后面还有几步」。
+ *  态色沿用定稿：完成 = 橄榄绿、当前 = 琥珀（running 加 blink）、失败 = 赭红、
+ *  未到 = 空心。点的 finished 判定与契约规则 7 一致（step 4 且 done 时第 4 点自算完成）。 */
+function MiniProgress({ step, stepState }: { step: DiscoveryView["step"]; stepState: DiscoveryView["step_state"] }) {
+  const failed = stepState === "failed";
+  const running = stepState === "running";
+  const suffix = failed ? "失败" : running ? "进行中" : stepState === "done" ? "已完成" : "待开始";
+  const suffixClass = failed ? "text-salmon" : running ? "text-amber" : stepState === "done" ? "text-olive" : "text-tx3";
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {STEP_TITLES.map((title, i) => {
-        const n = i + 1;
-        const current = n === step;
-        // 规则 7（step 4 且 done）下第 4 格自己也算完成，故 done 时把当前格并进完成
-        const finished = n < step || (current && stepState === "done");
-        const failed = current && stepState === "failed";
-        const running = current && stepState === "running";
-
-        const skin = failed
-          ? "border-salmon text-salmon"
-          : finished
-            ? "border-olive text-olive"
-            : current
-              ? "border-amber text-amber"
-              : "border-line text-tx3";
-
-        return (
-          <span key={title} className="flex items-center gap-1.5">
-            <span className={`rounded-hard border px-2 py-px font-mono text-[11px] ${skin}`}>
-              {running && <i className="blink mr-1 inline-block size-[5px] rounded-full bg-amber align-middle not-italic" />}
-              {n} {title}
-              {finished && " ✓"}
-              {failed && " 失败"}
-              {running && " 进行中"}
-              {current && !finished && !failed && !running && " ◀ 当前"}
-            </span>
-            {n < STEP_TITLES.length && <span className="text-[10px] text-tx3">→</span>}
-          </span>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-2.5">
+      <div className="flex items-center gap-1.5">
+        {STEP_TITLES.map((title, i) => {
+          const n = i + 1;
+          const current = n === step;
+          const finished = n < step || (current && stepState === "done");
+          const dot = current && failed ? "bg-salmon" : finished ? "bg-olive" : current ? (running ? "bg-amber blink" : "bg-amber") : "border border-line";
+          return <i key={title} title={`${n} ${title}`} className={`size-[8px] flex-none rounded-full not-italic ${dot}`} />;
+        })}
+      </div>
+      <span className="font-mono text-[11px] text-tx">
+        {step} / 4 · {STEP_TITLES[step - 1]}
+        <span className={`pl-1.5 ${suffixClass}`}>{suffix}</span>
+      </span>
     </div>
+  );
+}
+
+/** 当前步：常开区块，右上角带状态字。位置 `n === step` 由读模型给，不由折叠态推。 */
+function ActiveStep({ n, stepState, children }: { n: number; stepState: DiscoveryView["step_state"]; children: React.ReactNode }) {
+  const failed = stepState === "failed";
+  const running = stepState === "running";
+  const label = failed ? "失败" : running ? "进行中" : stepState === "done" ? "已完成" : "待开始";
+  const cls = failed ? "text-salmon" : running ? "text-amber" : stepState === "done" ? "text-olive" : "text-tx3";
+  return (
+    <div className="mt-2.5 border-t border-line pt-2.5">
+      <div className="microlabel flex items-baseline justify-between gap-2 pb-1.5">
+        <span>
+          {n} {STEP_TITLES[n - 1]}
+        </span>
+        <span className={`font-mono text-[10.5px] tracking-normal ${cls}`}>
+          {running && <i className="blink mr-1 inline-block size-[5px] rounded-full bg-amber align-middle not-italic" />}
+          {label}
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** 已完成步（n < step）：折叠成一行「✓ 标题 · 结果摘要」，点开看只读详情与重跑入口。
+ *  摘要由 stepSummary 从读模型现算，**不是缓存的旧结果**——上游重跑后读模型变了，
+ *  摘要跟着变。useState 挂在模块级组件上，重渲染不丢折叠态。 */
+function DoneStep({ n, summary, children }: { n: number; summary: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2.5 border-t border-line pt-2.5">
+      <button className="flex w-full items-center gap-2 py-1 text-left" onClick={() => setOpen((v) => !v)}>
+        <span className="flex-none text-[11px] text-olive">✓</span>
+        <span className="flex-none text-[12px] font-bold text-tx">{STEP_TITLES[n - 1]}</span>
+        <span className="min-w-0 flex-1 truncate text-[11.5px] text-tx3">{summary}</span>
+        <span className="flex-none text-[10.5px] text-tx3">{open ? "收起" : "详情"}</span>
+      </button>
+      {open && <div className="pb-1.5">{children}</div>}
+    </div>
+  );
+}
+
+/** 步块还没落地、但读模型说这一步在跑：不显假进度条，只说在跑、结果来了会顶上。 */
+function RunningLine({ title }: { title: string }) {
+  return (
+    <p className="flex items-center gap-2 py-0.5 text-[11.5px] text-amber">
+      <i className="blink inline-block size-[6px] flex-none rounded-full bg-amber not-italic" />
+      {title}执行中，完成后结果会显示在这里。
+    </p>
   );
 }
 
@@ -141,25 +190,6 @@ function StepErrorLine({ error }: { error: DiscoveryStepError }) {
     <p className="mt-1 rounded-hard border border-salmon/60 bg-salmon/10 px-2.5 py-1.5 text-[11.5px] text-salmon">
       服务端报错（{error.at}）：{error.message}
     </p>
-  );
-}
-
-function Section({
-  n,
-  step,
-  children,
-}: {
-  n: number;
-  step: DiscoveryView["step"];
-  children: React.ReactNode;
-}) {
-  return (
-    <div className={`mt-2.5 border-t border-line pt-2.5 ${n > step ? "opacity-55" : ""}`}>
-      <div className="microlabel pb-1.5">
-        {n} {STEP_TITLES[n - 1]}
-      </div>
-      {children}
-    </div>
   );
 }
 
@@ -176,6 +206,10 @@ function CandidateRow({ item, llmUsed }: { item: DiscoveryCandidateItem; llmUsed
         <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-cream">{item.repository_name}</span>
         {item.is_entry_point && (
           <span className="rounded-hard border border-amber px-1.5 py-px text-[10.5px] text-amber">入口仓</span>
+        )}
+        {/* 低信号 = 服务端自述「除名字外没有可倚仗的信号」，分数是猜测不是判定 */}
+        {item.low_signal && (
+          <span className="rounded-hard border border-line px-1.5 py-px text-[10.5px] text-tx3">低信号</span>
         )}
         {/* 这里**没有**「catalog 未解析」分支：§2.2 定死本块的 repository_id 不可为 null
             （不在 catalog 的候选评分阶段就被过滤了）。§5.4 计划纸面的节点是另一回事，
@@ -204,7 +238,8 @@ function CandidateRow({ item, llmUsed }: { item: DiscoveryCandidateItem; llmUsed
   );
 }
 
-/** Step 1 的追问区：答复表单 + 强行继续。 */
+/** Step 1 的追问区：答复表单 + 强行继续。只在**当前步**出现；步 1 完成后折叠详情走
+ *  AnalysisReadout 的只读版，不再摆表单。 */
 function ClarifyBlock({
   analysis,
   answers,
@@ -266,10 +301,72 @@ function ClarifyBlock({
         {/* 裁决 2：可强行继续，但必须留痕。契约 §4.6 把留痕落成快照 forced_continue +
             一条 platform 审计事件（发现期没有决策记录实体）。 */}
         强行继续会在本 issue 上永久留痕「忽略 {analysis.questions.length} 条追问继续」，并写一条审计事件；
-        它<b className="text-tx2">不重跑模型</b>，只是放行到候选评分。答复的拼接规则在服务端，前端不拼。
+        它<b className="text-tx2">不重跑模型</b>，只是放行到候选评分。
       </p>
     </div>
   );
+}
+
+/** 步 1 的只读事实（当前步结果态与折叠详情共用一份，不留两套措辞）。
+ *  「不充分 + 未强行继续」那种还悬着的态不在这——那由 ClarifyBlock 的表单接管。 */
+function AnalysisReadout({ analysis }: { analysis: DiscoveryAnalysisBlock }) {
+  return (
+    <>
+      {analysis.sufficient && (
+        <p className="text-[11.5px] text-olive">需求判定：充分（confidence {analysis.confidence.toFixed(2)}）</p>
+      )}
+      {/* 已强行继续：留痕原样展示，追问表单不再出现（那一票已经投过了） */}
+      {analysis.forced_continue && (
+        <p className="mt-0.5 text-[11.5px] text-amber">
+          已强行继续 · 忽略 {analysis.forced_continue.ignored_question_count} 条追问 ·{" "}
+          {agentLabel(null, analysis.forced_continue.by_agent_id)} · {analysis.forced_continue.at}
+        </p>
+      )}
+
+      {analysis.answers.length > 0 && (
+        <div className="mt-1.5">
+          <div className="microlabel pb-1">已提交的答复</div>
+          {analysis.answers.map((a, i) => (
+            <p key={`${a.question}-${i}`} className="text-[11.5px] text-tx2">
+              {a.question} — <span className="text-tx">{a.answer}</span>
+            </p>
+          ))}
+        </div>
+      )}
+
+      {analysis.extracted_keywords.length > 0 && (
+        <p className="mt-1 font-mono text-[10.5px] text-tx3">关键词：{analysis.extracted_keywords.join(" · ")}</p>
+      )}
+    </>
+  );
+}
+
+/** 生效分档（只读版，折叠详情用）：mono 仓名 + 档位徽章；`adjusted` 时把原判摆在旁边。
+ *  生效档直接读 `tier`——`original_tier` 只是「审批人改过」的注脚，不是当前事实。 */
+function EffectiveTiersList({ tiers }: { tiers: DiscoveryEffectiveTier[] }) {
+  if (tiers.length === 0) {
+    return <p className="text-[11.5px] text-tx3">暂无生效分档。</p>;
+  }
+  return (
+    <div>
+      {tiers.map((t) => (
+        <div key={t.repository} className="flex flex-wrap items-center gap-2 border-b border-line py-1 last:border-b-0">
+          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-cream">{t.repository}</span>
+          <span className={`rounded-hard border px-1.5 py-px text-[10.5px] ${TIER_SKIN[t.tier]}`}>{TIER_LABEL[t.tier]}</span>
+          {t.adjusted && t.original_tier && (
+            <span className="text-[10.5px] text-tx3">原判 {TIER_LABEL[t.original_tier]}</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 生效分档按档计数，折叠摘要与详情各用一份，口径只此一处。 */
+function tierCounts(tiers: DiscoveryEffectiveTier[]): Record<DiscoveryTier, number> {
+  const counts: Record<DiscoveryTier, number> = { required: 0, maybe: 0, excluded: 0 };
+  for (const t of tiers) counts[t.tier] += 1;
+  return counts;
 }
 
 /* ── 面板本体 ───────────────────────────────────────────────────────────── */
@@ -324,6 +421,9 @@ export function DiscoveryPanel({
   const [writeError, setWriteError] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [evidenceDrift, setEvidenceDrift] = useState(false);
+
+  /** 重跑确认弹层指向的步号（null = 关闭）。只在**确有下游可作废**时才会被置起。 */
+  const [rerunConfirm, setRerunConfirm] = useState<number | null>(null);
 
   /** 物化确认弹窗（C-3）。错误单列一份：它要显示在弹窗里，与面板顶部的
    *  writeError 不是同一个位置（关掉弹窗就看不见了，那才是真的静默失败）。 */
@@ -389,6 +489,7 @@ export function DiscoveryPanel({
     setMaterializeError(null);
     setMaterializeNotReady(null);
     setPolicyDialogOpen(false);
+    setRerunConfirm(null);
     keys.current = {};
   }, [issueId]);
 
@@ -660,14 +761,7 @@ export function DiscoveryPanel({
 
   /* ── 渲染 ─────────────────────────────────────────────────────────────── */
 
-  const header = (
-    <div className="microlabel flex items-baseline gap-2 pt-5 pb-2">
-      发现
-      <span className="text-[10px] tracking-normal text-tx3">
-        需求分析 → 候选评分 → 分档审批 → 生成计划（步进器位置由读模型判定）
-      </span>
-    </div>
-  );
+  const header = <div className="microlabel flex items-baseline gap-2 pt-5 pb-2">发现</div>;
 
   if (loading) {
     return (
@@ -703,43 +797,333 @@ export function DiscoveryPanel({
    *  前端重写 §3.2。 */
   const canTrigger = (n: number) => step >= n && canWrite && !anyBusy;
 
-  const triggerHint = (n: number) => {
+  /** 按钮旁的说明。只说「现在为什么发不出」，**不预告服务端会怎么拒**——409 是
+   *  触发那一刻的事实，真发生了会以服务端 detail 原文出现在上面的错误行里。 */
+  const triggerHint = () => {
     if (mode === "replay") return "回放模式不触发写请求（加 ?source=live）";
     if (principalResolving) return "审批/触发主体解析中…";
     if (!principalReady) return "花名册里没有本工作区的活跃 Org Leader，写请求主体无从派生";
     if (running) return "本 issue 已有在跑的任务，同时至多一个（§4.4）";
-    if (step < n) return "上一步尚未完成，服务端会以 409 拒绝";
     return null;
   };
 
-  const TriggerButton = ({ n, label, stepKey, onClick }: { n: number; label: string; stepKey: StepKey; onClick: () => void }) => (
-    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-      <button
-        className="rounded-hard bg-amber px-3 py-[5px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
-        disabled={!canTrigger(n)}
-        onClick={onClick}
-      >
-        {busy === stepKey ? "提交中…" : label}
-      </button>
-      {triggerHint(n) && <span className="text-[11px] text-tx3">{triggerHint(n)}</span>}
-    </div>
+  const TriggerButton = ({ n, label, onClick }: { n: number; label: string; onClick: () => void }) => {
+    const stepKey = STEP_KEYS[n - 1];
+    return (
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <button
+          className="rounded-hard bg-amber px-3 py-[5px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          disabled={!canTrigger(n)}
+          onClick={onClick}
+        >
+          {busy === stepKey ? "提交中…" : label}
+        </button>
+        {triggerHint() && <span className="text-[11px] text-tx3">{triggerHint()}</span>}
+      </div>
+    );
+  };
+
+  /** 步号 → 直接发起（首发与「没有下游可作废」的重试都走这里）。 */
+  const invokeStep = (n: number) => {
+    if (!agentId) return;
+    if (n === 1) {
+      startAnalysis({});
+      return;
+    }
+    if (n === 2) {
+      run("candidates", (key) =>
+        triggerCandidates(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
+      );
+      return;
+    }
+    if (n === 3) {
+      run("classification", (key) =>
+        triggerClassification(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
+      );
+      return;
+    }
+    run("plan", (key) => triggerPlan(issueId, { created_by_agent_id: agentId, idempotency_key: key }));
+  };
+
+  /** 重跑第 n 步时会被服务端自动作废（置 null）的下游步骤名（Q8）。没有下游时返回
+   *  空数组——确认弹窗只在**确实有东西要作废**时出现，否则就是在吓唬人。 */
+  const downstreamLabels = (n: number): string[] => {
+    const labels: string[] = [];
+    if (n <= 1 && candidates !== null) labels.push("候选评分");
+    if (n <= 2 && classification !== null) labels.push("分档审批（含审批意见与调整）");
+    if (n <= 3 && integration !== null) labels.push("生成计划");
+    return labels;
+  };
+
+  const requestStep = (n: number) => {
+    if (downstreamLabels(n).length > 0) setRerunConfirm(n);
+    else invokeStep(n);
+  };
+
+  const confirmRerun = () => {
+    if (rerunConfirm === null || !canWrite || busy !== null || running) return;
+    const n = rerunConfirm;
+    setRerunConfirm(null);
+    invokeStep(n);
+  };
+
+  /** 折叠行上的结果摘要：一行说清这一步落了个什么。 */
+  const stepSummary = (n: number): string | null => {
+    if (n === 1) {
+      if (!analysis) return null;
+      if (analysis.error) return "失败 · 点开详情看报错";
+      if (analysis.sufficient) return `需求充分 · 置信 ${analysis.confidence.toFixed(2)}`;
+      if (analysis.forced_continue) return `强行继续 · 忽略 ${analysis.forced_continue.ignored_question_count} 条追问`;
+      return `不充分 · ${analysis.questions.length} 条追问待答复`;
+    }
+    if (n === 2) {
+      if (!candidates) return null;
+      if (candidates.error) return "失败 · 点开详情看报错";
+      if (candidates.items.length === 0) return "无候选仓库";
+      return `${candidates.items.length} 个候选 · 首选 ${candidates.items[0].repository_name}${candidates.llm_used ? "" : " · 关键词回退评分"}`;
+    }
+    if (n === 3) {
+      if (!classification) return null;
+      if (classification.error) return "失败 · 点开详情看报错";
+      const counts = tierCounts(view.effective_tiers);
+      const decision =
+        approval.state === "approved" ? "已批准" : approval.state === "changes_requested" ? "已要求改动" : "待审批";
+      return `${decision} · 必需 ${counts.required} · 可能 ${counts.maybe} · 排除 ${counts.excluded}`;
+    }
+    return null;
+  };
+
+  /** 步 3 的审批交互体：当前步与折叠详情共用一份，不留两套措辞。key 绑**当前分档
+   *  指纹**：上游重跑换指纹即重挂，下拉草稿随之清空。绑 approval.evidence_version
+   *  不行——它未审批时恒 null，四种不同的分档会共用同一个 key，草稿就跨着证据活下
+   *  来了（见 DiscoveryApproval 注释）。步 4 时审批仍可能未决（§3.2 只看分类块在不在），
+   *  所以折叠详情里也要能批。 */
+  const classificationBody = classification && (
+    <>
+      {classification.error && <StepErrorLine error={classification.error} />}
+      <DiscoveryApproval
+        key={view.classification_evidence_version ?? "no-evidence"}
+        classification={classification}
+        effectiveTiers={view.effective_tiers}
+        approval={approval}
+        evidenceVersion={view.classification_evidence_version}
+        principal={approvalPrincipal(mode, principalResolving, principal)}
+        submitting={busy === "approval"}
+        errorText={approvalError}
+        evidenceDrift={evidenceDrift}
+        onSubmit={handleApproval}
+        onReload={() => setReload((n) => n + 1)}
+      />
+    </>
   );
 
-  /** 重跑上游会作废下游（Q8）。提示只在**确实有下游可作废**时出现——没有下游时
-   *  说这句话是在吓唬人。 */
-  const RerunNote = ({ has }: { has: boolean }) =>
-    has ? (
-      <p className="mt-1 text-[11px] text-tx3">
-        重跑本步会作废其下游步骤（契约 §4.4），下游结果将被清空并留审计。
-      </p>
-    ) : null;
+  /** 折叠步展开后的详情：只读地摆出这一步落下的结果。 */
+  const stepDetail = (n: number): React.ReactNode => {
+    if (n === 1) {
+      return (
+        <>
+          {analysis?.error && <StepErrorLine error={analysis.error} />}
+          {analysis && <AnalysisReadout analysis={analysis} />}
+        </>
+      );
+    }
+    if (n === 2) {
+      return (
+        <>
+          {candidates?.error && <StepErrorLine error={candidates.error} />}
+          {candidates && <CandidatesBlock block={candidates} />}
+        </>
+      );
+    }
+    return (
+      <>
+        {classificationBody}
+        {classification && (
+          <>
+            <div className="microlabel pb-1 pt-2">生效分档（第 4 步按这份生成计划）</div>
+            <EffectiveTiersList tiers={view.effective_tiers} />
+          </>
+        )}
+      </>
+    );
+  };
+
+  /** 物化区（C-3）。出现条件只看两条**事实**：读模型说整链走完（step 4 且 done），
+   *  且 issue 详情说还没有轮次。三岔口的**次序**有讲究（缺陷 B-12）：先问收据——
+   *  `materialization.status` 是服务端对「这一轮走到哪」的原话，让它先说话；再问轮次。
+   *  半截跑砸的一轮往往**已经有轮次行**，只看 `roundCount > 0` 会把它判成「已成交」，
+   *  按钮永远消失、卡住的一轮再没有 GUI 出口——正是那个缺陷。收据缺席时（收据机制
+   *  之前的旧轮次，如种子数据）一律走原逻辑：不知道就不猜，不拿「没有收据」反推
+   *  「多半没事」。 */
+  const materializeSection = (
+    <>
+      {view.materialization?.status === "failed" ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+              disabled={anyBusy}
+              onClick={openMaterialize}
+            >
+              重试物化
+            </button>
+            {triggerHint() && <span className="text-[11px] text-tx3">{triggerHint()}</span>}
+          </div>
+          {/* 服务端原文 + 原时间戳，不改写不归类（§3.1 诚实条款）。读模型只给
+              `status`，「卡在哪、要不要重试」由人看原文决定。 */}
+          <p className="mt-1.5 text-[11px] leading-[1.7] text-salmon">
+            上次物化失败（{view.materialization.at}）：{view.materialization.error ?? "服务端未记录原因"}
+          </p>
+          <p className="mt-1 text-[11px] leading-[1.7] text-tx3">
+            重试会<b className="text-tx2">补完这一轮</b>而不是另起一轮：已经建好的队与任务不会重复创建。
+            仍要创建什么，确认弹窗里数给你看。
+          </p>
+        </>
+      ) : materialize.roundCount > 0 ? (
+        <p className="text-[11.5px] text-olive">
+          本 issue 已物化 · 第 {materialize.roundCount} 轮交付已建立。任务与团队见下方「关联仓库 · 团队」
+          与「房间」区块，执行进度在「计划 DAG」上按读模型着色。
+        </p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+              disabled={anyBusy}
+              onClick={openMaterialize}
+            >
+              物化并开工
+            </button>
+            {triggerHint() && <span className="text-[11px] text-tx3">{triggerHint()}</span>}
+          </div>
+          <p className="mt-1.5 text-[11px] leading-[1.7] text-tx3">
+            把计划变成任务与团队（每仓一队 + teamRoom/leaderDM 双房间）。
+            这是整条链的<b className="text-tx2">第二个不可逆动作</b>，具体要创建多少东西在确认弹窗里数给你看。
+          </p>
+        </>
+      )}
+    </>
+  );
+
+  /** 当前步（n === step）的内容。块还没落下来的首发态，任务在跑时只给一行进行中；
+   *  真正的报错与重试入口都等读投影说话。 */
+  const renderActive = (n: number): React.ReactNode => {
+    if (n === 1) {
+      if (analysis === null) {
+        return running ? (
+          <RunningLine title="需求分析" />
+        ) : (
+          <>
+            <p className="text-[12px] text-tx3">尚未发起需求分析。需求文本取自本 issue 的草稿快照。</p>
+            <TriggerButton n={1} label="开始需求分析" onClick={() => invokeStep(1)} />
+          </>
+        );
+      }
+      return (
+        <>
+          {analysis.error && <StepErrorLine error={analysis.error} />}
+          {!analysis.error && !analysis.sufficient && !analysis.forced_continue ? (
+            <ClarifyBlock
+              analysis={analysis}
+              answers={answers}
+              disabled={!canWrite || anyBusy}
+              onAnswer={(q, v) => {
+                setAnswers((prev) => ({ ...prev, [q]: v }));
+                // 改了答复就是一次**新的**逻辑请求，旧键作废（否则会被当重放）
+                dropKey("analysis");
+              }}
+              onResubmit={() =>
+                startAnalysis({
+                  answers: analysis.questions
+                    .filter((q) => (answers[q] ?? "").trim() !== "")
+                    .map((q) => ({ question: q, answer: answers[q].trim() })),
+                })
+              }
+              onForce={() => startAnalysis({ force: true })}
+            />
+          ) : (
+            <AnalysisReadout analysis={analysis} />
+          )}
+          {analysis.error && <TriggerButton n={1} label="重试需求分析" onClick={() => invokeStep(1)} />}
+        </>
+      );
+    }
+    if (n === 2) {
+      if (candidates === null) {
+        return running ? (
+          <RunningLine title="候选评分" />
+        ) : (
+          <>
+            <p className="text-[12px] text-tx3">尚未评分。将按需求文本给 catalog 里的候选仓库打分。</p>
+            <TriggerButton n={2} label="开始候选评分" onClick={() => invokeStep(2)} />
+          </>
+        );
+      }
+      return (
+        <>
+          {candidates.error && <StepErrorLine error={candidates.error} />}
+          <CandidatesBlock block={candidates} />
+          <TriggerButton n={2} label={candidates.error ? "重试候选评分" : "重新评分"} onClick={() => requestStep(2)} />
+        </>
+      );
+    }
+    if (n === 3) {
+      if (classification === null) {
+        return running ? (
+          <RunningLine title="三档分类" />
+        ) : (
+          <>
+            <p className="text-[12px] text-tx3">尚未生成三档分类。将把候选仓库分为必需 / 可能 / 排除三档，交由审批人定夺。</p>
+            <TriggerButton n={3} label="生成三档分类" onClick={() => invokeStep(3)} />
+          </>
+        );
+      }
+      return (
+        <>
+          {classificationBody}
+          <TriggerButton n={3} label={classification.error ? "重试三档分类" : "重新分类"} onClick={() => requestStep(3)} />
+        </>
+      );
+    }
+    // n === 4
+    if (integration === null) {
+      return running ? (
+        <RunningLine title="计划生成" />
+      ) : (
+        <>
+          <p className="text-[12px] text-tx3">尚未生成计划。将按生效分档（含审批人的调整）生成任务与接口契约。</p>
+          <TriggerButton n={4} label="生成计划" onClick={() => invokeStep(4)} />
+        </>
+      );
+    }
+    return (
+      <>
+        <p className="text-[11.5px] text-olive">
+          计划已生成 v{view.plan_version} · {integration.task_dag_count} 个任务节点 · {integration.batch_count} 个执行批次 ·{" "}
+          {integration.contract_count} 份接口契约
+          <span className="block text-tx3">图形化的这张计划在下方「计划 DAG」区块。</span>
+        </p>
+        <TriggerButton n={4} label="重新生成计划" onClick={() => requestStep(4)} />
+        {policyWindowOpen && (
+          <SupervisionPolicyCard
+            state={policy}
+            onConfigure={() => setPolicyDialogOpen(true)}
+            onRetry={() => setPolicyReload((n) => n + 1)}
+          />
+        )}
+        {step === 4 && stepState === "done" && (
+          <div className="mt-3 border-t border-line pt-3">{materializeSection}</div>
+        )}
+      </>
+    );
+  };
 
   return (
     <>
       {header}
 
       <div className="rounded-hard border border-line bg-panel-2 px-3.5 py-3">
-        <Stepper step={step} stepState={stepState} />
+        <MiniProgress step={step} stepState={stepState} />
 
         {/* 在途任务：Q17 的逐候选进度。总数 total 由服务端给，前端不编 */}
         {running && task && (
@@ -764,293 +1148,20 @@ export function DiscoveryPanel({
           </p>
         )}
 
-        {/* ── 1 需求分析 ───────────────────────────────────────────────── */}
-        <Section n={1} step={step}>
-          {analysis === null ? (
-            <>
-              <p className="text-[12px] text-tx3">尚未发起需求分析。需求文本取自本 issue 的草稿快照，界面不重复收一份。</p>
-              <TriggerButton n={1} stepKey="analysis" label="开始需求分析" onClick={() => startAnalysis({})} />
-            </>
+        {/* 渐进披露：只渲染 1..step。已完成的步折叠成一行摘要，当前步常开，
+            未到的步不出场——顶部那排四点进度暗示它们的存在。 */}
+        {Array.from({ length: step }, (_, i) => i + 1).map((n) =>
+          n < step ? (
+            <DoneStep key={n} n={n} summary={stepSummary(n) ?? "已完成"}>
+              {stepDetail(n)}
+              <TriggerButton n={n} label={`重跑${STEP_TITLES[n - 1]}`} onClick={() => requestStep(n)} />
+            </DoneStep>
           ) : (
-            <>
-              {analysis.error && <StepErrorLine error={analysis.error} />}
-
-              {!analysis.error && analysis.sufficient && (
-                <p className="text-[11.5px] text-olive">
-                  需求判定：充分（confidence {analysis.confidence.toFixed(2)}）
-                </p>
-              )}
-
-              {/* 已强行继续：留痕原样展示，追问表单不再出现（那一票已经投过了） */}
-              {analysis.forced_continue && (
-                <p className="text-[11.5px] text-amber">
-                  已强行继续 · 忽略 {analysis.forced_continue.ignored_question_count} 条追问 ·{" "}
-                  {agentLabel(null, analysis.forced_continue.by_agent_id)} · {analysis.forced_continue.at}
-                </p>
-              )}
-
-              {!analysis.error && !analysis.sufficient && !analysis.forced_continue && (
-                <ClarifyBlock
-                  analysis={analysis}
-                  answers={answers}
-                  disabled={!canWrite || anyBusy}
-                  onAnswer={(q, v) => {
-                    setAnswers((prev) => ({ ...prev, [q]: v }));
-                    // 改了答复就是一次**新的**逻辑请求，旧键作废（否则会被当重放）
-                    dropKey("analysis");
-                  }}
-                  onResubmit={() =>
-                    startAnalysis({
-                      answers: analysis.questions
-                        .filter((q) => (answers[q] ?? "").trim() !== "")
-                        .map((q) => ({ question: q, answer: answers[q].trim() })),
-                    })
-                  }
-                  onForce={() => startAnalysis({ force: true })}
-                />
-              )}
-
-              {analysis.answers.length > 0 && (
-                <div className="mt-1.5">
-                  <div className="microlabel pb-1">已提交的答复</div>
-                  {analysis.answers.map((a, i) => (
-                    <p key={`${a.question}-${i}`} className="text-[11.5px] text-tx2">
-                      {a.question} — <span className="text-tx">{a.answer}</span>
-                    </p>
-                  ))}
-                </div>
-              )}
-
-              {analysis.extracted_keywords.length > 0 && (
-                <p className="mt-1 font-mono text-[10.5px] text-tx3">
-                  关键词：{analysis.extracted_keywords.join(" · ")}
-                </p>
-              )}
-
-              {analysis.error && (
-                <TriggerButton n={1} stepKey="analysis" label="重试需求分析" onClick={() => startAnalysis({})} />
-              )}
-              <RerunNote has={candidates !== null || classification !== null} />
-            </>
-          )}
-        </Section>
-
-        {/* ── 2 候选评分 ───────────────────────────────────────────────── */}
-        <Section n={2} step={step}>
-          {candidates === null ? (
-            <>
-              <p className="text-[12px] text-tx3">尚未评分。发现将按需求文本在 catalog 里给候选仓库打分。</p>
-              <TriggerButton
-                n={2}
-                stepKey="candidates"
-                label="开始候选评分"
-                onClick={() =>
-                  agentId &&
-                  run("candidates", (key) =>
-                    triggerCandidates(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
-                  )
-                }
-              />
-            </>
-          ) : (
-            <CandidatesBlock block={candidates} />
-          )}
-          {candidates !== null && (
-            <>
-              {candidates.error && <StepErrorLine error={candidates.error} />}
-              <TriggerButton
-                n={2}
-                stepKey="candidates"
-                label={candidates.error ? "重试候选评分" : "重新评分"}
-                onClick={() =>
-                  agentId &&
-                  run("candidates", (key) =>
-                    triggerCandidates(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
-                  )
-                }
-              />
-              <RerunNote has={classification !== null} />
-            </>
-          )}
-        </Section>
-
-        {/* ── 3 分档审批 ───────────────────────────────────────────────── */}
-        <Section n={3} step={step}>
-          {classification === null ? (
-            <>
-              <p className="text-[12px] text-tx3">
-                尚未生成三档分类。分类由服务端从上一步的候选块取输入（浏览器不回传候选与证据）。
-              </p>
-              <TriggerButton
-                n={3}
-                stepKey="classification"
-                label="生成三档分类"
-                onClick={() =>
-                  agentId &&
-                  run("classification", (key) =>
-                    triggerClassification(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
-                  )
-                }
-              />
-            </>
-          ) : (
-            <>
-              {classification.error && <StepErrorLine error={classification.error} />}
-              {/* key 绑**当前分档指纹**：上游重跑换指纹即重挂，下拉草稿随之清空。
-                  绑 approval.evidence_version 不行——它未审批时恒 null，四种不同的分档
-                  会共用同一个 key，草稿就跨着证据活下来了（见 DiscoveryApproval 注释）。 */}
-              <DiscoveryApproval
-                key={view.classification_evidence_version ?? "no-evidence"}
-                classification={classification}
-                effectiveTiers={view.effective_tiers}
-                approval={approval}
-                evidenceVersion={view.classification_evidence_version}
-                principal={approvalPrincipal(mode, principalResolving, principal)}
-                submitting={busy === "approval"}
-                errorText={approvalError}
-                evidenceDrift={evidenceDrift}
-                onSubmit={handleApproval}
-                onReload={() => setReload((n) => n + 1)}
-              />
-              <TriggerButton
-                n={3}
-                stepKey="classification"
-                label={classification.error ? "重试三档分类" : "重新分类"}
-                onClick={() =>
-                  agentId &&
-                  run("classification", (key) =>
-                    triggerClassification(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
-                  )
-                }
-              />
-              <RerunNote has={approval.state !== "not_requested"} />
-            </>
-          )}
-        </Section>
-
-        {/* ── 4 生成计划 ───────────────────────────────────────────────── */}
-        <Section n={4} step={step}>
-          {integration === null ? (
-            <p className="text-[12px] text-tx3">
-              尚未生成计划。集成送进去的是<b className="text-tx2">生效分档</b>（含审批人的调整），不是模型原判。
-            </p>
-          ) : (
-            <p className="text-[11.5px] text-olive">
-              计划已生成 v{view.plan_version} · {integration.task_dag_count} 个任务节点 ·{" "}
-              {integration.batch_count} 个执行批次 · {integration.contract_count} 份接口契约
-              <span className="block text-tx3">图形化的这张计划在下方「计划 DAG」区块。</span>
-            </p>
-          )}
-          <TriggerButton
-            n={4}
-            stepKey="plan"
-            label={integration === null ? "生成计划" : "重新生成计划"}
-            onClick={() =>
-              agentId &&
-              run("plan", (key) =>
-                triggerPlan(issueId, { created_by_agent_id: agentId, idempotency_key: key }),
-              )
-            }
-          />
-          {approval.state !== "approved" && (
-            <p className="mt-1 text-[11px] text-tx3">
-              审批 v1 必经：分档未批准时本步会被服务端以 409 拒绝。
-            </p>
-          )}
-
-          {/* ── 监管策略（5-1b · F4）───────────────────────────────────────
-              物化区**上方**、与物化按钮同级，**不进步进器**：下面那条注释的判据
-              （发现四步改的是同一份草稿快照，物化建的是执行面的实体）同样适用——
-              配策略改的也是草稿、也不建实体，但它不属于「发现」这件事。发现回答
-              「要动哪些仓库」，策略回答「谁来盯着」，共用一个步进器就要让「走到
-              第几步」这个唯一事实源为一件与发现无关的事让路。 */}
-          {policyWindowOpen && (
-            <SupervisionPolicyCard
-              state={policy}
-              onConfigure={() => setPolicyDialogOpen(true)}
-              onRetry={() => setPolicyReload((n) => n + 1)}
-            />
-          )}
-
-          {/* ── 物化并开工（C-3）───────────────────────────────────────────
-              出现条件只看两条**事实**：读模型说整链走完（step 4 且 done），
-              且 issue 详情说还没有轮次。不看 integration 是否为空去反推——
-              那就是在前端重写 §3.2 的第 7 条。
-
-              三岔口的**次序**是有讲究的（缺陷 B-12）：先问收据，再问轮次。
-              物化自 7659c89 起可重入，半截跑砸的一轮再调一次就能补完；但那种一轮
-              往往**已经有轮次行**，只看 `roundCount > 0` 就会把它判成「已成交」，
-              于是按钮永远消失、卡住的一轮再没有 GUI 出口——正是本缺陷。
-              `materialization.status` 是服务端对这件事的原话，所以它先说话。
-
-              收据缺席时（收据机制之前的旧轮次，如种子数据）**一律走原逻辑**：不知道
-              就不猜，不拿「没有收据」反推「多半没事」。 */}
-          {step === 4 && stepState === "done" && (
-            <div className="mt-3 border-t border-line pt-3">
-              {view.materialization?.status === "failed" ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
-                      disabled={anyBusy}
-                      onClick={openMaterialize}
-                    >
-                      重试物化
-                    </button>
-                    {triggerHint(4) && <span className="text-[11px] text-tx3">{triggerHint(4)}</span>}
-                  </div>
-                  {/* 服务端原文 + 原时间戳，不改写不归类（§3.1 诚实条款）。
-                      读模型只给 `status`，「卡在哪、要不要重试」由人看原文决定。 */}
-                  <p className="mt-1.5 text-[11px] leading-[1.7] text-salmon">
-                    上次物化失败（{view.materialization.at}）：{view.materialization.error ?? "服务端未记录原因"}
-                  </p>
-                  <p className="mt-1 text-[11px] leading-[1.7] text-tx3">
-                    重试会<b className="text-tx2">补完这一轮</b>而不是另起一轮：服务端按 §8.3 认领上次留下的
-                    痕迹，已经建好的队与任务不会重复创建。仍要创建什么，确认弹窗里数给你看。
-                  </p>
-                </>
-              ) : materialize.roundCount > 0 ? (
-                <p className="text-[11.5px] text-olive">
-                  本 issue 已物化 · 第 {materialize.roundCount} 轮交付已建立。任务与团队见下方「关联仓库 · 团队」
-                  与「房间」区块，执行进度在「计划 DAG」上按读模型着色。
-                </p>
-              ) : (
-                <>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
-                      disabled={anyBusy}
-                      onClick={openMaterialize}
-                    >
-                      物化并开工
-                    </button>
-                    {triggerHint(4) && <span className="text-[11px] text-tx3">{triggerHint(4)}</span>}
-                  </div>
-                  <p className="mt-1.5 text-[11px] leading-[1.7] text-tx3">
-                    把计划变成任务与团队（每仓一队 + teamRoom/leaderDM 双房间）。
-                    这是整条链的<b className="text-tx2">第二个不可逆动作</b>，具体要创建多少东西在确认弹窗里数给你看。
-                  </p>
-                </>
-              )}
-            </div>
-          )}
-        </Section>
-
-        {/* 页脚数据源标注，照 PlanDagPanel 的惯例 */}
-        <div className="mt-2.5 space-y-1 border-t border-line pt-2 font-mono text-[10px] leading-[1.7] text-tx3">
-          <div>
-            读投影 GET /issues/{"{id}"}/discovery（契约 v0.4 §3.1）· 草稿快照 v{view.plan_version}（发现四步与审批不涨版）·{" "}
-            {mode === "replay" ? "回放夹具" : "live"}
-          </div>
-          <div>
-            步进器位置（step={step} · {stepState}）由读模型按 §3.2 七条规则判定，本面只渲染不自判；
-            上游重跑会自动作废下游（§4.4），被作废的步在这里回到未完成态、不残留旧结果。
-          </div>
-          <div>
-            物化开工（把计划变成任务与团队）挂在第 4 步之后，但<b>不是</b>发现链的第五步——
-            发现四步改的都是同一份草稿快照，物化建的是执行面的实体，所以步进器仍只有这四格。
-          </div>
-        </div>
+            <ActiveStep key={n} n={n} stepState={stepState}>
+              {renderActive(n)}
+            </ActiveStep>
+          ),
+        )}
       </div>
 
       <MaterializeModal
@@ -1071,7 +1182,7 @@ export function DiscoveryPanel({
         onConfirm={handleMaterialize}
       />
 
-      {/* 配置弹窗（5-1b · F3）。入口**只有一个**——上面那张卡片；详情页的只读段
+      {/* 配置弹窗（5-1b · F3）。入口**只有一个**——第 4 步里那张卡片；详情页的只读段
           刻意不再放第二个按钮（「同一件事两个入口」是这批迁移一直在还的债）。
           `taskCount` 取集成计数，计划还没生成时为 null——弹窗的代价预告据此如实说
           「每个任务各 1 次」，不拿 0 冒充。 */}
@@ -1084,6 +1195,47 @@ export function DiscoveryPanel({
         onClose={() => setPolicyDialogOpen(false)}
         onSaved={(draft) => setPolicy(draft ? { kind: "set", draft } : { kind: "unset" })}
       />
+
+      {/* 重跑确认（Q8）。能打开这个弹层的路径只有 requestStep 里「确有下游可作废」
+          那一支，没有下游时按钮直接发请求、不打扰。 */}
+      {rerunConfirm !== null && (
+        <Modal
+          open
+          onClose={() => setRerunConfirm(null)}
+          className="m-auto w-[min(460px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+        >
+          <div className="px-5 pb-5 pt-4">
+            <p className="eyebrow pb-1">重跑确认</p>
+            <p className="mt-2 text-[12px] leading-[1.7] text-tx2">
+              重跑「{STEP_TITLES[rerunConfirm - 1]}」会<b className="text-tx">作废</b>以下已完成步骤的结果：
+            </p>
+            <ul className="mt-1.5 space-y-0.5 pl-1">
+              {downstreamLabels(rerunConfirm).map((label) => (
+                <li key={label} className="text-[12px] leading-[1.7] text-tx">
+                  · {label}
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3 border-l-2 border-amber bg-panel-2 px-3 py-2 text-[12px] leading-[1.7] text-kraft">
+              被作废的步骤会回到未完成状态，需要重新执行；重跑会留审计记录。
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                className="rounded-hard border border-line px-3 py-1.5 text-[12px] text-tx2 hover:text-tx"
+                onClick={() => setRerunConfirm(null)}
+              >
+                取消
+              </button>
+              <button
+                className="rounded-hard bg-amber px-4 py-1.5 text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi"
+                onClick={confirmRerun}
+              >
+                确认重跑
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

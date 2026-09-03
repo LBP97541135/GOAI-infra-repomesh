@@ -11,8 +11,9 @@ import { Modal } from "./Modal";
  *  后端（回放夹具世界不可篡改），提交时如实说明并保留草稿。
  *
  *  需求文档真实上传：📎 把 .txt/.md/.docx/.pdf/.odt/.rtf 发到 POST
- *  /issues/parse-document 解析成纯文本填入需求区（可继续编辑），解析只读后端、
- *  不写数据，replay 模式同样可用。文本一旦变化即视为新的逻辑创建、换幂等键。
+ *  /issues/parse-document 解析成纯文本。解析结果**不在界面展示正文**，只在原需求
+ *  文本区显示上传成功状态（文件名 + 字符数），提交时作为需求文本提交；解析只读
+ *  后端、不写数据，replay 模式同样可用。文本一旦变化即视为新的逻辑创建、换幂等键。
  *
  *  处理者芯片显示花名册派生的 Org Leader（resolveGovernanceAgent 单点）；解析
  *  不到时提交按钮不禁用——服务端 403/404 的原因比前端预判更准，错误原样呈现。 */
@@ -34,15 +35,18 @@ export function NewIssueModal({
   mode: "live" | "replay";
   onClose: () => void;
   onToast: (text: string) => void;
-  /** live 创建回路（成功后由外层负责刷新列表与跳转）；失败原因原样抛回 */
-  onCreate: (text: string, idempotencyKey: string) => Promise<void>;
+  /** live 创建回路（成功后由外层负责刷新列表与跳转）；失败原因原样抛回。
+   *  `filename` 为上传文档的文件名（随需求一并落库），未上传文档时为 null。 */
+  onCreate: (text: string, idempotencyKey: string, filename: string | null) => Promise<void>;
 }) {
   // 草稿**有意跨开关保留**：误按 Esc 不该让用户重写一遍需求；
   // 提交**成功**才清空（主脑 2026-08-11 裁决，写端点接入后的约定行为）。
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [parsingFile, setParsingFile] = useState(false);
-  /** 已成功解析的文档来源（仅标记，提取文本已入 textarea，可继续编辑）。 */
+  /** 上传文档的解析正文（隐藏态）：只在提交时作为需求文本，不在界面展示正文。 */
+  const [documentText, setDocumentText] = useState<string | null>(null);
+  /** 已成功解析的文档来源（上传成功痕迹：文件名 + 字符数）。 */
   const [sourceFile, setSourceFile] = useState<{ name: string; chars: number } | null>(null);
   const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
   const [principalResolving, setPrincipalResolving] = useState(false);
@@ -70,8 +74,10 @@ export function NewIssueModal({
 
   const submit = useCallback(() => {
     if (submitting) return;
-    if (!text.trim()) {
-      onToast("请先描述要交付什么");
+    // 需求正文：上传文档优先（不展示正文），否则用手输文本。
+    const requirementText = sourceFile ? documentText ?? "" : text.trim();
+    if (!requirementText) {
+      onToast("请先描述要交付什么，或上传需求文档");
       return;
     }
     if (mode === "replay") {
@@ -80,9 +86,10 @@ export function NewIssueModal({
       return;
     }
     setSubmitting(true);
-    onCreate(text.trim(), keyRef.current)
+    onCreate(requirementText, keyRef.current, sourceFile ? sourceFile.name : null)
       .then(() => {
         setText("");
+        setDocumentText(null);
         setSourceFile(null);
         keyRef.current = crypto.randomUUID(); // 本次逻辑创建已完成，下一次换新键
       })
@@ -90,10 +97,11 @@ export function NewIssueModal({
         onToast(`创建失败：${errText(err)}`);
       })
       .finally(() => setSubmitting(false));
-  }, [text, mode, submitting, onToast, onCreate]);
+  }, [text, documentText, sourceFile, mode, submitting, onToast, onCreate]);
 
-  /** 需求文档真实上传：解析成功后把提取文本并入需求区（可继续编辑），
-   *  文本变化即换幂等键（与手输同语义）。失败 toast 原样呈现（415/413/422）。 */
+  /** 需求文档真实上传：解析成功只在原需求文本区显示上传成功状态（文件名 + 字符数），
+   *  正文保存在隐藏态 `documentText` 里、不展示；提交时作为需求文本提交。文本变化即
+   *  换幂等键（与手输同语义）。失败 toast 原样呈现（415/413/422）。 */
   const handleFileChange = useCallback(
     async (e: ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -102,15 +110,13 @@ export function NewIssueModal({
       setParsingFile(true);
       try {
         const parsed = await parseRequirementDocument(file);
-        setText((prev) =>
-          prev.trim() ? `${prev.trimEnd()}\n\n${parsed.text}` : parsed.text,
-        );
+        setDocumentText(parsed.text);
         setSourceFile({ name: parsed.filename, chars: parsed.chars });
         keyRef.current = crypto.randomUUID();
         onToast(
           parsed.truncated
-            ? `已从 ${parsed.filename} 提取 ${parsed.chars} 字符（超长已截断）`
-            : `已从 ${parsed.filename} 提取 ${parsed.chars} 字符，可继续编辑`,
+            ? `已上传 ${parsed.filename}（${parsed.chars} 字符，超长已截断）`
+            : `已上传 ${parsed.filename}（${parsed.chars} 字符）`,
         );
       } catch (err) {
         onToast(`文档解析失败：${errText(err)}`);
@@ -120,6 +126,12 @@ export function NewIssueModal({
     },
     [parsingFile, onToast],
   );
+
+  const removeDocument = useCallback(() => {
+    setSourceFile(null);
+    setDocumentText(null);
+    keyRef.current = crypto.randomUUID();
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -169,17 +181,32 @@ export function NewIssueModal({
         <span className="text-[10.5px] text-tx3">Org Leader 负责需求接收与范围提议</span>
       </div>
 
-      <textarea
-        ref={areaRef}
-        className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-tx3 focus:outline-none"
-        placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          // A2：文本已变 = 新的逻辑创建，换新键（改完再重试不会被旧键归并）
-          keyRef.current = crypto.randomUUID();
-        }}
-      />
+      {sourceFile ? (
+        <div className="flex min-h-[150px] flex-col items-center justify-center gap-3 px-4 py-3.5">
+          <div className="rounded-hard border border-line bg-panel px-5 py-4 text-center">
+            <div className="font-mono text-[12.5px] text-kraft">{sourceFile.name}</div>
+            <div className="mt-1 text-[11px] text-tx2">已解析 {sourceFile.chars} 字符</div>
+          </div>
+          <button
+            className="text-[11px] text-tx3 underline-offset-2 hover:text-amber-hi"
+            onClick={removeDocument}
+          >
+            移除文档
+          </button>
+        </div>
+      ) : (
+        <textarea
+          ref={areaRef}
+          className="min-h-[150px] w-full resize-none bg-transparent px-4 py-3.5 font-sans text-[13px] leading-[1.7] text-tx placeholder:text-tx3 focus:outline-none"
+          placeholder='告诉组织要交付什么，例如："在订单结账时记录价格被修改的原因，原因随订单落库并在后台订单详情页展示"'
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            // A2：文本已变 = 新的逻辑创建，换新键（改完再重试不会被旧键归并）
+            keyRef.current = crypto.randomUUID();
+          }}
+        />
+      )}
 
       {/* 真实文件上传：隐藏 input，由 📎 触发；解析只读后端、不写数据 */}
       <input
@@ -207,19 +234,6 @@ export function NewIssueModal({
         </button>
         {parsingFile && (
           <span className="font-mono text-[10.5px] text-tx3">解析中…</span>
-        )}
-        {sourceFile && (
-          <span className="inline-flex items-center gap-1.5 rounded-hard border border-line bg-[#241d12] px-2 py-px font-mono text-[10.5px] text-kraft">
-            {sourceFile.name}
-            <span className="text-tx3">· {sourceFile.chars} 字</span>
-            <button
-              className="text-tx3 hover:text-amber-hi"
-              title="移除文档标记（已提取文本保留）"
-              onClick={() => setSourceFile(null)}
-            >
-              ✕
-            </button>
-          </span>
         )}
         <button
           className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"

@@ -44,9 +44,13 @@ class DecisionChainStore(Protocol):
         ...
 
     async def trace(
-        self, *, organization_id: UUID, project_id: UUID
+        self, *, organization_id: UUID | None, project_id: UUID
     ) -> DecisionChainNodes:
-        """§6.1 node list ordered by business_time + legacy gaps."""
+        """§6.1 node list ordered by business_time + legacy gaps.
+
+        ``organization_id`` None = across every organization (the audit
+        "search by requirement id" entry has no org to pin).
+        """
         ...
 
     async def find_similar_structural(
@@ -96,9 +100,9 @@ class DecisionEmbeddingStore(Protocol):
         ...
 
     async def embedded_nodes(
-        self, *, organization_id: UUID
+        self, *, organization_id: UUID | None
     ) -> list[EmbeddedDecision]:
-        """Every vectorized decision sheet of one organization (read path)."""
+        """Every vectorized decision sheet (``organization_id`` None = all)."""
         ...
 
 

@@ -367,6 +367,11 @@ def _ensure_topology(
             name=org_leader_name,
             model=model,
             runtime=runtimes.agentteams_manager_runtime,
+            # Field-for-field parity with the console's projection (contract
+            # §8.7): the controller's image fallback is role-blind, so a
+            # manager asked for without an image boots on the worker image
+            # and exits before its first Matrix sync.
+            image=runtimes.agentteams_manager_image,
             skills=("planning", "coordination"),
         )
         org_result = await registrar.execute(

@@ -70,6 +70,11 @@ class IssueIntakeCreate(BaseModel):
     created_by_agent_id: UUID
     idempotency_key: str = Field(min_length=8, max_length=200)
     organization_id: UUID | None = None
+    document_filename: str | None = Field(
+        default=None,
+        max_length=255,
+        description="创建 issue 时上传的需求文档文件名",
+    )
 
 
 class OrgScanRequest(BaseModel):

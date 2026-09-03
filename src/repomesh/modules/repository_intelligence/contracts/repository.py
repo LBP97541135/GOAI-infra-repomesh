@@ -31,6 +31,7 @@ class IssueIntakeCommand:
     created_by_agent_id: UUID
     idempotency_key: str
     organization_id: UUID | None = None
+    document_filename: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

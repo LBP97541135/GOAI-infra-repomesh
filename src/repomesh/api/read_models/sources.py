@@ -39,6 +39,7 @@ class PlanSnapshotData:
     task_dag: tuple[dict, ...]
     execution_plan_id: UUID | None
     created_by_agent_id: UUID | None = None
+    document_filename: str | None = None
     contracts: tuple[dict, ...] = ()
     discovery: dict | None = None
     """Contract v0.4 §2: the round's discovery chain, or None if it never ran.

@@ -81,6 +81,29 @@ async def test_assignment_history_and_atomic_reassignment(recovery_database) -> 
 
 
 @pytest.mark.asyncio
+async def test_ensure_initial_after_rerun_redispatch_opens_next_generation(
+    recovery_database,
+) -> None:
+    task, _ = await _task(recovery_database)
+    assignments = PostgresTaskAssignmentStore(recovery_database)
+    initial = await assignments.ensure_initial(task.id)
+    await assignments.complete_current(task.id, initial.id, initial.generation)
+
+    reopened = await assignments.ensure_initial(task.id)
+
+    assert reopened.id != initial.id
+    assert reopened.generation == initial.generation + 1
+    assert reopened.previous_attempt_id == initial.id
+    assert reopened.state.value == "active"
+    assert reopened.worker_agent_id == task.assignee_agent_id
+    assert reopened.reason is AssignmentReason.OPERATOR
+    history = await assignments.history(task.id)
+    assert [item.state.value for item in history] == ["completed", "active"]
+    converged = await assignments.ensure_initial(task.id)
+    assert converged.id == reopened.id
+
+
+@pytest.mark.asyncio
 async def test_two_recovery_claimers_have_one_winner(recovery_database) -> None:
     store = PostgresWorkerRecoveryStore(recovery_database)
     operation = await store.ensure(

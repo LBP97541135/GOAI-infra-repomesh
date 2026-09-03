@@ -1,5 +1,7 @@
 import type {
   AgentRuntimeHosting,
+  DecisionStatus,
+  DecisionStep,
   DeliveryTaskView,
   DiscoveryTier,
   DiscoveryTierStatus,
@@ -104,6 +106,75 @@ export function tierOf(status: string): DiscoveryTier | null {
 export function tierStatusLabel(status: string): string {
   const tier = tierOf(status);
   return tier ? TIER_LABEL[tier] : status;
+}
+
+/** 历史决策五步的措辞唯一表（decision-chain-v0.1 §4.1）。链内数组即 chain_order；
+ *  同 (project, step) 重做 version 递增。Record 收窄到契约枚举，缺项即编译错误。 */
+export const DECISION_STEP_LABEL: Record<DecisionStep, string> = {
+  classification: "分类",
+  confirmation: "确认",
+  integration: "集成",
+  task: "任务",
+  pr: "PR",
+};
+
+/** 五步的**动作短语**标题（v2 改版裁决）：卡片第一视线落点。上一版标题用
+ *  「分类 / 确认 / 任务」这类系统术语，读者必须问过一次才知道是什么——标题
+ *  的职责是自解释，术语让位给动作短语（这步**做了什么**），原始 step 名退到
+ *  折叠溯源区回显。与 DECISION_STEP_LABEL 并存：那张表服务溯源区的术语对照。 */
+export const DECISION_STEP_ACTION: Record<DecisionStep, string> = {
+  classification: "圈定范围",
+  confirmation: "人工确认",
+  integration: "排执行顺序",
+  task: "拆成任务",
+  pr: "提交代码",
+};
+
+/** 动作短语带运行时兜底：服务端先于前端新增 step 值时原样透出（同
+ *  decisionStatusLabel 的做法——宁可显示一个陌生词，不静默归到某一步）。 */
+export function decisionStepAction(step: string): string {
+  return DECISION_STEP_ACTION[step as DecisionStep] ?? step;
+}
+
+/** 决策单状态的措辞唯一表（§4.1）。confirmation 由 approval.state 映射（approved→
+ *  confirmed 等）；其余步落第一判词 proposed。运行时兜底原样回显，不猜新值。 */
+export const DECISION_STATUS_LABEL: Record<DecisionStatus, string> = {
+  proposed: "已提出",
+  adjusted: "已调整",
+  confirmed: "已确认",
+  rejected: "已拒绝",
+  changes_requested: "需修改",
+  blocked: "阻塞",
+  superseded: "已被取代",
+  merged: "已合并",
+  closed: "已关闭",
+};
+
+export function decisionStatusLabel(status: string): string {
+  return DECISION_STATUS_LABEL[status as DecisionStatus] ?? status;
+}
+
+/** 决策单状态徽标皮肤（§4.1）。展示皮肤，不是状态映射：橄榄 = 正面裁决/落地，
+ *  琥珀 = 在途/要改，赭红 = 拒绝/阻塞，灰 = 中性判词。零新颜色语义。 */
+export const DECISION_STATUS_SKIN: Record<DecisionStatus, string> = {
+  proposed: "border-line text-tx2",
+  adjusted: "border-amber text-amber",
+  confirmed: "border-olive text-olive",
+  rejected: "border-salmon text-salmon",
+  changes_requested: "border-amber text-amber",
+  blocked: "border-salmon text-salmon",
+  superseded: "border-line text-tx2",
+  merged: "border-olive text-olive",
+  closed: "border-line text-tx2",
+};
+
+export function decisionStatusSkin(status: string): string {
+  return DECISION_STATUS_SKIN[status as DecisionStatus] ?? "border-line text-tx2";
+}
+
+/** actor 类型措辞（§4.1）：llm | human | service。认不出原样透出。 */
+export function decisionActorLabel(type: string): string {
+  return { llm: "模型", human: "人", service: "服务" }[type] ?? type;
 }
 
 /** 六个人工检查点的**展示次序**（迁移 5-1a）。这里排的是**流程先后**——
