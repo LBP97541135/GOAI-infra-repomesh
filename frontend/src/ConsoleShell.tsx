@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Toast } from "./components/Toast";
 import { AuthError, authApi, type Account } from "./api/auth";
 import { LoginPage } from "./components/LoginPage";
+import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListItemView, IssueListResponse, OrganizationView } from "./api/contract";
 import { archiveIssue, createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
@@ -11,6 +12,7 @@ import type { HumanReviewRequestView } from "./api/reviewDesk";
 import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { DecisionChainPage } from "./pages/DecisionChainPage";
+import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
 import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
 import { ObserveHome } from "./pages/observe/ObserveHome";
@@ -49,6 +51,7 @@ export default function ConsoleShell() {
   const [setupReady, setSetupReady] = useState<boolean | null>(null);
   const [setupRequested, setSetupRequested] = useState(false);
   const [route, setRoute] = useState<Route>(readRoute);
+  const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -230,27 +233,21 @@ export default function ConsoleShell() {
     setRoute({ nav: "issues", issueId, roomId: null, observeSection: null, settingsSection: null });
   };
 
-  /** 工作台的新会话入口：#/issues/new 由工作台渲染成「空流 + 可用输入框」，
-   *  发送即建 issue 并路由进该会话（原 NewIssueModal 弹窗路径由此替代）。 */
-  const openNewSession = () => {
-    window.location.hash = "#/issues/new";
-    setRoute({ nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null });
-  };
-
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
     setRoute({ nav: "issues", issueId, roomId, observeSection: null, settingsSection: null });
   };
 
-  /** B-1 创建回路：POST /issues（v0.3 §1）→ 跳新会话工作台。
+  /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
    *  处理者按当前工作区派生（选「全部」时 null = 花名册唯一活跃 Org Leader）；
-   *  幂等键由输入框持有（A2，语义与原 NewIssueModal 一致）。 */
+   *  幂等键由弹窗/主页聊天框持有（A2：每次逻辑创建换键，重试沿用同键）。 */
   const handleCreateIssue = async (
     text: string,
     idempotencyKey: string,
     documentFilename: string | null,
   ) => {
     const issue = await createIssue(text, workspaceId, idempotencyKey, documentFilename);
+    setNewIssueOpen(false);
     showToast(`issue 已创建：#${shortId(issue.issue_id)}（虚拟草稿，等待规划）`);
     setIssuesReload((n) => n + 1);
     openIssue(issue.issue_id);
@@ -341,7 +338,9 @@ export default function ConsoleShell() {
     );
   }
 
-  const isWorkbenchRoute = route.nav === "issues" && route.issueId !== null && route.roomId === null;
+  // 聊天工作台只占主页新会话（无 hash/#/、#/issues/new）；「议题」标签页回到
+  // 聊天框之前的形态：#/issues 是列表，点 issue 进原详情页（用户 2026-09-05 裁决）。
+  const isWorkbenchRoute = route.nav === "issues" && route.issueId === "new";
 
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
@@ -356,7 +355,7 @@ export default function ConsoleShell() {
         onSelectWorkspace={setWorkspaceId}
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
-        onNewIssue={openNewSession}
+        onNewIssue={() => setNewIssueOpen(true)}
         onLogout={handleLogout}
         onToast={showToast}
       />
@@ -391,6 +390,16 @@ export default function ConsoleShell() {
               onRetry={() => setIssuesReload((n) => n + 1)}
               onOpenIssue={(item) => openIssue(item.issue_id)}
             />
+          ) : route.issueId === "new" ? (
+            <WorkbenchPage
+              issueId={null}
+              workspaceName={
+                workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? null
+              }
+              onCreateIssue={handleCreateIssue}
+              onOpenRoom={(roomId) => openRoom("new", roomId)}
+              onToast={showToast}
+            />
           ) : route.roomId !== null ? (
             <RoomViewContainer
               issueId={route.issueId}
@@ -399,13 +408,10 @@ export default function ConsoleShell() {
               onToast={showToast}
             />
           ) : (
-            <WorkbenchPage
-              issueId={route.issueId === "new" ? null : route.issueId}
-              workspaceName={
-                workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? null
-              }
-              onCreateIssue={handleCreateIssue}
-              onOpenRoom={(roomId) => openRoom(route.issueId!, roomId)}
+            <IssueDetailContainer
+              issueId={route.issueId}
+              onBack={() => navigate("issues")}
+              onOpenRoom={(room) => openRoom(route.issueId!, room.room_id)}
               onToast={showToast}
             />
           ))}
@@ -451,6 +457,20 @@ export default function ConsoleShell() {
           />
         )}
       </main>
+
+      <NewIssueModal
+        open={newIssueOpen}
+        workspaceLabel={
+          workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? "全部工作区"
+        }
+        organizationId={workspaceId}
+        mode={issuesSourceMode()}
+        onClose={() => setNewIssueOpen(false)}
+        onToast={showToast}
+        onCreate={async (text, key, filename) => {
+          await handleCreateIssue(text, key, filename);
+        }}
+      />
 
       {toast && <Toast text={toast} />}
     </div>

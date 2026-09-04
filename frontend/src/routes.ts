@@ -82,9 +82,13 @@ export function parseRoute(hash: string): Route {
     return { nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null };
   }
 
-  // #/issues 与 #/issues/new 都落「新会话」工作台——聊天优先是默认面（原型定稿）。
-  // 「new」是哨兵值：ConsoleShell 据此渲染空流 + 可用输入框的新会话态。
-  if (/^\/issues\/?(?:[?#].*)?$/.test(h) || /^\/issues\/new(?:[/?#].*)?$/.test(h)) {
+  // #/issues 本体回到列表——issue 标签页还原为聊天框之前的形态（用户 2026-09-05 裁决）。
+  // 「new」是哨兵值：主页（无 hash、#/、#/issues/new）渲染空流 + 可用输入框的新会话聊天。
+  if (/^\/issues\/?(?:[?#].*)?$/.test(h)) {
+    return { nav: "issues", issueId: null, roomId: null, observeSection: null, settingsSection: null };
+  }
+
+  if (/^\/issues\/new(?:[/?#].*)?$/.test(h)) {
     return { nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null };
   }
 
