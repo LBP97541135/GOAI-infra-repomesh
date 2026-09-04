@@ -152,20 +152,14 @@ export function AssistantFlow({
         : { state: "missing", label: "决策主体未接入" };
 
   return (
-    <div className="flex gap-2.5">
-      <span className="grid size-7 flex-none place-items-center rounded-full bg-line font-mono text-[10px] font-bold text-amber">
-        处
-      </span>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <div className="mb-0.5 flex items-baseline gap-2">
-          <span className="text-[11.5px] font-semibold text-amber">处理员</span>
-          <span className="font-mono text-[9.5px] tracking-[0.12em] text-tx3 uppercase">自动推进</span>
-        </div>
-
+    <div className="flex gap-2">
+      {/* ZCode 对话式：一个小图标，右边就是信息——没有身份、没有名字、没有头像框 */}
+      <span className="flex-none pt-[3px] text-[11px] leading-none text-amber">✦</span>
+      <div className="min-w-0 flex-1 grid gap-1">
         {!discovery && <RunLine title="正在接手需求" />}
 
         {discovery && (
-          <div className="grid gap-1">
+          <>
             {/* ── 步 1 · 需求分析 ── */}
             {discovery.step === 1 && discovery.step_state !== "done" && !clarifyPendingOf(discovery) && (
               <RunLine title="正在分析需求" />
@@ -310,7 +304,7 @@ export function AssistantFlow({
                 )}
               </>
             )}
-          </div>
+          </>
         )}
       </div>
 

@@ -415,6 +415,7 @@ export default function ConsoleShell() {
               }
               onCreateIssue={handleCreateIssue}
               onOpenRoom={(roomId) => openRoom(route.issueId!, roomId)}
+              onBack={() => navigate("issues")}
               onToast={showToast}
             />
           ))}

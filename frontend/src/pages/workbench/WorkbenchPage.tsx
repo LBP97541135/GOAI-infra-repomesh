@@ -34,6 +34,7 @@ import {
   type WorkCard,
 } from "./streamModel";
 import { EvidenceModal } from "../../components/EvidenceModal";
+import { Modal } from "../../components/Modal";
 import { RoomPanel } from "./RoomPanel";
 
 /** IDE 式工作台（期 1 骨架 + 期 2 卡片体系）。
@@ -394,7 +395,10 @@ export function WorkbenchPage({
 
   // ── 输入框（新会话可用；既有会话按已知缺口置灰） ──
   const [draft, setDraft] = useState("");
-  const [documentFilename, setDocumentFilename] = useState<string | null>(null);
+  /** 附件（真上传形态）：文档解析文本**不进输入框**，挂在附件位上随消息发送。
+   *  requirement_text 携带解析文本（规划要读的就是它，parse 端点截断 20k），
+   *  聊天里只显示文件卡片——点开看全文。 */
+  const [attachment, setAttachment] = useState<{ filename: string; text: string } | null>(null);
   const [sending, setSending] = useState(false);
   const idempotencyKey = useRef(crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -407,19 +411,26 @@ export function WorkbenchPage({
   };
 
   const handleSend = () => {
-    const text = draft.trim();
-    if (!text || sending) return;
-    // 追问待答时，输入框属于处理员的对话：发送即提交补充，不建新 issue
+    const typed = draft.trim();
+    if (sending) return;
     if (!isNew) {
-      if (!clarifyPending) return;
-      handleClarifySubmit(text);
+      // 追问待答时，输入框属于处理员的对话：发送即提交补充，不建新 issue
+      if (!clarifyPending || !typed) return;
+      handleClarifySubmit(typed);
       return;
     }
+    if (!typed && !attachment) return;
+    // 纯文档发送：需求文本 = 解析文本（后端把文档按这条通道交给规划）；
+    // 文字 + 文档一起发：文字在前，解析全文随后（气泡里只展示文字与文件卡片）。
+    const text =
+      typed && attachment
+        ? `${typed}\n\n${attachment.text}`
+        : typed || attachment!.text;
     setSending(true);
-    onCreateIssue(text, idempotencyKey.current, documentFilename)
+    onCreateIssue(text, idempotencyKey.current, attachment?.filename ?? null)
       .then(() => {
         setDraft("");
-        setDocumentFilename(null);
+        setAttachment(null);
         idempotencyKey.current = crypto.randomUUID();
       })
       .catch((err: unknown) => onToast(`创建失败：${errText(err)}`))
@@ -430,10 +441,9 @@ export function WorkbenchPage({
     if (!file) return;
     parseRequirementDocument(file)
       .then((parsed) => {
-        setDraft(parsed.text);
-        setDocumentFilename(parsed.filename);
+        setAttachment({ filename: parsed.filename, text: parsed.text });
         idempotencyKey.current = crypto.randomUUID();
-        if (parsed.truncated) onToast(`文档较长，已截断为前 ${parsed.chars} 字（可继续编辑）`);
+        if (parsed.truncated) onToast(`文档较长，已截断为前 ${parsed.chars} 字`);
       })
       .catch((err: unknown) => onToast(`文档解析失败：${errText(err)}`))
       .finally(() => {
@@ -579,7 +589,7 @@ export function WorkbenchPage({
                 />
                 <button
                   className="grid h-[27px] w-[27px] place-items-center rounded-hard text-[13px] text-tx3 hover:bg-panel-2 hover:text-tx disabled:opacity-40"
-                  title={isNew ? "上传需求文档（解析为文本继续编辑）" : "仅新会话可用"}
+                  title={isNew ? "上传需求文档（作为附件随消息发送）" : "仅新会话可用"}
                   disabled={!isNew}
                   onClick={() => fileInputRef.current?.click()}
                 >
@@ -601,12 +611,29 @@ export function WorkbenchPage({
                         ? "发送回答（Ctrl+Enter）"
                         : "会话内补充说明待后端立项"
                   }
-                  disabled={(!isNew && !clarifyPending) || sending || clarifySending || draft.trim() === ""}
+                  disabled={(!isNew && !clarifyPending) || sending || clarifySending || (draft.trim() === "" && !attachment)}
                   onClick={handleSend}
                 >
                   {sending || clarifySending ? "…" : "➤"}
                 </button>
               </div>
+              {attachment && (
+                <div className="flex items-center gap-2 border-t border-line px-3 py-1.5">
+                  <span className="text-[13px]">📄</span>
+                  <span className="min-w-0 truncate font-mono text-[11px] text-tx2" title={attachment.filename}>
+                    {attachment.filename}
+                  </span>
+                  <span className="flex-none text-[10px] text-tx3">已解析 · 发送时作为附件随消息提交</span>
+                  <button
+                    type="button"
+                    className="ml-auto flex-none text-[11px] text-tx3 hover:text-salmon"
+                    title="移除附件"
+                    onClick={() => setAttachment(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -664,6 +691,67 @@ export function WorkbenchPage({
 }
 
 /** 任务 tick：display_status 原值决定符号与配色（前端不翻译状态，只挑皮肤）。 */
+/** 用户需求气泡：带附件时渲染成**文件卡片**（点开看全文预览），不把文档文本
+ *  铺进对话——规划读的解析文本在 requirement_text 里，界面只欠一个「这是文件」
+ *  的样子。无附件时照旧显示全文。 */
+function RequirementBubble({ card }: { card: Extract<WorkCard, { kind: "requirement" }> }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const excerpt = card.text.length > 160 ? `${card.text.slice(0, 160)}…` : card.text;
+
+  return (
+    <div className="flex justify-end" id={workCardAnchor(card)}>
+      <div className="max-w-[78%] rounded-[10px_10px_3px_10px] bg-amber px-3.5 py-2.5 text-on-amber">
+        <div className="mb-0.5 font-mono text-[10px] opacity-65">
+          你 · {dayLabel(card.openedAt)}
+          {card.openedByName ? ` · ${card.openedByName}` : ""}
+        </div>
+        {card.documentFilename ? (
+          <>
+            <button
+              className="flex w-full items-center gap-2.5 rounded-hard bg-black/15 px-2.5 py-2 text-left transition-colors hover:bg-black/25"
+              onClick={() => setPreviewOpen(true)}
+              title="点击查看文档内容"
+            >
+              <span className="text-[17px]">📄</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-[11.5px] font-bold">{card.documentFilename}</span>
+                <span className="block text-[10px] opacity-70">需求文档 · 点击查看内容</span>
+              </span>
+            </button>
+            <div className="mt-1.5 whitespace-pre-wrap text-[11.5px] leading-[1.6] opacity-90">{excerpt}</div>
+          </>
+        ) : (
+          <div className="whitespace-pre-wrap text-[12.5px] leading-[1.65]">{card.text}</div>
+        )}
+      </div>
+
+      <Modal
+        open={previewOpen}
+        className="m-auto w-[min(640px,92vw)] rounded-[3px] border border-line-strong bg-panel p-0 text-tx shadow-pop"
+        onClose={() => setPreviewOpen(false)}
+      >
+        <div className="flex items-baseline gap-2 border-b border-line px-4 py-2.5">
+          <span className="text-[14px]">📄</span>
+          <h2 className="min-w-0 truncate font-mono text-[13px] font-bold text-cream">
+            {card.documentFilename ?? "需求全文"}
+          </h2>
+          <button
+            className="ml-auto flex-none text-[12px] text-tx3 hover:text-tx"
+            onClick={() => setPreviewOpen(false)}
+          >
+            ✕
+          </button>
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+          <pre className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-[1.8] text-tx">
+            {card.text}
+          </pre>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 function taskTick(status: string): { char: string; cls: string; spin: boolean } {
   switch (status) {
     case "succeeded":
@@ -704,22 +792,7 @@ function WorkCardView({
 }) {
   switch (card.kind) {
     case "requirement":
-      return (
-        <div className="flex justify-end" id={workCardAnchor(card)}>
-          <div className="max-w-[78%] rounded-[10px_10px_3px_10px] bg-amber px-3.5 py-2.5 text-on-amber">
-            <div className="mb-0.5 font-mono text-[10px] opacity-65">
-              你 · {dayLabel(card.openedAt)}
-              {card.openedByName ? ` · ${card.openedByName}` : ""}
-            </div>
-            <div className="whitespace-pre-wrap text-[12.5px] leading-[1.65]">{card.text}</div>
-            {card.documentFilename && (
-              <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-hard bg-white/10 px-2 py-0.5 font-mono text-[10.5px]">
-                📎 {card.documentFilename}
-              </div>
-            )}
-          </div>
-        </div>
-      );
+      return <RequirementBubble card={card} />;
     case "phase":
       return (
         <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card" id={workCardAnchor(card)}>
