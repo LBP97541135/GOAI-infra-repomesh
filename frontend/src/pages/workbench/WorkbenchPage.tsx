@@ -1,31 +1,54 @@
 import { useEffect, useRef, useState } from "react";
-import type { IssueListItemView, IssueRepositoryRef } from "../../api/contract";
+import type { DeliveryAggregate, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
 import { parseRequirementDocument } from "../../api/issues";
 import { fetchIssueDetail, fetchRooms } from "../../api/rooms";
+import {
+  fetchDecisionDeck,
+  fetchRoundDecisionHistory,
+  resolveGovernanceAgent,
+  submitGovernanceDecision,
+  type GovernanceAgent,
+} from "../../api/decisions";
+import { resolveDataSourceMode } from "../../api/source";
+import { EvidenceModal } from "../../components/EvidenceModal";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
 import { dayLabel, errText, shortId } from "../../display";
+import type { Decision, EvidenceView } from "../../types";
+import { approvalForDecision, evidenceFromAggregate } from "../../viewmodel";
 import {
   buildWorkStream,
   newSessionStream,
   workCardAnchor,
+  type RoundTaskRow,
   type WorkCard,
 } from "./streamModel";
 
-/** IDE 式工作台（改造期 1 骨架）。
+/** IDE 式工作台（期 1 骨架 + 期 2 卡片体系）。
  *
  *  一个对话 = 一个 issue：中央列是交付主线的对话流（顶部折叠 DAG 条 + 卡片流 +
- *  吸底输入框），右侧是仓库房间面板（期 1 只有壳，期 3 接房间数据）。
+ *  吸底输入框），右侧是仓库房间面板（期 3 接房间数据）。
  *
- *  两态：
- *   - `issueId === null`：新会话。输入框可用，发送即 createIssue（幂等键/附件
- *     解析与原 NewIssueModal 同一套契约），成功后由外壳路由进该 issue；
- *   - `issueId` 有值：既有会话。输入框按已知缺口**置灰**（后端还没有「往 issue
- *     追加说明」的端点），只读地呈现卡片流。
+ *  数据节奏（B 定稿「先复用现有接口」）：详情 + 房间 + 活跃轮决策夹 + 各轮任务
+ *  明细每 5s 静默轮询一次，卡片按 streamModel 重建——新卡依次出现、轮次任务
+ *  tick 原地更新。这是「轮询拼装出的流式」，真·事件流等后端立项。
  *
- *  取数是详情 + 房间的一次并发（与 IssueDetailContainer 同源同端点）；期 2 才引入
- *  轮询让卡片「流」起来，本期先把骨架与数据中枢接对。 */
+ *  流内审批（期 2）：approve 类决策卡就地批准——授权单按点击的卡构建（S1），
+ *  head-bound 提交（409 = SHA 漂移，错误显示在卡内不静默）；回放模式不写后端，
+ *  就地演示并如实注明。驳回不在决策卡上：治理写入只有 ready，拒绝走回滚 saga
+ *  （另一条回路，入口在轮次操作里）。
+ *
+ *  两态：`issueId === null` 新会话（发送即 createIssue）；有值 = 既有会话，输入框
+ *  按已知缺口置灰（后端还没有「往 issue 追加说明」的端点）。 */
 
 const DOC_ACCEPT = ".txt,.md,.docx,.pdf,.odt,.rtf";
+const POLL_MS = 5000;
+
+interface ActiveDeck {
+  roundId: string;
+  roundIndex: number;
+  decisions: Decision[];
+  aggregate: DeliveryAggregate;
+}
 
 export function WorkbenchPage({
   issueId,
@@ -35,9 +58,7 @@ export function WorkbenchPage({
 }: {
   /** null = 新会话；否则为既有 issue 的 id */
   issueId: string | null;
-  /** 当前工作区名（新会话的作用范围提示；null = 未选工作区） */
   workspaceName: string | null;
-  /** 新会话发送：与原 NewIssueModal 同一写回路（外壳持有幂等键语义之外的部分） */
   onCreateIssue: (
     text: string,
     idempotencyKey: string,
@@ -52,24 +73,33 @@ export function WorkbenchPage({
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
+  /** 静默轮询与首载的界线：换 issue 才整页 loading，轮询只换数据不闪屏 */
+  const loadedIssueRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isNew) {
+      loadedIssueRef.current = null;
       setDetail(null);
       setRooms([]);
       setLoading(false);
       setError(null);
       return;
     }
+    const firstVisit = loadedIssueRef.current !== issueId;
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    if (firstVisit) {
+      loadedIssueRef.current = issueId;
+      setLoading(true);
+      setError(null);
+    }
     Promise.all([fetchIssueDetail(issueId), fetchRooms(issueId)])
       .then(([d, r]) => {
         if (cancelled) return;
         setDetail(d);
         setRooms(r);
         setLoading(false);
+        setLastSyncAt(new Date());
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -81,14 +111,146 @@ export function WorkbenchPage({
     };
   }, [issueId, isNew, reload]);
 
+  // 流式节奏：5s 静默轮询（B 定稿路线；事件流另立项）
+  useEffect(() => {
+    if (isNew) return;
+    const timer = window.setInterval(() => setReload((n) => n + 1), POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [isNew]);
+
+  const activeRoundId = detail ? (detail.active_round_id ?? detail.latest_round_id ?? null) : null;
+  const activeRoundIndex = detail && activeRoundId ? detail.rounds.findIndex((r) => r.round_id === activeRoundId) + 1 : 0;
+
+  // ── 活跃轮决策夹（审批卡的数据源；每次轮询都重取，别人批掉的卡会消失） ──
+  const [activeDeck, setActiveDeck] = useState<ActiveDeck | null>(null);
+  useEffect(() => {
+    if (isNew || !detail || !activeRoundId || activeRoundIndex === 0) {
+      setActiveDeck(null);
+      return;
+    }
+    let cancelled = false;
+    fetchDecisionDeck(activeRoundId)
+      .then((data) => {
+        if (cancelled) return;
+        setActiveDeck({ roundId: activeRoundId, roundIndex: activeRoundIndex, decisions: data.deck, aggregate: data.aggregate });
+      })
+      .catch(() => {
+        if (!cancelled) setActiveDeck(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  // reload 不入依赖：detail 身份每轮轮询必变，本 effect 已随它重跑；
+  // 再叠 reload 会造成每轮双倍请求。
+  }, [isNew, detail, activeRoundId, activeRoundIndex]);
+
+  // ── 各轮任务明细（轮次卡的 tick 行） ──
+  const [tasksByRound, setTasksByRound] = useState<Record<string, import("../../api/contract").DeliveryTaskView[]>>({});
+  const historyEpoch = useRef(0);
+  useEffect(() => {
+    if (isNew || !detail || detail.rounds.length === 0) {
+      setTasksByRound({});
+      return;
+    }
+    const epoch = ++historyEpoch.current;
+    detail.rounds.forEach((round) => {
+      fetchRoundDecisionHistory(round.round_id)
+        .then((data) => {
+          // A6 同款：换代后在途响应不落桶
+          if (epoch !== historyEpoch.current) return;
+          setTasksByRound((prev) => ({ ...prev, [round.round_id]: data.tasks }));
+        })
+        .catch(() => {
+          // replay 夹具未覆盖历史轮等：该轮没有明细就明说，不摆假进度
+        });
+    });
+  }, [isNew, detail]);
+
+  // ── 治理决策主体（流内批准的「谁在批」） ──
+  const organizationId = detail?.organization_id ?? null;
+  const [principal, setPrincipal] = useState<GovernanceAgent | null>(null);
+  const [principalResolving, setPrincipalResolving] = useState(true);
+  useEffect(() => {
+    if (isNew || !detail) return;
+    let cancelled = false;
+    setPrincipalResolving(true);
+    resolveGovernanceAgent(organizationId)
+      .then((agent) => !cancelled && setPrincipal(agent))
+      .catch(() => !cancelled && setPrincipal(null))
+      .finally(() => !cancelled && setPrincipalResolving(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [isNew, detail, organizationId]);
+
   const cards: WorkCard[] = isNew
     ? newSessionStream(workspaceName)
     : detail
-      ? buildWorkStream(detail, rooms)
+      ? buildWorkStream({ detail, rooms, tasksByRound, activeDeck })
       : [];
 
   // ── 右栏（期 3 接房间数据；本期先做壳与开合） ──
   const [panelRepo, setPanelRepo] = useState<(IssueRepositoryRef & { roomId: string | null }) | null>(null);
+
+  // ── 流内审批：就地消化 + 已处理态（不靠整页刷新才消失） ──
+  const [resolvedDecisions, setResolvedDecisions] = useState<Record<string, "approved">>({});
+  const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [decisionErrors, setDecisionErrors] = useState<Record<string, string>>({});
+  const [evidence, setEvidence] = useState<EvidenceView | null>(null);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+
+  const handleApprove = (card: Extract<WorkCard, { kind: "decision" }>) => {
+    if (!activeDeck || !activeDeck.roundId) return;
+    // 授权单按**点击的这张卡**重建 Decision（S1）：repositoryId 是授权单的锚，
+    // 多仓同时待批时绝不拿别的卡顶替。
+    const decision: Decision = {
+      id: card.decisionId,
+      kind: card.decisionKind,
+      title: card.title,
+      body: card.body,
+      actions: [],
+      actionKinds: null,
+      repositoryId: card.repositoryId,
+      headSha: card.headSha,
+    };
+    const built = approvalForDecision(activeDeck.aggregate, decision);
+    if (!built) {
+      onToast("授权单不可用：该决策未指向仓库");
+      return;
+    }
+    if (resolveDataSourceMode() === "replay") {
+      // 与详情页同款语义：就地演示，如实注明未写后端
+      setResolvedDecisions((prev) => ({ ...prev, [decision.id]: "approved" }));
+      onToast("已批准（回放演示，未写入后端）");
+      return;
+    }
+    if (!principal) {
+      setDecisionErrors((prev) => ({ ...prev, [decision.id]: "决策主体未接入，无法提交。" }));
+      return;
+    }
+    setApprovingId(decision.id);
+    setDecisionErrors((prev) => ({ ...prev, [decision.id]: "" }));
+    submitGovernanceDecision(activeDeck.roundId, built, "", principal.agentId)
+      .then(() => {
+        setResolvedDecisions((prev) => ({ ...prev, [decision.id]: "approved" }));
+        onToast("治理决策已记录：READY（head-bound），merge gate 放行");
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409 = head 漂移，留在卡内不静默
+        setDecisionErrors((prev) => ({ ...prev, [decision.id]: errText(err) }));
+      })
+      .finally(() => setApprovingId(null));
+  };
+
+  const handleEvidence = (card: Extract<WorkCard, { kind: "decision" }>) => {
+    if (!activeDeck || !card.repositoryId) {
+      onToast("证据不可用：本轮聚合未取到或决策未指向仓库");
+      return;
+    }
+    setEvidence(evidenceFromAggregate(activeDeck.aggregate, card.repositoryId));
+    setEvidenceOpen(true);
+  };
 
   // ── 输入框（新会话可用；既有会话按已知缺口置灰） ──
   const [draft, setDraft] = useState("");
@@ -176,7 +338,12 @@ export function WorkbenchPage({
                 onRetry={() => setReload((n) => n + 1)}
               />
             )}
-            {!loading && !error && cards.map((card) => <WorkCardView key={card.anchor} card={card} onOpenRepo={setPanelRepo} />)}
+            {!loading && !error && cards.map((card) => <WorkCardView key={card.anchor} card={card} onOpenRepo={setPanelRepo} approvingId={approvingId} decisionErrors={decisionErrors} resolvedDecisions={resolvedDecisions} principalReady={!principalResolving && principal !== null} principalResolving={principalResolving} onApprove={handleApprove} onEvidence={handleEvidence} />)}
+            {!loading && !error && !isNew && detail && (
+              <p className="pt-1 text-center font-mono text-[10px] text-tx3">
+                每 5s 自动同步{lastSyncAt ? ` · 上次 ${lastSyncAt.toLocaleTimeString()}` : " · 首次同步中…"}
+              </p>
+            )}
           </div>
         </div>
 
@@ -296,17 +463,55 @@ export function WorkbenchPage({
           </div>
         </div>
       </aside>
+
+      <EvidenceModal
+        open={evidenceOpen}
+        roundLabel={activeDeck ? `第 ${activeDeck.roundIndex} 轮` : ""}
+        evidence={evidence}
+        onClose={() => setEvidenceOpen(false)}
+      />
     </div>
   );
+}
+
+/** 任务 tick：display_status 原值决定符号与配色（前端不翻译状态，只挑皮肤）。 */
+function taskTick(status: string): { char: string; cls: string; spin: boolean } {
+  switch (status) {
+    case "succeeded":
+      return { char: "✓", cls: "border-olive bg-olive text-on-amber", spin: false };
+    case "running":
+    case "repairing":
+      return { char: "▶", cls: "border-bluegray text-bluegray", spin: true };
+    case "failed":
+      return { char: "✕", cls: "border-salmon bg-salmon text-on-amber", spin: false };
+    case "blocked":
+      return { char: "■", cls: "border-salmon text-salmon", spin: false };
+    default:
+      return { char: "", cls: "border-line-strong text-tx3", spin: false };
+  }
 }
 
 /** 卡片渲染：样式与原型一致，判定逻辑全部在 streamModel（本组件不写映射）。 */
 function WorkCardView({
   card,
   onOpenRepo,
+  approvingId,
+  decisionErrors,
+  resolvedDecisions,
+  principalReady,
+  principalResolving,
+  onApprove,
+  onEvidence,
 }: {
   card: WorkCard;
   onOpenRepo: (repo: IssueRepositoryRef & { roomId: string | null }) => void;
+  approvingId: string | null;
+  decisionErrors: Record<string, string>;
+  resolvedDecisions: Record<string, "approved">;
+  principalReady: boolean;
+  principalResolving: boolean;
+  onApprove: (card: Extract<WorkCard, { kind: "decision" }>) => void;
+  onEvidence: (card: Extract<WorkCard, { kind: "decision" }>) => void;
 }) {
   switch (card.kind) {
     case "requirement":
@@ -402,9 +607,88 @@ function WorkCardView({
               {dayLabel(card.updatedAt)}
             </span>
           </div>
-          <p className="mt-1 text-[11px] text-tx3">任务明细与原地进度在期 2 接入（fetchRoundDecisionHistory）。</p>
+          {card.tasks === null ? (
+            <p className="mt-1.5 text-[11px] text-tx3">任务明细未取到（夹具未覆盖或取用失败），不摆假进度。</p>
+          ) : card.tasks.length > 0 ? (
+            <div className="mt-1.5">
+              {card.tasks.map((task) => (
+                <TaskRow key={task.taskId} task={task} />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-1.5 text-[11px] text-tx3">本轮还没有任务（尚未派工或计划未生成）。</p>
+          )}
         </div>
       );
+    case "decision": {
+      const resolved = resolvedDecisions[card.decisionId];
+      const errorTextFor = decisionErrors[card.decisionId] || "";
+      const submitting = approvingId === card.decisionId;
+      return (
+        <div
+          id={workCardAnchor(card)}
+          className={
+            resolved
+              ? "rounded-hard border border-olive bg-[color-mix(in_oklab,var(--color-olive)_10%,var(--color-panel))] px-3.5 py-2.5"
+              : card.decisionKind === "approve"
+                ? "rounded-hard border border-amber bg-amber-well px-3.5 py-2.5"
+                : "rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card"
+          }
+        >
+          <div className="mb-1.5 flex items-baseline gap-2">
+            <span className={`microlabel ${resolved ? "" : card.decisionKind === "approve" ? "text-[#b08a2e]" : ""}`}>
+              {resolved ? "已批准" : card.decisionKind === "approve" ? "待人审" : "观察项"}
+            </span>
+            <span className="text-[12.5px] font-bold text-cream">{card.title}</span>
+            <span className="ml-auto font-mono text-[10px] text-tx3">第 {card.roundIndex} 轮</span>
+          </div>
+          <p className="text-[12px] leading-[1.7] text-tx">{card.body}</p>
+          <p className="mt-1 font-mono text-[10.5px] text-tx2">
+            {card.repositoryName ?? "仓库未指向"} · {card.headSha ? `head ${shortId(card.headSha)}` : "head 未记录"}
+          </p>
+          {card.unverifiedCount > 0 && !resolved && (
+            <p className="mt-1.5 border-l-2 border-amber bg-panel px-2.5 py-1.5 text-[11.5px] leading-[1.7] text-tx2">
+              A-18：该仓有 {card.unverifiedCount} 个任务，agent 自述「未验证」——确认前请先看证据。
+            </p>
+          )}
+          {resolved ? (
+            <p className="mt-2 text-[11.5px] text-olive">✓ 治理决策已记录（READY）· merge gate 放行</p>
+          ) : card.decisionKind === "approve" ? (
+            <>
+              {errorTextFor && (
+                <p className="mt-2 rounded-hard border border-salmon/60 bg-salmon/10 px-2.5 py-1.5 text-[11.5px] text-salmon">
+                  {errorTextFor}
+                </p>
+              )}
+              <div className="mt-2.5 flex gap-2">
+                <button
+                  className="rounded-hard bg-amber px-3.5 py-1.5 text-[11.5px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-40"
+                  disabled={submitting || !principalReady}
+                  title={
+                    principalReady
+                      ? "head-bound 授权：提交 READY 治理决策，放行 merge gate"
+                      : "决策主体未接入（花名册无活跃 Org Leader）"
+                  }
+                  onClick={() => onApprove(card)}
+                >
+                  {submitting ? "提交中…" : "批准合并"}
+                </button>
+                <button
+                  className="rounded-hard border border-line-strong bg-panel px-3.5 py-1.5 text-[11.5px] text-tx hover:border-amber disabled:opacity-40"
+                  disabled={!card.repositoryId}
+                  onClick={() => onEvidence(card)}
+                >
+                  查看证据
+                </button>
+              </div>
+              {!principalReady && principalResolving && (
+                <p className="mt-1.5 text-[10.5px] text-tx3">决策主体解析中…</p>
+              )}
+            </>
+          ) : null}
+        </div>
+      );
+    }
     case "note":
       return (
         <div className="rounded-hard bg-panel-2 px-3.5 py-2.5 text-[11.5px] leading-[1.7] text-tx2" id={workCardAnchor(card)}>
@@ -412,4 +696,30 @@ function WorkCardView({
         </div>
       );
   }
+}
+
+function TaskRow({ task }: { task: RoundTaskRow }) {
+  const tick = taskTick(task.displayStatus);
+  return (
+    <div className="flex items-center gap-2 py-0.5 text-[12px]">
+      <span
+        className={`grid h-[15px] w-[15px] flex-none place-items-center rounded-full border-[1.5px] text-[9px] font-bold ${tick.cls} ${tick.spin ? "blink" : ""}`}
+      >
+        {tick.char}
+      </span>
+      <span className="min-w-0 truncate font-mono text-[11.5px] text-tx">{task.title}</span>
+      {task.attempt > 1 && (
+        <span className="flex-none rounded-hard border border-line px-1 font-mono text-[9px] text-tx3">
+          第{task.attempt}次
+        </span>
+      )}
+      <span className="ml-auto flex-none font-mono text-[10px] text-tx3">
+        {task.lastDispatchedAt === null
+          ? "从未派工"
+          : task.agent
+            ? task.agent
+            : task.displayStatus}
+      </span>
+    </div>
+  );
 }

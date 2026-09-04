@@ -1,24 +1,40 @@
 import type {
+  DeliveryAggregate,
+  DeliveryTaskView,
   IssueDetailView,
   IssueRepositoryRef,
   RoomListItemView,
 } from "../../api/contract";
+import type { Decision } from "../../types";
+import { approvalForDecision } from "../../viewmodel";
 
-/** 工作台对话流的数据中枢（期 0）。
+/** 工作台对话流的数据中枢（期 0 建，期 2 扩）。
  *
- *  **唯一的职责边界**：把读模型（issue 详情 + 房间清单，后续再加审核 SSE 与
- *  轮次历史）映射成对话流的卡片序列。输入输出都是纯数据——组件只负责渲染，
- *  任何「这张卡该不该出现、顺序如何、文案是什么」的判断都收在这里，保证：
+ *  **唯一的职责边界**：把读模型（issue 详情 + 房间清单 + 轮次任务明细 + 活跃轮
+ *  决策夹）映射成对话流的卡片序列。输入输出都是纯数据——组件只负责渲染，任何
+ *  「这张卡该不该出现、顺序如何、文案是什么」的判断都收在这里，保证：
  *   - 判定逻辑可以被直接核对/测试，不埋在 JSX 里；
- *   - 期 2 换数据源（轮询→事件流）时只换取数，不改映射。
+ *   - 后续换数据源（轮询→事件流）时只换取数，不改映射。
  *
  *  **诚实红线**（与全站同一套）：卡片只为**已经发生的事实**出现。没有计划就不画
- *  计划卡，没有轮次就不画轮次卡——空缺由阶段卡（phase）一句话说清，不摆占位块
- *  假装流程在走。 */
+ *  计划卡，某轮取不到任务明细就不摆假进度；状态一律透传读模型原值
+ *  （`display_status` / phase_note），前端不翻译不派生。 */
 
 /** 卡片锚点 id 的统一前缀（期 4 的 DAG 节点滚动定位按它查找）。 */
 export function workCardAnchor(card: WorkCard): string {
   return `work-card-${card.anchor}`;
+}
+
+/** 轮次任务明细的展示行：DeliveryTaskView 的窄化，只留对话流要说的字段。 */
+export interface RoundTaskRow {
+  taskId: string;
+  title: string;
+  /** 读模型 §5.1 展示态原值，透传不翻译 */
+  displayStatus: string;
+  agent: string | null;
+  attempt: number;
+  /** null = 从未派工（契约 §8.7.4：这是这句话本身，不是缺数据） */
+  lastDispatchedAt: string | null;
 }
 
 export type WorkCard =
@@ -49,7 +65,7 @@ export type WorkCard =
       anchor: "repositories";
       repos: Array<IssueRepositoryRef & { roomId: string | null }>;
     }
-  /** 轮次卡：每轮一张（B 定稿）。期 1 只含轮次自身字段，任务明细期 2 接。 */
+  /** 轮次卡：每轮一张（B 定稿），卡内任务逐行原地更新（tick 按 display_status）。 */
   | {
       kind: "round";
       anchor: `round-${number}`;
@@ -60,9 +76,51 @@ export type WorkCard =
       planVersion: number | null;
       updatedAt: string | null;
       active: boolean;
+      /** 该轮任务明细；取用失败/夹具未覆盖时为 null——如实不摆假进度 */
+      tasks: RoundTaskRow[] | null;
+    }
+  /** 审批卡（B 定稿：流内直接操作）。来自活跃轮的决策夹；批准/查看证据的
+   *  写回路在页面层（授权单按点击的卡构建，S1）。 */
+  | {
+      kind: "decision";
+      anchor: `decision-${string}`;
+      decisionId: string;
+      /** 契约 §4.3 仅此两类 */
+      decisionKind: "approve" | "watch";
+      title: string;
+      body: string;
+      /** 授权单构建（approvalForDecision）与证据切片都认这个 id */
+      repositoryId: string | null;
+      repositoryName: string | null;
+      headSha: string | null;
+      /** A-18：该决策指向仓库里 agent 自述「未验证」的任务数（0 = 无此声明） */
+      unverifiedCount: number;
+      roundIndex: number;
     }
   /** 备注/空态卡：房间、范围等「契约明文的空」要一句话说出来，不留白。 */
   | { kind: "note"; anchor: `note-${string}`; text: string };
+
+/** buildWorkStream 的输入：详情与房间之外，期 2 增加轮次任务与活跃轮决策夹。 */
+export interface WorkStreamInput {
+  detail: IssueDetailView;
+  rooms: RoomListItemView[];
+  /** 每轮任务原文，按 round_id 归桶（fetchRoundDecisionHistory().tasks） */
+  tasksByRound: Record<string, DeliveryTaskView[]>;
+  /** 活跃轮（active ?? latest）的决策夹；null = 无轮次或取用失败 */
+  activeDeck: { roundId: string; roundIndex: number; decisions: Decision[]; aggregate: DeliveryAggregate } | null;
+}
+
+function taskRows(tasks: DeliveryTaskView[] | undefined): RoundTaskRow[] | null {
+  if (!tasks) return null;
+  return tasks.map((t) => ({
+    taskId: t.task_id,
+    title: t.title,
+    displayStatus: t.display_status,
+    agent: t.agent,
+    attempt: t.attempt,
+    lastDispatchedAt: t.last_dispatched_at,
+  }));
+}
 
 /** 房间按 kind 分类后挂回仓库：teamRoom 才是干活的地方，leaderDM 是单向汇报线。 */
 function teamRoomByRepository(rooms: RoomListItemView[]): Map<string, RoomListItemView> {
@@ -73,7 +131,8 @@ function teamRoomByRepository(rooms: RoomListItemView[]): Map<string, RoomListIt
   return map;
 }
 
-export function buildWorkStream(detail: IssueDetailView, rooms: RoomListItemView[]): WorkCard[] {
+export function buildWorkStream(input: WorkStreamInput): WorkCard[] {
+  const { detail, rooms, tasksByRound, activeDeck } = input;
   const cards: WorkCard[] = [];
 
   cards.push({
@@ -130,17 +189,43 @@ export function buildWorkStream(detail: IssueDetailView, rooms: RoomListItemView
   }
 
   detail.rounds.forEach((round, i) => {
+    const roundIndex = i + 1;
     cards.push({
       kind: "round",
-      anchor: `round-${i + 1}`,
-      index: i + 1,
+      anchor: `round-${roundIndex}`,
+      index: roundIndex,
       roundId: round.round_id,
       phase: round.phase,
       status: round.status,
       planVersion: round.plan_version,
       updatedAt: round.updated_at,
       active: round.round_id === (detail.active_round_id ?? detail.latest_round_id),
+      tasks: taskRows(tasksByRound[round.round_id]),
     });
+
+    // 决策是轮次粒度：审批卡紧跟在它所属的那一轮卡片后面（B 定稿的流内操作）
+    if (activeDeck && activeDeck.roundId === round.round_id) {
+      const repoNameById = new Map(activeDeck.aggregate.repositories.map((r) => [r.repository_id, r.name]));
+      for (const decision of activeDeck.decisions) {
+        cards.push({
+          kind: "decision",
+          anchor: `decision-${decision.id}`,
+          decisionId: decision.id,
+          decisionKind: decision.kind,
+          title: decision.title,
+          body: decision.body,
+          repositoryId: decision.repositoryId,
+          repositoryName: decision.repositoryId
+            ? repoNameById.get(decision.repositoryId) ?? null
+            : null,
+          headSha: decision.headSha,
+          unverifiedCount: decision.repositoryId
+            ? approvalForDecision(activeDeck.aggregate, decision)?.unverified.length ?? 0
+            : 0,
+          roundIndex,
+        });
+      }
+    }
   });
 
   if (rooms.length === 0 && detail.teams.length === 0) {
