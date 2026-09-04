@@ -105,7 +105,8 @@ export function WorkbenchPage({
   };
   const scrollToBottom = () => {
     const el = streamRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    // 平滑滚动：瞬移读起来像闪跳，新卡片是「滑进来」而不是「砸上来」
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
   useEffect(() => {
@@ -244,9 +245,23 @@ export function WorkbenchPage({
   }, [showDiscovery, detail, reload]);
 
   const autoTriggeredRef = useRef<Record<string, string>>({});
+  /** 驱动器状态上屏：触发失败/主体缺失不再静默——用户看到的「没反应」要能自解释。 */
+  const [driver, setDriver] = useState<{ status: "idle" | "fired" | "error" | "no-principal"; detail: string }>({
+    status: "idle",
+    detail: "",
+  });
   useEffect(() => {
     if (resolveDataSourceMode() === "replay") return; // 回放里写入口一律如实拒绝，不空转
-    if (!discovery || !principal || discovery.step_state !== "idle") return;
+    if (!discovery) return;
+    if (discovery.step_state !== "idle") {
+      if (driver.status !== "idle") setDriver({ status: "idle", detail: "" });
+      return;
+    }
+    if (!principal) {
+      // 主体还没解析出来不算错，但解析完仍为 null 必须说出口
+      if (!principalResolving) setDriver({ status: "no-principal", detail: "决策主体未接入（花名册无活跃 Org Leader），无法自动推进" });
+      return;
+    }
     const key = `${discovery.issue_id}:${discovery.step}`;
     if (autoTriggeredRef.current[key]) return; // 本 visit 已触发过（失败由面板的重试入口接管，避免循环开火）
     autoTriggeredRef.current[key] = newIdempotencyKey(STEP_KEY_BY_STEP[discovery.step]);
@@ -262,15 +277,20 @@ export function WorkbenchPage({
           : discovery.step === 3
             ? triggerClassification(discovery.issue_id, payload)
             : triggerPlan(discovery.issue_id, payload);
-    fire.catch(() => undefined);
-  }, [discovery, principal]);
+    setDriver({ status: "fired", detail: `已发起第 ${discovery.step} 步` });
+    fire.catch((err: unknown) => {
+      // 触发失败上屏：409/422/网络错都原样给，不再让人对着「待开始」猜
+      setDriver({ status: "error", detail: `第 ${discovery.step} 步自动触发失败：${errText(err)}` });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discovery, principal, principalResolving]);
 
   const discoveryCard =
     showDiscovery && detail ? (
       <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card">
         <div className="mb-1.5 flex items-baseline gap-2">
           <span className="microlabel">处理员 · 自动推进</span>
-          <span className="text-[10.5px] text-tx3">
+          <span className="text-[10.5px] text-tx2">
             {discovery
               ? discovery.step_state === "idle"
                 ? discovery.step === 3
@@ -283,6 +303,14 @@ export function WorkbenchPage({
                     : "已完成"
               : "准备中…"}
           </span>
+          {driver.status === "error" && (
+            <span className="min-w-0 truncate text-[10.5px] text-salmon" title={driver.detail}>
+              {driver.detail}
+            </span>
+          )}
+          {driver.status === "no-principal" && (
+            <span className="text-[10.5px] text-salmon">{driver.detail}</span>
+          )}
         </div>
         <DiscoveryPanel
           issueId={detail.issue_id}
