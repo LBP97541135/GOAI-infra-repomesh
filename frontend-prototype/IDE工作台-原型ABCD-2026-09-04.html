@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RepoMesh 工作台原型 · A骨架 + B卡片 + C右栏 + D折叠DAG</title>
+<style>
+  /* ========== 设计令牌：与 frontend 浅色主题同步（白底 · 炭墨 · 6px） ========== */
+  :root {
+    --ink: #ffffff;
+    --ink-deep: #f7f7f4;
+    --panel: #ffffff;
+    --panel-2: #f5f5f1;
+    --line: #e7e5df;
+    --line-strong: #d5d2ca;
+    --charcoal: #34343a;      /* 主操作 */
+    --charcoal-hi: #48484f;
+    --head: #26262b;          /* 强调文字 */
+    --tx: #333338;
+    --tx2: #71706a;
+    --tx3: #a5a39c;
+    --eyebrow: #85837c;
+    --olive: #1a7f37;
+    --olive-well: #ecf7ef;
+    --salmon: #d1342f;
+    --salmon-well: #fdecea;
+    --bluegray: #3d6a94;
+    --bluegray-well: #eef4fa;
+    --warn-well: #fdf8ec;     /* 全站唯一暖色相：警示洗底 */
+    --chip: #e7e6e1;
+    --well: #f6f6f2;
+    --radius: 6px;
+    --shadow-float: 0 16px 40px rgba(35,32,25,.1);
+    --shadow-card: 0 6px 16px rgba(35,32,25,.06);
+    --font: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    --mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font); font-size: 13.5px; line-height: 1.55;
+    color: var(--tx); background: var(--ink);
+    display: flex; overflow: hidden;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .14em; color: var(--eyebrow); text-transform: uppercase;
+  }
+  button { font-family: inherit; cursor: pointer; }
+
+  /* ========== 左侧栏（保留导航 + 会话列表） ========== */
+  .sidebar {
+    width: 216px; flex: none; background: var(--ink-deep);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; padding: 14px 10px 12px;
+  }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 2px 8px 14px; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: var(--radius); background: var(--charcoal);
+    color: #fff; display: grid; place-items: center;
+    font-family: var(--mono); font-size: 14px; font-weight: 800;
+  }
+  .brand-name { font-family: var(--mono); font-size: 12.5px; font-weight: 700; letter-spacing: .14em; color: var(--head); }
+  .nav { display: grid; gap: 2px; margin-bottom: 14px; }
+  .nav a {
+    display: flex; align-items: center; gap: 9px; padding: 6px 9px;
+    border-radius: var(--radius); color: var(--tx2); text-decoration: none; font-size: 12.5px;
+  }
+  .nav a:hover { background: rgba(52,52,58,.06); color: var(--tx); }
+  .nav a.active { background: rgba(52,52,58,.09); color: var(--head); font-weight: 600; }
+  .nav .badge {
+    margin-left: auto; background: var(--salmon); color: #fff; border-radius: 99px;
+    font-size: 10px; padding: 0 5.5px; line-height: 15px;
+  }
+  .nav .ico { font-family: var(--mono); font-size: 11px; width: 16px; text-align: center; color: var(--tx3); }
+  .nav a.active .ico { color: var(--charcoal); }
+
+  .conv-label { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 6px; }
+  .conv-new {
+    border: 1px solid var(--line-strong); background: #fff; color: var(--tx);
+    font-size: 11px; border-radius: var(--radius); padding: 1px 8px;
+  }
+  .conv-list { flex: 1; overflow-y: auto; display: grid; gap: 2px; align-content: start; }
+  .conv {
+    padding: 7px 9px; border-radius: var(--radius); cursor: pointer; border: 1px solid transparent;
+  }
+  .conv:hover { background: rgba(52,52,58,.06); }
+  .conv.current { background: #fff; border-color: var(--line); box-shadow: var(--shadow-card); }
+  .conv-title { font-size: 12.5px; font-weight: 600; color: var(--head); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-meta { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 10.5px; color: var(--tx3); }
+  .conv-last { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .state-dot { width: 6px; height: 6px; border-radius: 99px; flex: none; }
+  .state-run { background: var(--bluegray); }
+  .state-wait { background: #d1a23c; }
+  .state-done { background: var(--olive); }
+  .state-plan { background: var(--tx3); }
+
+  .me { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0; border-top: 1px solid var(--line); margin-top: 10px; }
+  .avatar {
+    width: 26px; height: 26px; border-radius: 99px; background: var(--chip);
+    display: grid; place-items: center; font-size: 11px; font-weight: 800; color: var(--head);
+  }
+  .me-name { font-size: 12px; font-weight: 600; color: var(--head); }
+  .me-role { font-size: 10.5px; color: var(--tx3); }
+
+  /* ========== 中央列 ========== */
+  .center { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+  /* —— D. 顶部 DAG 折叠条 —— */
+  .dagbar {
+    flex: none; border-bottom: 1px solid var(--line); background: var(--ink);
+    padding: 0 22px;
+  }
+  .dagbar-row { height: 44px; display: flex; align-items: center; gap: 14px; }
+  .dag-phases { display: flex; align-items: center; gap: 4px; }
+  .phase { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--tx2); }
+  .phase .p-dot {
+    width: 16px; height: 16px; border-radius: 99px; display: grid; place-items: center;
+    font-size: 9.5px; font-weight: 800; border: 1.5px solid var(--line-strong); color: var(--tx3);
+    background: #fff;
+  }
+  .phase.done .p-dot { background: var(--olive); border-color: var(--olive); color: #fff; }
+  .phase.done { color: var(--tx2); }
+  .phase.now .p-dot { background: var(--charcoal); border-color: var(--charcoal); color: #fff; }
+  .phase.now { color: var(--head); font-weight: 600; }
+  .phase-link { width: 14px; height: 1.5px; background: var(--line-strong); }
+  .dag-counts { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--tx3); }
+  .dag-toggle {
+    border: 1px solid var(--line-strong); background: #fff; border-radius: var(--radius);
+    font-size: 11px; color: var(--tx2); padding: 2.5px 9px;
+  }
+  .dag-toggle:hover { color: var(--head); border-color: var(--charcoal); }
+  .dag-detail {
+    display: none; padding: 14px 4px 18px; border-top: 1px dashed var(--line);
+  }
+  .dag-detail.open { display: block; }
+  .dag-graph { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; padding: 6px 2px 2px; }
+  .dag-node {
+    flex: none; border: 1px solid var(--line-strong); background: #fff; border-radius: var(--radius);
+    padding: 6px 10px; min-width: 108px;
+  }
+  .dag-node b { display: block; font-size: 11.5px; color: var(--head); }
+  .dag-node span { font-size: 10px; color: var(--tx3); font-family: var(--mono); }
+  .dag-node.done { border-color: var(--olive); }
+  .dag-node.done span { color: var(--olive); }
+  .dag-node.run { border-color: var(--charcoal); box-shadow: var(--shadow-card); }
+  .dag-node.run span { color: var(--bluegray); }
+  .dag-edge { flex: none; width: 26px; height: 1.5px; background: var(--line-strong); margin-top: 20px; }
+
+  /* —— 对话流 —— */
+  .stream-wrap { flex: 1; overflow-y: auto; }
+  .stream { max-width: 720px; margin: 0 auto; padding: 22px 24px 18px; display: grid; gap: 12px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 11px 14px; box-shadow: var(--shadow-card);
+  }
+  .card-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .card-title { font-size: 12.5px; font-weight: 700; color: var(--head); }
+  .card-tag {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .1em;
+    color: var(--tx3); text-transform: uppercase;
+  }
+  .card-time { margin-left: auto; font-size: 10px; color: var(--tx3); font-family: var(--mono); }
+
+  /* B: 用户需求气泡（右对齐） */
+  .bubble-row { display: flex; justify-content: flex-end; }
+  .bubble {
+    max-width: 78%; background: var(--charcoal); color: #fff;
+    border-radius: 10px 10px 3px 10px; padding: 10px 14px;
+  }
+  .bubble .who { font-size: 10px; opacity: .65; margin-bottom: 3px; font-family: var(--mono); }
+  .bubble .txt { font-size: 12.5px; line-height: 1.65; }
+  .bubble .file {
+    margin-top: 7px; display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,.12); border-radius: var(--radius);
+    font-size: 10.5px; padding: 3px 8px; font-family: var(--mono);
+  }
+
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 2px 10px; font-size: 12px; }
+  .kv dt { color: var(--tx3); font-size: 11px; padding-top: 1px; }
+  .kv dd { color: var(--tx); }
+
+  /* 仓库 chip 行（点击开右栏） */
+  .repo-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .repo-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--line-strong); background: #fff; border-radius: var(--radius);
+    padding: 5px 11px; font-size: 12px; font-family: var(--mono); color: var(--tx);
+  }
+  .repo-chip:hover { border-color: var(--charcoal); box-shadow: var(--shadow-card); }
+  .repo-chip .st { width: 7px; height: 7px; border-radius: 99px; }
+  .repo-chip .arrow { color: var(--tx3); font-size: 10px; }
+
+  /* 轮次进度卡 */
+  .task { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+  .task .tick {
+    width: 15px; height: 15px; border-radius: 99px; flex: none; display: grid; place-items: center;
+    font-size: 9px; font-weight: 800; border: 1.5px solid var(--line-strong); color: var(--tx3);
+  }
+  .task.done .tick { background: var(--olive); border-color: var(--olive); color: #fff; }
+  .task.run .tick { border-color: var(--bluegray); color: var(--bluegray); animation: pulse 1.6s infinite; }
+  .task.fail .tick { background: var(--salmon); border-color: var(--salmon); color: #fff; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .task .name { font-family: var(--mono); font-size: 11.5px; color: var(--tx); }
+  .task .note { margin-left: auto; font-size: 10.5px; color: var(--tx3); }
+  .meter { height: 4px; background: var(--well); border-radius: 99px; overflow: hidden; margin: 7px 0 3px; }
+  .meter i { display: block; height: 100%; background: var(--charcoal); border-radius: 99px; }
+
+  /* 审批卡（流内可操作） */
+  .card.approve { border-color: #e4c98a; background: var(--warn-well); }
+  .btn { border-radius: var(--radius); font-size: 11.5px; padding: 4px 12px; font-weight: 600; }
+  .btn-primary { background: var(--charcoal); color: #fff; border: 1px solid var(--charcoal); }
+  .btn-primary:hover { background: var(--charcoal-hi); }
+  .btn-ghost { background: #fff; color: var(--tx); border: 1px solid var(--line-strong); }
+  .btn-ghost:hover { border-color: var(--charcoal); }
+  .approve-actions { display: flex; gap: 8px; margin-top: 9px; }
+  .approve.done-yes { border-color: var(--olive); background: var(--olive-well); }
+  .approve.done-no { border-color: var(--salmon); background: var(--salmon-well); }
+
+  /* 异常卡 */
+  .card.alert { border-left: 3px solid var(--salmon); background: var(--salmon-well); }
+  .card.alert .fix { margin-top: 6px; font-size: 11.5px; color: var(--tx2); }
+
+  /* 流式输入中指示 */
+  .typing { display: flex; align-items: center; gap: 8px; color: var(--tx3); font-size: 11px; padding: 2px 4px; }
+  .typing i { width: 5px; height: 5px; border-radius: 99px; background: var(--tx3); animation: pulse 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+
+  /* —— 输入区：一体式对话框（简洁版） —— */
+  .composer { flex: none; border-top: 1px solid var(--line); background: var(--ink); padding: 10px 24px 14px; }
+  .composer-inner { max-width: 720px; margin: 0 auto; }
+  .composer-box { border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; transition: border-color .12s; }
+  .composer-box:focus-within { border-color: var(--charcoal); }
+  .composer-box textarea {
+    display: block; width: 100%; border: none; outline: none; resize: none;
+    height: 46px; padding: 10px 13px 0; font: inherit; font-size: 12.5px;
+    color: var(--tx); background: transparent; line-height: 1.5;
+  }
+  .composer-bar { display: flex; align-items: center; gap: 3px; padding: 2px 7px 7px 9px; }
+  .scope { position: relative; }
+  .scope-btn {
+    display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--line-strong); border-radius: 99px; padding: 2.5px 10px;
+    color: var(--tx2); background: #fff;
+  }
+  .scope-btn:hover { border-color: var(--charcoal); color: var(--head); }
+  .scope-btn .st { width: 6px; height: 6px; border-radius: 99px; background: var(--bluegray); flex: none; }
+  .icon-btn {
+    width: 27px; height: 27px; border-radius: var(--radius); border: none; background: transparent;
+    color: var(--tx3); font-size: 13.5px; display: grid; place-items: center;
+  }
+  .icon-btn:hover { background: var(--panel-2); color: var(--head); }
+  .send-ico {
+    margin-left: auto; width: 28px; height: 28px; border-radius: var(--radius);
+    background: var(--charcoal); color: #fff; border: none; font-size: 12px;
+  }
+  .send-ico:hover { background: var(--charcoal-hi); }
+  .scope-menu {
+    display: none; position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 156px;
+    background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius);
+    box-shadow: var(--shadow-float); padding: 5px; z-index: 20;
+  }
+  .scope-menu.open { display: block; }
+  .scope-item {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius);
+    font-size: 12px; font-family: var(--mono); color: var(--tx); cursor: pointer;
+  }
+  .scope-item:hover { background: var(--panel-2); }
+  .scope-item .box {
+    width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid var(--line-strong);
+    display: grid; place-items: center; font-size: 8px; color: #fff; flex: none;
+  }
+  .scope-item.on .box { background: var(--charcoal); border-color: var(--charcoal); }
+
+  /* ========== C. 右侧房间面板 ========== */
+  .rightpanel {
+    width: 0; flex: none; overflow: hidden; border-left: 1px solid var(--line);
+    background: var(--panel); display: flex; flex-direction: column;
+    transition: width .18s ease;
+  }
+  .rightpanel.open { width: 352px; }
+  .rp-inner { width: 352px; display: flex; flex-direction: column; height: 100%; }
+  .rp-head { padding: 10px 14px 9px; border-bottom: 1px solid var(--line); }
+  .rp-top { display: flex; align-items: center; gap: 8px; }
+  .rp-title { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--head); }
+  .rp-actions { margin-left: auto; display: flex; gap: 5px; }
+  .rp-ico { width: 24px; height: 24px; border-radius: var(--radius); border: 1px solid var(--line-strong); background: #fff; color: var(--tx2); font-size: 11px; }
+  .rp-ico:hover { color: var(--head); border-color: var(--charcoal); }
+  .rp-switch { display: flex; gap: 5px; margin-top: 9px; }
+  .rp-tab {
+    font-family: var(--mono); font-size: 11px; border: 1px solid var(--line-strong);
+    border-radius: 99px; padding: 2px 10px; background: #fff; color: var(--tx2);
+  }
+  .rp-tab.on { background: var(--charcoal); border-color: var(--charcoal); color: #fff; }
+  .agents { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+  .agent {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px;
+    border: 1px solid var(--line); border-radius: 99px; padding: 2px 9px; color: var(--tx2); background: var(--well);
+  }
+  .agent .st { width: 6px; height: 6px; border-radius: 99px; }
+  .rp-stream { flex: 1; overflow-y: auto; padding: 12px 14px; display: grid; gap: 9px; align-content: start; background: var(--well); }
+  .msg { max-width: 92%; border-radius: var(--radius); padding: 7px 11px; font-size: 11.5px; line-height: 1.6; border: 1px solid var(--line); background: #fff; }
+  .msg .m-who { font-family: var(--mono); font-size: 9.5px; color: var(--tx3); margin-bottom: 2px; }
+  .msg.leader { border-left: 3px solid var(--charcoal); }
+  .msg.worker { border-left: 3px solid var(--bluegray); }
+  .msg.sys { background: var(--panel-2); color: var(--tx2); font-size: 10.5px; border: none; }
+  .rp-events { border-top: 1px solid var(--line); background: #fff; }
+  .rp-events summary {
+    list-style: none; cursor: pointer; padding: 9px 14px; font-size: 11.5px; font-weight: 600; color: var(--tx2);
+    display: flex; align-items: center; gap: 7px;
+  }
+  .rp-events summary::before { content: "▸"; color: var(--tx3); font-size: 10px; transition: transform .12s; }
+  .rp-events[open] summary::before { transform: rotate(90deg); }
+  .rp-events ul { list-style: none; padding: 0 14px 12px; display: grid; gap: 7px; }
+  .rp-events li { font-size: 11px; color: var(--tx2); display: flex; gap: 8px; }
+  .rp-events .t { font-family: var(--mono); font-size: 9.5px; color: var(--tx3); flex: none; padding-top: 1px; }
+
+  .hintbar {
+    position: fixed; left: 50%; bottom: 108px; transform: translateX(-50%);
+    background: var(--head); color: rgba(255,255,255,.85); font-size: 11px;
+    border-radius: 99px; padding: 5px 16px; box-shadow: var(--shadow-float);
+    z-index: 9; font-family: var(--mono);
+  }
+</style>
+</head>
+<body>
+
+  <!-- ═══ 左侧栏：导航保留 + 「议题」转「会话」 ═══ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark">R</span>
+      <span class="brand-name">REPOMESH</span>
+    </div>
+    <nav class="nav">
+      <a class="active" href="#"><span class="ico">◇</span>会话</a>
+      <a href="#"><span class="ico">✓</span>人工审核<span class="badge">1</span></a>
+      <a href="#"><span class="ico">⌂</span>仓库</a>
+      <a href="#"><span class="ico">❖</span>团队</a>
+      <a href="#"><span class="ico">◉</span>智能体</a>
+      <a href="#"><span class="ico">=~</span>观测</a>
+      <a href="#"><span class="ico">⛓</span>决策链</a>
+      <a href="#"><span class="ico">⚙</span>设置</a>
+    </nav>
+    <div class="conv-label">
+      <span class="eyebrow">会话</span>
+      <button class="conv-new">＋ 新会话</button>
+    </div>
+    <div class="conv-list">
+      <div class="conv current">
+        <div class="conv-title">结账价格修改</div>
+        <div class="conv-meta"><span class="state-dot state-run"></span><span class="conv-last">轮次 2 · dashboard 修复中…</span></div>
+      </div>
+      <div class="conv">
+        <div class="conv-title">订单导出支持 CSV</div>
+        <div class="conv-meta"><span class="state-dot state-wait"></span><span class="conv-last">待人审：release 批准</span></div>
+      </div>
+      <div class="conv">
+        <div class="conv-title">库存接口幂等键</div>
+        <div class="conv-meta"><span class="state-dot state-done"></span><span class="conv-last">已交付 · 2 仓合并</span></div>
+      </div>
+      <div class="conv">
+        <div class="conv-title">会员积分规则重构</div>
+        <div class="conv-meta"><span class="state-dot state-plan"></span><span class="conv-last">规划中 · plan v2 草稿</span></div>
+      </div>
+    </div>
+    <div class="me">
+      <span class="avatar">陈</span>
+      <div><div class="me-name">陈</div><div class="me-role">管理员</div></div>
+    </div>
+  </aside>
+
+  <!-- ═══ 中央列：DAG 折叠条 + 对话流 + 吸底输入 ═══ -->
+  <main class="center">
+
+    <!-- D. 顶部折叠 DAG 条 -->
+    <div class="dagbar">
+      <div class="dagbar-row">
+        <div class="dag-phases">
+          <span class="phase done"><span class="p-dot">✓</span>规划</span><span class="phase-link"></span>
+          <span class="phase done"><span class="p-dot">✓</span>建团</span><span class="phase-link"></span>
+          <span class="phase now"><span class="p-dot">2</span>执行</span><span class="phase-link"></span>
+          <span class="phase"><span class="p-dot">4</span>审核</span><span class="phase-link"></span>
+          <span class="phase"><span class="p-dot">5</span>交付</span>
+        </div>
+        <span class="dag-counts">3 仓 · 4 任务 · 轮次 2/∞</span>
+        <button class="dag-toggle" onclick="toggleDag()" id="dagBtn">展开 DAG ▾</button>
+      </div>
+      <div class="dag-detail" id="dagDetail">
+        <div class="eyebrow" style="margin-bottom:9px;">plan v1 · 仓库粒度 · 4 依赖边</div>
+        <div class="dag-graph">
+          <div class="dag-node done"><b>api · 改价接口</b><span>批次1 · ✓ 完成</span></div>
+          <div class="dag-edge"></div>
+          <div class="dag-node done"><b>client · 价签渲染</b><span>批次2 · ✓ 完成</span></div>
+          <div class="dag-edge"></div>
+          <div class="dag-node run"><b>dashboard · 价格页</b><span>批次3 · ▶ 执行中</span></div>
+          <div class="dag-edge"></div>
+          <div class="dag-node"><b>checkout · 回归验证</b><span>批次4 · ○ 等依赖</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stream-wrap">
+      <div class="stream">
+
+        <!-- B: 用户需求卡（右对齐气泡） -->
+        <div class="bubble-row">
+          <div class="bubble">
+            <div class="who">你 · 14:02</div>
+            <div class="txt">结账流程价格展示要改：会员价需要在价签和订单确认页同时展示，划线价保留原价；会员折扣 deep 徽标只在会员登录态出现。dashboard 的价格说明页文案同步更新。</div>
+            <div class="file">📎 需求说明-价格展示-v2.docx</div>
+          </div>
+        </div>
+
+        <!-- 发现卡 -->
+        <div class="card">
+          <div class="card-head"><span class="card-tag">发现</span><span class="card-title">仓库盘点完成</span><span class="card-time">14:03</span></div>
+          <dl class="kv">
+            <dt>扫描范围</dt><dd>3 个仓库（org/repo-mesh-demo）· 全部通过验证</dd>
+            <dt>涉及</dt><dd>api（改价接口）· client（价签组件）· dashboard（价格说明页）</dd>
+          </dl>
+        </div>
+
+        <!-- 计划卡 -->
+        <div class="card">
+          <div class="card-head"><span class="card-tag">规划</span><span class="card-title">plan v1 已冻结</span><span class="card-time">14:05</span></div>
+          <dl class="kv">
+            <dt>任务</dt><dd>4 个任务 · 批次 4 级 · 依赖边 4 条（粒度 repo）</dd>
+            <dt>验收</dt><dd>会员价双端可见 · 划线价保留 · 非会员态无折扣徽标</dd>
+            <dt>边界</dt><dd>allowed: pricing/** · forbidden: payments/**</dd>
+          </dl>
+        </div>
+
+        <!-- 建团卡 -->
+        <div class="card">
+          <div class="card-head"><span class="card-tag">建团</span><span class="card-title">3 个仓库团队就位</span><span class="card-time">14:06</span></div>
+          <dl class="kv">
+            <dt>api</dt><dd>leader-1 + worker×2 · 常驻</dd>
+            <dt>client</dt><dd>leader-1 + worker×1 · 常驻</dd>
+            <dt>dashboard</dt><dd>leader-1 + worker×1 · 常驻</dd>
+          </dl>
+        </div>
+
+        <!-- 仓库卡排：点击开右栏 -->
+        <div class="card">
+          <div class="card-head"><span class="card-tag">房间</span><span class="card-title">仓库房间 · 点击查看内部</span></div>
+          <div class="repo-row">
+            <button class="repo-chip" onclick="openPanel('api')"><span class="st" style="background:var(--olive)"></span>api<span class="arrow">▸</span></button>
+            <button class="repo-chip" onclick="openPanel('client')"><span class="st" style="background:var(--olive)"></span>client<span class="arrow">▸</span></button>
+            <button class="repo-chip" onclick="openPanel('dashboard')"><span class="st" style="background:var(--bluegray)"></span>dashboard<span class="arrow">▸</span></button>
+          </div>
+        </div>
+
+        <!-- 轮次 1（已完成） -->
+        <div class="card">
+          <div class="card-head"><span class="card-tag">轮次 1</span><span class="card-title">派单完成 · 4/4</span><span class="card-time">14:09</span></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">api / 修改 checkout 价格接口</span><span class="note">6m · 已合并</span></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">api / 会员价字段透传</span><span class="note">4m · 已合并</span></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">client / 价签组件支持会员价</span><span class="note">7m · CI 全绿</span></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">dashboard / 价格说明页改版</span><span class="note">5m · CI 全绿</span></div>
+        </div>
+
+        <!-- 审批卡（流内可操作） -->
+        <div class="card approve" id="approveCard">
+          <div class="card-head"><span class="card-tag" style="color:#b08a2e">待人审</span><span class="card-title">release 批准：client 价签组件</span><span class="card-time">14:31</span></div>
+          <dl class="kv">
+            <dt>变更</dt><dd>client · head <span style="font-family:var(--mono);font-size:11px">c1a0b2c</span> · +128 / −31</dd>
+            <dt>证据</dt><dd>CI 全绿 · 契约冻结校验通过 · 截图 2 张</dd>
+          </dl>
+          <div class="approve-actions" id="approveActions">
+            <button class="btn btn-primary" onclick="approve(true)">批准合并</button>
+            <button class="btn btn-ghost" onclick="approve(false)">驳回</button>
+            <button class="btn btn-ghost" onclick="alert('原型：打开证据详情弹窗')">查看证据</button>
+          </div>
+        </div>
+
+        <!-- 轮次 2（进行中，进度原地更新） -->
+        <div class="card">
+          <div class="card-head"><span class="card-tag">轮次 2 · 进行中</span><span class="card-title">回归验证 + 修复</span><span class="card-time">14:38</span></div>
+          <div class="meter"><i style="width:75%"></i></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">api / 划线价回归用例</span><span class="note">3m</span></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">client / 会员态徽标回归</span><span class="note">4m</span></div>
+          <div class="task done"><span class="tick">✓</span><span class="name">client / 非会员态快照</span><span class="note">2m</span></div>
+          <div class="task run"><span class="tick">▶</span><span class="name">dashboard / 价格页文案修复</span><span class="note">执行中 · 已 6m</span></div>
+        </div>
+
+        <!-- 异常卡 -->
+        <div class="card alert">
+          <div class="card-head"><span class="card-tag" style="color:var(--salmon)">异常</span><span class="card-title">dashboard 快照比对失败（2 处）</span><span class="card-time">14:52</span></div>
+          <div class="fix">修复轮已自动派给 dashboard worker：会员价说明段落缺失 + 折扣徽标条件反了。监管策略：watch · 自动重试 ≤ 2 次。</div>
+        </div>
+
+        <div class="typing"><i></i><i></i><i></i><span>dashboard worker 正在汇报修复结果…</span></div>
+      </div>
+    </div>
+
+    <!-- 吸底输入区：一体式对话框 -->
+    <div class="composer">
+      <div class="composer-inner">
+        <div class="composer-box">
+          <textarea placeholder="输入需求 / 追加说明 —— 新会话首条消息即创建 issue 并开始规划，之后发送作为补充进入当前流程（Ctrl ⏎ 发送）"></textarea>
+          <div class="composer-bar">
+            <div class="scope">
+              <button class="scope-btn" onclick="toggleScope(event)">
+                <span class="st"></span><span id="scopeLabel">api · client</span><span style="font-size:8px">▾</span>
+              </button>
+              <div class="scope-menu" id="scopeMenu">
+                <div class="scope-item on" data-name="api" onclick="toggleRepo(this)"><span class="box">✓</span>api</div>
+                <div class="scope-item on" data-name="client" onclick="toggleRepo(this)"><span class="box">✓</span>client</div>
+                <div class="scope-item" data-name="dashboard" onclick="toggleRepo(this)"><span class="box"></span>dashboard</div>
+              </div>
+            </div>
+            <button class="icon-btn" title="上传需求文档">📎</button>
+            <button class="icon-btn" title="截图 / 粘贴图片">🖼</button>
+            <button class="send-ico" title="发送 (Ctrl+Enter)">➤</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ═══ C. 右侧房间面板（默认收起） ═══ -->
+  <aside class="rightpanel" id="rightpanel">
+    <div class="rp-inner">
+      <div class="rp-head">
+        <div class="rp-top">
+          <span class="rp-title" id="rpTitle">api</span>
+          <div class="rp-actions">
+            <button class="rp-ico" title="放大到全页房间视图">⤢</button>
+            <button class="rp-ico" onclick="closePanel()" title="收起">✕</button>
+          </div>
+        </div>
+        <div class="rp-switch">
+          <button class="rp-tab on" onclick="switchRoom(this,'api')">api</button>
+          <button class="rp-tab" onclick="switchRoom(this,'client')">client</button>
+          <button class="rp-tab" onclick="switchRoom(this,'dashboard')">dashboard</button>
+        </div>
+        <div class="agents">
+          <span class="agent"><span class="st" style="background:var(--olive)"></span>leader-1 · 运行</span>
+          <span class="agent"><span class="st" style="background:var(--olive)"></span>worker-a · 运行</span>
+          <span class="agent"><span class="st" style="background:var(--tx3)"></span>worker-b · idle</span>
+        </div>
+      </div>
+      <div class="rp-stream" id="rpStream"></div>
+      <details class="rp-events">
+        <summary>事件时间线</summary>
+        <ul>
+          <li><span class="t">14:44</span><span>任务包已通过 MinIO 下发 worker</span></li>
+          <li><span class="t">14:41</span><span>leader 派单：回归验证任务</span></li>
+          <li><span class="t">14:31</span><span>change set 提交人审</span></li>
+          <li><span class="t">14:16</span><span>worker-a 汇报完成（会员价字段）</span></li>
+          <li><span class="t">14:09</span><span>轮次 1 派单 2 任务</span></li>
+        </ul>
+      </details>
+    </div>
+  </aside>
+
+  <div class="hintbar">原型：点仓库卡片开右栏 · 点「展开 DAG」· 审批卡可直接批/驳</div>
+
+<script>
+  const ROOM_MSGS = {
+    api: [
+      { who: 'leader-1 · 14:09', cls: 'leader', text: '轮次 1 派单：修改 checkout 价格接口、会员价字段透传。allowed: pricing/**，禁触 payments/**。' },
+      { who: 'worker-a · 14:16', cls: 'worker', text: '会员价字段透传完成：GET /checkout/price 增加 member_price、original_price 字段，单测 6 例全绿。' },
+      { who: '系统 · 14:20', cls: 'sys', text: 'api 仓库 2 个任务已合并（轮次 1）。' },
+      { who: 'worker-a · 14:44', cls: 'worker', text: '划线价回归用例完成：3 例对比原价渲染逻辑，全部通过。' },
+    ],
+    client: [
+      { who: 'leader-1 · 14:09', cls: 'leader', text: '轮次 1 派单：价签组件支持会员价与折扣徽标（登录态条件渲染）。' },
+      { who: 'worker-a · 14:27', cls: 'worker', text: '价签组件完成：会员价展示 + 划线价 + MemberBadge（会员登录态）。快照 4 张更新。' },
+      { who: '系统 · 14:31', cls: 'sys', text: 'change set 已提交人审，等待 release 批准。' },
+      { who: 'worker-a · 14:46', cls: 'worker', text: '会员态/非会员态回归快照全部通过。' },
+    ],
+    dashboard: [
+      { who: 'leader-1 · 14:09', cls: 'leader', text: '轮次 1 派单：价格说明页改版，同步会员价说明文案。' },
+      { who: 'worker-a · 14:24', cls: 'worker', text: '价格说明页改版完成，文案同步 v2 需求稿。' },
+      { who: '系统 · 14:52', cls: 'sys', text: '快照比对失败 2 处：会员价说明段落缺失、折扣徽标条件取反。' },
+      { who: 'leader-1 · 14:53', cls: 'leader', text: '修复轮已派：补充说明段落 + 修正徽标条件。watch 策略，自动重试 ≤ 2。' },
+    ],
+  };
+
+  function renderRoom(room) {
+    document.getElementById('rpTitle').textContent = room;
+    const box = document.getElementById('rpStream');
+    box.innerHTML = '';
+    (ROOM_MSGS[room] || []).forEach(m => {
+      const div = document.createElement('div');
+      div.className = 'msg ' + m.cls;
+      div.innerHTML = '<div class="m-who">' + m.who + '</div>' + m.text;
+      box.appendChild(div);
+    });
+  }
+  function openPanel(room) {
+    const p = document.getElementById('rightpanel');
+    renderRoom(room);
+    document.querySelectorAll('.rp-tab').forEach(t => t.classList.toggle('on', t.textContent === room));
+    p.classList.add('open');
+  }
+  function closePanel() { document.getElementById('rightpanel').classList.remove('open'); }
+  function switchRoom(btn, room) {
+    document.querySelectorAll('.rp-tab').forEach(t => t.classList.remove('on'));
+    btn.classList.add('on');
+    renderRoom(room);
+  }
+  function toggleDag() {
+    const d = document.getElementById('dagDetail');
+    const open = d.classList.toggle('open');
+    document.getElementById('dagBtn').textContent = open ? '收起 DAG ▴' : '展开 DAG ▾';
+  }
+  function approve(yes) {
+    const card = document.getElementById('approveCard');
+    const tag = card.querySelector('.card-tag');
+    card.classList.remove('approve');
+    card.classList.add(yes ? 'done-yes' : 'done-no');
+    tag.textContent = yes ? '已批准' : '已驳回';
+    tag.style.color = yes ? 'var(--olive)' : 'var(--salmon)';
+    document.getElementById('approveActions').innerHTML =
+      '<span style="font-size:11.5px;color:var(--tx2)">' +
+      (yes ? '✓ 已批准合并 · 14:55 · client 进入交付阶段' : '✕ 已驳回 · 修复轮已派') + '</span>';
+  }
+  function toggleScope(e) {
+    e.stopPropagation();
+    document.getElementById('scopeMenu').classList.toggle('open');
+  }
+  function toggleRepo(el) {
+    el.classList.toggle('on');
+    el.querySelector('.box').textContent = el.classList.contains('on') ? '✓' : '';
+    const names = [...document.querySelectorAll('.scope-item.on')].map(x => x.dataset.name);
+    document.getElementById('scopeLabel').textContent = names.length ? names.join(' · ') : '未选择仓库';
+  }
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.scope')) document.getElementById('scopeMenu').classList.remove('open');
+  });
+  renderRoom('api');
+</script>
+</body>
+</html>
