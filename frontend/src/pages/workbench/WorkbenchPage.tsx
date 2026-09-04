@@ -20,6 +20,7 @@ import {
 } from "../../api/discovery";
 import type { DiscoveryView } from "../../api/contract";
 import { DiscoveryPanel } from "../../components/DiscoveryPanel";
+import { ShiningText } from "../../components/ui/shining-text";
 import { EvidenceModal } from "../../components/EvidenceModal";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
 import { dayLabel, errText, shortId } from "../../display";
@@ -61,6 +62,9 @@ const STEP_KEY_BY_STEP = {
   3: "classification",
   4: "plan",
 } as const;
+/** 自动触发防重发：模块级 Map——组件重挂载（切会话再切回来）也不丢，
+ *  ref 做不到这一点（每次挂载重置，重置后撞上读投影滞后就是一串 409）。 */
+const autoTriggered = new Map<string, string>();
 
 interface ActiveDeck {
   roundId: string;
@@ -248,7 +252,6 @@ export function WorkbenchPage({
     };
   }, [showDiscovery, detail, reload]);
 
-  const autoTriggeredRef = useRef<Record<string, string>>({});
   /** 驱动器状态上屏：触发失败/主体缺失不再静默——用户看到的「没反应」要能自解释。 */
   const [driver, setDriver] = useState<{ status: "idle" | "fired" | "error" | "no-principal"; detail: string }>({
     status: "idle",
@@ -261,17 +264,19 @@ export function WorkbenchPage({
       if (driver.status !== "idle") setDriver({ status: "idle", detail: "" });
       return;
     }
+    // 读投影滞后保护：任务句柄还在，就是有一步在跑——不重发（409 的根源）
+    if (discovery.running_task_id !== null) return;
     if (!principal) {
       // 主体还没解析出来不算错，但解析完仍为 null 必须说出口
       if (!principalResolving) setDriver({ status: "no-principal", detail: "决策主体未接入（花名册无活跃 Org Leader），无法自动推进" });
       return;
     }
     const key = `${discovery.issue_id}:${discovery.step}`;
-    if (autoTriggeredRef.current[key]) return; // 本 visit 已触发过（失败由面板的重试入口接管，避免循环开火）
-    autoTriggeredRef.current[key] = newIdempotencyKey(STEP_KEY_BY_STEP[discovery.step]);
+    if (autoTriggered.get(key)) return; // 本 visit 已触发过（失败由面板的重试入口接管，避免循环开火）
+    autoTriggered.set(key, newIdempotencyKey(STEP_KEY_BY_STEP[discovery.step]));
     const payload = {
       created_by_agent_id: principal.agentId,
-      idempotency_key: autoTriggeredRef.current[key],
+      idempotency_key: autoTriggered.get(key)!,
     };
     const fire =
       discovery.step === 1
@@ -283,28 +288,78 @@ export function WorkbenchPage({
             : triggerPlan(discovery.issue_id, payload);
     setDriver({ status: "fired", detail: `已发起第 ${discovery.step} 步` });
     fire.catch((err: unknown) => {
-      // 触发失败上屏：409/422/网络错都原样给，不再让人对着「待开始」猜
-      setDriver({ status: "error", detail: `第 ${discovery.step} 步自动触发失败：${errText(err)}` });
+      const text = errText(err);
+      if (text.includes("already has a discovery step running")) {
+        // 409 = 那一步其实已经在跑（读投影滞后时的撞车）——不是错误，等它就行
+        setDriver({ status: "fired", detail: "该步骤已在执行中，等待完成" });
+        setReload((n) => n + 1);
+        return;
+      }
+      setDriver({ status: "error", detail: `第 ${discovery.step} 步自动触发失败：${text}` });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [discovery, principal, principalResolving]);
 
+  // ── 推进卡的紧凑渲染：四步流光线；只有需要人时才展开完整面板 ──
+  const d = discovery;
+  const needsHuman =
+    !!d &&
+    (d.step_state === "failed" ||
+      // 第 1 步跑完但需求信息不足（有追问）——要人补答案
+      (d.step === 1 && d.analysis !== null && !d.analysis.sufficient) ||
+      // 分档跑完、审批还没提交——要人批
+      (d.step === 3 && d.classification !== null && d.approval.state === "not_requested") ||
+      // 计划已生成——等人物化开工
+      (d.step === 4 && d.step_state === "done"));
+  const [panelOpenByUser, setPanelOpenByUser] = useState(false);
+  const panelExpanded = needsHuman || panelOpenByUser;
+
+  const stepTitle = (n: 1 | 2 | 3 | 4) => ["需求分析", "候选评分", "分档审批", "生成计划"][n - 1];
+  const stepLines = d
+    ? ([1, 2, 3, 4] as const).map((n) => {
+        const done = n < d.step || (n === d.step && d.step_state === "done" && !(n === 3 && d.approval.state === "not_requested"));
+        const current = n === d.step && !done;
+        const failed = current && d.step_state === "failed";
+        const running = current && d.step_state === "running";
+        const summary = !done && !current
+          ? null
+          : n === 1
+            ? d.analysis === null
+              ? null
+              : d.analysis.sufficient
+                ? "需求已解析"
+                : "需要补充信息"
+            : n === 2
+              ? d.candidates === null
+                ? null
+                : `${d.candidates.items.length} 个候选${d.candidates.llm_used ? "" : " · 关键词回退"}`
+              : n === 3
+                ? d.approval.state === "approved"
+                  ? "已批准"
+                  : d.approval.state === "changes_requested"
+                    ? "已要求改动"
+                    : d.classification !== null
+                      ? "待你审批"
+                      : null
+                : null;
+        return { n, title: stepTitle(n), done, current, failed, running, summary };
+      })
+    : [];
+
   const discoveryCard =
     showDiscovery && detail ? (
       <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card">
-        <div className="mb-1.5 flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2">
           <span className="microlabel">处理员 · 自动推进</span>
           <span className="text-[10.5px] text-tx2">
             {discovery
-              ? discovery.step_state === "idle"
-                ? discovery.step === 3
-                  ? "等待分档审批"
-                  : "即将开始下一步"
-                : discovery.step_state === "running"
-                  ? "正在处理…"
-                  : discovery.step_state === "failed"
-                    ? "出错（见下方面板的重试入口）"
-                    : "已完成"
+              ? discovery.step_state === "running"
+                ? `${stepTitle(discovery.step)}执行中…`
+                : discovery.step_state === "failed"
+                  ? "出错（展开看原因与重试）"
+                  : needsHuman
+                    ? "等待你操作"
+                    : "推进中"
               : "准备中…"}
           </span>
           {driver.status === "error" && (
@@ -315,21 +370,58 @@ export function WorkbenchPage({
           {driver.status === "no-principal" && (
             <span className="text-[10.5px] text-salmon">{driver.detail}</span>
           )}
+          <button
+            className="ml-auto flex-none text-[10.5px] text-tx3 hover:text-tx"
+            onClick={() => setPanelOpenByUser((v) => !v)}
+          >
+            {panelExpanded ? "收起详情" : "详情"}
+          </button>
         </div>
-        <DiscoveryPanel
-          issueId={detail.issue_id}
-          issueTitle={detail.title}
-          organizationId={detail.organization_id}
-          onToast={onToast}
-          onPlanGenerated={() => setReload((n) => n + 1)}
-          onCandidateAnchor={flow.handleCandidateAnchor}
-          materialize={flow.materialize}
-          policyGate={policyGateOf(flow.supervision)}
-          onMaterialized={() => {
-            setReload((n) => n + 1);
-            flow.reloadPlan();
-          }}
-        />
+
+        {/* 四步流光线：完成的折叠成一行摘要，正在跑的用流光字，没到的暗着排 */}
+        <div className="mt-2 grid gap-1">
+          {stepLines.map((line) => (
+            <div key={line.n} className="flex items-baseline gap-2 text-[11.5px]">
+              {line.failed ? (
+                <span className="flex-none text-salmon">✕</span>
+              ) : line.done ? (
+                <span className="flex-none text-olive">✓</span>
+              ) : line.running ? (
+                <i className="blink flex-none not-italic">
+                  <span className="inline-block size-[5px] rounded-full bg-amber align-middle" />
+                </i>
+              ) : (
+                <span className="flex-none text-tx3">○</span>
+              )}
+              <span className={`flex-none ${line.done ? "text-tx" : line.failed ? "text-salmon" : line.running ? "text-tx" : "text-tx3"}`}>
+                {line.title}
+                {line.running && <ShiningText text=" 执行中…" className="text-[11.5px]" />}
+              </span>
+              {line.summary && <span className="min-w-0 truncate text-tx3">{line.summary}</span>}
+            </div>
+          ))}
+        </div>
+
+        {/* 完整面板按需展开：需要人（审批/补答案/物化/重试）或主动点详情。
+            平时收起——四步流光线就是全部，不再有一大框。 */}
+        {panelExpanded && (
+          <div className="mt-2.5 border-t border-line pt-2.5">
+            <DiscoveryPanel
+              issueId={detail.issue_id}
+              issueTitle={detail.title}
+              organizationId={detail.organization_id}
+              onToast={onToast}
+              onPlanGenerated={() => setReload((n) => n + 1)}
+              onCandidateAnchor={flow.handleCandidateAnchor}
+              materialize={flow.materialize}
+              policyGate={policyGateOf(flow.supervision)}
+              onMaterialized={() => {
+                setReload((n) => n + 1);
+                flow.reloadPlan();
+              }}
+            />
+          </div>
+        )}
       </div>
     ) : null;
 
