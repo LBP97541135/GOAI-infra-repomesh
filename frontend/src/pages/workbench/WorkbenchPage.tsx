@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type { DeliveryAggregate, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
 import { parseRequirementDocument } from "../../api/issues";
 import { fetchIssueDetail, fetchRooms } from "../../api/rooms";
@@ -10,6 +10,7 @@ import {
   type GovernanceAgent,
 } from "../../api/decisions";
 import { resolveDataSourceMode } from "../../api/source";
+import { DiscoveryPanel } from "../../components/DiscoveryPanel";
 import { EvidenceModal } from "../../components/EvidenceModal";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
 import { dayLabel, errText, shortId } from "../../display";
@@ -22,6 +23,7 @@ import {
   type RoundTaskRow,
   type WorkCard,
 } from "./streamModel";
+import { policyGateOf, useIssueFlowState } from "./useIssueFlowState";
 
 /** IDE 式工作台（期 1 骨架 + 期 2 卡片体系）。
  *
@@ -183,6 +185,33 @@ export function WorkbenchPage({
     };
   }, [isNew, detail, organizationId]);
 
+  const flow = useIssueFlowState(issueId ?? "", detail, reload);
+  // 推动卡只在「尚未物化」的会话出现：发现→计划→物化整条回路都在面板里，
+  // 物化成功后轮次卡接管叙事，面板随之退场（roundCount>0 时按钮本来也会消失）。
+  const showDiscovery = !isNew && detail !== null && detail.rounds.length === 0;
+  const discoveryCard =
+    showDiscovery && detail ? (
+      <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card">
+        <div className="mb-1.5">
+          <span className="microlabel">推进 · 发现 → 计划 → 物化</span>
+        </div>
+        <DiscoveryPanel
+          issueId={detail.issue_id}
+          issueTitle={detail.title}
+          organizationId={detail.organization_id}
+          onToast={onToast}
+          onPlanGenerated={() => setReload((n) => n + 1)}
+          onCandidateAnchor={flow.handleCandidateAnchor}
+          materialize={flow.materialize}
+          policyGate={policyGateOf(flow.supervision)}
+          onMaterialized={() => {
+            setReload((n) => n + 1);
+            flow.reloadPlan();
+          }}
+        />
+      </div>
+    ) : null;
+
   const cards: WorkCard[] = isNew
     ? newSessionStream(workspaceName)
     : detail
@@ -338,7 +367,24 @@ export function WorkbenchPage({
                 onRetry={() => setReload((n) => n + 1)}
               />
             )}
-            {!loading && !error && cards.map((card) => <WorkCardView key={card.anchor} card={card} onOpenRepo={setPanelRepo} approvingId={approvingId} decisionErrors={decisionErrors} resolvedDecisions={resolvedDecisions} principalReady={!principalResolving && principal !== null} principalResolving={principalResolving} onApprove={handleApprove} onEvidence={handleEvidence} />)}
+            {!loading &&
+              !error &&
+              cards.map((card) => (
+                <Fragment key={card.anchor}>
+                  <WorkCardView
+                    card={card}
+                    onOpenRepo={setPanelRepo}
+                    approvingId={approvingId}
+                    decisionErrors={decisionErrors}
+                    resolvedDecisions={resolvedDecisions}
+                    principalReady={!principalResolving && principal !== null}
+                    principalResolving={principalResolving}
+                    onApprove={handleApprove}
+                    onEvidence={handleEvidence}
+                  />
+                  {card.anchor === "requirement" && discoveryCard}
+                </Fragment>
+              ))}
             {!loading && !error && !isNew && detail && (
               <p className="pt-1 text-center font-mono text-[10px] text-tx3">
                 每 5s 自动同步{lastSyncAt ? ` · 上次 ${lastSyncAt.toLocaleTimeString()}` : " · 首次同步中…"}
