@@ -49,7 +49,7 @@ export function RoomPanel({
   const inFlight = useRef(false);
 
   const [roundId, setRoundId] = useState<string | null>(null);
-  const [events, setEvents] = useState<Array<{ at: string | null; kind: string; subject: string }> | null>(null);
+  const [events, setEvents] = useState<Array<{ at: string | null; kind: string; text: string }> | null>(null);
 
   // 换房间：流复位重取；轮次事件随之重解析
   useEffect(() => {
@@ -80,7 +80,7 @@ export function RoomPanel({
             return;
           }
           fetchRoundEvents(rid)
-            .then((page) => !cancelled && setEvents(page.items.map((e) => ({ at: e.at, kind: e.kind, subject: e.subject }))))
+            .then((page) => !cancelled && setEvents(page.items.map((e) => ({ at: e.at, kind: e.kind, text: e.text }))))
             .catch(() => !cancelled && setEvents([]));
         })
         .catch(() => !cancelled && setEvents([]));
@@ -241,7 +241,7 @@ export function RoomPanel({
               <li key={`${e.at ?? i}-${i}`} className="flex gap-2 py-0.5 text-[10.5px] text-tx2">
                 <span className="flex-none font-mono text-tx3">{eventTime(e.at).slice(0, 5)}</span>
                 <span className="min-w-0 truncate">
-                  <span className="font-mono text-tx3">[{e.kind}]</span> {e.subject}
+                  <span className="font-mono text-tx3">[{e.kind}]</span> {e.text}
                 </span>
               </li>
             ))}

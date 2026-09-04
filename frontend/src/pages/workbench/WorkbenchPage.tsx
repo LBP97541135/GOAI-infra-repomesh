@@ -33,6 +33,7 @@ import {
   type WorkCard,
 } from "./streamModel";
 import { policyGateOf, useIssueFlowState } from "./useIssueFlowState";
+import { RoomPanel } from "./RoomPanel";
 
 /** IDE 式工作台（期 1 骨架 + 期 2 卡片体系）。
  *
@@ -72,6 +73,7 @@ export function WorkbenchPage({
   issueId,
   workspaceName,
   onCreateIssue,
+  onOpenRoom,
   onToast,
 }: {
   /** null = 新会话；否则为既有 issue 的 id */
@@ -82,6 +84,8 @@ export function WorkbenchPage({
     idempotencyKey: string,
     documentFilename: string | null,
   ) => Promise<IssueListItemView>;
+  /** 右栏「⤢ 放大」：跳转全页房间视图（外壳负责路由） */
+  onOpenRoom: (roomId: string) => void;
   onToast: (text: string) => void;
 }) {
   const isNew = issueId === null;
@@ -344,6 +348,8 @@ export function WorkbenchPage({
 
   // ── 右栏（期 3 接房间数据；本期先做壳与开合） ──
   const [panelRepo, setPanelRepo] = useState<(IssueRepositoryRef & { roomId: string | null }) | null>(null);
+  /** 窄化用局部量：state 变量的 narrowing 传不进 JSX 里的回调，const 局部量可以 */
+  const panelRoomId = panelRepo?.roomId ?? null;
 
   // ── 流内审批：就地消化 + 已处理态（不靠整页刷新才消失） ──
   const [resolvedDecisions, setResolvedDecisions] = useState<Record<string, "approved">>({});
@@ -590,26 +596,31 @@ export function WorkbenchPage({
         </div>
       </div>
 
-      {/* ── 右栏：仓库房间面板（期 3 接入房间数据） ── */}
+      {/* ── 右栏：仓库房间面板（只读；写路径在 ⤢ 放大的全页房间） ── */}
       <aside
         className={`flex-none overflow-hidden border-line bg-panel transition-[width] duration-150 ${
           panelRepo ? "w-[352px] border-l" : "w-0"
         }`}
       >
-        <div className="flex h-full w-[352px] flex-col">
-          <div className="border-b border-line px-3.5 pb-2.5 pt-2.5">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-[13px] font-bold text-cream">{panelRepo?.name ?? "…"}</span>
-              <div className="ml-auto flex gap-1.5">
+        {panelRepo !== null && detail !== null && panelRoomId !== null ? (
+          <RoomPanel
+            issueId={detail.issue_id}
+            rooms={rooms}
+            selectedRoomId={panelRoomId}
+            onSelectRoom={(roomId) => {
+              const match = rooms.find((r) => r.room_id === roomId);
+              if (match) setPanelRepo({ ...panelRepo, roomId, name: match.repository_name ?? panelRepo.name });
+            }}
+            onClose={() => setPanelRepo(null)}
+            onExpand={() => onOpenRoom(panelRoomId)}
+          />
+        ) : (
+          <div className="flex h-full w-[352px] flex-col">
+            <div className="border-b border-line px-3.5 pb-2.5 pt-2.5">
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[13px] font-bold text-cream">{panelRepo?.name ?? "…"}</span>
                 <button
-                  className="h-6 w-6 rounded-hard border border-line-strong text-[11px] text-tx2 hover:border-amber hover:text-tx disabled:opacity-40"
-                  title={panelRepo?.roomId ? "放大到全页房间视图（期 3 接入）" : "该仓库尚未建团"}
-                  disabled={!panelRepo?.roomId}
-                >
-                  ⤢
-                </button>
-                <button
-                  className="h-6 w-6 rounded-hard border border-line-strong text-[11px] text-tx2 hover:border-amber hover:text-tx"
+                  className="ml-auto h-6 w-6 rounded-hard border border-line-strong text-[11px] text-tx2 hover:border-amber hover:text-tx"
                   title="收起"
                   onClick={() => setPanelRepo(null)}
                 >
@@ -617,21 +628,13 @@ export function WorkbenchPage({
                 </button>
               </div>
             </div>
+            <div className="flex flex-1 items-center justify-center bg-well px-6 text-center text-[11.5px] leading-[1.8] text-tx2">
+              {panelRepo === null ? null : (
+                <p>该仓库尚未建团，房间会在计划物化后出现。</p>
+              )}
+            </div>
           </div>
-          <div className="flex flex-1 items-center justify-center bg-well px-6 text-center text-[11.5px] leading-[1.8] text-tx2">
-            {panelRepo === null ? null : panelRepo.roomId ? (
-              <p>
-                房间已定位：
-                <br />
-                <span className="font-mono text-[10.5px] text-tx3">{shortId(panelRepo.roomId)}</span>
-                <br />
-                消息流、agent 醒睡态与事件时间线在期 3 接入。
-              </p>
-            ) : (
-              <p>该仓库尚未建团，房间会在计划物化后出现。</p>
-            )}
-          </div>
-        </div>
+        )}
       </aside>
 
       <EvidenceModal

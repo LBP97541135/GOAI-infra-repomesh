@@ -405,6 +405,7 @@ export default function ConsoleShell() {
                 workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? null
               }
               onCreateIssue={handleCreateIssue}
+              onOpenRoom={(roomId) => openRoom(route.issueId!, roomId)}
               onToast={showToast}
             />
           ))}
