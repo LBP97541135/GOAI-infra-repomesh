@@ -76,6 +76,12 @@ export function parseRoute(hash: string): Route {
     return { nav: "issues", issueId: null, roomId: null, observeSection: null, settingsSection: null };
   }
 
+  // 主页即聊天（用户定稿）：打开控制台、空 hash、#/——一律落「新会话」工作台，
+  // 首屏就是可发送需求的聊天面。列表退到 #/issues/list（期 5 搬进侧栏后退役）。
+  if (h === "" || /^\/(?:[?#].*)?$/.test(h)) {
+    return { nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null };
+  }
+
   // #/issues 与 #/issues/new 都落「新会话」工作台——聊天优先是默认面（原型定稿）。
   // 「new」是哨兵值：ConsoleShell 据此渲染空流 + 可用输入框的新会话态。
   if (/^\/issues\/?(?:[?#].*)?$/.test(h) || /^\/issues\/new(?:[/?#].*)?$/.test(h)) {
