@@ -194,7 +194,7 @@ export function SidebarV2({
             setDropOpen((v) => !v);
           }}
         >
-          <span className="grid size-[30px] flex-none place-items-center rounded-hard bg-amber font-mono text-[14px] font-extrabold text-[#16120a]">
+          <span className="grid size-[30px] flex-none place-items-center rounded-hard bg-amber font-mono text-[14px] font-extrabold text-on-amber">
             R
           </span>
           <div className="min-w-0">
@@ -204,9 +204,9 @@ export function SidebarV2({
         </button>
 
         {dropOpen && (
-          <div className="absolute top-[52px] left-0 z-20 w-[218px] rounded-hard border border-line bg-panel py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.6)]">
+          <div className="absolute top-[52px] left-0 z-20 w-[218px] rounded-hard border border-line bg-panel py-1.5 shadow-float">
             <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-2.5">
-              <span className="grid size-[30px] flex-none place-items-center rounded-hard bg-[#4a4130] text-[12px] font-extrabold text-cream">
+              <span className="grid size-[30px] flex-none place-items-center rounded-full bg-chip text-[12px] font-extrabold text-cream">
                 {initial}
               </span>
               <div className="min-w-0">
@@ -285,7 +285,7 @@ export function SidebarV2({
                     />
                     <div className="mt-1 flex items-center gap-2">
                       <button
-                        className="rounded-hard bg-amber px-2 py-[3px] text-[11px] font-bold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+                        className="rounded-hard bg-amber px-2 py-[3px] text-[11px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-60"
                         disabled={createSubmitting}
                         onClick={submitCreate}
                       >
@@ -311,7 +311,7 @@ export function SidebarV2({
       </div>
 
       <button
-        className="mt-3 mb-1 flex w-full items-center justify-center gap-1.5 rounded-hard bg-amber py-[7px] text-[12.5px] font-extrabold tracking-[0.04em] text-[#191308] hover:bg-amber-hi"
+        className="mt-3 mb-1 flex w-full items-center justify-center gap-1.5 rounded-hard bg-amber py-[7px] text-[12.5px] font-extrabold tracking-[0.04em] text-on-amber hover:bg-amber-hi"
         onClick={onNewIssue}
       >
         + 新建 issue
@@ -370,7 +370,7 @@ export function SidebarV2({
           本地 CLI
         </button>
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <span className="grid size-7 flex-none place-items-center rounded-hard bg-[#4a4130] text-[12px] font-extrabold text-cream">
+          <span className="grid size-7 flex-none place-items-center rounded-full bg-chip text-[12px] font-extrabold text-cream">
             {initial}
           </span>
           <div className="min-w-0">

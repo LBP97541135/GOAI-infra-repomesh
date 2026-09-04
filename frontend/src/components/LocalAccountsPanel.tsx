@@ -229,7 +229,7 @@ export function LocalAccountsPanel({ account }: { account: Account }) {
           </span>
 
           <button
-            className="mt-3 w-full rounded-hard bg-amber px-3 py-[6px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+            className="mt-3 w-full rounded-hard bg-amber px-3 py-[6px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
             disabled={busy}
           >
             {busy ? "创建中…" : "创建账号"}

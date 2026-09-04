@@ -40,7 +40,7 @@ export function UnverifiedMarker({
     <span
       className={
         compact
-          ? "flex-none rounded-[1px] bg-amber px-1 font-mono text-[9px] font-bold tracking-normal text-[#191308] normal-case"
+          ? "flex-none rounded-[1px] bg-amber px-1 font-mono text-[9px] font-bold tracking-normal text-on-amber normal-case"
           : "rounded-hard border border-amber px-1.5 py-px font-mono text-[10px] font-bold text-amber"
       }
       title={title}
@@ -68,9 +68,9 @@ export function AgentVerificationBlock({ report }: { report: TaskAgentReport }) 
   const unverified = marksUnverified(report);
 
   const tone = failed
-    ? "border-salmon bg-[#2b1712]"
+    ? "border-salmon bg-salmon-well"
     : unverified
-      ? "border-amber bg-[#2a2110]"
+      ? "border-amber bg-amber-well"
       : "border-olive bg-panel-2";
 
   return (
@@ -146,7 +146,7 @@ export function AgentVerificationBlock({ report }: { report: TaskAgentReport }) 
           </div>
           <pre
             className={`max-h-[260px] overflow-y-auto rounded-hard border px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap ${
-              failed ? "border-salmon/50 bg-[#211008] text-[#e8a184]" : "border-line bg-[#161209] text-tx"
+              failed ? "border-salmon/50 bg-salmon-well text-salmon-hi" : "border-line bg-well text-tx"
             }`}
           >
             {report.summaryText}

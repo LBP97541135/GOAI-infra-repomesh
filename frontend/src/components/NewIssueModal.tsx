@@ -162,7 +162,7 @@ export function NewIssueModal({
     <Modal
       open={open}
       onClose={onClose}
-      className="m-auto w-[560px] max-w-[92vw] rounded-hard border border-line bg-[#1c1710] p-0 text-tx shadow-[0_24px_60px_rgba(0,0,0,0.6)]"
+      className="m-auto w-[560px] max-w-[92vw] rounded-hard border border-line bg-well p-0 text-tx shadow-pop"
     >
       <div className="flex items-center gap-2 border-b border-line px-4 py-3">
         <span className="text-[12px] text-tx2">{workspaceLabel}</span>
@@ -236,7 +236,7 @@ export function NewIssueModal({
           <span className="font-mono text-[10.5px] text-tx3">解析中…</span>
         )}
         <button
-          className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="ml-auto rounded-hard bg-amber px-4 py-[7px] text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           disabled={submitting}
           onClick={submit}
         >

@@ -313,7 +313,7 @@ export function AddRepositoryCard({
           identifyError={identifyError}
         />
         <button
-          className="ml-auto rounded-hard bg-amber px-3.5 py-[6px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="ml-auto rounded-hard bg-amber px-3.5 py-[6px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           disabled={!canSubmit}
           onClick={submit}
         >

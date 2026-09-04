@@ -27,6 +27,7 @@ import {
   triggerPlan,
 } from "../api/discovery";
 import { resolveGovernanceAgent } from "../api/decisions";
+import { ShiningText } from "./ui/shining-text";
 import { resolveDataSourceMode } from "../api/source";
 import { agentLabel, errText, shortId, TIER_LABEL, TIER_SKIN } from "../display";
 import { DiscoveryApproval, type ApprovalPrincipal } from "./DiscoveryApproval";
@@ -137,7 +138,7 @@ function ActiveStep({ n, stepState, children }: { n: number; stepState: Discover
   const failed = stepState === "failed";
   const running = stepState === "running";
   const label = failed ? "失败" : running ? "进行中" : stepState === "done" ? "已完成" : "待开始";
-  const cls = failed ? "text-salmon" : running ? "text-amber" : stepState === "done" ? "text-olive" : "text-tx3";
+  const cls = failed ? "text-salmon" : stepState === "done" ? "text-olive" : "text-tx3";
   return (
     <div className="mt-2.5 border-t border-line pt-2.5">
       <div className="microlabel flex items-baseline justify-between gap-2 pb-1.5">
@@ -145,8 +146,14 @@ function ActiveStep({ n, stepState, children }: { n: number; stepState: Discover
           {n} {STEP_TITLES[n - 1]}
         </span>
         <span className={`font-mono text-[10.5px] tracking-normal ${cls}`}>
-          {running && <i className="blink mr-1 inline-block size-[5px] rounded-full bg-amber align-middle not-italic" />}
-          {label}
+          {running ? (
+            <>
+              <i className="blink mr-1 inline-block size-[5px] rounded-full bg-amber align-middle not-italic" />
+              <ShiningText text="指令运行中" className="text-[10.5px]" />
+            </>
+          ) : (
+            label
+          )}
         </span>
       </div>
       {children}
@@ -172,12 +179,14 @@ function DoneStep({ n, summary, children }: { n: number; summary: string; childr
   );
 }
 
-/** 步块还没落地、但读模型说这一步在跑：不显假进度条，只说在跑、结果来了会顶上。 */
+/** 步块还没落地、但读模型说这一步在跑：流光字标示指令在途，不显假进度条，
+ *  只说在跑、结果来了会顶上。 */
 function RunningLine({ title }: { title: string }) {
   return (
-    <p className="flex items-center gap-2 py-0.5 text-[11.5px] text-amber">
+    <p className="flex items-center gap-2 py-0.5 text-[11.5px]">
       <i className="blink inline-block size-[6px] flex-none rounded-full bg-amber not-italic" />
-      {title}执行中，完成后结果会显示在这里。
+      <ShiningText text={`${title}执行中…`} className="text-[11.5px]" />
+      <span className="text-tx3">完成后结果会显示在这里。</span>
     </p>
   );
 }
@@ -283,7 +292,7 @@ function ClarifyBlock({
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button
-          className="rounded-hard bg-amber px-3 py-[5px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="rounded-hard bg-amber px-3 py-[5px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           disabled={disabled || answered === 0}
           onClick={onResubmit}
         >
@@ -812,7 +821,7 @@ export function DiscoveryPanel({
     return (
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <button
-          className="rounded-hard bg-amber px-3 py-[5px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="rounded-hard bg-amber px-3 py-[5px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           disabled={!canTrigger(n)}
           onClick={onClick}
         >
@@ -961,7 +970,7 @@ export function DiscoveryPanel({
         <>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
               disabled={anyBusy}
               onClick={openMaterialize}
             >
@@ -988,7 +997,7 @@ export function DiscoveryPanel({
         <>
           <div className="flex flex-wrap items-center gap-2">
             <button
-              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
               disabled={anyBusy}
               onClick={openMaterialize}
             >
@@ -1202,7 +1211,7 @@ export function DiscoveryPanel({
         <Modal
           open
           onClose={() => setRerunConfirm(null)}
-          className="m-auto w-[min(460px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+          className="m-auto w-[min(460px,92vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
         >
           <div className="px-5 pb-5 pt-4">
             <p className="eyebrow pb-1">重跑确认</p>
@@ -1227,7 +1236,7 @@ export function DiscoveryPanel({
                 取消
               </button>
               <button
-                className="rounded-hard bg-amber px-4 py-1.5 text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi"
+                className="rounded-hard bg-amber px-4 py-1.5 text-[12px] font-extrabold text-on-amber hover:bg-amber-hi"
                 onClick={confirmRerun}
               >
                 确认重跑

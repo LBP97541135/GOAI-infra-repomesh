@@ -288,7 +288,7 @@ export function LocalCliPage() {
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
               disabled={busy !== null}
               onClick={() => run("start", startMembers)}
             >
@@ -309,7 +309,7 @@ export function LocalCliPage() {
             // 启动器 detail 原文。404（重启一个它不认的成员）、连不上（没起，或来源不在
             // 白名单——写请求带自定义头，那一趟被拦在预检，连发都没发出去）各是一件不同的
             // 事，归并成「操作失败」会把可自助解决的配置问题说成故障
-            <div className="mt-3 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] break-words text-[#e8a184]">
+            <div className="mt-3 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] break-words text-salmon-hi">
               <b className="mr-1.5 font-mono tracking-[0.08em]">启动器拒绝</b>
               {opError}
             </div>

@@ -84,12 +84,12 @@ interface Placed {
  *  底色一律不透明并混进 cream：节点盖在边的图层之上，透明底会让跨列的边从节点文字
  *  中间穿过去（与既有三视觉同一条约束）。 */
 const EXEC_SKIN: Record<TaskDisplayStatus, string> = {
-  succeeded: "border-olive bg-[color-mix(in_oklab,var(--color-olive)_20%,var(--color-cream))] text-paper-ink",
-  running: "border-amber bg-[color-mix(in_oklab,var(--color-amber)_22%,var(--color-cream))] text-paper-ink",
-  repairing: "border-amber bg-[color-mix(in_oklab,var(--color-amber)_22%,var(--color-cream))] text-paper-ink",
-  pending: "border-paper-dim/40 bg-cream text-paper-dim",
-  blocked: "border-paper-dim/40 bg-cream text-paper-dim",
-  failed: "border-salmon bg-[color-mix(in_oklab,var(--color-salmon)_16%,var(--color-cream))] text-paper-ink",
+  succeeded: "border-olive bg-[color-mix(in_oklab,var(--color-olive)_20%,var(--color-paper))] text-paper-ink",
+  running: "border-amber bg-[color-mix(in_oklab,var(--color-amber)_22%,var(--color-paper))] text-paper-ink",
+  repairing: "border-amber bg-[color-mix(in_oklab,var(--color-amber)_22%,var(--color-paper))] text-paper-ink",
+  pending: "border-paper-dim/40 bg-paper text-paper-dim",
+  blocked: "border-paper-dim/40 bg-paper text-paper-dim",
+  failed: "border-salmon bg-[color-mix(in_oklab,var(--color-salmon)_16%,var(--color-paper))] text-paper-ink",
 };
 
 /** 按 `batch_index` 分列。列取自节点自身而非 `execution_batches`——两者是同一份
@@ -137,12 +137,12 @@ function NodeBox({ placed, execution }: { placed: Placed; execution: DagExecutio
   // 未解析永远是虚线赭红：它没有 repository_id，也就没有任何执行态事实可谈。
   // 其余节点：有执行态就走 EXEC_SKIN，没有就退回结构三视觉（锚点仓 / 普通）。
   const skin = unresolved
-    ? "border-dashed border-salmon bg-cream text-salmon"
+    ? "border-dashed border-salmon bg-paper text-salmon"
     : colored
       ? EXEC_SKIN[status]
       : node.is_focus
-        ? "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-cream))] text-paper-ink"
-        : "border-paper-dim/60 bg-cream text-paper-ink";
+        ? "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-paper))] text-paper-ink"
+        : "border-paper-dim/60 bg-paper text-paper-ink";
 
   const baseTitle = unresolved
     ? `${node.name}：catalog 中查无此仓库——名字未注册，或在本 issue 域外重名歧义（域内优先后仍无唯一解），服务端不猜。`
@@ -364,7 +364,7 @@ function Legend({ execution }: { execution: DagExecutionView | null }) {
           {swatch(EXEC_SKIN.running, "进行中 running / repairing")}
           {swatch(EXEC_SKIN.pending, "等待 pending / blocked")}
           {swatch(EXEC_SKIN.failed, "失败 failed")}
-          {swatch("border-dashed border-salmon bg-cream", "未解析（catalog 无此仓）")}
+          {swatch("border-dashed border-salmon bg-paper", "未解析（catalog 无此仓）")}
           {/* A-18：不是第五个执行态，是贴在任何一个态上的标记，所以图例里也另起一说 */}
           <span className="flex items-center gap-1">
             <i className="inline-block size-[9px] rounded-[1px] border border-amber bg-amber" />
@@ -375,11 +375,11 @@ function Legend({ execution }: { execution: DagExecutionView | null }) {
         <>
           <span className="font-bold tracking-[0.1em] uppercase">结构</span>
           {swatch(
-            "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-cream))]",
+            "border-amber bg-[color-mix(in_oklab,var(--color-amber)_15%,var(--color-paper))]",
             "锚点仓",
           )}
-          {swatch("border-paper-dim/60 bg-cream", "计划内仓库")}
-          {swatch("border-dashed border-salmon bg-cream", "未解析（catalog 无此仓）")}
+          {swatch("border-paper-dim/60 bg-paper", "计划内仓库")}
+          {swatch("border-dashed border-salmon bg-paper", "未解析（catalog 无此仓）")}
         </>
       )}
     </div>
@@ -492,9 +492,9 @@ function PlanDagSheet({
     : [];
 
   return (
-    <div className="rounded-hard bg-cream px-4 py-3.5 text-paper-ink">
+    <div className="rounded-hard bg-paper px-4 py-3.5 text-paper-ink">
       <div className="flex items-baseline gap-2.5 border-b-2 border-paper-ink pb-2">
-        <span className="bg-paper-ink px-1.5 font-mono text-[11px] tracking-[0.14em] text-cream">PLAN DAG</span>
+        <span className="bg-paper-ink px-1.5 font-mono text-[11px] tracking-[0.14em] text-paper">PLAN DAG</span>
         {/* 数的是**节点**不是仓库：未解析节点在 catalog 里没有对应仓库，
             把它算进「N 仓」就是拿一个查无此仓的名字充数。 */}
         <span className="font-mono text-[11px] text-paper-dim">

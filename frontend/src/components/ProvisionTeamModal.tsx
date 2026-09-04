@@ -73,7 +73,7 @@ export function ProvisionTeamModal({
     <Modal
       open={open}
       onClose={onClose}
-      className="m-auto w-[min(520px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+      className="m-auto w-[min(520px,92vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div>
@@ -129,7 +129,7 @@ export function ProvisionTeamModal({
           取消
         </button>
         <button
-          className="rounded-hard bg-amber px-3.5 py-1.5 text-[12.5px] font-bold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="rounded-hard bg-amber px-3.5 py-1.5 text-[12.5px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           onClick={submit}
           disabled={busy}
         >

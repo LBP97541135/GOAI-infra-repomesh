@@ -109,7 +109,7 @@ export function RoundsPanel({
           return (
             <div key={round.round_id} className="border-b border-panel last:border-b-0">
               {/* 行内两个动作（展开 / 归档）不能嵌套 button，行是布局容器 */}
-              <div className="flex items-baseline gap-2.5 px-3 py-2 hover:bg-[#241e13]">
+              <div className="flex items-baseline gap-2.5 px-3 py-2 hover:bg-well-2">
                 <button
                   className="flex min-w-0 flex-1 items-baseline gap-2.5 text-left"
                   onClick={() => onToggleRound(round)}
@@ -167,7 +167,7 @@ export function RoundsPanel({
               </div>
 
               {open && (
-                <div className="border-t border-panel bg-[#161209] px-3 py-2.5">
+                <div className="border-t border-panel bg-well px-3 py-2.5">
                   {state?.loading && <p className="text-[11.5px] text-tx2">决策取用中…</p>}
                   {state?.error && <p className="text-[11.5px] text-salmon">决策取用失败：{state.error}</p>}
                   {state && !state.loading && !state.error && (

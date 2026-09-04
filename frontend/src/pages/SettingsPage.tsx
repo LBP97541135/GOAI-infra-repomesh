@@ -12,6 +12,7 @@ import { fetchCodingAgents, fetchSetupStatus } from "../api/platformSetup";
 import { LocalAccountsPanel } from "../components/LocalAccountsPanel";
 import { errText } from "../display";
 import { browserApiToken } from "../runtimeConfig";
+import { applyTheme, readStoredTheme, type ThemeName } from "../theme";
 import { useRuntimeRows } from "./useRuntimeRows";
 
 /** 设置页（CONS-44）。
@@ -80,6 +81,44 @@ const AUTH_LABEL: Record<CodingAgentAdapterView["auth_status"], string> = {
   // 「探不出来」不是「没认上」：合并这两态会把探测失败读成配置错误
   unknown: "无法判定",
 };
+
+const THEME_LABEL: Record<ThemeName, string> = {
+  dark: "深色（默认）",
+  light: "浅色",
+};
+
+/** 界面主题段。唯一的非服务端设置：只写本机 localStorage（见 theme.ts），
+ *  不碰后端，所以不算本页的「写路径」。 */
+function AppearanceSection() {
+  const [theme, setTheme] = useState<ThemeName>(readStoredTheme);
+  return (
+    <>
+      <div className="flex gap-2 pt-1">
+        {(["dark", "light"] as const).map((name) => (
+          <button
+            key={name}
+            type="button"
+            aria-pressed={theme === name}
+            onClick={() => {
+              setTheme(name);
+              applyTheme(name);
+            }}
+            className={`rounded-hard border px-3 py-1.5 text-[12px] font-semibold transition-colors ${
+              theme === name
+                ? "border-amber bg-amber/10 text-amber"
+                : "border-line text-tx2 hover:border-amber/50 hover:text-tx"
+            }`}
+          >
+            {THEME_LABEL[name]}
+          </button>
+        ))}
+      </div>
+      <p className="pt-2 text-[11px] text-tx3">
+        只保存在本机浏览器（localStorage），不进后端、不跟随账号；刷新与重启浏览器后保持。
+      </p>
+    </>
+  );
+}
 
 function AdapterRow({ adapter }: { adapter: CodingAgentAdapterView }) {
   return (
@@ -167,8 +206,12 @@ export function SettingsPage({ account, onConfigure }: { account: Account; onCon
     <div className="max-w-[860px]">
       <div className="flex items-baseline gap-3 border-b border-line pb-3">
         <h1 className="text-[16px] font-semibold text-cream">设置</h1>
-        <span className="microlabel">只读 · 唯一写路径：新增账号</span>
+        <span className="microlabel">只读 · 服务端写路径仅新增账号 · 界面主题只存本机</span>
       </div>
+
+      <Section title="界面主题">
+        <AppearanceSection />
+      </Section>
 
       <Section title="平台就绪">
         {setupError ? (

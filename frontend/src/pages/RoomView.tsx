@@ -89,9 +89,9 @@ function PlanPaper({ plan }: { plan: RepositoryPlanView }) {
   const focus = plan.dag.nodes.find((n) => n.is_focus);
 
   return (
-    <div className="max-w-[560px] rounded-hard bg-cream px-5 py-4 text-paper-ink">
+    <div className="max-w-[560px] rounded-hard bg-paper px-5 py-4 text-paper-ink">
       <div className="flex items-baseline gap-2.5 border-b-2 border-paper-ink pb-2">
-        <span className="bg-paper-ink px-1.5 font-mono text-[11px] tracking-[0.14em] text-cream">REPO PLAN</span>
+        <span className="bg-paper-ink px-1.5 font-mono text-[11px] tracking-[0.14em] text-paper">REPO PLAN</span>
         <span className="font-mono text-[12.5px] font-bold">{focus?.name ?? "—"}</span>
         <span className="ml-auto font-mono text-[10.5px]">plan v{plan.plan_version}</span>
       </div>
@@ -118,7 +118,7 @@ function PlanPaper({ plan }: { plan: RepositoryPlanView }) {
       )}
 
       <div className="pt-4 pb-1.5 font-mono text-[11px] font-bold">2.0 REPOSITORY DAG</div>
-      <div className="rounded-hard border border-[#b7a87e] px-3 py-2.5 font-mono text-[11.5px] leading-[1.9]">
+      <div className="rounded-hard border border-kraft-line px-3 py-2.5 font-mono text-[11.5px] leading-[1.9]">
         {plan.execution_batches.map((batch, i) => (
           <div key={batch.join("|")}>
             <span className="text-paper-dim">批次 {i + 1}　</span>
@@ -201,8 +201,8 @@ function EnvFloat({
   const shown = allRepos ? events : { ...events, items: scoped };
 
   return (
-    <aside className="fixed top-[64px] right-4 z-[8] max-h-[calc(100vh-90px)] w-[252px] overflow-y-auto rounded-hard border border-line bg-[#1c1710] shadow-[0_12px_30px_rgba(0,0,0,0.5)]">
-      <div className="sticky top-0 flex items-center border-b border-line bg-[#1c1710] px-3 py-2.5">
+    <aside className="fixed top-[64px] right-4 z-[8] max-h-[calc(100vh-90px)] w-[252px] overflow-y-auto rounded-hard border border-line bg-well shadow-rail">
+      <div className="sticky top-0 flex items-center border-b border-line bg-well px-3 py-2.5">
         <span className="font-mono text-[11px] tracking-[0.16em] text-tx">环境 · {repositoryName}</span>
         <button className="ml-auto px-0.5 text-[13px] text-tx2 hover:text-amber-hi" onClick={() => setMin((v) => !v)}>
           {min ? "▸" : "▾"}
@@ -261,7 +261,7 @@ function EnvFloat({
                 <div
                   key={s.name}
                   className={`flex items-baseline gap-2 px-1 py-0.5 font-mono text-[11px] ${
-                    s.isCurrent ? "bg-[#241c10]" : ""
+                    s.isCurrent ? "bg-well-2" : ""
                   }`}
                 >
                   <span className={s.isCurrent ? "text-tx" : "text-tx2"}>{s.name}</span>
@@ -404,13 +404,13 @@ export function RoomView({
 
         <div className="flex flex-none overflow-hidden rounded-hard border border-line">
           <button
-            className={view === "chat" ? `${tabBase} bg-amber font-bold text-[#191308]` : `${tabBase} text-tx2`}
+            className={view === "chat" ? `${tabBase} bg-amber font-bold text-on-amber` : `${tabBase} text-tx2`}
             onClick={() => setView("chat")}
           >
             房间
           </button>
           <button
-            className={view === "plan" ? `${tabBase} bg-amber font-bold text-[#191308]` : `${tabBase} text-tx2`}
+            className={view === "plan" ? `${tabBase} bg-amber font-bold text-on-amber` : `${tabBase} text-tx2`}
             onClick={() => setView("plan")}
           >
             DAG · PLAN · SPEC

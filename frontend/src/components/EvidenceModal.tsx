@@ -29,7 +29,7 @@ export function EvidenceModal({
     <Modal
       open={open}
       onClose={onClose}
-      className="m-auto max-h-[86vh] w-[620px] max-w-[94vw] overflow-y-auto rounded-hard border border-line bg-[#1c1710] p-0 text-tx shadow-[0_24px_60px_rgba(0,0,0,0.6)]"
+      className="m-auto max-h-[86vh] w-[620px] max-w-[94vw] overflow-y-auto rounded-hard border border-line bg-well p-0 text-tx shadow-pop"
     >
       <div className="flex items-center gap-2 border-b border-line px-4 py-3">
         <span className="eyebrow text-amber">证据面</span>
