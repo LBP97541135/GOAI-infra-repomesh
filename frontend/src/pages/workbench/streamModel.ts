@@ -232,7 +232,10 @@ export function buildWorkStream(input: WorkStreamInput): WorkCard[] {
     cards.push({
       kind: "note",
       anchor: "note-no-rooms",
-      text: "尚未建团：仓库房间会在计划物化后出现，届时点仓库即可在右侧打开房间面板。",
+      text:
+        "这条会话还没有自己的执行团队。团队是按会话组建的：需求确定交付范围并生成计划后，" +
+        "才会为涉及的每个仓库组建专属团队、开设房间。团队页里的团队属于其他会话，" +
+        "不会自动挂到这一条上——走到物化那一步，上面的仓库卡片就能点了。",
     });
   }
 
