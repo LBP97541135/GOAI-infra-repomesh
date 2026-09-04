@@ -13,6 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
+from repomesh.modules.observability.infrastructure.agentloop import build_agentloop_config
 from repomesh.modules.observability.infrastructure.alerting import (
     SUPPORTED_METRICS,
     SUPPORTED_OPERATORS,
@@ -409,3 +410,22 @@ async def list_log_entries(
         cursor=cursor,
     )
     return LogEntriesResponse(**data)
+
+
+@router.get("/agentloop/config")
+async def agentloop_config(request: Request) -> dict:
+    """AgentLoop 控制台跳转配置（只读，零副作用）。
+
+    从部署既有的 OTLP 配置（``otlp_endpoint`` / ``otlp_headers``，可选
+    ``agentloop_console_url`` 覆盖模板）推导云端控制台地址，供观测门户的
+    「全链路 · AgentLoop」卡片直接跳转。未配置上报时返回
+    ``configured=false``，由前端出一次性配置弹层（用户粘贴的地址存本机，
+    不回传服务端）——绝不要求用户自己去阿里云搜地址。
+    """
+    _authorized_container(request)
+    settings = get_settings()
+    return build_agentloop_config(
+        endpoint=settings.otlp_endpoint,
+        headers_raw=settings.otlp_headers,
+        override_url=settings.agentloop_console_url,
+    )
