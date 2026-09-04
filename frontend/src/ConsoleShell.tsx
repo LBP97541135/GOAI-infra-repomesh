@@ -12,7 +12,6 @@ import type { HumanReviewRequestView } from "./api/reviewDesk";
 import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { DecisionChainPage } from "./pages/DecisionChainPage";
-import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
 import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
 import { ObserveHome } from "./pages/observe/ObserveHome";
@@ -338,9 +337,10 @@ export default function ConsoleShell() {
     );
   }
 
-  // 聊天工作台只占主页新会话（无 hash/#/、#/issues/new）；「议题」标签页回到
-  // 聊天框之前的形态：#/issues 是列表，点 issue 进原详情页（用户 2026-09-05 裁决）。
-  const isWorkbenchRoute = route.nav === "issues" && route.issueId === "new";
+  // 聊天工作台占主页新会话（无 hash/#/、#/issues/new）与每个 issue 的会话视图
+  // （点列表里的 issue 进来就是每轮对话记录，用户 2026-09-05 裁决；旧详情页已删）。
+  // 两者都是全高内滚布局；列表与房间页照旧带页边距。
+  const isWorkbenchRoute = route.nav === "issues" && route.issueId !== null && route.roomId === null;
 
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
@@ -408,10 +408,13 @@ export default function ConsoleShell() {
               onToast={showToast}
             />
           ) : (
-            <IssueDetailContainer
+            <WorkbenchPage
               issueId={route.issueId}
-              onBack={() => navigate("issues")}
-              onOpenRoom={(room) => openRoom(route.issueId!, room.room_id)}
+              workspaceName={
+                workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? null
+              }
+              onCreateIssue={handleCreateIssue}
+              onOpenRoom={(roomId) => openRoom(route.issueId!, roomId)}
               onToast={showToast}
             />
           ))}

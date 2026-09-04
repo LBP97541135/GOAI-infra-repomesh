@@ -2,14 +2,24 @@ import { useCallback, useEffect, useState } from "react";
 import type { PlanDagState } from "../../components/PlanDagPanel";
 import type { PolicyGate } from "../../components/DiscoveryPanel";
 import type { PlanAnchor } from "../../types";
-import type { SupervisionState } from "../IssueDetailPage";
 import type { IssueDetailView } from "../../api/contract";
 import { fetchPlanGraphEdges, fetchRepositoryPlan } from "../../api/rooms";
-import { fetchProjectTopology } from "../../api/humanControl";
+import { fetchProjectTopology, type ProjectAgentTopologyView } from "../../api/humanControl";
 import { AuthError } from "../../api/auth";
 import { ApiError } from "../../api/client";
 import { errText } from "../../display";
 import { resolveDataSourceMode } from "../../api/source";
+
+/** 监管策略取数态（原 IssueDetailPage 的定义随旧页退役迁到这里）。
+ *  401 单独一态：会话过期重试永远不会成功，不能混进可重试的 error。 */
+export type SupervisionState =
+  | { status: "loading" }
+  | { status: "ready"; topology: ProjectAgentTopologyView }
+  | { status: "absent" }
+  | { status: "forbidden"; detail: string }
+  | { status: "unauthenticated"; detail: string }
+  | { status: "error"; message: string }
+  | { status: "replay" };
 
 /** 工作台的「推动」状态：发现/物化面板需要的两份容器级事实。
  *
