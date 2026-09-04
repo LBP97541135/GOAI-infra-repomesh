@@ -3,6 +3,8 @@ import type { ExternalMemberReadinessView } from "../api/contract";
 import { defaultClient } from "../api/client";
 import {
   LAUNCHER_BASE,
+  getRoster,
+  getSecrets,
   probe,
   restartMember,
   stalePidFile,
@@ -10,8 +12,11 @@ import {
   stopMembers,
   type LauncherMember,
   type LauncherProbe,
+  type RosterDocument,
+  type SecretEntry,
   type StalePidFileDetail,
 } from "../api/launcher";
+import { ConnectionConfigSection, RosterSection, SecretsSection } from "../components/LocalCliConfig";
 import { READINESS_LABEL, READINESS_SKIN, errText, eventTime, shortId } from "../display";
 import { StalePidBlock } from "../components/StatusBlocks";
 
@@ -177,7 +182,9 @@ function MemberRow({
   );
 }
 
-export function LocalCliPage() {
+/** `embedded`：收进设置页「本地 CLI」分类时为 true——去掉页面级大标题与外框，
+ *  分类标题由设置页提供；独立路由（#/settings/local-cli 旧链接）仍带头部。 */
+export function LocalCliPage({ embedded = false }: { embedded?: boolean }) {
   /** null = 首次探测还没回来。三态本身在 `api/launcher.ts` 的 `LauncherProbe`。 */
   const [launcher, setLauncher] = useState<LauncherProbe | null>(null);
   const [readiness, setReadiness] = useState<ExternalMemberReadinessView[] | null>(null);
@@ -187,6 +194,37 @@ export function LocalCliPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [opError, setOpError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<StalePidFileDetail | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  // 配置文档（roster + 密钥掩码）：只在挂载与保存后取，不跟 5s 轮询——
+  // 它们是操作者编辑的对象，不该在打字时被轮询重置
+  const [roster, setRoster] = useState<RosterDocument | null>(null);
+  const [secrets, setSecrets] = useState<SecretEntry[] | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configTick, setConfigTick] = useState(0);
+  const [showCommands, setShowCommands] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getRoster(), getSecrets()])
+      .then(([rosterRes, secretsRes]) => {
+        if (cancelled) return;
+        setRoster(rosterRes.document);
+        setSecrets(secretsRes.entries);
+        setConfigError(null);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setConfigError(errText(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configTick]);
+
+  const reloadConfig = () => {
+    setConfigTick((n) => n + 1);
+    setTick((n) => n + 1);
+  };
 
   // 5s 心跳（同 observe 各页与房间流的写法）
   useEffect(() => {
@@ -197,7 +235,11 @@ export function LocalCliPage() {
   // 两个源同一拍取：并排的两列必须来自同一次刷新，否则它们的不一致有一半是取数时差
   useEffect(() => {
     let cancelled = false;
-    probe().then((result) => !cancelled && setLauncher(result));
+    probe().then((result) => {
+      if (cancelled) return;
+      setLauncher(result);
+      setLastRefresh(new Date());
+    });
     defaultClient()
       .getExternalMemberReadiness()
       .then((page) => {
@@ -234,21 +276,41 @@ export function LocalCliPage() {
   const readinessOf = (agentId: string) => readiness?.find((m) => m.agentId === agentId) ?? null;
 
   return (
-    <div className="max-w-[860px]">
-      <div className="flex items-baseline gap-3 border-b border-line pb-3">
-        <h1 className="text-[16px] font-semibold text-cream">本地 CLI</h1>
-        <span className="microlabel">External · Codex</span>
-      </div>
+    <div className={embedded ? "" : "max-w-[860px]"}>
+      {!embedded && (
+        <div className="flex items-baseline gap-3 border-b border-line pb-3">
+          <h1 className="text-[16px] font-semibold text-cream">本地 CLI</h1>
+          <span className="microlabel">External · Codex</span>
+        </div>
+      )}
 
-      <div className="mt-4 rounded-hard border border-amber/40 bg-amber/5 px-4 py-3">
-        <div className="eyebrow mb-1">启动边界</div>
-        <p className="text-[12px] text-tx2">
-          浏览器不直接启动宿主机进程，也不读取 credential env。一键启动是把请求发给
-          <b className="text-tx">这台机器上</b>的启动器（{LAUNCHER_BASE}，四条固定路由），由它按
-          roster 拉起已 provision、已生成 enrollment 的 External 成员——页面递不进去命令行、脚本路径
-          或成员定义，那些路由没有对应的字段。启动器不在时，下方命令照旧可用。
-        </p>
-      </div>
+      <p className="mt-3 text-[11.5px] text-tx2">
+        一键启动由本机启动器（{LAUNCHER_BASE}）代为执行；启动器未运行时，用下方命令。
+      </p>
+
+      {launcher?.kind === "ok" && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className="rounded-hard border border-olive px-2 py-px text-[11px] text-olive">启动器已连接</span>
+          <span className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2">
+            进程 {launcher.status.members.filter((m) => m.running).length}/{launcher.status.members.length} 运行
+          </span>
+          {readiness !== null && (
+            <span className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2">
+              就绪 {readiness.filter((r) => r.status === "ready").length}/{readiness.length}
+            </span>
+          )}
+          <span className="text-[10.5px] text-tx3">
+            {lastRefresh ? `刷新于 ${lastRefresh.toLocaleTimeString()} · ` : ""}每 {POLL_MS / 1000} 秒自动
+          </span>
+          <button
+            type="button"
+            className="rounded-hard border border-line px-2 py-px text-[11px] text-tx2 transition-colors hover:border-amber hover:text-amber-hi"
+            onClick={() => setTick((n) => n + 1)}
+          >
+            刷新
+          </button>
+        </div>
+      )}
 
       {launcher === null && <p className="mt-5 text-[12px] text-tx2">正在探测本机启动器…</p>}
 
@@ -256,11 +318,8 @@ export function LocalCliPage() {
         <div className="mt-5 rounded-hard border border-line bg-panel px-4 py-3">
           <div className="eyebrow mb-1">未连接本机启动器</div>
           <p className="text-[12px] text-tx2">
-            {LAUNCHER_BASE} 没有应答。<b className="text-tx">两种可能，浏览器不告诉我们是哪一种</b>
-            ：启动器没在跑；或者它在跑，但控制台此刻的访问地址不在它 config 的{" "}
-            <span className="font-mono">allowedOrigins</span> 里——那种情况下状态请求照样发得出去
-            （它是简单请求，没有预检），只是响应被浏览器挡在页面之外，这边看到的同样是一次失败。
-            两种都不是平台故障——下方命令直接拉起成员，效果与一键启动相同（调的就是同一批脚本）。
+            {LAUNCHER_BASE} 没有应答：启动器未运行，或控制台地址不在其 allowedOrigins 白名单里。
+            下方命令照常可用。
           </p>
           <p className="mt-1.5 font-mono text-[10.5px] break-all text-tx3">{launcher.message}</p>
         </div>
@@ -269,10 +328,7 @@ export function LocalCliPage() {
       {launcher?.kind === "refused" && (
         <div className="mt-5 rounded-hard border border-salmon/60 bg-salmon/10 px-4 py-3">
           <div className="eyebrow mb-1 text-salmon">本机启动器答了一个错误码</div>
-          <p className="text-[12px] text-salmon">
-            启动器在跑，来源也认（不认的话浏览器会把响应挡下，这边根本读不到状态码），
-            是它自己这一趟出了错。原文在下面，日志在启动它的那个终端里。
-          </p>
+          <p className="text-[12px] text-salmon">启动器返回了错误，原文如下：</p>
           <p className="mt-1.5 font-mono text-[10.5px] break-all text-tx3">{launcher.message}</p>
         </div>
       )}
@@ -357,23 +413,58 @@ export function LocalCliPage() {
           )}
 
           <p className="pt-3 text-[11px] text-tx3">
-            两列会不一致，那不是 bug：进程刚起来还没续上第一次租约、Bridge 卡住不再上报、进程被杀
-            而租约还剩几十秒，都会让它们对不上。物化门只认<b className="text-tx2">就绪</b>那一列。
-            {readinessError &&
-              (readinessKnown
-                ? ` 这一轮租约没取到（显示的是上一轮的值）：${readinessError.slice(0, 80)}`
-                : ` 就绪列一次都没取到，所以它对每个成员都写「未能获取」而不是「未上报」：${readinessError.slice(0, 80)}`)}
+            两列可能短暂不一致，物化门只认<b className="text-tx2">就绪</b>列。
+            {readinessError && ` 就绪列取用失败：${readinessError.slice(0, 80)}`}
           </p>
         </section>
       )}
 
+      {launcher?.kind === "ok" && (
+        <>
+          {configError && (
+            <div className="mt-5 rounded-hard border border-salmon/60 bg-salmon/10 px-3 py-2 text-[11.5px] text-salmon">
+              {configError}
+            </div>
+          )}
+          {roster !== null && secrets !== null && (
+            <>
+              <ConnectionConfigSection
+                key={`conn-${configTick}`}
+                roster={roster}
+                onSaved={reloadConfig}
+                onError={setConfigError}
+              />
+              <SecretsSection
+                key={`sec-${configTick}`}
+                roster={roster}
+                secrets={secrets}
+                onSaved={reloadConfig}
+                onError={setConfigError}
+              />
+              <RosterSection
+                key={`ros-${configTick}`}
+                roster={roster}
+                onSaved={reloadConfig}
+                onError={setConfigError}
+              />
+            </>
+          )}
+        </>
+      )}
+
       <section className="mt-5">
-        <div className="eyebrow mb-2">命令行入口</div>
-        <p className="mb-2 text-[11.5px] text-tx3">
-          启动器不在、或不想经过它时走这条：在 RepoMesh 仓库根目录的 PowerShell 中执行，
-          脚本与一键启动调的是同一批。
-        </p>
-        <div className="grid gap-3">
+        <button
+          type="button"
+          className="flex w-full items-baseline gap-2 text-left"
+          onClick={() => setShowCommands((v) => !v)}
+        >
+          <span className="eyebrow">命令行入口 {showCommands ? "▾" : "▸"}</span>
+          <span className="text-[10.5px] text-tx3">启动器不在时走这条</span>
+        </button>
+        {showCommands && (
+          <>
+            <p className="mb-2 mt-2 text-[11.5px] text-tx3">在仓库根目录的 PowerShell 中执行：</p>
+            <div className="grid gap-3">
           <CommandCard
             title="先预检命令"
             command={DRY_RUN_COMMAND}
@@ -389,7 +480,9 @@ export function LocalCliPage() {
             command={STOP_COMMAND}
             note="停止前按 PID 和命令行复核进程身份，避免误杀。"
           />
-        </div>
+            </div>
+          </>
+        )}
       </section>
 
       <section className="mt-5">

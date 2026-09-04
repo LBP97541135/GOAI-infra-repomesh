@@ -12,7 +12,6 @@ import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { DecisionChainPage } from "./pages/DecisionChainPage";
 import { IssueListPage } from "./pages/IssueListPage";
-import { LocalCliPage } from "./pages/LocalCliPage";
 import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
 import { ObserveHome } from "./pages/observe/ObserveHome";
 import { ObserveLogs } from "./pages/observe/ObserveLogs";
@@ -226,17 +225,6 @@ export default function ConsoleShell() {
     setRoute({ nav, issueId: null, roomId: null, observeSection: null, settingsSection: null });
   };
 
-  const openLocalCli = () => {
-    window.location.hash = "#/settings/local-cli";
-    setRoute({
-      nav: "settings",
-      issueId: null,
-      roomId: null,
-      observeSection: null,
-      settingsSection: "local-cli",
-    });
-  };
-
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
     setRoute({ nav: "issues", issueId, roomId: null, observeSection: null, settingsSection: null });
@@ -368,8 +356,6 @@ export default function ConsoleShell() {
         onSelectWorkspace={setWorkspaceId}
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
-        localCliActive={route.settingsSection === "local-cli"}
-        onOpenLocalCli={openLocalCli}
         onNewIssue={openNewSession}
         onLogout={handleLogout}
         onToast={showToast}
@@ -455,12 +441,14 @@ export default function ConsoleShell() {
         {route.nav === "decision-chains" && (
           <DecisionChainPage organizationId={workspaceId} onToast={showToast} />
         )}
-        {route.nav === "settings" &&
-          (route.settingsSection === "local-cli" ? (
-            <LocalCliPage />
-          ) : (
-            <SettingsPage account={account} onConfigure={() => setSetupRequested(true)} />
-          ))}
+        {route.nav === "settings" && (
+          <SettingsPage
+            key={route.settingsSection ?? "general"}
+            account={account}
+            onConfigure={() => setSetupRequested(true)}
+            initialCategory={route.settingsSection === "local-cli" ? "localcli" : "general"}
+          />
+        )}
       </main>
 
       {toast && <Toast text={toast} />}

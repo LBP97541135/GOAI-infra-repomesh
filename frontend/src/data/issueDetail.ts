@@ -50,6 +50,9 @@ export const issueDetailFixture: IssueDetailView = {
   opened_by_name: "console-demo-org-leader",
   opened_at: "2026-08-09T02:14:00Z",
   updated_at: "2026-08-11T12:20:01Z",
+  // v0.5 归档字段：夹具未归档；后端在列表/详情/摘要三处恒带这两个字段
+  archived: false,
+  archived_at: null,
   rounds: [
     {
       round_id: "1a0e3c92-77b1-4c5d-9e0f-1122334455aa",

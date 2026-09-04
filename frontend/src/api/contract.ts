@@ -82,6 +82,10 @@ export interface IssueListItemView {
   opened_at: string;
   /** §2.3：取不到时间源时回退 opened_at，不编造 */
   updated_at: string;
+  /** v0.5 归档墓碑：列表卫生，不改写 state/phase（八相不新增第九相） */
+  archived: boolean;
+  /** 未归档恒为 null */
+  archived_at: string | null;
 }
 
 /** §2.5：两个计数**不受 state 与分页影响**，但**受 organization_id 影响**
