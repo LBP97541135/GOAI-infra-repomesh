@@ -204,11 +204,15 @@ export function WorkbenchPage({
               <div className="flex items-center gap-1 px-2 pb-1.5 pl-2.5">
                 <span
                   className="inline-flex items-center gap-1.5 rounded-full border border-line-strong px-2.5 py-[2.5px] font-mono text-[11px] text-tx2"
-                  title={isNew ? "需求的作用范围：归属当前工作区，交付范围由发现链确定" : "本会话的交付范围（由服务端派生）"}
+                  title={
+                    isNew
+                      ? "需求归属当前工作区；未选工作区时由花名册唯一活跃 Org Leader 处理，交付范围由发现链确定"
+                      : "本会话的交付范围（由服务端派生）"
+                  }
                 >
                   <span className="h-1.5 w-1.5 flex-none rounded-full bg-bluegray" />
                   {isNew
-                    ? workspaceName ?? "未选择工作区"
+                    ? workspaceName ?? "全部工作区"
                     : detail
                       ? `${detail.repositories.length} 个仓库`
                       : "…"}

@@ -33,7 +33,9 @@ export const OBSERVE_SECTIONS: ReadonlyArray<ObserveSection> = [
 
 export interface Route {
   nav: NavKey;
-  /** #/issues/{issue_id} 命中时为该 id；列表页为 null */
+  /** #/issues/{issue_id} 命中时为该 id；
+   *  "new" = 新会话工作台（#/issues 与 #/issues/new，聊天优先的默认面）；
+   *  null = 会话列表（#/issues/list，临时入口） */
   issueId: string | null;
   /** #/issues/{issue_id}/rooms/{room_id} 命中时为该 room_id；否则 null。
    *  room_id 形如 `!room-core-team:local`，含 `!` 与 `:`，写入 hash 前须编码 */
@@ -67,6 +69,17 @@ export function parseRoute(hash: string): Route {
       observeSection: null,
       settingsSection: null,
     };
+  }
+
+  // 会话列表（工作台改造期的临时入口：#/issues/list。期 5 列表搬进侧栏后退役）
+  if (/^\/issues\/list(?:[/?#].*)?$/.test(h)) {
+    return { nav: "issues", issueId: null, roomId: null, observeSection: null, settingsSection: null };
+  }
+
+  // #/issues 与 #/issues/new 都落「新会话」工作台——聊天优先是默认面（原型定稿）。
+  // 「new」是哨兵值：ConsoleShell 据此渲染空流 + 可用输入框的新会话态。
+  if (/^\/issues\/?(?:[?#].*)?$/.test(h) || /^\/issues\/new(?:[/?#].*)?$/.test(h)) {
+    return { nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null };
   }
 
   const detail = h.match(/^\/issues\/([^/?]+)/);

@@ -164,7 +164,7 @@ export function newSessionStream(workspaceName: string | null): WorkCard[] {
         "新会话。" +
         (workspaceName
           ? `当前工作区：${workspaceName}。`
-          : "未选择工作区（可选）。") +
+          : "作用范围：全部工作区（可在侧栏切换）。") +
         "在下方输入需求（可附文档）发送即创建 issue，规划、建团、轮次会依次流进来。",
     },
   ];
