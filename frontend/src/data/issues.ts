@@ -33,6 +33,8 @@ function issue(over: Partial<IssueListItemView> & Pick<IssueListItemView, "issue
     execution_mode: null,
     opened_by_agent_id: null,
     opened_by_name: null,
+    archived: false,
+    archived_at: null,
     ...over,
   };
 }

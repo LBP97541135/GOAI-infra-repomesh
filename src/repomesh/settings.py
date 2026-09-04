@@ -130,6 +130,10 @@ class Settings(BaseSettings):
     otlp_metrics_enabled: bool = False
     otlp_logs_enabled: bool = False
     otlp_log_level: str = "WARNING"
+    # AgentLoop 控制台跳转地址模板（可选）。留空时由 otlp_endpoint/otlp_headers
+    # 推导地域与项目，按默认模板落 ARMS 控制台该地域首页；要深链具体页面才配它，
+    # 支持 {region}/{project}/{workspace} 占位符。
+    agentloop_console_url: str = ""
     # The product exposes one default model connection. Legacy planning-specific
     # names remain aliases so existing deployments can override it independently.
     deepseek_api_key: str | None = Field(

@@ -58,11 +58,14 @@ export class LauncherError extends Error {
   }
 }
 
-async function call(method: string, path: string, op: boolean): Promise<LauncherStatus> {
+async function call<T = LauncherStatus>(method: string, path: string, op: boolean, body?: unknown): Promise<T> {
   const url = `${LAUNCHER_BASE}${path}`;
+  const headers: Record<string, string> = {};
+  if (op) headers[OP_HEADER] = OP_VALUE;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
-    res = await fetch(url, { method, headers: op ? { [OP_HEADER]: OP_VALUE } : undefined });
+    res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch (cause) {
     throw new LauncherError(
       0,
@@ -83,7 +86,7 @@ async function call(method: string, path: string, op: boolean): Promise<Launcher
     throw new LauncherError(res.status, `${method} ${path} → HTTP ${res.status}${text ? ` · ${text.slice(0, 200)}` : ""}`, detail);
   }
   try {
-    return (await res.json()) as LauncherStatus;
+    return (await res.json()) as T;
   } catch (cause) {
     // 固定端口上答话的未必是启动器（一个跑串了的 dev server 也会 200 一段 HTML）。
     // 归到 `0`——「没拿到可用应答」，与连不上同一档：那边确实没有一个启动器在。
@@ -129,6 +132,74 @@ export function stopMembers(): Promise<LauncherStatus> {
 
 export function restartMember(agentId: string): Promise<LauncherStatus> {
   return call("POST", `/v1/members/${encodeURIComponent(agentId)}/restart`, true);
+}
+
+/* ── 配置文档（settings 页「本地 CLI」的连接/密钥/名册编辑）────────────────
+ *  写路径与 start/stop 同一门（Origin 白名单 + OP 头）。roster 是整个文档替换：
+ *  表单只改字段，提交时整份送回；secrets 是只写更新，读回来永远只有掩码。 */
+
+export interface RosterMemberEntry {
+  key: string;
+  role: string;
+  agentId: string;
+  repositoryId?: string;
+  resourceName?: string;
+  responsibilityPaths?: string[];
+  leaderKey?: string;
+  workspaceRoot?: string;
+  subsets?: string[];
+  [extra: string]: unknown;
+}
+
+/** members.json 的形状（子集）：启动器只解释 members[].key/agentId/role，
+ *  其余字段（含全局连接配置）按操作者数据原样透传。 */
+export interface RosterDocument {
+  organizationId?: string;
+  organizationLeaderAgentId?: string;
+  repomeshEndpoint?: string;
+  matrixHomeserverUrl?: string;
+  controllerUrl?: string;
+  codingProfile?: string;
+  members: RosterMemberEntry[];
+  [extra: string]: unknown;
+}
+
+/** e1-members.env 的一行：名字 + 掩码尾巴。**值永远不出启动器**。 */
+export interface SecretEntry {
+  name: string;
+  masked: string;
+}
+
+export interface RosterResponse {
+  rosterVersion: string;
+  document: RosterDocument;
+}
+
+export function getRoster(): Promise<RosterResponse> {
+  return call<RosterResponse>("GET", "/v1/roster", false);
+}
+
+export function putRoster(document: RosterDocument): Promise<{ saved: boolean }> {
+  return call("PUT", "/v1/roster", true, document);
+}
+
+export function getSecrets(): Promise<{ entries: SecretEntry[] }> {
+  return call<{ entries: SecretEntry[] }>("GET", "/v1/secrets", false);
+}
+
+export interface SecretUpdate {
+  name: string;
+  value: string;
+}
+
+export function putSecrets(entries: SecretUpdate[]): Promise<{ saved: boolean }> {
+  return call("PUT", "/v1/secrets", true, { entries });
+}
+
+/** 成员 key → env 名 stem，与启动器/预置脚本同一套派生（E1_ + 大写 + -→_）。 */
+export function envTokenNames(memberKey: string): { matrix: string; repomesh: string } {
+  const stem = "E1_" + memberKey.toUpperCase().replaceAll("-", "_");
+  return { matrix: `${stem}_MATRIX_TOKEN`, repomesh: `${stem}_REPOMESH_TOKEN` };
 }
 
 /** 从写请求的失败里取出 PID 文件占位那一族；不是这一族则 null（调用方照常显 message）。 */

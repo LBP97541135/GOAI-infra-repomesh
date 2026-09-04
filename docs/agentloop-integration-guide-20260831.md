@@ -1,7 +1,7 @@
 # AgentLoop 接入方案（可观测接续）
 
 > 目标：把 RepoMesh 现有 OTel 锚点接续到阿里云 AgentLoop，零代码改动。
-> 日期：2026-08-31 ｜ 状态：**通道 A 三信号（Trace/Metrics/Logs）代码+网关验证通过 ✅ / 通道 B 已配置待重启生效**
+> 日期：2026-08-31 ｜ 状态：**通道 A 三信号（Trace/Metrics/Logs）代码+网关验证通过 ✅ / 通道 B 配置已灌入并重建容器（2026-09-05）✅，ARMS 侧上报待下一次 agent 运行人工确认 ⏳**
 
 ## 0. 接入状态
 
@@ -10,7 +10,7 @@
 | A：RepoMesh API/runner → AgentLoop（Trace） | ✅ 已配置 + headers 透传 + 真实上报验证通过（控制台可见 `repomesh-connectivity-check`） |
 | A：RepoMesh API/runner → AgentLoop（Metrics） | ✅ 已接入：`setup_metrics` + `_metrics_url` 拼接 + LLM/工具调用计数器埋点；网关 `/v1/metrics` 实测 200 |
 | A：RepoMesh API/runner → AgentLoop（Logs） | ✅ 已接入：`setup_logs` + `_logs_url` 拼接 + `LoggingHandler` 自动附加 trace_id；网关 `/v1/logs` 实测 200 |
-| B：AgentTeams Manager/Workers → AgentLoop | ✅ 已配置（`agentteams-manager.env`，含 `AGENTTEAMS_CMS_METRICS_ENABLED=true`）⏳ 待重启 manager + 重建 worker 生效 |
+| B：AgentTeams Manager/Workers → AgentLoop | ✅ 配置已于 2026-09-05 灌入 `agentteams-manager.env`（值从通道 A 同族配置推导）并经安装器一键升级重建 manager + 全部 worker；容器内 env 已核实（`AGENTTEAMS_CMS_*` 全量可见）。⏳ ARMS 控制台侧的实际上报待下一次 agent 运行后人工确认 |
 
 ## 1. 核心结论
 
@@ -159,14 +159,23 @@ AGENTTEAMS_CMS_SERVICE_NAME=agentteams-manager
   export OTEL_EXPORTER_OTLP_HEADERS="x-arms-license-key=${AGENTTEAMS_CMS_LICENSE_KEY},x-arms-project=${AGENTTEAMS_CMS_PROJECT},x-cms-workspace=${AGENTTEAMS_CMS_WORKSPACE}"
   ```
 
-### 重启
+### 生效方式（2026-09-05 实测修订）
+
+**`docker restart` 不生效**：容器 env 在创建时烧入，restart 不重读 env 文件（本次实测：9/4 restart 后容器内 `AGENTTEAMS_CMS_ENDPOINT` 仍为空）。正确路径是**重建**：
 
 ```bash
-# 1) 重启 Manager（读取新环境变量）
-docker restart agentteams-manager
-# 2) 删除重建 Worker 容器，使其从 Manager 继承 OTLP 配置
-#    （Worker 由 Manager 拉起，重启后自动带 OTEL_EXPORTER_*）
+# 1) 在 ~/agentteams-manager.env 里填好上面的 CMS 块
+# 2) 安装器「就地升级」：重建 manager + 全部 worker（数据卷保留）
+printf '1\n' | bash components/agentteams/install/agentteams-install.sh
+# 3) 核实：
+docker exec agentteams-manager printenv | grep AGENTTEAMS_CMS_ENDPOINT
+docker exec agentteams-worker-agt-worker-<id> printenv | grep AGENTTEAMS_CMS_TRACES_ENABLED
 ```
+
+两个踩过的坑（2026-09-05）：
+
+- **env 文件带 UTF-8 BOM 会让安装器崩掉**：安装器逐行 `read` 解析 env，注释守卫只认 `#` 开头；BOM 粘在首行注释前会让注释行漏判、进 `eval` 直接 `bad substitution`（卡在「加载已有配置」一步，容器此时只被重启、未重建）。用编辑器改完 env 记得存成无 BOM 的 UTF-8。
+- **一键升级会重建全部 worker**（以更新 Manager IP），worker 由 entrypoint 的 `lib/agentteams-env.sh` 在运行时把 `AGENTTEAMS_CMS_*` 转成 `OTEL_EXPORTER_OTLP_*`——所以 `docker exec printenv` 看不到 `OTEL_*` 属正常，看 `AGENTTEAMS_CMS_*` 是否在容器 env 里即可。
 
 ## 7. 验证
 

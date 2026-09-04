@@ -1,10 +1,24 @@
 import { useEffect, useState } from "react";
 import { defaultClient } from "../../api/client";
 import type { ObserveSummary } from "../../api/contract";
+import { fetchAgentloopConfig, type AgentLoopConfig } from "../../api/agentloop";
 import type { ObserveSection } from "../../routes";
 import { ActiveAlertBanner } from "../../components/AlertPanel";
+import { Modal } from "../../components/Modal";
 
 const fmt = (n: number) => n.toLocaleString("en-US");
+
+/** AgentLoop 跳转地址的本机记忆键。配置弹层里用户手动改过的地址只存这里，
+ *  不回传服务端——服务端推导（OTLP 配置）覆盖不了的个性化兜底。 */
+const AGENTLOOP_URL_KEY = "repomesh-agentloop-url";
+
+function savedAgentloopUrl(): string {
+  try {
+    return (localStorage.getItem(AGENTLOOP_URL_KEY) ?? "").trim();
+  } catch {
+    return "";
+  }
+}
 
 /** 观测中心门户（#/observe）。
  *
@@ -61,6 +75,47 @@ export function ObserveHome() {
   // 日志卡片统计：同样用 keyset 首屏条数 + 「+」标注还有更多页。
   const [logCount, setLogCount] = useState<number | null>(null);
   const [logHasMore, setLogHasMore] = useState(false);
+  // AgentLoop 跳转配置：服务端从部署既有 OTLP 配置推导；拿不到（含旧后端
+  // 无此端点）不报错，卡片点击时走配置弹层。
+  const [agentloop, setAgentloop] = useState<AgentLoopConfig | null>(null);
+  const [agentloopDialog, setAgentloopDialog] = useState(false);
+  const [dialogUrl, setDialogUrl] = useState("");
+  const [savedUrl, setSavedUrl] = useState(savedAgentloopUrl);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAgentloopConfig()
+      .then((config) => !cancelled && setAgentloop(config))
+      .catch(() => !cancelled && setAgentloop(null));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const agentloopJumpUrl = savedUrl || agentloop?.console_url || null;
+
+  const openAgentloop = () => {
+    const url = agentloopJumpUrl;
+    if (url) {
+      window.open(url, "_blank", "noopener");
+      return;
+    }
+    setDialogUrl(agentloop?.console_url ?? "");
+    setAgentloopDialog(true);
+  };
+
+  const saveAndEnter = () => {
+    const url = dialogUrl.trim();
+    if (!url) return;
+    try {
+      localStorage.setItem(AGENTLOOP_URL_KEY, url);
+    } catch {
+      // 存不进去（隐私模式）本次仍可直接进，只是下次要再填一遍
+    }
+    setSavedUrl(url);
+    setAgentloopDialog(false);
+    window.open(url, "_blank", "noopener");
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -140,8 +195,9 @@ export function ObserveHome() {
         </div>
       </div>
 
-      {/* 板块卡片：一个功能域一张卡，点击跳转对应分类 */}
-      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+      {/* 本地板块：自研读模型的四个功能域，日常观测的主线 */}
+      <div className="eyebrow mt-5">本地</div>
+      <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
         {SECTION_CARDS.map((card) => {
           const stat = cardStat(card.section);
           return (
@@ -176,6 +232,97 @@ export function ObserveHome() {
           );
         })}
       </div>
+
+      {/* AgentLoop：云端技术信号（span 全链路 / 时序指标 / 长期留存）。
+          地址由服务端从部署既有 OTLP 配置推导，用户手改只存本机。 */}
+      <div className="eyebrow mt-5">AgentLoop</div>
+      <button
+        onClick={openAgentloop}
+        className="group mt-2 flex w-full flex-col rounded-hard border border-line bg-panel px-4 py-3.5 text-left transition-colors hover:border-amber/50"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-[15px] leading-none text-amber">⛓</span>
+          <span className="text-[13px] font-semibold text-cream">全链路 · AgentLoop</span>
+          <span className="ml-auto text-[11px] text-tx2 transition-colors group-hover:text-amber-hi">
+            新窗口进入 ↗
+          </span>
+        </div>
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-tx3">
+          云端技术信号 · 调用链瀑布 / 指标趋势 / 长期留存（全量遥测已同步上报）
+        </p>
+        <div className="mt-2.5 flex items-baseline justify-between">
+          <span className="font-mono text-[11px] text-tx2">
+            {agentloopJumpUrl
+              ? agentloop?.region
+                ? `已连接 · ${agentloop.region}`
+                : "已连接"
+              : "未配置 · 首次点击进行配置"}
+          </span>
+          {agentloopJumpUrl && (
+            <span
+              role="button"
+              tabIndex={0}
+              className="text-[11px] text-tx3 hover:text-tx"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDialogUrl(agentloopJumpUrl);
+                setAgentloopDialog(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.stopPropagation();
+                  setDialogUrl(agentloopJumpUrl);
+                  setAgentloopDialog(true);
+                }
+              }}
+            >
+              修改地址
+            </span>
+          )}
+        </div>
+      </button>
+
+      {/* 一次性配置弹层：只在跳转地址缺失或用户主动改地址时出现 */}
+      <Modal
+        open={agentloopDialog}
+        className="m-auto w-[min(520px,92vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
+        onClose={() => setAgentloopDialog(false)}
+      >
+        <div className="px-6 py-5">
+          <div className="eyebrow mb-1.5">接入 AgentLoop</div>
+          <h2 className="text-[15px] font-semibold text-cream">AgentLoop 控制台地址</h2>
+          <p className="mt-1.5 text-[11.5px] leading-[1.7] text-tx2">
+            {agentloop === null
+              ? "当前部署没能自动推导出控制台地址。粘贴你的 AgentLoop 控制台地址，保存后本机记住、以后一键直达。"
+              : "已按部署配置自动推导，通常无需修改；如有出入可粘贴控制台地址覆盖（只存本机）。"}
+          </p>
+          <input
+            className="mt-3 w-full rounded-hard border border-line bg-well px-2.5 py-1.5 font-mono text-[11.5px] text-tx outline-none focus:border-amber"
+            placeholder="https://arms.console.aliyun.com/?regionId=cn-hangzhou"
+            value={dialogUrl}
+            onChange={(e) => setDialogUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveAndEnter();
+            }}
+            autoFocus
+          />
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              className="rounded-hard border border-line-strong bg-panel px-3 py-1.5 text-[11.5px] text-tx2 hover:border-amber hover:text-tx"
+              onClick={() => setAgentloopDialog(false)}
+            >
+              取消
+            </button>
+            <button
+              className="rounded-hard bg-amber px-3 py-1.5 text-[11.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={dialogUrl.trim() === ""}
+              onClick={saveAndEnter}
+            >
+              保存并进入
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <p className="pt-5 text-[11px] leading-relaxed text-tx3">
         板块划分对照赛题可观测要求：<b className="text-tx2">推理轨迹</b>（Skill / MCP /

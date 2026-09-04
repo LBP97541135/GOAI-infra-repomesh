@@ -309,7 +309,7 @@ export function DiscoveryApproval({
           要求改动
         </button>
         <button
-          className="rounded-hard bg-amber px-3.5 py-[5px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="rounded-hard bg-amber px-3.5 py-[5px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           disabled={!canSubmit}
           onClick={() => onSubmit("approved", reason, adjustments)}
         >

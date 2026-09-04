@@ -45,14 +45,14 @@ function RoomRow({ room, onOpen }: { room: RoomListItemView; onOpen: (room: Room
 
   return (
     <button
-      className={`flex w-full items-center gap-2.5 border-b border-panel px-3 py-2.5 text-left last:border-b-0 hover:bg-[#241e13] ${
-        room.live ? "bg-[#1a160e]" : ""
+      className={`flex w-full items-center gap-2.5 border-b border-panel px-3 py-2.5 text-left last:border-b-0 hover:bg-well-2 ${
+        room.live ? "bg-well" : ""
       }`}
       onClick={() => onOpen(room)}
     >
       <span
         className={`grid size-8 flex-none place-items-center rounded-hard font-mono text-[11px] ${
-          empty ? "bg-[#1d1810] text-tx3" : "bg-line text-kraft"
+          empty ? "bg-well text-tx3" : "bg-line text-kraft"
         }`}
       >
         {tag}
@@ -110,7 +110,7 @@ function HeaderBlock({ detail }: { detail: IssueDetailView }) {
 
       <div className="mt-1 flex flex-none flex-wrap justify-end gap-1.5">
         {/* state 与 phase_note 均由读模型派生（§2.1/§2.2） */}
-        <span className="rounded-hard bg-amber px-2 py-px text-[11px] font-semibold text-[#191308]">
+        <span className="rounded-hard bg-amber px-2 py-px text-[11px] font-semibold text-on-amber">
           {detail.state === "open" ? "Open" : "Closed"} · {detail.phase_note}
         </span>
         {/* §2.3：需求已落库、尚未物化——与列表行同一徽标，详情页同样提示
