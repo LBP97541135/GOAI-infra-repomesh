@@ -12,6 +12,19 @@ const fmt = (n: number) => n.toLocaleString("en-US");
  *  不回传服务端——服务端推导（OTLP 配置）覆盖不了的个性化兜底。 */
 const AGENTLOOP_URL_KEY = "repomesh-agentloop-url";
 
+/** 入口选择的本机记忆：上一次选了哪扇门，下次直接落进去（选择器仍常驻可切）。 */
+const OBSERVE_SURFACE_KEY = "repomesh-observe-surface";
+
+type ObserveSurface = "choose" | "local";
+
+function storedSurface(): ObserveSurface {
+  try {
+    return localStorage.getItem(OBSERVE_SURFACE_KEY) === "local" ? "local" : "choose";
+  } catch {
+    return "choose";
+  }
+}
+
 function savedAgentloopUrl(): string {
   try {
     return (localStorage.getItem(AGENTLOOP_URL_KEY) ?? "").trim();
@@ -22,11 +35,14 @@ function savedAgentloopUrl(): string {
 
 /** 观测中心门户（#/observe）。
  *
- * 不是数据页，是「去哪看」的索引：顶部告警横幅 + 一行健康摘要 + 板块卡片
- * 网格。每个板块对应赛题可观测要求的一个覆盖面（Metrics / Log / 告警 /
- * 推理轨迹），点击卡片跳转 `#/observe/{section}`。已实心的板块卡片带真实
- * 数字；建设中板块带「建设中」徽标，进入后由占位页如实说明边界——不编造
- * 「已接入」。摘要条只在进入时拉一次（门户不需要 30s 轮询的实时性）。 */
+ * **入口即选择**（用户定稿）：进观测先见两扇门——
+ *  - 「自研观测」：进入本地四大板块（推理轨迹 / 用量 / 日志 / 告警），数据来自
+ *    observability 模块的读模型；
+ *  - 「AgentLoop」：直接跳出阿里云云端控制台（span 全链路 / 时序指标 / 长期留存），
+ *    地址由服务端从部署既有 OTLP 配置推导，用户手改只存本机。
+ *
+ * 选择记进 localStorage，下次直落上次的门；顶部入口条常驻（两个 pill），随时切回。
+ * 告警横幅全局可见（不分入口）。摘要条只在本地面拉一次（门户不需要 30s 轮询）。 */
 
 const SECTION_CARDS: Array<{
   section: ObserveSection;
@@ -66,6 +82,7 @@ const SECTION_CARDS: Array<{
 ];
 
 export function ObserveHome() {
+  const [surface, setSurface] = useState<ObserveSurface>(storedSurface);
   const [summary, setSummary] = useState<ObserveSummary | null>(null);
   const [activeCount, setActiveCount] = useState<number | null>(null);
   // 推理轨迹卡片统计：keyset 首屏 limit=200 已覆盖现实体量；next_cursor 非空时
@@ -117,9 +134,19 @@ export function ObserveHome() {
     window.open(url, "_blank", "noopener");
   };
 
+  const enterSurface = (next: ObserveSurface) => {
+    setSurface(next);
+    try {
+      localStorage.setItem(OBSERVE_SURFACE_KEY, next);
+    } catch {
+      // 隐私模式存不进去就当会话内选择
+    }
+  };
+
   useEffect(() => {
+    if (surface !== "local") return;
     let cancelled = false;
-    // 门户只做一次摘要快照；各路独立降级——某一路端点失败不拖垮其余数字
+    // 本地面只做一次摘要快照；各路独立降级——某一路端点失败不拖垮其余数字
     // （只渲染后端给的事实，拿不到的那格如实显示 —）。
     Promise.allSettled([
       defaultClient().observeSummary(7),
@@ -142,7 +169,7 @@ export function ObserveHome() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [surface]);
 
   const cardStat = (section: ObserveSection): string | null => {
     if (section === "usage" && summary) {
@@ -161,126 +188,159 @@ export function ObserveHome() {
     return null;
   };
 
+  /** 入口条：两扇门的常驻切换器（进入任一面后收成一行 pill，随时切回/换门）。 */
+  const surfaceSwitch = (
+    <div className="flex items-center gap-2">
+      <span className="microlabel">入口</span>
+      <button
+        onClick={() => enterSurface("local")}
+        className={`rounded-full border px-3 py-[3px] text-[11px] transition-colors ${
+          surface === "local"
+            ? "border-amber bg-amber/10 text-amber"
+            : "border-line text-tx2 hover:border-amber/50 hover:text-tx"
+        }`}
+      >
+        自研 · 本地
+      </button>
+      <button
+        onClick={openAgentloop}
+        className="rounded-full border border-line px-3 py-[3px] text-[11px] text-tx2 transition-colors hover:border-amber/50 hover:text-tx"
+        title={agentloopJumpUrl ? "新窗口打开 AgentLoop 控制台" : "首次点击进行配置"}
+      >
+        AgentLoop ↗
+      </button>
+    </div>
+  );
+
   return (
     <div className="max-w-[860px]">
       <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-line pb-3">
         <div className="flex items-baseline gap-3">
           <h1 className="text-[16px] font-semibold text-cream">观测</h1>
-          <span className="text-[11.5px] text-tx2">可观测中心 · 按板块查看 · 数据来自 observability 模块</span>
+          <span className="text-[11.5px] text-tx2">可观测中心 · 数据来自 observability 模块与 AgentLoop</span>
         </div>
+        {surfaceSwitch}
       </div>
 
-      {/* 告警横幅：firing 中告警全局可见（30s 轮询，见 AlertPanel） */}
       <ActiveAlertBanner />
 
-      {/* 健康摘要条：只放三个关键数字，其余进板块页 */}
-      <div className="mt-4 grid grid-cols-3 gap-3">
-        <div className="rounded-hard border border-line bg-panel px-4 py-3">
-          <div className="eyebrow text-tx2">近 7 天调用</div>
-          <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
-            {summary ? fmt(summary.calls) : "—"}
-          </div>
+      {/* ═══ 入口选择：两扇门 ═══ */}
+      {surface === "choose" && (
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <button
+            onClick={() => enterSurface("local")}
+            className="group flex flex-col rounded-hard border border-line bg-panel px-5 py-5 text-left transition-colors hover:border-amber"
+          >
+            <div className="flex items-center gap-2.5">
+              <span className="text-[20px] leading-none text-amber">◎</span>
+              <span className="text-[15px] font-bold text-cream">自研观测 · 本地</span>
+            </div>
+            <p className="mt-2 text-[12px] leading-relaxed text-tx2">
+              进入本地四大板块：推理轨迹 / 用量大盘 / 日志 / 告警。数据来自 RepoMesh
+              observability 模块读模型，按 Issue 归因。
+            </p>
+            <div className="mt-3 flex items-baseline justify-between">
+              <span className="font-mono text-[11px] text-tx2">4 个板块已就绪</span>
+              <span className="text-[11.5px] text-tx2 transition-colors group-hover:text-amber-hi">进入 →</span>
+            </div>
+          </button>
+          <button
+            onClick={openAgentloop}
+            className="group flex flex-col rounded-hard border border-line bg-panel px-5 py-5 text-left transition-colors hover:border-amber"
+          >
+            <div className="flex items-center gap-2.5">
+              <span className="text-[20px] leading-none text-amber">⛓</span>
+              <span className="text-[15px] font-bold text-cream">AgentLoop · 阿里云</span>
+            </div>
+            <p className="mt-2 text-[12px] leading-relaxed text-tx2">
+              跳转云端控制台：span 全链路瀑布 / 时序指标趋势 / 长期留存。全量遥测已从本部署同步上报。
+            </p>
+            <div className="mt-3 flex items-baseline justify-between">
+              <span className="font-mono text-[11px] text-tx2">
+                {agentloopJumpUrl
+                  ? agentloop?.region
+                    ? `已连接 · ${agentloop.region}`
+                    : "已连接"
+                  : "未配置 · 首次点击进行配置"}
+              </span>
+              <span className="text-[11.5px] text-tx2 transition-colors group-hover:text-amber-hi">新窗口跳转 ↗</span>
+            </div>
+          </button>
         </div>
-        <div className="rounded-hard border border-line bg-panel px-4 py-3">
-          <div className="eyebrow text-tx2">成功率</div>
-          <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
-            {summary && summary.success_rate !== null ? `${(summary.success_rate * 100).toFixed(1)}%` : "—"}
-          </div>
-        </div>
-        <div className="rounded-hard border border-line bg-panel px-4 py-3">
-          <div className="eyebrow text-tx2">活跃告警</div>
-          <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
-            {activeCount === null ? "—" : activeCount}
-          </div>
-        </div>
-      </div>
+      )}
 
-      {/* 本地板块：自研读模型的四个功能域，日常观测的主线 */}
-      <div className="eyebrow mt-5">本地</div>
-      <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
-        {SECTION_CARDS.map((card) => {
-          const stat = cardStat(card.section);
-          return (
-            <button
-              key={card.section}
-              onClick={() => {
-                window.location.hash = `#/observe/${card.section}`;
-              }}
-              className="group flex flex-col rounded-hard border border-line bg-panel px-4 py-3.5 text-left transition-colors hover:border-amber/50"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-[15px] leading-none text-amber">{card.icon}</span>
-                <span className="text-[13px] font-semibold text-cream">{card.title}</span>
-                {card.status === "building" && (
-                  <span className="ml-auto rounded-full border border-line px-2 py-0.5 text-[9.5px] text-tx3">
-                    建设中
-                  </span>
-                )}
+      {/* ═══ 自研面：健康摘要 + 四大板块 ═══ */}
+      {surface === "local" && (
+        <>
+          {/* 健康摘要条：只放三个关键数字，其余进板块页 */}
+          <div className="mt-4 grid grid-cols-3 gap-3">
+            <div className="rounded-hard border border-line bg-panel px-4 py-3">
+              <div className="eyebrow text-tx2">近 7 天调用</div>
+              <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
+                {summary ? fmt(summary.calls) : "—"}
               </div>
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-tx3">{card.desc}</p>
-              <div className="mt-2.5 flex items-baseline justify-between">
-                {stat ? (
-                  <span className="font-mono text-[11px] text-tx2">{stat}</span>
-                ) : (
-                  <span className="text-[11px] text-tx3">{card.status === "building" ? "尚未接入数据源" : ""}</span>
-                )}
-                <span className="text-[11px] text-tx2 transition-colors group-hover:text-amber-hi">
-                  进入 →
-                </span>
+            </div>
+            <div className="rounded-hard border border-line bg-panel px-4 py-3">
+              <div className="eyebrow text-tx2">成功率</div>
+              <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
+                {summary && summary.success_rate !== null ? `${(summary.success_rate * 100).toFixed(1)}%` : "—"}
               </div>
-            </button>
-          );
-        })}
-      </div>
+            </div>
+            <div className="rounded-hard border border-line bg-panel px-4 py-3">
+              <div className="eyebrow text-tx2">活跃告警</div>
+              <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
+                {activeCount === null ? "—" : activeCount}
+              </div>
+            </div>
+          </div>
 
-      {/* AgentLoop：云端技术信号（span 全链路 / 时序指标 / 长期留存）。
-          地址由服务端从部署既有 OTLP 配置推导，用户手改只存本机。 */}
-      <div className="eyebrow mt-5">AgentLoop</div>
-      <button
-        onClick={openAgentloop}
-        className="group mt-2 flex w-full flex-col rounded-hard border border-line bg-panel px-4 py-3.5 text-left transition-colors hover:border-amber/50"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-[15px] leading-none text-amber">⛓</span>
-          <span className="text-[13px] font-semibold text-cream">全链路 · AgentLoop</span>
-          <span className="ml-auto text-[11px] text-tx2 transition-colors group-hover:text-amber-hi">
-            新窗口进入 ↗
-          </span>
-        </div>
-        <p className="mt-1.5 text-[11.5px] leading-relaxed text-tx3">
-          云端技术信号 · 调用链瀑布 / 指标趋势 / 长期留存（全量遥测已同步上报）
-        </p>
-        <div className="mt-2.5 flex items-baseline justify-between">
-          <span className="font-mono text-[11px] text-tx2">
-            {agentloopJumpUrl
-              ? agentloop?.region
-                ? `已连接 · ${agentloop.region}`
-                : "已连接"
-              : "未配置 · 首次点击进行配置"}
-          </span>
-          {agentloopJumpUrl && (
-            <span
-              role="button"
-              tabIndex={0}
-              className="text-[11px] text-tx3 hover:text-tx"
-              onClick={(e) => {
-                e.stopPropagation();
-                setDialogUrl(agentloopJumpUrl);
-                setAgentloopDialog(true);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.stopPropagation();
-                  setDialogUrl(agentloopJumpUrl);
-                  setAgentloopDialog(true);
-                }
-              }}
-            >
-              修改地址
-            </span>
-          )}
-        </div>
-      </button>
+          {/* 本地板块：自研读模型的四个功能域，日常观测的主线 */}
+          <div className="eyebrow mt-5">四大板块</div>
+          <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
+            {SECTION_CARDS.map((card) => {
+              const stat = cardStat(card.section);
+              return (
+                <button
+                  key={card.section}
+                  onClick={() => {
+                    window.location.hash = `#/observe/${card.section}`;
+                  }}
+                  className="group flex flex-col rounded-hard border border-line bg-panel px-4 py-3.5 text-left transition-colors hover:border-amber/50"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[15px] leading-none text-amber">{card.icon}</span>
+                    <span className="text-[13px] font-semibold text-cream">{card.title}</span>
+                    {card.status === "building" && (
+                      <span className="ml-auto rounded-full border border-line px-2 py-0.5 text-[9.5px] text-tx3">
+                        建设中
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-[11.5px] leading-relaxed text-tx3">{card.desc}</p>
+                  <div className="mt-2.5 flex items-baseline justify-between">
+                    {stat ? (
+                      <span className="font-mono text-[11px] text-tx2">{stat}</span>
+                    ) : (
+                      <span className="text-[11px] text-tx3">{card.status === "building" ? "尚未接入数据源" : ""}</span>
+                    )}
+                    <span className="text-[11px] text-tx2 transition-colors group-hover:text-amber-hi">
+                      进入 →
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="pt-5 text-[11px] leading-relaxed text-tx3">
+            板块划分对照赛题可观测要求：<b className="text-tx2">推理轨迹</b>（Skill / MCP /
+            Agent 会话）为赛题点名的全链路推理轨迹覆盖项，<b className="text-tx2">用量大盘</b>
+            （Metrics）与<b className="text-tx2">日志</b>（Log）为数据类型覆盖，<b className="text-tx2">告警</b>
+            为「在线监控与告警」场景。已实心板块的数据来自 RepoMesh 规划侧；
+            执行侧 Agent 数据经「推理轨迹」板块接入（路线 1）。
+          </p>
+        </>
+      )}
 
       {/* 一次性配置弹层：只在跳转地址缺失或用户主动改地址时出现 */}
       <Modal
@@ -323,14 +383,6 @@ export function ObserveHome() {
           </div>
         </div>
       </Modal>
-
-      <p className="pt-5 text-[11px] leading-relaxed text-tx3">
-        板块划分对照赛题可观测要求：<b className="text-tx2">推理轨迹</b>（Skill / MCP /
-        Agent 会话）为赛题点名的全链路推理轨迹覆盖项，<b className="text-tx2">用量大盘</b>
-        （Metrics）与<b className="text-tx2">日志</b>（Log）为数据类型覆盖，<b className="text-tx2">告警</b>
-        为「在线监控与告警」场景。已实心板块的数据来自 RepoMesh 规划侧；
-        执行侧 Agent 数据经「推理轨迹」板块接入（路线 1）。
-      </p>
     </div>
   );
 }
