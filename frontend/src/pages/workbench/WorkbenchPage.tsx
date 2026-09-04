@@ -10,6 +10,15 @@ import {
   type GovernanceAgent,
 } from "../../api/decisions";
 import { resolveDataSourceMode } from "../../api/source";
+import {
+  fetchDiscovery,
+  newIdempotencyKey,
+  triggerAnalysis,
+  triggerCandidates,
+  triggerClassification,
+  triggerPlan,
+} from "../../api/discovery";
+import type { DiscoveryView } from "../../api/contract";
 import { DiscoveryPanel } from "../../components/DiscoveryPanel";
 import { EvidenceModal } from "../../components/EvidenceModal";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
@@ -44,6 +53,13 @@ import { policyGateOf, useIssueFlowState } from "./useIssueFlowState";
 
 const DOC_ACCEPT = ".txt,.md,.docx,.pdf,.odt,.rtf";
 const POLL_MS = 5000;
+/** 发现链步号 → 触发端点的幂等键前缀（与 DiscoveryPanel 同一套键位）。 */
+const STEP_KEY_BY_STEP = {
+  1: "analysis",
+  2: "candidates",
+  3: "classification",
+  4: "plan",
+} as const;
 
 interface ActiveDeck {
   roundId: string;
@@ -78,6 +94,19 @@ export function WorkbenchPage({
   const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   /** 静默轮询与首载的界线：换 issue 才整页 loading，轮询只换数据不闪屏 */
   const loadedIssueRef = useRef<string | null>(null);
+
+  // ── 对话流自动滚底：进入会话 / 新卡出现时跟随到底部；用户上翻阅读时不抢滚动 ──
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  const nearBottomRef = useRef(true);
+  const handleStreamScroll = () => {
+    const el = streamRef.current;
+    if (!el) return;
+    nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+  const scrollToBottom = () => {
+    const el = streamRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
 
   useEffect(() => {
     if (isNew) {
@@ -187,13 +216,73 @@ export function WorkbenchPage({
 
   const flow = useIssueFlowState(issueId ?? "", detail, reload);
   // 推动卡只在「尚未物化」的会话出现：发现→计划→物化整条回路都在面板里，
-  // 物化成功后轮次卡接管叙事，面板随之退场（roundCount>0 时按钮本来也会消失）。
+  // 物化成功后轮次卡接管叙事（roundCount>0 时面板里的按钮本来也会消失）。
   const showDiscovery = !isNew && detail !== null && detail.rounds.length === 0;
+
+  // ── 处理员自动推进（B 定稿的对话式体验）──
+  // 需求一发出去，处理员就开始干活：发现链哪一步「待开始」，就自动触发哪一步，
+  // 不让人对着「开始分析」按钮点头。人审门不动：第 3 步分档审批的提交、以及
+  // 物化确认，仍由人操作——读模型在门没过前不会把步进器往前走，所以这里的
+  // 自动触发天然越不过门。
+  const [discovery, setDiscovery] = useState<DiscoveryView | null>(null);
+  useEffect(() => {
+    if (!showDiscovery || !detail) {
+      setDiscovery(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = () =>
+      fetchDiscovery(detail.issue_id)
+        .then((view) => !cancelled && setDiscovery(view))
+        .catch(() => undefined);
+    tick();
+    const timer = window.setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [showDiscovery, detail, reload]);
+
+  const autoTriggeredRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    if (resolveDataSourceMode() === "replay") return; // 回放里写入口一律如实拒绝，不空转
+    if (!discovery || !principal || discovery.step_state !== "idle") return;
+    const key = `${discovery.issue_id}:${discovery.step}`;
+    if (autoTriggeredRef.current[key]) return; // 本 visit 已触发过（失败由面板的重试入口接管，避免循环开火）
+    autoTriggeredRef.current[key] = newIdempotencyKey(STEP_KEY_BY_STEP[discovery.step]);
+    const payload = {
+      created_by_agent_id: principal.agentId,
+      idempotency_key: autoTriggeredRef.current[key],
+    };
+    const fire =
+      discovery.step === 1
+        ? triggerAnalysis(discovery.issue_id, payload)
+        : discovery.step === 2
+          ? triggerCandidates(discovery.issue_id, payload)
+          : discovery.step === 3
+            ? triggerClassification(discovery.issue_id, payload)
+            : triggerPlan(discovery.issue_id, payload);
+    fire.catch(() => undefined);
+  }, [discovery, principal]);
+
   const discoveryCard =
     showDiscovery && detail ? (
       <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card">
-        <div className="mb-1.5">
-          <span className="microlabel">推进 · 发现 → 计划 → 物化</span>
+        <div className="mb-1.5 flex items-baseline gap-2">
+          <span className="microlabel">处理员 · 自动推进</span>
+          <span className="text-[10.5px] text-tx3">
+            {discovery
+              ? discovery.step_state === "idle"
+                ? discovery.step === 3
+                  ? "等待分档审批"
+                  : "即将开始下一步"
+                : discovery.step_state === "running"
+                  ? "正在处理…"
+                  : discovery.step_state === "failed"
+                    ? "出错（见下方面板的重试入口）"
+                    : "已完成"
+              : "准备中…"}
+          </span>
         </div>
         <DiscoveryPanel
           issueId={detail.issue_id}
@@ -217,6 +306,13 @@ export function WorkbenchPage({
     : detail
       ? buildWorkStream({ detail, rooms, tasksByRound, activeDeck })
       : [];
+
+  // 新内容到达（进入会话 / 新卡入流 / 轮询同步）且用户本就贴底时跟随到底部——
+  // 上翻读历史时不抢滚动（nearBottom 由 onScroll 维护）。
+  useEffect(() => {
+    if (loading || error) return;
+    if (nearBottomRef.current) scrollToBottom();
+  }, [loading, error, cards.length, lastSyncAt]);
 
   // ── 右栏（期 3 接房间数据；本期先做壳与开合） ──
   const [panelRepo, setPanelRepo] = useState<(IssueRepositoryRef & { roomId: string | null }) | null>(null);
@@ -356,7 +452,7 @@ export function WorkbenchPage({
         </div>
 
         {/* 对话流 */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto" ref={streamRef} onScroll={handleStreamScroll}>
           <div className="mx-auto flex max-w-[720px] flex-col gap-3 px-6 py-5">
             {loading && <LoadingLine />}
             {!loading && error && (
