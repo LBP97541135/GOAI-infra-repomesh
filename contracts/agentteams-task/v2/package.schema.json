@@ -67,7 +67,7 @@
       "const": "base/tools/repomesh-work.sh"
     },
     "helper_commands": {
-      "description": "The four complete command lines, verbatim and in order: init, test, bundle, clean. The observer's auto-approval (D-23) answers a copaw Tool Guard request only when the intercepted command line equals one of these character for character; any other command is left for a human. None of them may contain a token the Tool Guard reads as dangerous (D-21).",
+      "description": "The four complete command lines, verbatim and in order: init, test, bundle, clean. The observer's auto-approval (D-23) answers a copaw Tool Guard request only when the intercepted command line, after at most one `cd <this attempt's own shared/tasks directory> && ` prefix is removed (spec §8.17, helper-cli.md), equals one of these character for character; any other command is left for a human. None of them may contain a token the Tool Guard reads as dangerous (D-21).",
       "type": "array",
       "minItems": 4,
       "maxItems": 4,

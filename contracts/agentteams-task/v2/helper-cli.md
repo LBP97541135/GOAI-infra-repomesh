@@ -13,8 +13,9 @@ written into `base/package.json.helper_commands[]`.
 
 These are the complete command lines, character for character, that the worker types from the
 task directory. The observer's auto-approval (D-23) compares an intercepted Tool Guard command
-against this list and approves only an exact match; `tests/contracts/test_agentteams_task_v2_contract.py`
-asserts that this block, `helper_commands[]` and `HELPER_COMMANDS` are identical.
+against this list after the normalisation below and approves only an exact match;
+`tests/contracts/test_agentteams_task_v2_contract.py` asserts that this block, `helper_commands[]`
+and `HELPER_COMMANDS` are identical.
 
 ```text
 bash base/tools/repomesh-work.sh init
@@ -31,6 +32,39 @@ worker types.
 
 The worker's spec names `init`, `test` and `bundle` only. `clean` exists for the platform and the
 operator and is not part of the worker's instructions.
+
+## Auto-approval normalisation (spec §8.17, decided 2026-09-05)
+
+In wave 0 every one of the seven shell calls the worker really made had the form
+`cd <task directory> && bash base/tools/…`, with the task directory spelled as the absolute path
+inside copaw's sync root (`/root/.copaw-worker/<worker>/.copaw/workspaces/default/shared/tasks/<attempt_id>`).
+A bare comparison against the four lines above would therefore approve nothing. The observer
+(`repomesh.integrations.hosted_native.approval`) normalises the intercepted command line exactly
+this far and no further:
+
+1. The command line is the `command` value of the JSON parameters block in copaw's Tool Guard
+   prompt, and the tool must be `execute_shell_command`. Only leading and trailing whitespace is
+   stripped; inner whitespace, case and quoting are left alone. A message without that block (the
+   fabricated "waiting for approval" text of spike S-5) never enters the comparison.
+2. At most one prefix of the exact shape `cd <dir> && ` is removed — one space after `cd`, one
+   space on each side of `&&`. `<dir>` may be bare or wrapped in one pair of single or double
+   quotes and must contain no shell metacharacter (whitespace, `; | & < > $`, backtick,
+   `( ) { } * ? [ ] ! ~ #`, newline). After a trailing `/` is dropped, `<dir>` must end in
+   `shared/tasks/<attempt_id>` — relative (`shared/tasks/<id>`) or under any absolute prefix
+   (`…/shared/tasks/<id>`) — where `<attempt_id>` is **this attempt's own** directory name. Another
+   attempt's directory, the `shared/tasks` root and the workspace `/work/<id>` do not qualify.
+3. What remains must equal one entry of this attempt's `base/package.json.helper_commands[]`
+   character for character. The observer reads the file from the attempt directory; it does not
+   consult the `HELPER_COMMANDS` constant (the contract test keeps the two identical).
+4. Everything else is left for a human: a chained command (`ls -la && cd … && …`,
+   `… && echo ok`), `;`, `||`, a pipe, a redirection, an environment assignment, a second `cd`,
+   `bash -c`, `sh`, an extra argument, a case difference.
+
+The gates around the comparison are unchanged (D-23): the request must come from the attempt's
+own worker in the attempt's team room, the attempt must not be terminal, the request must be
+newer than the attempt's `notified_at`, and the `auto_approved` event is written before the
+`/approve` is sent (the Matrix transaction id derives from the event id, so a retry never sends
+twice).
 
 ## Inputs common to every command
 
