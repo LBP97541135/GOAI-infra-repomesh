@@ -29,7 +29,7 @@
 | 证据 | 位置 | 含义 |
 |---|---|---|
 | copaw worker 调 `start_assigned_task` 12 次全 401 | 记录 §5 V-1 | 控制器给 worker 的 Bearer 是 Higress consumer key，平台不认；CRD `MCPServer` 无自定义 header（`components/agentteams/agentteams-controller/api/v1beta1/types.go:86-101`） |
-| dispatch 永远 `queued`，30 分钟 `runner-tasks/next` 零次 | 记录 §6 V-5 | 产品部署里没有 runner；活体控制器二进制含 `repomesh-runner` 字符串 0 次，即上游镜像根本不认这个运行时 |
+| dispatch 永远 `queued`，30 分钟 `runner-tasks/next` 零次 | 记录 §6 V-5 | 产品部署里没有 runner；活体控制器二进制含 `repomesh-runner` 字符串 0 次，即上游镜像根本不认这个运行时。**09-04 更新**：`b38549a0`（09-03）已把 runner 作为 sidecar 服务放进 compose platform profile（`compose.yaml:167`），用全局 control token 领活——控制器仍不认 `repomesh-runner` 运行时，D-2 不变；但「无主体消费者今天不存在」的前提已变，见 §6 `runner-tasks/next` 行 |
 | worker 自己交了 `STATUS: BLOCKED` 的 `result.md` | 记录 §5 | **AgentTeams 原生任务协议是通的**：worker 领了包、读了 spec、按协议交了回执、@ 了 Leader；缺的只是代码和一份对得上的 spec |
 | Leader 绕圈三分钟 | 记录 §5 V-3 | 服务端拆解下 Leader 无包无仓，平台没告诉它不必动 |
 
@@ -384,7 +384,7 @@ class RequireExecutionPlaneReady:    # 组合门禁
 |---|---|
 | `contracts/runtime/v1/runner-task.schema.json` | 可选 `candidate: { bundleUri, bundleHash, commitSha, diffUri? }`；文档化 `adapterId` 取值 `repomesh-verifier` |
 | `contracts/runtime/v1/task-and-result-reference.md:168-211` | 补记终态 payload 已有的 `commitSha`（引擎已发、文档漏写）；`artifacts[].kind` 增列 `git-bundle` |
-| `contracts/runtime/README.md` | `GET /runtime/runner-tasks/next` 新增可选查询参数 `adapter`；**规则**：无主体的 control token 领任务必须带 `adapter`，且永远领不到 `containerManaged:false` 成员的调度；新增 `POST /runtime/v1/verifier/heartbeat` |
+| `contracts/runtime/README.md` | `GET /runtime/runner-tasks/next` 新增可选查询参数 `adapter`；**规则**：无主体的 control token 领任务必须带 `adapter`，且永远领不到持有自己凭据的成员（即 `containerManaged:false` 的 Bridge 成员）的调度——**09-04 已写入**；新增 `POST /runtime/v1/verifier/heartbeat`（PR-B） |
 | `tests/contracts/test_runtime_v1_contract.py` | 覆盖 `candidate` 字段与 `repomesh-verifier` 任务样本 |
 
 **`docs/contracts/`（控制台读模型）**
@@ -397,13 +397,13 @@ class RequireExecutionPlaneReady:    # 组合门禁
 
 ### 5.3 后端改动与数据库改动
 
-#### 5.3.1 数据库（三个迁移，头 `20260902_0052`）
+#### 5.3.1 数据库（三个迁移，头 `20260902_0054`；09-04 改编号——`0053`/`0054` 已被数据库测试团队移交与合并迁移占用）
 
 | 迁移 | 内容 | 样板 |
 |---|---|---|
-| `20260903_0053_team_construction_mode.py` | `project.repository_agent_teams` 加 `construction_mode String(20) NOT NULL server_default 'hosted_native'` + 索引 `ix_project_repository_agent_teams_construction_mode`；`downgrade` 删列 | `20260830_0047_team_decomposition_mode.py:63-111` |
-| `20260903_0054_hosted_native_attempts.py` | 表 `agent_runtime.hosted_native_attempts(id PK, task_id, worker_agent_id, leader_agent_id, team_name, assignment_attempt_id, generation, execution_id, phase String(30), package_dir, review_dir NULL, budget_until, notified_at, acknowledged_at, submitted_at, submit_status, review_verdict, verification_run_id, fenced_at, fence_reason, created_at, updated_at)`，部分唯一索引「每 task 一个非终态尝试」；表 `agent_runtime.hosted_native_events(id PK, attempt_id, kind String(30), marker String(200), payload JSONB, observed_at, applied_at NULL, UNIQUE(attempt_id, kind, marker))` | `delivery/infrastructure.py:188-217`；`assignment.py:58-88` |
-| `20260903_0055_repository_toolchain.py`（第二波） | `repository_intelligence.repositories.toolchain String(64) NULL` | `models.py:15-58` |
+| `20260904_0055_team_construction_mode.py` | `project.repository_agent_teams` 加 `construction_mode String(20) NOT NULL server_default 'hosted_native'` + 索引 `ix_project_repository_agent_teams_construction_mode`；`downgrade` 删列 | `20260830_0047_team_decomposition_mode.py:63-111` |
+| `20260904_0056_hosted_native_attempts.py` | 表 `agent_runtime.hosted_native_attempts(id PK, task_id, worker_agent_id, leader_agent_id, team_name, assignment_attempt_id, generation, execution_id, phase String(30), package_dir, review_dir NULL, budget_until, notified_at, acknowledged_at, submitted_at, submit_status, review_verdict, verification_run_id, fenced_at, fence_reason, created_at, updated_at)`，部分唯一索引「每 task 一个非终态尝试」；表 `agent_runtime.hosted_native_events(id PK, attempt_id, kind String(30), marker String(200), payload JSONB, observed_at, applied_at NULL, UNIQUE(attempt_id, kind, marker))` | `delivery/infrastructure.py:188-217`；`assignment.py:58-88` |
+| `20260904_0057_repository_toolchain.py`（第二波） | `repository_intelligence.repositories.toolchain String(64) NULL` | `models.py:15-58` |
 
 存量数据：迁移后所有团队默认 `hosted_native`；曾以外部成员建的团队由管理员一次性 `UPDATE ... SET construction_mode='local_cli'`（活体里目前没有这类团队）。
 
@@ -423,7 +423,7 @@ class RequireExecutionPlaneReady:    # 组合门禁
 | 发布器（M3） | `integrations/agentteams/task_publishing.py:20-105,131-206` | `PackageInputs`、v2 manifest、全文件摘要、`base/` 写入；`_render_spec` 分 construction/review 两模板 |
 | 工作树（M5/M6） | 新 `integrations/workspace/candidate_worktree.py`、`base_bundle.py` | 见 4.2；复用 `git_worktree.py` 的镜像仓布局 |
 | 验证调度投影 | `integrations/runner/task_projection.py` | `TaskProjection` 加可选 `candidate`；`adapterId` 由调用方给 `repomesh-verifier`；`workspace.path` 为 M5 返回的容器内路径 |
-| 领任务过滤 | `modules/agent_runtime/api/router.py:53-70`、`runner_store.py`（`next_task`） | 可选 `adapter` 查询参数；control token 无 `adapter` → 400；过滤掉 `containerManaged:false` worker 的调度（按调度行 worker 的绑定读取，或在入队时打 `subjectless_ok` 标） |
+| 领任务过滤 | `modules/agent_runtime/api/router.py`（`next_runner_task`）、`runner_store.py`（`lease_next`）、`integrations/runner/gateway.py`；runner 侧 `repomesh_runner/{runtime_env,task_source,profiles,main}.py` | **09-04 已落地（分支 `feat/hosted-native-wave1`，先于 M1）**：可重复的 `adapter` 查询参数（也接受逗号分隔），按冻结 payload 的 `adapterId` 过滤，不加列；control token 无 `adapter` → 400；无主体调用永远领不到**持有自己 worker 令牌**的成员队列（`REPOMESH_RUNNER_WORKER_TOKENS` 的 id 集合：点名即 403，不点名即跳过）——按部署凭据表判定而不是每次领活读控制器绑定，控制器宕机时领活代价不变。runner 进程用 `REPOMESH_RUNNER_ADAPTERS` 广播可跑的 profile，未设则取本机能启动的 profile，一个都没有就拒绝启动；compose 默认 `mock` |
 | 心跳与门禁（M8） | 新 `modules/agent_runtime/application/execution_plane.py`；`router.py` 加 `POST /runtime/v1/verifier/heartbeat`（control token）；`repository_intelligence/ports/member_readiness.py:62` 加 `ExecutionPlaneGate`；`discovery_materialization.py:358-366` 改调组合门禁；`api/discovery_chain.py:530-538,677` 新 409 与预检 | 见 4.2 |
 | 设置状态 | `api/platform_setup.py:152-190` | `execution_plane` 检查 |
 | 恢复 | `bootstrap/app.py:698`（`_discover`）、`integrations/runner/recovery.py:31-59`、`integrations/recovery/actions.py` | 过期预留若无调度且尝试表 phase 属 worker 侧阶段 → `reason="budget_expired"`；决策沿用 `decide()`（retry 同 worker = `open()` 新代次；reassign = 团队内其他 worker；escalate = 人工检查点）；新增两种探测（D-12）：worker 进程/容器启动时间晚于尝试 `notified_at` → `reason="worker_restarted"`（载体见 §8.16）；`WorkerBindingReader.get_worker(...).phase != "Running"` 或 `containerState` 非 running → `reason="worker_not_running"` |
@@ -494,9 +494,9 @@ Tool Guard 出厂开启不动，靠 D-23 的自动审批过关；配置下发留
 | 开工门禁 | 新 409 code、新 `services[]` | 前端判别、`tests/api/test_issue_materialize*.py` | 旧 code 保留一个周期；前端同一波次更新 |
 | 执行预留 | 托管原生尝试整段预算内持有预留 | 每 worker 一个活跃预留的唯一索引 → 同一 worker 不能并行接第二个任务 | 这是期望行为（不变量 5.6） |
 | 恢复循环 | 新 `reason` 与 phase 探测 | `_discover` 原逻辑「有 queued 调度就续租」对无调度的尝试不再适用 | 只对 `hosted_native_attempts` 有行的预留走新分支；`tests/test_worker_failure_recovery.py` 扩例 |
-| `runner-tasks/next` | 可选 `adapter` + 无主体规则 | 用 control token 领任务的既有调用者（产品路径今天没有；W4 只用它重放事件） | 文档写明；缺 `adapter` 返回 400 而非静默空 |
+| `runner-tasks/next` | 可选 `adapter` + 无主体规则（09-04 已落地） | 用 control token 领任务的既有调用者：一键栈的 runner sidecar（`b38549a0`）就是一个，09-04 起它带 `adapter=mock`（compose 默认）；W4 只用它重放事件，不受影响 | 文档写明；缺 `adapter` 返回 400 而非静默空；一键栈实走一次 mock 链确认 runner 仍能领活 |
 | 交付链 | 零改动 | 依赖 `workspacePath` 上有工作树 | M5 在 ACCEPT 时就建好；验证失败或封存时清理工作树（`git worktree remove`） |
-| 数据库 | 三个迁移 | 头从 `0052` 前进 | 旧谱系库不兼容（记忆：5433 已死谱系），只对全新库或 `0052` 头的库升级 |
+| 数据库 | 三个迁移 | 头从 `0054` 前进 | 旧谱系库不兼容（记忆：5433 已死谱系），只对全新库或 `0054` 头的库升级 |
 | 复验器 | 新服务、docker socket | 宿主安全面多一个持 socket 的容器 | 一次性容器不挂 socket、无凭据、限资源；bootstrap 与 verifier 是仅有的两个持 socket 者 |
 | 启动 | 外部对象改自建、脚本修正 | 安装器重装分支会 `network rm agentteams-net` | 文档写明重装前先停 api/verifier；`|| true` 不会让重装失败 |
 | 前端 | 类型加法与新块 | 无路径删除 | `tsc -b` + oxlint + 实走 |
@@ -509,7 +509,7 @@ Tool Guard 出厂开启不动，靠 D-23 的自动审批过关；配置下发留
 | 波次 | 内容 | 完成标志 | 验证 |
 |---|---|---|---|
 | 0 实证（零代码，半天） | 手工按 v2 布局打一个尝试包给活体 pricing-core worker（`base.bundle` 从公开夹具仓打、`rm-work.sh`、spec）；再手工给 Leader 一个审阅包；中途 `docker restart` 一次 worker | 三个答案：模型能否做完、三条命令照不照做、重启后会不会往旧目录交 | 共享盘产物 + 房间记录，写入 `docs/startup-records/` |
-| 1 最薄闭环 | PR-A 后端：M7 列与推导、M3 包 v2（含 `base/package.json`、`repomesh-work.sh`）、M1/M2（含 D-23 自动审批）/M5/M6、M8 门禁、投递分叉、恢复分支；PR-B 复验器：M4 + `Dockerfile.verifier` + compose + `adapter` 过滤 + 心跳；PR-C 前端：5.1 全部 | §1.2 的目标在活体达成 | 每 PR：受影响模块测试；合并后活体实走一条新 issue |
+| 1 最薄闭环 | PR-A 后端：M7 列与推导、M3 包 v2（含 `base/package.json`、`repomesh-work.sh`）、M1/M2（含 D-23 自动审批）/M5/M6、M8 门禁、投递分叉、恢复分支；PR-B 复验器：M4 + `Dockerfile.verifier` + compose + 心跳（`adapter` 过滤已于 09-04 先行落地）；PR-C 前端：5.1 全部 | §1.2 的目标在活体达成 | 每 PR：受影响模块测试；合并后活体实走一条新 issue |
 | 2 产品化 | `toolchain` 列与按团队 worker `image`；组织默认模式；审阅/预算落配置面；SettingsPage 执行面详情 | 控制台能选、能看 | 同上 |
 | 3 从零复验 | 5.4.3 全部；整拆重跑 README 一条命令 | 白机一条命令到「候选提交」；推 GitHub 前用户放行 | 新记录文件 |
 | 4 启动逻辑归容器（D-22） | api 启动时 `.env` 有模型密钥且控制器缺失 → 自动 `ensure_requested` bootstrap 操作；`start-platform.*` 缩成「生成 token → `compose up` → 等 `setup/status`」；Windows 不再走 `.ps1` 安装器 | Windows 白机一条 `start.ps1` 到候选提交，两个启动脚本行数减半以上 | 新记录文件 |
@@ -556,6 +556,6 @@ PR-A 与 PR-B 之间只有两个契约相连：`runner_dispatches` 行（`adapte
 | D-21 帮手命令行 `rm-work.sh init\|test\|bundle` | 名字触发 `TOOL_CMD_DANGEROUS_RM` | S-1 | 契约里改名并做规则集测试 | **采纳，D-21 修订**。定名 `repomesh-work.sh`（名字与四条命令行无 `rm` 等片段）；契约测试跑四条完整命令行过规则集，规则夹具从活体 worker 镜像导出（vendored 源无规则表） |
 | 目的文档 §7 「容器重启导致工作区消失」 | 事实相反：重启保留工作区，重建才丢 | S-6 | 措辞改「重启或重建都视为中断；重建才丢」 | **采纳，目的文档 §7 已改**：重启或重建都视为中断；只有重建才丢工作区，重启保留工作区但丢会话内存、worker 不自发续做 |
 
-裁决之外、同日审计发现但**尚未写入本 spec** 的三件事（下一刀处理）：① `b38549a0` 已把 runner 服务放进 compose platform profile，用全局 control token 领所有队列且 `runner-tasks/next` 无 `adapter` 过滤——§1.1「产品部署没有 runner」与 §6「control token 调用者产品路径今天没有」已过期，§5.3.2 的「领任务过滤」必须先于 M1 落地；② 迁移头已是 `20260902_0054`，§5.3.1 的 `0053/0054` 编号被占用，改从 `0055` 起；③ 记忆与部分记录写 D-21 为末条，spec 实到 D-22。
+裁决之外、同日审计发现的三件事（09-04 已处理）：① `b38549a0` 已把 runner 服务放进 compose platform profile，用全局 control token 领所有队列且 `runner-tasks/next` 无 `adapter` 过滤——§1.1 与 §6 已加更新注记，§5.3.2「领任务过滤」已先于 M1 落地（分支 `feat/hosted-native-wave1`，契约规则写进 `contracts/runtime/README.md`）；② 迁移头已是 `20260902_0054`，§5.3.1 编号改为 `0055/0056/0057`；③ 记忆与部分记录写 D-21 为末条，spec 实到 D-22（09-04 起到 D-23）。
 
 S-n 编号见 `docs/startup-records/2026-09-03-hosted-native-spike.md` §4。
