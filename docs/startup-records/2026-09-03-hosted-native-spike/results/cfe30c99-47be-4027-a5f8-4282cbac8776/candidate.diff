@@ -1,0 +1,162 @@
+diff --git a/README.md b/README.md
+index 26c5f71..11ff749 100644
+--- a/README.md
++++ b/README.md
+@@ -16,6 +16,13 @@ RepoMesh 多仓交付验证夹具 —— **生产者仓库**。
+ - 跨仓联调：`python integration/run_joint_tests.py` —— 需要 `CHECKOUT_SRC` / `BILLING_SRC`
+   指向两个消费者的 `src`，三仓全部改完才会通过
+ 
++### 契约：`quote(...)` 币种语义
++
++- `currency` 是可选的 ISO 4217 代码，缺省为 `USD`；代码必须是恰好三个 ASCII
++  字母（不区分大小写），否则抛出 `ValueError`。`Quote.currency` 一律存大写。
++- 零小数币种（JPY/KRW/VND，无辅币单位）的应付金额四舍五入到整数主单位；
++  其余币种保留两位小数。
++
+ ## 为什么需要联调测试
+ 
+ 消费者的单测跑在 `contract/pricing_core.py`（冻结契约桩）上，因此消费者可以先于
+diff --git a/src/pricing_core/quote.py b/src/pricing_core/quote.py
+index 5776101..b7a6726 100644
+--- a/src/pricing_core/quote.py
++++ b/src/pricing_core/quote.py
+@@ -1,7 +1,16 @@
+ """The quoting contract every storefront service prices against."""
+ 
++import re
+ from dataclasses import dataclass
+ 
++# ISO 4217 currencies with no minor (cent) units. Amounts are quoted in whole
++# major units and must therefore be rounded to the nearest integer.
++_ZERO_DECIMAL_CURRENCIES = frozenset({"JPY", "KRW", "VND"})
++
++_DEFAULT_CURRENCY = "USD"
++
++_CURRENCY_CODE = re.compile(r"^[A-Za-z]{3}$")
++
+ 
+ @dataclass(frozen=True)
+ class LineItem:
+@@ -17,6 +26,20 @@ class LineItem:
+ @dataclass(frozen=True)
+ class Quote:
+     amount: float
++    currency: str
++
++
++def _normalize_currency(currency: str) -> str:
++    """Validate an ISO 4217-style code and return it upper-cased.
++
++    The code must be exactly three ASCII letters; anything else (wrong length,
++    digits, punctuation, empty) is rejected with ``ValueError``.
++    """
++    if not isinstance(currency, str) or not _CURRENCY_CODE.match(currency):
++        raise ValueError(
++            f"currency must be a three-letter ASCII ISO 4217 code, got {currency!r}"
++        )
++    return currency.upper()
+ 
+ 
+ def quote(
+@@ -24,14 +47,26 @@ def quote(
+     shipping: float = 0.0,
+     discount_rate: float = 0.0,
+     tax_rate: float = 0.0,
++    currency: str = _DEFAULT_CURRENCY,
+ ) -> Quote:
+     """Price a basket.
+ 
+     Discounts apply to merchandise only; shipping joins afterwards and the whole
+-    payable amount is taxed.
++    payable amount is taxed. ``currency`` is an ISO 4217 code (default ``USD``),
++    validated to be exactly three ASCII letters and stored upper-case on the
++    returned ``Quote``. For zero-decimal currencies (for example JPY, KRW, VND)
++    the payable amount is rounded to the nearest whole major unit; every other
++    currency is rounded to the standard two decimal places.
+     """
+ 
++    currency_code = _normalize_currency(currency)
++
+     merchandise = sum(item.amount for item in items)
+     payable = merchandise * (1 - discount_rate) + shipping
+     payable = payable * (1 + tax_rate)
+-    return Quote(amount=round(payable, 2))
++
++    if currency_code in _ZERO_DECIMAL_CURRENCIES:
++        amount = float(round(payable))
++    else:
++        amount = round(payable, 2)
++    return Quote(amount=amount, currency=currency_code)
+diff --git a/tests/test_quote.py b/tests/test_quote.py
+index 2ec41b4..78c22d1 100644
+--- a/tests/test_quote.py
++++ b/tests/test_quote.py
+@@ -34,5 +34,68 @@ class QuoteCurrencyTests(unittest.TestCase):
+         self.assertEqual(result.currency, "USD")
+ 
+ 
++class CurrencyValidationTests(unittest.TestCase):
++    """Currency codes are validated and normalised to upper-case."""
++
++    def test_lowercase_currency_is_normalised_to_upper(self) -> None:
++        result = quote([LineItem("book", 10.0, 1)], currency="eur")
++        self.assertEqual(result.currency, "EUR")
++
++    def test_mixed_case_currency_is_normalised_to_upper(self) -> None:
++        result = quote([LineItem("book", 10.0, 1)], currency="jPy")
++        self.assertEqual(result.currency, "JPY")
++
++    def test_rejects_short_code(self) -> None:
++        with self.assertRaises(ValueError):
++            quote([LineItem("book", 10.0, 1)], currency="US")
++
++    def test_rejects_long_code(self) -> None:
++        with self.assertRaises(ValueError):
++            quote([LineItem("book", 10.0, 1)], currency="EURO")
++
++    def test_rejects_code_with_digits(self) -> None:
++        with self.assertRaises(ValueError):
++            quote([LineItem("book", 10.0, 1)], currency="US1")
++
++    def test_rejects_empty_string(self) -> None:
++        with self.assertRaises(ValueError):
++            quote([LineItem("book", 10.0, 1)], currency="")
++
++
++class MultiCurrencyRoundingTests(unittest.TestCase):
++    """Currency-specific rounding: zero-decimal vs standard decimal place."""
++
++    def test_zero_decimal_currency_rounds_to_nearest_integer(self) -> None:
++        result = quote([LineItem("desk", 199.99, 1)], currency="JPY")
++        self.assertEqual(result.currency, "JPY")
++        self.assertEqual(result.amount, 200.0)
++
++    def test_zero_decimal_currency_rounds_down_when_fraction_is_low(self) -> None:
++        result = quote([LineItem("desk", 200.4, 1)], tax_rate=0.1, currency="JPY")
++        # 200.4 * 1.1 = 220.44 -> whole major unit 220.0
++        self.assertEqual(result.amount, 220.0)
++
++    def test_zero_decimal_currency_accepts_lowercase_code(self) -> None:
++        result = quote([LineItem("desk", 199.99, 1)], currency="jpy")
++        self.assertEqual(result.currency, "JPY")
++        self.assertEqual(result.amount, 200.0)
++
++    def test_standard_decimal_currency_keeps_two_places(self) -> None:
++        result = quote([LineItem("desk", 199.99, 1)], tax_rate=0.08, currency="EUR")
++        # 199.99 * 1.08 = 215.9892 -> 215.99
++        self.assertEqual(result.amount, 215.99)
++        self.assertEqual(result.currency, "EUR")
++
++    def test_zero_decimal_rounding_survives_discount_and_shipping(self) -> None:
++        result = quote(
++            [LineItem("desk", 199.99, 1)],
++            shipping=10.0,
++            discount_rate=0.1,
++            currency="JPY",
++        )
++        # (199.99 * 0.9) + 10 = 189.991 -> whole major unit 190.0
++        self.assertEqual(result.amount, 190.0)
++
++
+ if __name__ == "__main__":
+     unittest.main()

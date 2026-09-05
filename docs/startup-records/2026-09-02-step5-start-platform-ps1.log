@@ -1,0 +1,33 @@
+2026-09-02 04:17:47 start
+AgentTeams Controller is missing; installing it automatically.
+
+========================================
+AgentTeams Installation Log
+Started: 2026-09-02 04:17:48
+User: 18092
+System: XuBoHan的PC
+Log file: C:\Users\18092\agentteams-install.log
+========================================
+
+[36m[AgentTeams][0m === AgentTeams Manager Installation ===
+[31m[AgentTeams ERROR][0m Embedded controller image is not available in the registry:
+  - tried: higress-registry.us-west-1.cr.aliyuncs.com/agentteams/agentteams-embedded:v1.2.0
+  - tried: higress-registry.us-west-1.cr.aliyuncs.com/agentteams/agentteams-embedded:latest
+
+Embedded mode is the only supported architecture since PR #616.
+How to resolve:
+  1) Pin to a AGENTTEAMS_VERSION whose embedded image has been published, or
+     wait for the release pipeline to publish it.
+  2) For a local build, run:  make install-embedded
+     (builds and uses the local embedded image without touching the registry).
+  3) Override with a custom image:
+     $env:AGENTTEAMS_INSTALL_EMBEDDED_IMAGE=...; .\agentteams-install.ps1
+AgentTeams installation failed.
+所在位置 D:\Project4work\GOAI-infra-repomesh\scripts\start-platform.ps1:168 字符: 9
++         throw "AgentTeams installation failed."
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (AgentTeams installation failed.:String) [], RuntimeException
+    + FullyQualifiedErrorId : AgentTeams installation failed.
+ 
+EXIT=1
+2026-09-02 04:17:57 end

@@ -1,0 +1,27 @@
+{
+  "attempt_id": "ca0ef2b0-a6c7-4d03-a0e3-b7bf13aef13a",
+  "content_hash": "sha256:fe50958924fd6ba90d68bbc912b4918793f9f3235959dea2dda667bdc04a805d",
+  "file_digests": {
+    "base/base.bundle": "sha256:b0169617b30b59f36260b91bafe61035650a06ea07b5ecff5b3eb4ba61611d8c",
+    "base/package.json": "sha256:fab5ef20f6cd9686cf5dc2a02c218241ae16fc2a7da0b6cbb9c726e5e85fb533",
+    "base/tools/rm-work.sh": "sha256:751fd0abed50e8937fadb7024dcc83d6fa6e62e5c02a0f8b1bf3d916ce5dd525",
+    "meta.json": "sha256:1dac693e30852b2a1dbeebfa9247d2ab7ef2a07b17f3283cb5691272752153a9",
+    "spec.md": "sha256:4eec625ffb4e405b3bc0a1a9598dd43066a3a66d8a340f786d1954b466331544"
+  },
+  "file_sizes": {
+    "base/base.bundle": 7581,
+    "base/package.json": 754,
+    "base/tools/rm-work.sh": 8674,
+    "meta.json": 813,
+    "spec.md": 4500
+  },
+  "files": [
+    "base/base.bundle",
+    "base/package.json",
+    "base/tools/rm-work.sh",
+    "meta.json",
+    "spec.md"
+  ],
+  "kind": "construction",
+  "schema": "repomesh.agentteams-task.v2"
+}

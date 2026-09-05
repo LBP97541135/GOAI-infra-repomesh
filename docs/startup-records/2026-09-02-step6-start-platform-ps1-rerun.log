@@ -1,0 +1,129 @@
+2026-09-02 04:20:10 start
+AgentTeams Controller is missing; installing it automatically.
+
+========================================
+AgentTeams Installation Log
+Started: 2026-09-02 04:20:12
+User: 18092
+System: XuBoHan的PC
+Log file: C:\Users\18092\agentteams-install.log
+========================================
+
+[36m[AgentTeams][0m === AgentTeams Manager Installation ===
+[36m[AgentTeams][0m 镜像仓库: higress-registry.cn-hangzhou.cr.aliyuncs.com
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 安装目录: D:\Project4work\GOAI-infra-repomesh
+[36m[AgentTeams][0m   （env 文件 'agentteams-manager.env' 将保存到 HOME 目录。）
+[36m[AgentTeams][0m   （请从您希望管理此安装的目录运行此脚本。）
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 检测到已有 Manager 安装（env 文件: C:\Users\18092\agentteams-manager.env）
+[36m[AgentTeams][0m 非交互模式: 执行就地升级...
+[36m[AgentTeams][0m 执行就地升级...
+
+请选择升级方式：
+  1) 保留所有参数，一键升级（推荐）
+  2) 逐个确认参数（可修改）
+  3) 返回
+
+[36m[AgentTeams][0m 从 C:\Users\18092\agentteams-manager.env 加载已有配置（shell 环境变量优先）...
+[36m[AgentTeams][0m   使用 Docker 卷: agentteams-data
+[36m[AgentTeams][0m 默认 Worker 运行时: copaw
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 正在生成密钥...
+[36m[AgentTeams][0m 配置已保存到 C:\Users\18092\agentteams-manager.env
+[36m[AgentTeams][0m 正在拉取 Manager 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-manager-copaw
+Digest: sha256:29429e47118f859191fa133f8d617434019c0f03221b405474be7e467bad87b4
+Status: Image is up to date for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0
+[36m[AgentTeams][0m 正在拉取 Worker 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-worker
+Digest: sha256:daf587ad042f9564abb2347db5c4205ecc25d1b322e09fdd0d58a2a16c2d5c85
+Status: Image is up to date for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0
+[36m[AgentTeams][0m 正在拉取 Worker 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-copaw-worker
+Digest: sha256:dcdd9103535cfac247267e0f69661820c801396d58e2c8e0c14eefd40b63b7bc
+Status: Image is up to date for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0
+[36m[AgentTeams][0m 正在拉取 Worker 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-hermes-worker
+Digest: sha256:60cdf6be43dea6eafcb85b26f592756a991ac6221fd1faf49face91e1592ec2a
+Status: Image is up to date for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker:v1.2.0
+[36m[AgentTeams][0m 共享主机目录: /c/Users/18092 -> 容器内 /host-share
+[36m[AgentTeams][0m 正在启动 Manager 容器...
+781db51efcb428d941e46c9d0eecbf1f47fb575d7e262340435b1dd9a950e8a4
+[36m[AgentTeams][0m Embedded controller started: agentteams-controller
+[36m[AgentTeams][0m Waiting for Tuwunel (Matrix)...
+[36m[AgentTeams][0m Tuwunel (Matrix) is ready (2s)
+[36m[AgentTeams][0m Waiting for MinIO...
+[36m[AgentTeams][0m MinIO is ready (0s)
+[36m[AgentTeams][0m Waiting for Higress Gateway...
+[36m[AgentTeams][0m Higress Gateway is ready (6s)
+[36m[AgentTeams][0m Waiting for Manager Agent container...
+[36m[AgentTeams][0m Manager Agent container detected (9s)
+[36m[AgentTeams][0m Waiting for Manager Agent to start...
+[36m[AgentTeams][0m Manager Agent is running
+[36m[AgentTeams][0m 等待 Manager Agent 就绪（超时: 300s）...
+[36m[AgentTeams][0m 等待中... (5s/300s)[36m[AgentTeams][0m 等待中... (10s/300s)[36m[AgentTeams][0m 等待中... (15s/300s)[36m[AgentTeams][0m 等待中... (20s/300s)[36m[AgentTeams][0m 等待中... (25s/300s)[36m[AgentTeams][0m 等待中... (30s/300s)[36m[AgentTeams][0m 等待中... (35s/300s)[36m[AgentTeams][0m 等待中... (40s/300s)[36m[AgentTeams][0m 等待中... (45s/300s)[36m[AgentTeams][0m 等待中... (50s/300s)[36m[AgentTeams][0m 等待中... (55s/300s)[36m[AgentTeams][0m Manager Agent 已就绪！
+True
+[36m[AgentTeams][0m 等待 Matrix 服务就绪（超时: 300s）...
+[36m[AgentTeams][0m Matrix 服务已就绪！
+True
+[36m[AgentTeams][0m 等待 Manager 发送欢迎消息（Higress 路由授权 + LLM 探活，约 45-90s）...
+[36m[AgentTeams][0m Manager 已确认发送欢迎消息（status.welcomeSent=true，用时 {0}s）
+[36m[AgentTeams][0m 正在创建 OpenAI 兼容提供商...
+[36m[AgentTeams][0m   域名: api.deepseek.com
+[36m[AgentTeams][0m   端口: 443
+[36m[AgentTeams][0m   协议: https
+[36m[AgentTeams][0m 警告: 创建 DNS 服务源失败（可能已存在）
+[36m[AgentTeams][0m 警告: 创建 AI 提供商失败（可能已存在）
+False
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m === AgentTeams Manager 已启动！===
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 以下域名已配置解析到 127.0.0.1:
+[36m[AgentTeams][0m   matrix-local.agentteams.io matrix-client-local.agentteams.io aigw-local.agentteams.io fs-local.agentteams.io console-local.agentteams.io
+[36m[AgentTeams][0m 
+[33m===============================================================[0m
+[33m    在浏览器中打开以下 URL 开始使用:                           [0m
+[33m                                                                                 [0m
+[1;36m    http://127.0.0.1:18088/#/login[0m
+[33m                                                                                 [0m
+[33m    登录信息:[0m
+[33m      用户名: admin[0m
+[33m      密码: admin<REDACTED>[0m
+[33m                                                                                 [0m
+[33m    登录后，开始与 Manager 聊天！[0m
+[33m      告诉它: "创建一个名为 alice 的前端开发 Worker"[0m
+[33m      Manager 会自动处理一切。[0m
+[33m                                                                                 [0m
+[33m  ---------------------------------------------------------------  [0m
+[33m    移动端访问（FluffyChat / Element Mobile）:[0m
+[33m                                                                                 [0m
+[33m      1. 在手机上下载 FluffyChat 或 Element[0m
+[33m      2. 设置 homeserver 为: http://172.28.80.1:18080[0m
+[33m      3. 登录信息:[0m
+[33m           用户名: admin[0m
+[33m           密码: admin<REDACTED>[0m
+[33m                                                                                 [0m
+[33m===============================================================[0m
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m --- 其他控制台 ---
+[36m[AgentTeams][0m   Higress 控制台: http://localhost:18001（用户名: admin / 密码: admin<REDACTED>）
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m --- 切换 LLM 提供商 ---
+[36m[AgentTeams][0m   您可以通过 Higress 控制台切换到其他 LLM 提供商（OpenAI、Anthropic 等）。
+[36m[AgentTeams][0m   详细说明请参阅:
+[36m[AgentTeams][0m   https://higress.ai/en/docs/ai/scene-guide/multi-proxy#console-configuration
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 提示: 您也可以在聊天中让 Manager 为您配置 LLM 提供商。
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 配置文件: C:\Users\18092\agentteams-manager.env
+[36m[AgentTeams][0m 数据卷:        agentteams-data
+[36m[AgentTeams][0m Manager 工作空间:  /c/Users/18092/agentteams-manager
+RepoMesh is ready at http://127.0.0.1:8000/docs
+RepoMesh console is ready at http://127.0.0.1:5280
+EXIT=0
+2026-09-02 04:25:53 end

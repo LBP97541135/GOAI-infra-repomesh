@@ -1,0 +1,15 @@
+{
+  "attempt_id": "ca0ef2b0-a6c7-4d03-a0e3-b7bf13aef13a",
+  "base_sha": "882231dd887688a986b0faec656a90d29141406c",
+  "head_sha": "c42e875cd097431264b52f7c051949b0686591f7",
+  "tree": "88ebf6688ea1518f3ce30022cd4857ab92d9a25a",
+  "tests_ran_at": "2026-09-02T20:26:44+00:00",
+  "tests": [
+    {
+      "command": "python scripts/run_tests.py",
+      "exit_code": 0,
+      "excerpt": "test_standard_decimal_currency_keeps_two_places (test_quote.MultiCurrencyRoundingTests.test_standard_decimal_currency_keeps_two_places) ... ok\ntest_zero_decimal_currency_rounds_down_when_fraction_is_low (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_currency_rounds_down_when_fraction_is_low) ... ok\ntest_zero_decimal_currency_rounds_to_nearest_integer (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_currency_rounds_to_nearest_integer) ... ok\ntest_zero_decimal_rounding_survives_discount_and_shipping (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_rounding_survives_discount_and_shipping) ... ok\ntest_discount_applies_to_merchandise_only (test_quote.QuoteAmountTests.test_discount_applies_to_merchandise_only) ... ok\ntest_merchandise_and_shipping (test_quote.QuoteAmountTests.test_merchandise_and_shipping) ... ok\ntest_tax_applies_to_the_payable_amount (test_quote.QuoteAmountTests.test_tax_applies_to_the_payable_amount) ... ok\ntest_quote_defaults_to_usd (test_quote.QuoteCurrencyTests.test_quote_defaults_to_usd) ... ok\ntest_quote_reports_the_requested_currency (test_quote.QuoteCurrencyTests.test_quote_reports_the_requested_currency) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 0.001s\n\nOK"
+    }
+  ],
+  "produced_at": "2026-09-02T20:26:50+00:00"
+}

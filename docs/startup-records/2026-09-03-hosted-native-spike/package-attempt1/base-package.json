@@ -1,0 +1,26 @@
+{
+  "allowed_paths": [
+    "src/**",
+    "tests/**",
+    "README.md"
+  ],
+  "attempt_id": "ca0ef2b0-a6c7-4d03-a0e3-b7bf13aef13a",
+  "base_sha": "882231dd887688a986b0faec656a90d29141406c",
+  "budget_seconds": 2700,
+  "denied_paths": [
+    ".github/**"
+  ],
+  "generation": 1,
+  "helper": "base/tools/rm-work.sh",
+  "kind": "construction",
+  "organization_id": "7ce7e70e-f501-5ece-b998-ce2f4c4cd550",
+  "repository": "repomesh-e2e-pricing-core",
+  "repository_id": "dfb8a4cd-a6f7-4ee7-95e4-197963151308",
+  "schema": "repomesh.agentteams-task.v2/package",
+  "task_id": "b6e0bc59-255a-4edc-a186-47f5eeb3050c",
+  "test_commands": [
+    "python scripts/run_tests.py"
+  ],
+  "test_timeout_seconds": 600,
+  "workspace_root": "/work"
+}

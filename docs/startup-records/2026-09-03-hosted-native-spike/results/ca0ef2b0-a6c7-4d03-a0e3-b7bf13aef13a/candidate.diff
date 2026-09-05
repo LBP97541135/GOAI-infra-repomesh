@@ -1,0 +1,92 @@
+diff --git a/src/pricing_core/quote.py b/src/pricing_core/quote.py
+index 5776101..9862ecd 100644
+--- a/src/pricing_core/quote.py
++++ b/src/pricing_core/quote.py
+@@ -2,6 +2,12 @@
+ 
+ from dataclasses import dataclass
+ 
++# ISO 4217 currencies with no minor (cent) units. Amounts are quoted in whole
++# major units and must therefore be rounded to the nearest integer.
++_ZERO_DECIMAL_CURRENCIES = frozenset({"JPY", "KRW", "VND"})
++
++_DEFAULT_CURRENCY = "USD"
++
+ 
+ @dataclass(frozen=True)
+ class LineItem:
+@@ -17,6 +23,7 @@ class LineItem:
+ @dataclass(frozen=True)
+ class Quote:
+     amount: float
++    currency: str
+ 
+ 
+ def quote(
+@@ -24,14 +31,24 @@ def quote(
+     shipping: float = 0.0,
+     discount_rate: float = 0.0,
+     tax_rate: float = 0.0,
++    currency: str = _DEFAULT_CURRENCY,
+ ) -> Quote:
+     """Price a basket.
+ 
+     Discounts apply to merchandise only; shipping joins afterwards and the whole
+-    payable amount is taxed.
++    payable amount is taxed. ``currency`` is an ISO 4217 code (default ``USD``)
++    that is carried on the returned ``Quote``. For zero-decimal currencies (for
++    example JPY, KRW, VND) the payable amount is rounded to the nearest whole
++    major unit; every other currency is rounded to the standard two decimal
++    places.
+     """
+ 
+     merchandise = sum(item.amount for item in items)
+     payable = merchandise * (1 - discount_rate) + shipping
+     payable = payable * (1 + tax_rate)
+-    return Quote(amount=round(payable, 2))
++
++    if currency.upper() in _ZERO_DECIMAL_CURRENCIES:
++        amount = float(round(payable))
++    else:
++        amount = round(payable, 2)
++    return Quote(amount=amount, currency=currency)
+diff --git a/tests/test_quote.py b/tests/test_quote.py
+index 2ec41b4..a13b621 100644
+--- a/tests/test_quote.py
++++ b/tests/test_quote.py
+@@ -34,5 +34,35 @@ class QuoteCurrencyTests(unittest.TestCase):
+         self.assertEqual(result.currency, "USD")
+ 
+ 
++class MultiCurrencyRoundingTests(unittest.TestCase):
++    """Currency-specific rounding: zero-decimal vs standard decimal place."""
++
++    def test_zero_decimal_currency_rounds_to_nearest_integer(self) -> None:
++        result = quote([LineItem("desk", 199.99, 1)], currency="JPY")
++        self.assertEqual(result.currency, "JPY")
++        self.assertEqual(result.amount, 200.0)
++
++    def test_zero_decimal_currency_rounds_down_when_fraction_is_low(self) -> None:
++        result = quote([LineItem("desk", 200.4, 1)], tax_rate=0.1, currency="JPY")
++        # 200.4 * 1.1 = 220.44 -> whole major unit 220.0
++        self.assertEqual(result.amount, 220.0)
++
++    def test_standard_decimal_currency_keeps_two_places(self) -> None:
++        result = quote([LineItem("desk", 199.99, 1)], tax_rate=0.08, currency="EUR")
++        # 199.99 * 1.08 = 215.9892 -> 215.99
++        self.assertEqual(result.amount, 215.99)
++        self.assertEqual(result.currency, "EUR")
++
++    def test_zero_decimal_rounding_survives_discount_and_shipping(self) -> None:
++        result = quote(
++            [LineItem("desk", 199.99, 1)],
++            shipping=10.0,
++            discount_rate=0.1,
++            currency="JPY",
++        )
++        # (199.99 * 0.9) + 10 = 189.991 -> whole major unit 190.0
++        self.assertEqual(result.amount, 190.0)
++
++
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,15 @@
+{
+  "attempt_id": "cfe30c99-47be-4027-a5f8-4282cbac8776",
+  "base_sha": "882231dd887688a986b0faec656a90d29141406c",
+  "head_sha": "9e1b38ab8e705184a51211f52baada26768d571f",
+  "tree": "8e4f751198ea4e7c170e91812bf17c2fe00d6738",
+  "tests_ran_at": "2026-09-02T20:38:54+00:00",
+  "tests": [
+    {
+      "command": "python scripts/run_tests.py",
+      "exit_code": 0,
+      "excerpt": "test_lowercase_currency_is_normalised_to_upper (test_quote.CurrencyValidationTests.test_lowercase_currency_is_normalised_to_upper) ... ok\ntest_mixed_case_currency_is_normalised_to_upper (test_quote.CurrencyValidationTests.test_mixed_case_currency_is_normalised_to_upper) ... ok\ntest_rejects_code_with_digits (test_quote.CurrencyValidationTests.test_rejects_code_with_digits) ... ok\ntest_rejects_empty_string (test_quote.CurrencyValidationTests.test_rejects_empty_string) ... ok\ntest_rejects_long_code (test_quote.CurrencyValidationTests.test_rejects_long_code) ... ok\ntest_rejects_short_code (test_quote.CurrencyValidationTests.test_rejects_short_code) ... ok\ntest_standard_decimal_currency_keeps_two_places (test_quote.MultiCurrencyRoundingTests.test_standard_decimal_currency_keeps_two_places) ... ok\ntest_zero_decimal_currency_accepts_lowercase_code (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_currency_accepts_lowercase_code) ... ok\ntest_zero_decimal_currency_rounds_down_when_fraction_is_low (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_currency_rounds_down_when_fraction_is_low) ... ok\ntest_zero_decimal_currency_rounds_to_nearest_integer (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_currency_rounds_to_nearest_integer) ... ok\ntest_zero_decimal_rounding_survives_discount_and_shipping (test_quote.MultiCurrencyRoundingTests.test_zero_decimal_rounding_survives_discount_and_shipping) ... ok\ntest_discount_applies_to_merchandise_only (test_quote.QuoteAmountTests.test_discount_applies_to_merchandise_only) ... ok\ntest_merchandise_and_shipping (test_quote.QuoteAmountTests.test_merchandise_and_shipping) ... ok\ntest_tax_applies_to_the_payable_amount (test_quote.QuoteAmountTests.test_tax_applies_to_the_payable_amount) ... ok\ntest_quote_defaults_to_usd (test_quote.QuoteCurrencyTests.test_quote_defaults_to_usd) ... ok\ntest_quote_reports_the_requested_currency (test_quote.QuoteCurrencyTests.test_quote_reports_the_requested_currency) ... ok\n\n----------------------------------------------------------------------\nRan 16 tests in 0.001s\n\nOK"
+    }
+  ],
+  "produced_at": "2026-09-02T20:48:25+00:00"
+}

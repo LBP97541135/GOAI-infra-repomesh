@@ -1,0 +1,203 @@
+2026-09-02 03:58:34 start
+ Container goai-infra-repomesh-postgres-1  Running
+Model credentials are not configured; starting the setup plane first.
+Compose can now delegate builds to bake for better performance.
+ To do so, set COMPOSE_BAKE=true.
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [api internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.26kB done
+#1 DONE 0.0s
+
+#2 [api internal] load metadata for docker.io/library/python:3.12-slim
+#2 DONE 59.6s
+
+#3 [api internal] load .dockerignore
+#3 transferring context: 551B done
+#3 DONE 0.0s
+
+#4 [api 1/9] FROM docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+#4 DONE 0.0s
+
+#5 [api internal] load build context
+#5 transferring context: 1.13MB 0.1s done
+2026/09/02 03:59:38 http2: server: error reading preface from client //./pipe/dockerDesktopLinuxEngine: file has already been closed
+#5 DONE 0.1s
+
+#6 [api 2/9] WORKDIR /app
+#6 CACHED
+
+#7 [api 4/9] COPY pyproject.toml README.md alembic.ini ./
+#7 CACHED
+
+#8 [api 7/9] COPY capabilities ./capabilities
+#8 CACHED
+
+#9 [api 5/9] COPY src ./src
+#9 CACHED
+
+#10 [api 3/9] RUN apt-get update     && apt-get install -y --no-install-recommends git     && rm -rf /var/lib/apt/lists/*
+#10 CACHED
+
+#11 [api 6/9] COPY migrations ./migrations
+#11 CACHED
+
+#12 [api 8/9] RUN pip install --no-cache-dir .
+#12 CACHED
+
+#13 [api 9/9] COPY scripts ./scripts
+#13 CACHED
+
+#14 [api] exporting to image
+#14 exporting layers done
+#14 writing image sha256:b0ddf7830ab09af71ed9ce6054dfc5b615749f7b84749fc9fe11786fa72e3d04 done
+#14 naming to docker.io/library/goai-infra-repomesh-api done
+#14 DONE 0.0s
+
+#15 [api] resolving provenance for metadata file
+#15 DONE 0.0s
+
+#16 [bootstrap internal] load build definition from Dockerfile.bootstrap
+#16 transferring dockerfile: 1.26kB done
+#16 DONE 0.0s
+
+#17 [web internal] load build definition from Dockerfile
+#17 transferring dockerfile: 1.32kB done
+#17 DONE 0.0s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 ...
+
+#19 [web internal] load metadata for docker.io/library/node:22-alpine
+#19 ...
+
+#2 [bootstrap internal] load metadata for docker.io/library/python:3.12-slim
+#2 DONE 116.0s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 ...
+
+#4 [bootstrap 1/7] FROM docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+#4 DONE 0.0s
+
+#20 [bootstrap internal] load build context
+#20 transferring context: 616.00kB 0.1s done
+#20 DONE 0.1s
+
+#21 [bootstrap 4/7] COPY pyproject.toml README.md ./
+#21 CACHED
+
+#22 [bootstrap 6/7] COPY components/agentteams/install ./components/agentteams/install
+#22 CACHED
+
+#23 [bootstrap 5/7] COPY src ./src
+#23 CACHED
+
+#6 [bootstrap 2/7] WORKDIR /app
+#6 CACHED
+
+#24 [bootstrap 3/7] RUN apt-get update     && apt-get install -y --no-install-recommends         bash         ca-certificates         curl         docker-cli         openssl     && rm -rf /var/lib/apt/lists/*
+#24 CACHED
+
+#25 [bootstrap 7/7] RUN pip install --no-cache-dir .
+#25 CACHED
+
+#26 [bootstrap] exporting to image
+#26 exporting layers done
+#26 writing image sha256:dfcb2253957d9d8dd54a343b877125fb79f5d867b73795c4d6720a2754c0a602 done
+#26 naming to docker.io/library/goai-infra-repomesh-bootstrap done
+#26 DONE 0.0s
+
+#27 [bootstrap] resolving provenance for metadata file
+#27 DONE 0.0s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 ...
+
+#19 [web internal] load metadata for docker.io/library/node:22-alpine
+#19 DONE 56.6s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 DONE 56.8s
+
+#28 [web internal] load .dockerignore
+#28 transferring context: 123B done
+#28 DONE 0.0s
+
+#29 [web build 1/6] FROM docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+#29 DONE 0.0s
+
+#30 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#30 DONE 0.0s
+
+#31 [web internal] load build context
+#31 transferring context: 4.50kB done
+#31 DONE 0.0s
+
+#32 [web stage-1 2/6] COPY nginx.conf /etc/nginx/conf.d/default.conf
+#32 CACHED
+
+#33 [web build 3/6] COPY package.json package-lock.json ./
+#33 CACHED
+
+#34 [web stage-1 3/6] RUN sed -i "s/__REPOMESH_API_UPSTREAM__/api/g" /etc/nginx/conf.d/default.conf
+#34 CACHED
+
+#35 [web stage-1 5/6] COPY docker-entrypoint.d/40-runtime-config.sh /docker-entrypoint.d/40-runtime-config.sh
+#35 CACHED
+
+#36 [web build 4/6] RUN npm ci --registry=https://registry.npmmirror.com
+#36 CACHED
+
+#37 [web build 6/6] RUN npm run build
+#37 CACHED
+
+#38 [web build 2/6] WORKDIR /app
+#38 CACHED
+
+#39 [web build 5/6] COPY . .
+#39 CACHED
+
+#40 [web stage-1 4/6] COPY --from=build /app/dist /usr/share/nginx/html
+#40 CACHED
+
+#41 [web stage-1 6/6] RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh
+#41 CACHED
+
+#42 [web] exporting to image
+#42 exporting layers done
+#42 writing image sha256:038af7ae9ba6064bc1b5217a0fc5399a938ad0e09794c1f8299965f162cab600 done
+#42 naming to docker.io/library/goai-infra-repomesh-web done
+#42 DONE 0.0s
+
+#43 [web] resolving provenance for metadata file
+#43 DONE 0.0s
+ api  Built
+ bootstrap  Built
+ web  Built
+ Container goai-infra-repomesh-postgres-1  Running
+ Container goai-infra-repomesh-api-1  Creating
+ Container goai-infra-repomesh-api-1  Created
+ Container goai-infra-repomesh-web-1  Creating
+ Container goai-infra-repomesh-bootstrap-1  Creating
+ Container goai-infra-repomesh-web-1  Created
+ Container goai-infra-repomesh-bootstrap-1  Created
+ Container goai-infra-repomesh-postgres-1  Waiting
+ Container goai-infra-repomesh-postgres-1  Healthy
+ Container goai-infra-repomesh-api-1  Starting
+ Container goai-infra-repomesh-api-1  Started
+ Container goai-infra-repomesh-api-1  Waiting
+ Container goai-infra-repomesh-postgres-1  Waiting
+ Container goai-infra-repomesh-api-1  Waiting
+ Container goai-infra-repomesh-postgres-1  Healthy
+ Container goai-infra-repomesh-api-1  Healthy
+ Container goai-infra-repomesh-web-1  Starting
+ Container goai-infra-repomesh-api-1  Healthy
+ Container goai-infra-repomesh-bootstrap-1  Starting
+ Container goai-infra-repomesh-bootstrap-1  Started
+ Container goai-infra-repomesh-web-1  Started
+RepoMesh is ready at http://127.0.0.1:8000/docs
+RepoMesh console is ready at http://127.0.0.1:5280
+Open RepoMesh: http://127.0.0.1:5280
+EXIT=0
+2026-09-02 04:00:56 end

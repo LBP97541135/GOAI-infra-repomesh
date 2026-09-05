@@ -1,0 +1,1137 @@
+2026-09-02 03:34:46 start
+ Network goai-infra-repomesh_default  Creating
+ Network goai-infra-repomesh_default  Created
+ Volume "goai-infra-repomesh_repomesh-postgres"  Creating
+ Volume "goai-infra-repomesh_repomesh-postgres"  Created
+ Container goai-infra-repomesh-postgres-1  Creating
+ Container goai-infra-repomesh-postgres-1  Created
+ Container goai-infra-repomesh-postgres-1  Starting
+ Container goai-infra-repomesh-postgres-1  Started
+Model credentials are not configured; starting the setup plane first.
+Compose can now delegate builds to bake for better performance.
+ To do so, set COMPOSE_BAKE=true.
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [api internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.26kB 0.0s done
+#1 DONE 0.0s
+
+#2 [api internal] load metadata for docker.io/library/python:3.12-slim
+#2 DONE 276.7s
+
+#3 [api internal] load .dockerignore
+#3 transferring context: 551B done
+#3 DONE 0.0s
+
+#4 [api internal] load build context
+#4 transferring context: 11.72MB 0.4s done
+#4 DONE 0.4s
+
+#5 [api 1/9] FROM docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+#5 resolve docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+#5 resolve docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea 99.6s done
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 0.1s
+#5 sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea 10.37kB / 10.37kB done
+#5 sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79 1.75kB / 1.75kB done
+#5 sha256:ec7d6c95cd3692a2e2d228a8b1ca74e4025b54121fcc4c5da6f09cfa473315ad 5.66kB / 5.66kB done
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 0.1s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 0.1s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 5.1s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 5.1s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 5.3s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 10.3s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 10.3s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 10.3s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 15.4s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 15.4s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 15.4s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 20.5s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 20.5s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 20.5s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 25.5s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 25.5s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 25.5s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 30.6s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 30.6s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 30.6s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 35.6s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 35.6s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 35.8s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 40.7s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 40.7s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 40.8s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 45.7s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 45.7s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 45.9s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 50.8s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 50.8s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 51.0s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0B / 12.12MB 55.9s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0B / 4.27MB 55.9s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 0B / 29.79MB 56.1s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 1.05MB / 12.12MB 60.0s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 1.05MB / 4.27MB 60.0s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 2.10MB / 4.27MB 60.1s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 2.10MB / 12.12MB 60.3s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 2.10MB / 29.79MB 60.6s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 3.15MB / 4.27MB 60.8s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 3.15MB / 12.12MB 60.9s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 5.24MB / 12.12MB 61.4s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 4.19MB / 29.79MB 61.4s
+#5 sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 4.27MB / 4.27MB 61.2s done
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 61.4s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 6.29MB / 12.12MB 61.6s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 7.34MB / 12.12MB 61.9s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 6.29MB / 29.79MB 61.9s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 9.44MB / 12.12MB 62.1s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 8.39MB / 29.79MB 62.2s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 10.49MB / 12.12MB 62.3s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 11.53MB / 12.12MB 62.5s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 10.49MB / 29.79MB 62.5s
+#5 sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 12.12MB / 12.12MB 62.5s done
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 12.58MB / 29.79MB 62.8s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 14.68MB / 29.79MB 63.2s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 16.78MB / 29.79MB 63.4s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 18.87MB / 29.79MB 63.8s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 20.97MB / 29.79MB 64.0s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 23.07MB / 29.79MB 64.3s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 25.17MB / 29.79MB 64.5s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 27.26MB / 29.79MB 64.8s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 29.79MB / 29.79MB 65.0s
+#5 sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 29.79MB / 29.79MB 65.0s done
+#5 extracting sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 66.5s
+#5 extracting sha256:6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be 1.5s done
+#5 extracting sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a
+#5 extracting sha256:dbd0b7849e6c06b61e1fa6b7ffe053f246ce0075890620e3db64b47bb662433a 0.2s done
+#5 extracting sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0.1s
+#5 extracting sha256:1560cfed01dc4c72c07f789d860078d74466a1f9a26b33a2e35d887b5f90dd3f 0.8s done
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 71.5s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 76.6s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 81.7s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 86.8s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 92.0s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 97.0s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 102.0s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 107.1s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 112.1s
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 0B / 249B 117.2s
+#5 extracting sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f
+#5 sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f 249B / 249B 121.9s done
+#5 extracting sha256:56235e4245636e401a28cf88944d543b29ee028ae3b6c27e03d6b43e7b4eac5f done
+#5 DONE 322.3s
+
+#6 [api 2/9] WORKDIR /app
+#6 DONE 0.0s
+
+#7 [api 3/9] RUN apt-get update     && apt-get install -y --no-install-recommends git     && rm -rf /var/lib/apt/lists/*
+#7 2.015 Hit:1 http://deb.debian.org/debian trixie InRelease
+#7 2.188 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#7 2.641 Hit:3 http://deb.debian.org/debian-security trixie-security InRelease
+#7 2.818 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9673 kB]
+#7 4.757 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [4412 B]
+#7 4.935 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [251 kB]
+#7 5.314 Fetched 9975 kB in 5s (2035 kB/s)
+#7 5.314 Reading package lists...
+#7 5.814 Reading package lists...
+#7 6.320 Building dependency tree...
+#7 6.479 Reading state information...
+#7 6.692 The following additional packages will be installed:
+#7 6.692   git-man libbrotli1 libcom-err2 libcurl3t64-gnutls liberror-perl libexpat1
+#7 6.693   libgdbm-compat4t64 libgnutls30t64 libgssapi-krb5-2 libidn2-0 libk5crypto3
+#7 6.693   libkeyutils1 libkrb5-3 libkrb5support0 libldap2 libnghttp2-14 libnghttp3-9
+#7 6.693   libngtcp2-16 libngtcp2-crypto-gnutls8 libp11-kit0 libperl5.40 libpsl5t64
+#7 6.693   librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1t64 libtasn1-6
+#7 6.694   libunistring5 perl perl-modules-5.40
+#7 6.696 Suggested packages:
+#7 6.696   gettext-base git-doc git-email git-gui gitk gitweb git-cvs git-mediawiki
+#7 6.696   git-svn gnutls-bin krb5-doc krb5-user sensible-utils perl-doc
+#7 6.696   libterm-readline-gnu-perl | libterm-readline-perl-perl make
+#7 6.696   libtap-harness-archive-perl
+#7 6.696 Recommended packages:
+#7 6.696   patch less ssh-client krb5-locales libldap-common publicsuffix
+#7 6.696   libsasl2-modules
+#7 6.835 The following NEW packages will be installed:
+#7 6.835   git git-man libbrotli1 libcom-err2 libcurl3t64-gnutls liberror-perl
+#7 6.835   libexpat1 libgdbm-compat4t64 libgnutls30t64 libgssapi-krb5-2 libidn2-0
+#7 6.835   libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0 libldap2 libnghttp2-14
+#7 6.835   libnghttp3-9 libngtcp2-16 libngtcp2-crypto-gnutls8 libp11-kit0 libperl5.40
+#7 6.835   libpsl5t64 librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1t64 libtasn1-6
+#7 6.836   libunistring5 perl perl-modules-5.40
+#7 7.367 0 upgraded, 31 newly installed, 0 to remove and 0 not upgraded.
+#7 7.367 Need to get 23.7 MB of archives.
+#7 7.367 After this operation, 119 MB of additional disk space will be used.
+#7 7.367 Get:1 http://deb.debian.org/debian-security trixie-security/main amd64 libexpat1 amd64 2.8.3-1~deb13u1 [123 kB]
+#7 8.029 Get:2 http://deb.debian.org/debian trixie/main amd64 perl-modules-5.40 all 5.40.1-6 [3019 kB]
+#7 8.904 Get:3 http://deb.debian.org/debian trixie/main amd64 libgdbm-compat4t64 amd64 1.24-2 [50.3 kB]
+#7 8.907 Get:4 http://deb.debian.org/debian trixie/main amd64 libperl5.40 amd64 5.40.1-6 [4341 kB]
+#7 9.339 Get:5 http://deb.debian.org/debian trixie/main amd64 perl amd64 5.40.1-6 [267 kB]
+#7 9.361 Get:6 http://deb.debian.org/debian trixie/main amd64 libbrotli1 amd64 1.1.0-2+b7 [307 kB]
+#7 9.630 Get:7 http://deb.debian.org/debian trixie/main amd64 libunistring5 amd64 1.3-2 [477 kB]
+#7 9.662 Get:8 http://deb.debian.org/debian trixie/main amd64 libidn2-0 amd64 2.3.8-2 [109 kB]
+#7 9.666 Get:9 http://deb.debian.org/debian trixie/main amd64 libp11-kit0 amd64 0.25.5-3 [425 kB]
+#7 9.846 Get:10 http://deb.debian.org/debian trixie/main amd64 libtasn1-6 amd64 4.20.0-2+deb13u1 [50.1 kB]
+#7 9.850 Get:11 http://deb.debian.org/debian trixie/main amd64 libgnutls30t64 amd64 3.8.9-3+deb13u4 [1469 kB]
+#7 10.19 Get:12 http://deb.debian.org/debian trixie/main amd64 libkrb5support0 amd64 1.21.3-5+deb13u1 [33.1 kB]
+#7 10.20 Get:13 http://deb.debian.org/debian trixie/main amd64 libcom-err2 amd64 1.47.2-3+b11 [25.0 kB]
+#7 10.20 Get:14 http://deb.debian.org/debian trixie/main amd64 libk5crypto3 amd64 1.21.3-5+deb13u1 [81.2 kB]
+#7 10.21 Get:15 http://deb.debian.org/debian trixie/main amd64 libkeyutils1 amd64 1.6.3-6 [9456 B]
+#7 10.21 Get:16 http://deb.debian.org/debian trixie/main amd64 libkrb5-3 amd64 1.21.3-5+deb13u1 [326 kB]
+#7 10.22 Get:17 http://deb.debian.org/debian trixie/main amd64 libgssapi-krb5-2 amd64 1.21.3-5+deb13u1 [138 kB]
+#7 10.26 Get:18 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg1-9 [19.8 kB]
+#7 10.26 Get:19 http://deb.debian.org/debian trixie/main amd64 libsasl2-2 amd64 2.1.28+dfsg1-9 [57.5 kB]
+#7 10.27 Get:20 http://deb.debian.org/debian trixie/main amd64 libldap2 amd64 2.6.10+dfsg-1 [194 kB]
+#7 10.37 Get:21 http://deb.debian.org/debian trixie/main amd64 libnghttp2-14 amd64 1.64.0-1.1+deb13u1 [76.2 kB]
+#7 10.38 Get:22 http://deb.debian.org/debian trixie/main amd64 libnghttp3-9 amd64 1.8.0-1 [67.7 kB]
+#7 10.40 Get:23 http://deb.debian.org/debian trixie/main amd64 libngtcp2-16 amd64 1.11.0-1+deb13u1 [132 kB]
+#7 10.44 Get:24 http://deb.debian.org/debian trixie/main amd64 libngtcp2-crypto-gnutls8 amd64 1.11.0-1+deb13u1 [29.5 kB]
+#7 10.44 Get:25 http://deb.debian.org/debian trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+#7 10.46 Get:26 http://deb.debian.org/debian trixie/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b5 [58.8 kB]
+#7 10.47 Get:27 http://deb.debian.org/debian trixie/main amd64 libssh2-1t64 amd64 1.11.1-1+deb13u1 [245 kB]
+#7 10.49 Get:28 http://deb.debian.org/debian trixie/main amd64 libcurl3t64-gnutls amd64 8.14.1-2+deb13u4 [384 kB]
+#7 10.80 Get:29 http://deb.debian.org/debian trixie/main amd64 liberror-perl all 0.17030-1 [26.9 kB]
+#7 10.80 Get:30 http://deb.debian.org/debian trixie/main amd64 git-man all 1:2.47.3-0+deb13u1 [2205 kB]
+#7 10.99 Get:31 http://deb.debian.org/debian trixie/main amd64 git amd64 1:2.47.3-0+deb13u1 [8862 kB]
+#7 12.54 debconf: unable to initialize frontend: Dialog
+#7 12.54 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#7 12.54 debconf: falling back to frontend: Readline
+#7 12.54 debconf: unable to initialize frontend: Readline
+#7 12.54 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 31.)
+#7 12.54 debconf: falling back to frontend: Teletype
+#7 12.55 debconf: unable to initialize frontend: Teletype
+#7 12.55 debconf: (This frontend requires a controlling tty.)
+#7 12.55 debconf: falling back to frontend: Noninteractive
+#7 13.54 Fetched 23.7 MB in 6s (4266 kB/s)
+#7 13.56 Selecting previously unselected package libexpat1:amd64.
+#7 13.56 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5652 files and directories currently installed.)
+#7 13.58 Preparing to unpack .../00-libexpat1_2.8.3-1~deb13u1_amd64.deb ...
+#7 13.59 Unpacking libexpat1:amd64 (2.8.3-1~deb13u1) ...
+#7 13.62 Selecting previously unselected package perl-modules-5.40.
+#7 13.62 Preparing to unpack .../01-perl-modules-5.40_5.40.1-6_all.deb ...
+#7 13.62 Unpacking perl-modules-5.40 (5.40.1-6) ...
+#7 13.98 Selecting previously unselected package libgdbm-compat4t64:amd64.
+#7 13.98 Preparing to unpack .../02-libgdbm-compat4t64_1.24-2_amd64.deb ...
+#7 13.98 Unpacking libgdbm-compat4t64:amd64 (1.24-2) ...
+#7 14.01 Selecting previously unselected package libperl5.40:amd64.
+#7 14.01 Preparing to unpack .../03-libperl5.40_5.40.1-6_amd64.deb ...
+#7 14.01 Unpacking libperl5.40:amd64 (5.40.1-6) ...
+#7 14.25 Selecting previously unselected package perl.
+#7 14.25 Preparing to unpack .../04-perl_5.40.1-6_amd64.deb ...
+#7 14.25 Unpacking perl (5.40.1-6) ...
+#7 14.29 Selecting previously unselected package libbrotli1:amd64.
+#7 14.29 Preparing to unpack .../05-libbrotli1_1.1.0-2+b7_amd64.deb ...
+#7 14.30 Unpacking libbrotli1:amd64 (1.1.0-2+b7) ...
+#7 14.34 Selecting previously unselected package libunistring5:amd64.
+#7 14.34 Preparing to unpack .../06-libunistring5_1.3-2_amd64.deb ...
+#7 14.34 Unpacking libunistring5:amd64 (1.3-2) ...
+#7 14.39 Selecting previously unselected package libidn2-0:amd64.
+#7 14.39 Preparing to unpack .../07-libidn2-0_2.3.8-2_amd64.deb ...
+#7 14.39 Unpacking libidn2-0:amd64 (2.3.8-2) ...
+#7 14.42 Selecting previously unselected package libp11-kit0:amd64.
+#7 14.42 Preparing to unpack .../08-libp11-kit0_0.25.5-3_amd64.deb ...
+#7 14.43 Unpacking libp11-kit0:amd64 (0.25.5-3) ...
+#7 14.46 Selecting previously unselected package libtasn1-6:amd64.
+#7 14.46 Preparing to unpack .../09-libtasn1-6_4.20.0-2+deb13u1_amd64.deb ...
+#7 14.47 Unpacking libtasn1-6:amd64 (4.20.0-2+deb13u1) ...
+#7 14.50 Selecting previously unselected package libgnutls30t64:amd64.
+#7 14.50 Preparing to unpack .../10-libgnutls30t64_3.8.9-3+deb13u4_amd64.deb ...
+#7 14.50 Unpacking libgnutls30t64:amd64 (3.8.9-3+deb13u4) ...
+#7 14.55 Selecting previously unselected package libkrb5support0:amd64.
+#7 14.56 Preparing to unpack .../11-libkrb5support0_1.21.3-5+deb13u1_amd64.deb ...
+#7 14.56 Unpacking libkrb5support0:amd64 (1.21.3-5+deb13u1) ...
+#7 14.59 Selecting previously unselected package libcom-err2:amd64.
+#7 14.59 Preparing to unpack .../12-libcom-err2_1.47.2-3+b11_amd64.deb ...
+#7 14.59 Unpacking libcom-err2:amd64 (1.47.2-3+b11) ...
+#7 14.61 Selecting previously unselected package libk5crypto3:amd64.
+#7 14.62 Preparing to unpack .../13-libk5crypto3_1.21.3-5+deb13u1_amd64.deb ...
+#7 14.62 Unpacking libk5crypto3:amd64 (1.21.3-5+deb13u1) ...
+#7 14.65 Selecting previously unselected package libkeyutils1:amd64.
+#7 14.65 Preparing to unpack .../14-libkeyutils1_1.6.3-6_amd64.deb ...
+#7 14.65 Unpacking libkeyutils1:amd64 (1.6.3-6) ...
+#7 14.68 Selecting previously unselected package libkrb5-3:amd64.
+#7 14.68 Preparing to unpack .../15-libkrb5-3_1.21.3-5+deb13u1_amd64.deb ...
+#7 14.68 Unpacking libkrb5-3:amd64 (1.21.3-5+deb13u1) ...
+#7 14.72 Selecting previously unselected package libgssapi-krb5-2:amd64.
+#7 14.72 Preparing to unpack .../16-libgssapi-krb5-2_1.21.3-5+deb13u1_amd64.deb ...
+#7 14.72 Unpacking libgssapi-krb5-2:amd64 (1.21.3-5+deb13u1) ...
+#7 14.75 Selecting previously unselected package libsasl2-modules-db:amd64.
+#7 14.75 Preparing to unpack .../17-libsasl2-modules-db_2.1.28+dfsg1-9_amd64.deb ...
+#7 14.75 Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#7 14.78 Selecting previously unselected package libsasl2-2:amd64.
+#7 14.78 Preparing to unpack .../18-libsasl2-2_2.1.28+dfsg1-9_amd64.deb ...
+#7 14.78 Unpacking libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#7 14.81 Selecting previously unselected package libldap2:amd64.
+#7 14.81 Preparing to unpack .../19-libldap2_2.6.10+dfsg-1_amd64.deb ...
+#7 14.81 Unpacking libldap2:amd64 (2.6.10+dfsg-1) ...
+#7 14.85 Selecting previously unselected package libnghttp2-14:amd64.
+#7 14.85 Preparing to unpack .../20-libnghttp2-14_1.64.0-1.1+deb13u1_amd64.deb ...
+#7 14.85 Unpacking libnghttp2-14:amd64 (1.64.0-1.1+deb13u1) ...
+#7 14.88 Selecting previously unselected package libnghttp3-9:amd64.
+#7 14.88 Preparing to unpack .../21-libnghttp3-9_1.8.0-1_amd64.deb ...
+#7 14.89 Unpacking libnghttp3-9:amd64 (1.8.0-1) ...
+#7 14.92 Selecting previously unselected package libngtcp2-16:amd64.
+#7 14.92 Preparing to unpack .../22-libngtcp2-16_1.11.0-1+deb13u1_amd64.deb ...
+#7 14.92 Unpacking libngtcp2-16:amd64 (1.11.0-1+deb13u1) ...
+#7 14.95 Selecting previously unselected package libngtcp2-crypto-gnutls8:amd64.
+#7 14.95 Preparing to unpack .../23-libngtcp2-crypto-gnutls8_1.11.0-1+deb13u1_amd64.deb ...
+#7 14.95 Unpacking libngtcp2-crypto-gnutls8:amd64 (1.11.0-1+deb13u1) ...
+#7 14.98 Selecting previously unselected package libpsl5t64:amd64.
+#7 14.98 Preparing to unpack .../24-libpsl5t64_0.21.2-1.1+b1_amd64.deb ...
+#7 14.98 Unpacking libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#7 15.02 Selecting previously unselected package librtmp1:amd64.
+#7 15.02 Preparing to unpack .../25-librtmp1_2.4+20151223.gitfa8646d.1-2+b5_amd64.deb ...
+#7 15.02 Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#7 15.05 Selecting previously unselected package libssh2-1t64:amd64.
+#7 15.05 Preparing to unpack .../26-libssh2-1t64_1.11.1-1+deb13u1_amd64.deb ...
+#7 15.05 Unpacking libssh2-1t64:amd64 (1.11.1-1+deb13u1) ...
+#7 15.08 Selecting previously unselected package libcurl3t64-gnutls:amd64.
+#7 15.08 Preparing to unpack .../27-libcurl3t64-gnutls_8.14.1-2+deb13u4_amd64.deb ...
+#7 15.08 Unpacking libcurl3t64-gnutls:amd64 (8.14.1-2+deb13u4) ...
+#7 15.12 Selecting previously unselected package liberror-perl.
+#7 15.12 Preparing to unpack .../28-liberror-perl_0.17030-1_all.deb ...
+#7 15.12 Unpacking liberror-perl (0.17030-1) ...
+#7 15.14 Selecting previously unselected package git-man.
+#7 15.14 Preparing to unpack .../29-git-man_1%3a2.47.3-0+deb13u1_all.deb ...
+#7 15.14 Unpacking git-man (1:2.47.3-0+deb13u1) ...
+#7 15.20 Selecting previously unselected package git.
+#7 15.20 Preparing to unpack .../30-git_1%3a2.47.3-0+deb13u1_amd64.deb ...
+#7 15.21 Unpacking git (1:2.47.3-0+deb13u1) ...
+#7 15.49 Setting up libexpat1:amd64 (2.8.3-1~deb13u1) ...
+#7 15.50 Setting up libkeyutils1:amd64 (1.6.3-6) ...
+#7 15.51 Setting up libgdbm-compat4t64:amd64 (1.24-2) ...
+#7 15.52 Setting up libbrotli1:amd64 (1.1.0-2+b7) ...
+#7 15.52 Setting up libnghttp2-14:amd64 (1.64.0-1.1+deb13u1) ...
+#7 15.53 Setting up libcom-err2:amd64 (1.47.2-3+b11) ...
+#7 15.54 Setting up libkrb5support0:amd64 (1.21.3-5+deb13u1) ...
+#7 15.55 Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#7 15.56 Setting up libp11-kit0:amd64 (0.25.5-3) ...
+#7 15.56 Setting up libunistring5:amd64 (1.3-2) ...
+#7 15.57 Setting up libk5crypto3:amd64 (1.21.3-5+deb13u1) ...
+#7 15.58 Setting up libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#7 15.59 Setting up libnghttp3-9:amd64 (1.8.0-1) ...
+#7 15.60 Setting up perl-modules-5.40 (5.40.1-6) ...
+#7 15.60 Setting up libtasn1-6:amd64 (4.20.0-2+deb13u1) ...
+#7 15.61 Setting up git-man (1:2.47.3-0+deb13u1) ...
+#7 15.62 Setting up libngtcp2-16:amd64 (1.11.0-1+deb13u1) ...
+#7 15.63 Setting up libkrb5-3:amd64 (1.21.3-5+deb13u1) ...
+#7 15.64 Setting up libssh2-1t64:amd64 (1.11.1-1+deb13u1) ...
+#7 15.64 Setting up libldap2:amd64 (2.6.10+dfsg-1) ...
+#7 15.65 Setting up libidn2-0:amd64 (2.3.8-2) ...
+#7 15.66 Setting up libperl5.40:amd64 (5.40.1-6) ...
+#7 15.67 Setting up perl (5.40.1-6) ...
+#7 15.68 Setting up libgssapi-krb5-2:amd64 (1.21.3-5+deb13u1) ...
+#7 15.69 Setting up libgnutls30t64:amd64 (3.8.9-3+deb13u4) ...
+#7 15.70 Setting up libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#7 15.71 Setting up liberror-perl (0.17030-1) ...
+#7 15.72 Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#7 15.73 Setting up libngtcp2-crypto-gnutls8:amd64 (1.11.0-1+deb13u1) ...
+#7 15.73 Setting up libcurl3t64-gnutls:amd64 (8.14.1-2+deb13u4) ...
+#7 15.74 Setting up git (1:2.47.3-0+deb13u1) ...
+#7 15.76 Processing triggers for libc-bin (2.41-12+deb13u3) ...
+#7 DONE 15.9s
+
+#8 [api 4/9] COPY pyproject.toml README.md alembic.ini ./
+#8 DONE 0.0s
+
+#9 [api 5/9] COPY src ./src
+#9 DONE 0.5s
+
+#10 [api 6/9] COPY migrations ./migrations
+#10 DONE 0.1s
+
+#11 [api 7/9] COPY capabilities ./capabilities
+#11 DONE 0.1s
+
+#12 [api 8/9] RUN pip install --no-cache-dir .
+#12 1.529 Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+#12 1.529 Processing /app
+#12 1.533   Installing build dependencies: started
+#12 5.313   Installing build dependencies: finished with status 'done'
+#12 5.315   Getting requirements to build wheel: started
+#12 5.868   Getting requirements to build wheel: finished with status 'done'
+#12 5.871   Preparing metadata (pyproject.toml): started
+#12 6.396   Preparing metadata (pyproject.toml): finished with status 'done'
+#12 7.270 Collecting alembic<2,>=1.14 (from repomesh==0.1.0)
+#12 7.521   Downloading https://mirrors.aliyun.com/pypi/packages/20/89/e62cc37b69ad357cc8ecd6e7367f5245f523d3cbb338a66197212bdf6749/alembic-1.19.1-py3-none-any.whl (265 kB)
+#12 8.307 Collecting asyncpg<1,>=0.30 (from repomesh==0.1.0)
+#12 8.499   Downloading https://mirrors.aliyun.com/pypi/packages/8c/d1/a867c2150f9c6e7af6462637f613ba67f78a314b00db220cd26ff559d532/asyncpg-0.31.0-cp312-cp312-manylinux_2_28_x86_64.whl (3.5 MB)
+#12 9.247      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.5/3.5 MB 5.7 MB/s eta 0:00:00
+#12 9.730 Collecting cryptography<46,>=44 (from repomesh==0.1.0)
+#12 10.32   Downloading https://mirrors.aliyun.com/pypi/packages/0e/e4/b3e68a4ac363406a56cf7b741eeb80d05284d8c60ee1a55cdc7587e2a553/cryptography-45.0.7-cp311-abi3-manylinux_2_34_x86_64.whl (4.5 MB)
+#12 11.23      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.5/4.5 MB 4.7 MB/s eta 0:00:00
+#12 11.50 Collecting fastapi<1,>=0.115 (from repomesh==0.1.0)
+#12 11.69   Downloading https://mirrors.aliyun.com/pypi/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl (131 kB)
+#12 12.10 Collecting httpx<1,>=0.27 (from repomesh==0.1.0)
+#12 12.29   Downloading https://mirrors.aliyun.com/pypi/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl (73 kB)
+#12 12.51 Collecting minio<8,>=7.2 (from repomesh==0.1.0)
+#12 12.70   Downloading https://mirrors.aliyun.com/pypi/packages/3e/9a/b697530a882588a84db616580f2ba5d1d515c815e11c30d219145afeec87/minio-7.2.20-py3-none-any.whl (93 kB)
+#12 13.11 Collecting opentelemetry-exporter-otlp-proto-http<2,>=1.29 (from repomesh==0.1.0)
+#12 13.30   Downloading https://mirrors.aliyun.com/pypi/packages/cd/d0/fdeb1a98d8d3a6205f5f297c51b4a9bfe65126ab60339669bbe3dd54c2e2/opentelemetry_exporter_otlp_proto_http-1.44.0-py3-none-any.whl (21 kB)
+#12 13.70 Collecting opentelemetry-sdk<2,>=1.29 (from repomesh==0.1.0)
+#12 14.20   Downloading https://mirrors.aliyun.com/pypi/packages/e7/23/ff077e61886ee020a17ce9c8b6fa11c601c8d8345b09ea24f605445df62a/opentelemetry_sdk-1.44.0-py3-none-any.whl (137 kB)
+#12 14.61 Collecting pydantic-settings<3,>=2.6 (from repomesh==0.1.0)
+#12 14.80   Downloading https://mirrors.aliyun.com/pypi/packages/30/a4/2bffa9f8e804325a09867f0e9d30795c80ea9f8d62560bd1b6ad6220eb2f/pydantic_settings-2.15.0-py3-none-any.whl (69 kB)
+#12 15.20 Collecting python-multipart<1,>=0.0.9 (from repomesh==0.1.0)
+#12 15.39   Downloading https://mirrors.aliyun.com/pypi/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl (30 kB)
+#12 16.08 Collecting python-docx<2,>=1.1 (from repomesh==0.1.0)
+#12 16.27   Downloading https://mirrors.aliyun.com/pypi/packages/d0/00/1e03a4989fa5795da308cd774f05b704ace555a70f9bf9d3be057b680bcf/python_docx-1.2.0-py3-none-any.whl (252 kB)
+#12 16.50 Collecting pypdf<7,>=4 (from repomesh==0.1.0)
+#12 16.69   Downloading https://mirrors.aliyun.com/pypi/packages/13/f1/a2da3b55acd4ab737bf728c97edaaed5ec1d3c1236acb639dcdfa97e42c7/pypdf-6.16.2-py3-none-any.whl (385 kB)
+#12 16.95 Collecting pyyaml<7,>=6 (from repomesh==0.1.0)
+#12 17.15   Downloading https://mirrors.aliyun.com/pypi/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (807 kB)
+#12 17.22      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 807.9/807.9 kB 11.9 MB/s eta 0:00:00
+#12 17.80 Collecting sqlalchemy<3,>=2.0.36 (from sqlalchemy[asyncio]<3,>=2.0.36->repomesh==0.1.0)
+#12 17.98   Downloading https://mirrors.aliyun.com/pypi/packages/be/57/2eadf93a552568c57e8680b7e58bb5e9770d80942a1bdbaf4f2f63f0d7c8/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.4 MB)
+#12 18.68      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.4/3.4 MB 4.6 MB/s eta 0:00:00
+#12 18.91 Collecting uvicorn<1,>=0.32 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#12 19.10   Downloading https://mirrors.aliyun.com/pypi/packages/f1/79/4a20b54ab0491485ccd8c077db2d39187c7f12b3e15485d38a7be37c81b4/uvicorn-0.52.4-py3-none-any.whl (79 kB)
+#12 19.52 Collecting Mako (from alembic<2,>=1.14->repomesh==0.1.0)
+#12 19.71   Downloading https://mirrors.aliyun.com/pypi/packages/a5/54/12ed58d458474aaab5c3d180173e745a4fe131bb330370596876d19ff60f/mako-1.4.1-py3-none-any.whl (80 kB)
+#12 20.12 Collecting typing-extensions>=4.12 (from alembic<2,>=1.14->repomesh==0.1.0)
+#12 20.30   Downloading https://mirrors.aliyun.com/pypi/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+#12 20.62 Collecting cffi>=1.14 (from cryptography<46,>=44->repomesh==0.1.0)
+#12 20.81   Downloading https://mirrors.aliyun.com/pypi/packages/b1/db/dceb9dd5b231e1da801793f8acc9f3c52a7e1afe40bb1aae37e02b0faad5/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
+#12 21.09 Collecting starlette>=0.46.0 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#12 21.28   Downloading https://mirrors.aliyun.com/pypi/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl (75 kB)
+#12 21.62 Collecting pydantic>=2.9.0 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#12 21.81   Downloading https://mirrors.aliyun.com/pypi/packages/eb/47/c95ffc2009878c7aac0c5e08528022dcb885933252a88b5f170058014464/pydantic-2.13.5-py3-none-any.whl (472 kB)
+#12 22.24 Collecting typing-inspection>=0.4.2 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#12 22.63   Downloading https://mirrors.aliyun.com/pypi/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+#12 23.02 Collecting annotated-doc>=0.0.2 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#12 23.41   Downloading https://mirrors.aliyun.com/pypi/packages/3e/30/e900b21425a860e195f32e37657aa1f7c7f2b1bfb26f03ca209b90933c06/annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+#12 23.82 Collecting anyio (from httpx<1,>=0.27->repomesh==0.1.0)
+#12 24.06   Downloading https://mirrors.aliyun.com/pypi/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl (125 kB)
+#12 24.47 Collecting certifi (from httpx<1,>=0.27->repomesh==0.1.0)
+#12 24.66   Downloading https://mirrors.aliyun.com/pypi/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl (136 kB)
+#12 25.07 Collecting httpcore==1.* (from httpx<1,>=0.27->repomesh==0.1.0)
+#12 25.26   Downloading https://mirrors.aliyun.com/pypi/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl (78 kB)
+#12 25.66 Collecting idna (from httpx<1,>=0.27->repomesh==0.1.0)
+#12 25.84   Downloading https://mirrors.aliyun.com/pypi/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl (68 kB)
+#12 26.24 Collecting h11>=0.16 (from httpcore==1.*->httpx<1,>=0.27->repomesh==0.1.0)
+#12 26.43   Downloading https://mirrors.aliyun.com/pypi/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl (37 kB)
+#12 26.63 Collecting argon2-cffi (from minio<8,>=7.2->repomesh==0.1.0)
+#12 27.02   Downloading https://mirrors.aliyun.com/pypi/packages/4f/d3/a8b22fa575b297cd6e3e3b0155c7e25db170edf1c74783d6a31a2490b8d9/argon2_cffi-25.1.0-py3-none-any.whl (14 kB)
+#12 27.30 Collecting pycryptodome (from minio<8,>=7.2->repomesh==0.1.0)
+#12 27.49   Downloading https://mirrors.aliyun.com/pypi/packages/5f/e9/a09476d436d0ff1402ac3867d933c61805ec2326c6ea557aeeac3825604e/pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.3 MB)
+#12 28.38      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 2.3 MB/s eta 0:00:00
+#12 28.59 Collecting urllib3 (from minio<8,>=7.2->repomesh==0.1.0)
+#12 28.78   Downloading https://mirrors.aliyun.com/pypi/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl (131 kB)
+#12 29.19 Collecting googleapis-common-protos~=1.52 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 29.38   Downloading https://mirrors.aliyun.com/pypi/packages/47/5b/1c9e55363c3b1890a98cae813de5b4ea327845756cd8fb7ee690140c7eac/googleapis_common_protos-1.75.2-py3-none-any.whl (307 kB)
+#12 30.15 Collecting opentelemetry-api~=1.15 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 30.34   Downloading https://mirrors.aliyun.com/pypi/packages/ca/6f/a04e900f465ff3221ccc395522503e2d10e79fa21f2723c8e177aae1e0d1/opentelemetry_api-1.44.0-py3-none-any.whl (60 kB)
+#12 30.74 Collecting opentelemetry-exporter-otlp-proto-common==1.44.0 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 31.22   Downloading https://mirrors.aliyun.com/pypi/packages/5e/71/65fd9d54c10b860f87c045ccee1264cab7011268895d3528818a29c1172a/opentelemetry_exporter_otlp_proto_common-1.44.0-py3-none-any.whl (17 kB)
+#12 31.63 Collecting opentelemetry-proto==1.44.0 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 31.81   Downloading https://mirrors.aliyun.com/pypi/packages/d1/7c/8be563d68e93bbefa5c8affb82ddcff91b3ad858ce49957ba7b16fd3e0ab/opentelemetry_proto-1.44.0-py3-none-any.whl (72 kB)
+#12 32.04 Collecting requests~=2.7 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 32.22   Downloading https://mirrors.aliyun.com/pypi/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl (73 kB)
+#12 32.87 Collecting protobuf<8.0,>=5.0 (from opentelemetry-proto==1.44.0->opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 33.06   Downloading https://mirrors.aliyun.com/pypi/packages/22/df/c799fe7a05ef16ba853a59db01f3a2c5f7d0676469589ccc4874f76a2a88/protobuf-7.36.1-cp310-abi3-manylinux2014_x86_64.whl (343 kB)
+#12 33.49 Collecting opentelemetry-semantic-conventions==0.65b0 (from opentelemetry-sdk<2,>=1.29->repomesh==0.1.0)
+#12 34.02   Downloading https://mirrors.aliyun.com/pypi/packages/a6/0e/49df70d9b81fb5cbae4bbf2a49d865b09bcbcbc4eb53f5851b1027738d78/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl (204 kB)
+#12 34.45 Collecting python-dotenv>=0.21.0 (from pydantic-settings<3,>=2.6->repomesh==0.1.0)
+#12 34.64   Downloading https://mirrors.aliyun.com/pypi/packages/0d/17/c5c6b53ddc18f297992099b3d9ec16c855c0ccc83263a21fe4d1c625ec6c/python_dotenv-1.2.3-py3-none-any.whl (22 kB)
+#12 35.43 Collecting lxml>=3.1.0 (from python-docx<2,>=1.1->repomesh==0.1.0)
+#12 35.66   Downloading https://mirrors.aliyun.com/pypi/packages/3d/e0/a65b64f34d556925faef2c4f14167d58c571bc15a3e1f2bba71138830562/lxml-6.1.2-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (5.2 MB)
+#12 36.96      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 3.9 MB/s eta 0:00:00
+#12 37.36 Collecting greenlet>=1 (from sqlalchemy<3,>=2.0.36->sqlalchemy[asyncio]<3,>=2.0.36->repomesh==0.1.0)
+#12 37.55   Downloading https://mirrors.aliyun.com/pypi/packages/78/ac/5c5b959999b6f09c3026b5dfe171575bc3121c5236ce74f495096f25b203/greenlet-3.5.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (621 kB)
+#12 37.60      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 621.4/621.4 kB 12.1 MB/s eta 0:00:00
+#12 38.01 Collecting click>=7.0 (from uvicorn<1,>=0.32->uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#12 38.20   Downloading https://mirrors.aliyun.com/pypi/packages/58/50/6c0d534c5f134586a8e1ba4e330569e32f057e33372ae556463212fb4cd3/click-8.5.0-py3-none-any.whl (125 kB)
+#12 38.43 Collecting httptools>=0.8.0 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#12 38.62   Downloading https://mirrors.aliyun.com/pypi/packages/e3/a6/febbb8b8db0f58b38e44ad6cb946e6a255ae49b55f2e8543408fb7501ccd/httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (523 kB)
+#12 38.89 Collecting uvloop>=0.15.1 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#12 39.08   Downloading https://mirrors.aliyun.com/pypi/packages/5f/6f/e62b4dfc7ad6518e7eff2516f680d02a0f6eb62c0c212e152ca708a0085e/uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
+#12 40.16      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 3.9 MB/s eta 0:00:00
+#12 40.79 Collecting watchfiles>=0.20 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#12 41.01   Downloading https://mirrors.aliyun.com/pypi/packages/22/24/ed72f68cbc1333ca9b9f2200aa048bb6658ae41709bc1caad4310f4bdffd/watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
+#12 41.37 Collecting websockets>=13.0 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#12 41.56   Downloading https://mirrors.aliyun.com/pypi/packages/fb/05/9f82d090c8d2d861604147ef6dfb938a90b039f9358d5193f1df62558593/websockets-17.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (224 kB)
+#12 41.98 Collecting pycparser (from cffi>=1.14->cryptography<46,>=44->repomesh==0.1.0)
+#12 42.16   Downloading https://mirrors.aliyun.com/pypi/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl (48 kB)
+#12 42.58 Collecting annotated-types>=0.6.0 (from pydantic>=2.9.0->fastapi<1,>=0.115->repomesh==0.1.0)
+#12 42.97   Downloading https://mirrors.aliyun.com/pypi/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl (13 kB)
+#12 44.30 Collecting pydantic-core==2.46.5 (from pydantic>=2.9.0->fastapi<1,>=0.115->repomesh==0.1.0)
+#12 44.49   Downloading https://mirrors.aliyun.com/pypi/packages/c0/a4/eb9409ec0736e50aa70a412f16c204ed149516846912f7e6724d4c73ee53/pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+#12 44.95      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 4.1 MB/s eta 0:00:00
+#12 45.32 Collecting charset_normalizer<4,>=2 (from requests~=2.7->opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#12 45.50   Downloading https://mirrors.aliyun.com/pypi/packages/6f/89/bb5108dc6c3651dca963f2b0a3ba19bbcb370c94e1b6d3e0e844a58e6dca/charset_normalizer-3.5.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (248 kB)
+#12 45.98 Collecting argon2-cffi-bindings (from argon2-cffi->minio<8,>=7.2->repomesh==0.1.0)
+#12 46.17   Downloading https://mirrors.aliyun.com/pypi/packages/6f/86/5363df11b86d02cf3662208e7406496327649cc90eb365bf6f4e8a54a41f/argon2_cffi_bindings-26.1.0-cp310-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (26 kB)
+#12 46.42 Collecting MarkupSafe>=2.0 (from Mako->alembic<2,>=1.14->repomesh==0.1.0)
+#12 46.61   Downloading https://mirrors.aliyun.com/pypi/packages/3c/2e/8d0c2ab90a8c1d9a24f0399058ab8519a3279d1bd4289511d74e909f060e/markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+#12 46.63 Building wheels for collected packages: repomesh
+#12 46.64   Building wheel for repomesh (pyproject.toml): started
+#12 47.57   Building wheel for repomesh (pyproject.toml): finished with status 'done'
+#12 47.57   Created wheel for repomesh: filename=repomesh-0.1.0-py3-none-any.whl size=1074709 sha256=3b835f0f577d33a0300b896ec437d9e89e0c85635c0f8835d9adb98aeeeaa295
+#12 47.57   Stored in directory: /tmp/pip-ephem-wheel-cache-hdf5u5eo/wheels/54/1b/b7/aa63e25c8f14f4f2ae7b04e6097bdecb770e455c5c1ee0a600
+#12 47.58 Successfully built repomesh
+#12 47.67 Installing collected packages: websockets, uvloop, urllib3, typing-extensions, pyyaml, python-multipart, python-dotenv, pypdf, pycryptodome, pycparser, protobuf, MarkupSafe, lxml, idna, httptools, h11, greenlet, click, charset_normalizer, certifi, asyncpg, annotated-types, annotated-doc, uvicorn, typing-inspection, sqlalchemy, requests, python-docx, pydantic-core, opentelemetry-proto, opentelemetry-api, Mako, httpcore, googleapis-common-protos, cffi, anyio, watchfiles, starlette, pydantic, opentelemetry-semantic-conventions, opentelemetry-exporter-otlp-proto-common, httpx, cryptography, argon2-cffi-bindings, alembic, pydantic-settings, opentelemetry-sdk, fastapi, argon2-cffi, opentelemetry-exporter-otlp-proto-http, minio, repomesh
+#12 53.51 Successfully installed Mako-1.4.1 MarkupSafe-3.0.3 alembic-1.19.1 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.14.2 argon2-cffi-25.1.0 argon2-cffi-bindings-26.1.0 asyncpg-0.31.0 certifi-2026.7.22 cffi-2.1.1 charset_normalizer-3.5.1 click-8.5.0 cryptography-45.0.7 fastapi-0.141.1 googleapis-common-protos-1.75.2 greenlet-3.5.5 h11-0.16.0 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 idna-3.19 lxml-6.1.2 minio-7.2.20 opentelemetry-api-1.44.0 opentelemetry-exporter-otlp-proto-common-1.44.0 opentelemetry-exporter-otlp-proto-http-1.44.0 opentelemetry-proto-1.44.0 opentelemetry-sdk-1.44.0 opentelemetry-semantic-conventions-0.65b0 protobuf-7.36.1 pycparser-3.0 pycryptodome-3.23.0 pydantic-2.13.5 pydantic-core-2.46.5 pydantic-settings-2.15.0 pypdf-6.16.2 python-docx-1.2.0 python-dotenv-1.2.3 python-multipart-0.0.32 pyyaml-6.0.3 repomesh-0.1.0 requests-2.34.2 sqlalchemy-2.0.52 starlette-1.6.0 typing-extensions-4.16.0 typing-inspection-0.4.4 urllib3-2.7.0 uvicorn-0.52.4 uvloop-0.22.1 watchfiles-1.2.0 websockets-17.1
+#12 53.51 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#12 54.51 
+#12 54.51 [notice] A new release of pip is available: 25.0.1 -> 26.2.1
+#12 54.51 [notice] To update, run: pip install --upgrade pip
+#12 DONE 55.1s
+
+#13 [api 9/9] COPY scripts ./scripts
+#13 DONE 0.1s
+
+#14 [api] exporting to image
+#14 exporting layers
+#14 exporting layers 0.8s done
+#14 writing image sha256:b0ddf7830ab09af71ed9ce6054dfc5b615749f7b84749fc9fe11786fa72e3d04 done
+#14 naming to docker.io/library/goai-infra-repomesh-api done
+#14 DONE 0.8s
+
+#15 [api] resolving provenance for metadata file
+#15 DONE 0.0s
+2026/09/02 03:46:10 http2: server: error reading preface from client //./pipe/dockerDesktopLinuxEngine: file has already been closed
+
+#16 [bootstrap internal] load build definition from Dockerfile.bootstrap
+#16 transferring dockerfile: 1.26kB done
+#16 DONE 0.0s
+
+#17 [web internal] load build definition from Dockerfile
+#17 transferring dockerfile: 1.32kB done
+#17 DONE 0.0s
+
+#2 [bootstrap internal] load metadata for docker.io/library/python:3.12-slim
+#2 ...
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 ...
+
+#19 [web internal] load metadata for docker.io/library/node:22-alpine
+#19 ...
+
+#2 [bootstrap internal] load metadata for docker.io/library/python:3.12-slim
+#2 DONE 321.5s
+
+#5 [bootstrap 1/7] FROM docker.io/library/python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+#5 DONE 322.3s
+
+#6 [bootstrap 2/7] WORKDIR /app
+#6 CACHED
+
+#20 [bootstrap internal] load build context
+#20 transferring context: 616.00kB 0.1s done
+#20 DONE 0.1s
+
+#21 [bootstrap 3/7] RUN apt-get update     && apt-get install -y --no-install-recommends         bash         ca-certificates         curl         docker-cli         openssl     && rm -rf /var/lib/apt/lists/*
+#21 1.899 Hit:1 http://deb.debian.org/debian trixie InRelease
+#21 2.068 Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+#21 2.520 Hit:3 http://deb.debian.org/debian-security trixie-security InRelease
+#21 2.725 Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9673 kB]
+#21 4.614 Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [4412 B]
+#21 4.792 Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [251 kB]
+#21 5.176 Fetched 9975 kB in 5s (2053 kB/s)
+#21 5.176 Reading package lists...
+#21 5.707 Reading package lists...
+#21 6.216 Building dependency tree...
+#21 6.396 Reading state information...
+#21 6.662 bash is already the newest version (5.2.37-2+b9).
+#21 6.662 bash set to manually installed.
+#21 6.662 ca-certificates is already the newest version (20250419).
+#21 6.662 openssl is already the newest version (3.5.7-1~deb13u2).
+#21 6.662 openssl set to manually installed.
+#21 6.662 The following additional packages will be installed:
+#21 6.662   libbrotli1 libcom-err2 libcurl4t64 libgnutls30t64 libgssapi-krb5-2 libidn2-0
+#21 6.662   libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0 libldap2 libnghttp2-14
+#21 6.663   libnghttp3-9 libp11-kit0 libpsl5t64 librtmp1 libsasl2-2 libsasl2-modules-db
+#21 6.664   libssh2-1t64 libtasn1-6 libunistring5
+#21 6.666 Suggested packages:
+#21 6.666   docker-doc gnutls-bin krb5-doc krb5-user
+#21 6.666 Recommended packages:
+#21 6.666   bash-completion docker-buildx krb5-locales libldap-common publicsuffix
+#21 6.666   libsasl2-modules
+#21 6.778 The following NEW packages will be installed:
+#21 6.779   curl docker-cli libbrotli1 libcom-err2 libcurl4t64 libgnutls30t64
+#21 6.779   libgssapi-krb5-2 libidn2-0 libk5crypto3 libkeyutils1 libkrb5-3
+#21 6.779   libkrb5support0 libldap2 libnghttp2-14 libnghttp3-9 libp11-kit0 libpsl5t64
+#21 6.779   librtmp1 libsasl2-2 libsasl2-modules-db libssh2-1t64 libtasn1-6
+#21 6.780   libunistring5
+#21 7.441 0 upgraded, 23 newly installed, 0 to remove and 0 not upgraded.
+#21 7.441 Need to get 12.2 MB of archives.
+#21 7.441 After this operation, 45.8 MB of additional disk space will be used.
+#21 7.441 Get:1 http://deb.debian.org/debian trixie/main amd64 libbrotli1 amd64 1.1.0-2+b7 [307 kB]
+#21 8.355 Get:2 http://deb.debian.org/debian trixie/main amd64 libkrb5support0 amd64 1.21.3-5+deb13u1 [33.1 kB]
+#21 8.370 Get:3 http://deb.debian.org/debian trixie/main amd64 libcom-err2 amd64 1.47.2-3+b11 [25.0 kB]
+#21 8.373 Get:4 http://deb.debian.org/debian trixie/main amd64 libk5crypto3 amd64 1.21.3-5+deb13u1 [81.2 kB]
+#21 8.409 Get:5 http://deb.debian.org/debian trixie/main amd64 libkeyutils1 amd64 1.6.3-6 [9456 B]
+#21 8.409 Get:6 http://deb.debian.org/debian trixie/main amd64 libkrb5-3 amd64 1.21.3-5+deb13u1 [326 kB]
+#21 8.587 Get:7 http://deb.debian.org/debian trixie/main amd64 libgssapi-krb5-2 amd64 1.21.3-5+deb13u1 [138 kB]
+#21 8.639 Get:8 http://deb.debian.org/debian trixie/main amd64 libunistring5 amd64 1.3-2 [477 kB]
+#21 8.769 Get:9 http://deb.debian.org/debian trixie/main amd64 libidn2-0 amd64 2.3.8-2 [109 kB]
+#21 8.787 Get:10 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg1-9 [19.8 kB]
+#21 8.791 Get:11 http://deb.debian.org/debian trixie/main amd64 libsasl2-2 amd64 2.1.28+dfsg1-9 [57.5 kB]
+#21 8.800 Get:12 http://deb.debian.org/debian trixie/main amd64 libldap2 amd64 2.6.10+dfsg-1 [194 kB]
+#21 8.836 Get:13 http://deb.debian.org/debian trixie/main amd64 libnghttp2-14 amd64 1.64.0-1.1+deb13u1 [76.2 kB]
+#21 8.847 Get:14 http://deb.debian.org/debian trixie/main amd64 libnghttp3-9 amd64 1.8.0-1 [67.7 kB]
+#21 8.860 Get:15 http://deb.debian.org/debian trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+#21 8.871 Get:16 http://deb.debian.org/debian trixie/main amd64 libp11-kit0 amd64 0.25.5-3 [425 kB]
+#21 8.930 Get:17 http://deb.debian.org/debian trixie/main amd64 libtasn1-6 amd64 4.20.0-2+deb13u1 [50.1 kB]
+#21 8.949 Get:18 http://deb.debian.org/debian trixie/main amd64 libgnutls30t64 amd64 3.8.9-3+deb13u4 [1469 kB]
+#21 9.075 Get:19 http://deb.debian.org/debian trixie/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b5 [58.8 kB]
+#21 9.079 Get:20 http://deb.debian.org/debian trixie/main amd64 libssh2-1t64 amd64 1.11.1-1+deb13u1 [245 kB]
+#21 9.101 Get:21 http://deb.debian.org/debian trixie/main amd64 libcurl4t64 amd64 8.14.1-2+deb13u4 [392 kB]
+#21 9.134 Get:22 http://deb.debian.org/debian trixie/main amd64 curl amd64 8.14.1-2+deb13u4 [270 kB]
+#21 9.158 Get:23 http://deb.debian.org/debian-security trixie-security/main amd64 docker-cli amd64 26.1.5+dfsg1-9+deb13u1 [7337 kB]
+#21 10.28 debconf: unable to initialize frontend: Dialog
+#21 10.28 debconf: (TERM is not set, so the dialog frontend is not usable.)
+#21 10.28 debconf: falling back to frontend: Readline
+#21 10.28 debconf: unable to initialize frontend: Readline
+#21 10.28 debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 23.)
+#21 10.28 debconf: falling back to frontend: Teletype
+#21 10.29 debconf: unable to initialize frontend: Teletype
+#21 10.29 debconf: (This frontend requires a controlling tty.)
+#21 10.29 debconf: falling back to frontend: Noninteractive
+#21 10.81 Fetched 12.2 MB in 3s (3646 kB/s)
+#21 10.83 Selecting previously unselected package libbrotli1:amd64.
+#21 10.83 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5652 files and directories currently installed.)
+#21 10.85 Preparing to unpack .../00-libbrotli1_1.1.0-2+b7_amd64.deb ...
+#21 10.86 Unpacking libbrotli1:amd64 (1.1.0-2+b7) ...
+#21 10.90 Selecting previously unselected package libkrb5support0:amd64.
+#21 10.90 Preparing to unpack .../01-libkrb5support0_1.21.3-5+deb13u1_amd64.deb ...
+#21 10.90 Unpacking libkrb5support0:amd64 (1.21.3-5+deb13u1) ...
+#21 10.93 Selecting previously unselected package libcom-err2:amd64.
+#21 10.93 Preparing to unpack .../02-libcom-err2_1.47.2-3+b11_amd64.deb ...
+#21 10.93 Unpacking libcom-err2:amd64 (1.47.2-3+b11) ...
+#21 10.96 Selecting previously unselected package libk5crypto3:amd64.
+#21 10.96 Preparing to unpack .../03-libk5crypto3_1.21.3-5+deb13u1_amd64.deb ...
+#21 10.96 Unpacking libk5crypto3:amd64 (1.21.3-5+deb13u1) ...
+#21 10.99 Selecting previously unselected package libkeyutils1:amd64.
+#21 10.99 Preparing to unpack .../04-libkeyutils1_1.6.3-6_amd64.deb ...
+#21 10.99 Unpacking libkeyutils1:amd64 (1.6.3-6) ...
+#21 11.02 Selecting previously unselected package libkrb5-3:amd64.
+#21 11.02 Preparing to unpack .../05-libkrb5-3_1.21.3-5+deb13u1_amd64.deb ...
+#21 11.02 Unpacking libkrb5-3:amd64 (1.21.3-5+deb13u1) ...
+#21 11.06 Selecting previously unselected package libgssapi-krb5-2:amd64.
+#21 11.06 Preparing to unpack .../06-libgssapi-krb5-2_1.21.3-5+deb13u1_amd64.deb ...
+#21 11.06 Unpacking libgssapi-krb5-2:amd64 (1.21.3-5+deb13u1) ...
+#21 11.09 Selecting previously unselected package libunistring5:amd64.
+#21 11.09 Preparing to unpack .../07-libunistring5_1.3-2_amd64.deb ...
+#21 11.10 Unpacking libunistring5:amd64 (1.3-2) ...
+#21 11.15 Selecting previously unselected package libidn2-0:amd64.
+#21 11.15 Preparing to unpack .../08-libidn2-0_2.3.8-2_amd64.deb ...
+#21 11.15 Unpacking libidn2-0:amd64 (2.3.8-2) ...
+#21 11.18 Selecting previously unselected package libsasl2-modules-db:amd64.
+#21 11.18 Preparing to unpack .../09-libsasl2-modules-db_2.1.28+dfsg1-9_amd64.deb ...
+#21 11.18 Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#21 11.21 Selecting previously unselected package libsasl2-2:amd64.
+#21 11.21 Preparing to unpack .../10-libsasl2-2_2.1.28+dfsg1-9_amd64.deb ...
+#21 11.21 Unpacking libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#21 11.24 Selecting previously unselected package libldap2:amd64.
+#21 11.24 Preparing to unpack .../11-libldap2_2.6.10+dfsg-1_amd64.deb ...
+#21 11.24 Unpacking libldap2:amd64 (2.6.10+dfsg-1) ...
+#21 11.27 Selecting previously unselected package libnghttp2-14:amd64.
+#21 11.27 Preparing to unpack .../12-libnghttp2-14_1.64.0-1.1+deb13u1_amd64.deb ...
+#21 11.27 Unpacking libnghttp2-14:amd64 (1.64.0-1.1+deb13u1) ...
+#21 11.30 Selecting previously unselected package libnghttp3-9:amd64.
+#21 11.30 Preparing to unpack .../13-libnghttp3-9_1.8.0-1_amd64.deb ...
+#21 11.30 Unpacking libnghttp3-9:amd64 (1.8.0-1) ...
+#21 11.33 Selecting previously unselected package libpsl5t64:amd64.
+#21 11.33 Preparing to unpack .../14-libpsl5t64_0.21.2-1.1+b1_amd64.deb ...
+#21 11.33 Unpacking libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#21 11.36 Selecting previously unselected package libp11-kit0:amd64.
+#21 11.36 Preparing to unpack .../15-libp11-kit0_0.25.5-3_amd64.deb ...
+#21 11.36 Unpacking libp11-kit0:amd64 (0.25.5-3) ...
+#21 11.40 Selecting previously unselected package libtasn1-6:amd64.
+#21 11.40 Preparing to unpack .../16-libtasn1-6_4.20.0-2+deb13u1_amd64.deb ...
+#21 11.40 Unpacking libtasn1-6:amd64 (4.20.0-2+deb13u1) ...
+#21 11.43 Selecting previously unselected package libgnutls30t64:amd64.
+#21 11.43 Preparing to unpack .../17-libgnutls30t64_3.8.9-3+deb13u4_amd64.deb ...
+#21 11.43 Unpacking libgnutls30t64:amd64 (3.8.9-3+deb13u4) ...
+#21 11.48 Selecting previously unselected package librtmp1:amd64.
+#21 11.49 Preparing to unpack .../18-librtmp1_2.4+20151223.gitfa8646d.1-2+b5_amd64.deb ...
+#21 11.49 Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#21 11.52 Selecting previously unselected package libssh2-1t64:amd64.
+#21 11.52 Preparing to unpack .../19-libssh2-1t64_1.11.1-1+deb13u1_amd64.deb ...
+#21 11.52 Unpacking libssh2-1t64:amd64 (1.11.1-1+deb13u1) ...
+#21 11.55 Selecting previously unselected package libcurl4t64:amd64.
+#21 11.55 Preparing to unpack .../20-libcurl4t64_8.14.1-2+deb13u4_amd64.deb ...
+#21 11.56 Unpacking libcurl4t64:amd64 (8.14.1-2+deb13u4) ...
+#21 11.59 Selecting previously unselected package curl.
+#21 11.59 Preparing to unpack .../21-curl_8.14.1-2+deb13u4_amd64.deb ...
+#21 11.60 Unpacking curl (8.14.1-2+deb13u4) ...
+#21 11.63 Selecting previously unselected package docker-cli.
+#21 11.63 Preparing to unpack .../22-docker-cli_26.1.5+dfsg1-9+deb13u1_amd64.deb ...
+#21 11.63 Unpacking docker-cli (26.1.5+dfsg1-9+deb13u1) ...
+#21 11.86 Setting up libkeyutils1:amd64 (1.6.3-6) ...
+#21 11.87 Setting up docker-cli (26.1.5+dfsg1-9+deb13u1) ...
+#21 11.88 Setting up libbrotli1:amd64 (1.1.0-2+b7) ...
+#21 11.89 Setting up libnghttp2-14:amd64 (1.64.0-1.1+deb13u1) ...
+#21 11.90 Setting up libcom-err2:amd64 (1.47.2-3+b11) ...
+#21 11.91 Setting up libkrb5support0:amd64 (1.21.3-5+deb13u1) ...
+#21 11.91 Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+#21 11.92 Setting up libp11-kit0:amd64 (0.25.5-3) ...
+#21 11.93 Setting up libunistring5:amd64 (1.3-2) ...
+#21 11.94 Setting up libk5crypto3:amd64 (1.21.3-5+deb13u1) ...
+#21 11.94 Setting up libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+#21 11.95 Setting up libnghttp3-9:amd64 (1.8.0-1) ...
+#21 11.96 Setting up libtasn1-6:amd64 (4.20.0-2+deb13u1) ...
+#21 11.97 Setting up libkrb5-3:amd64 (1.21.3-5+deb13u1) ...
+#21 11.97 Setting up libssh2-1t64:amd64 (1.11.1-1+deb13u1) ...
+#21 11.98 Setting up libldap2:amd64 (2.6.10+dfsg-1) ...
+#21 11.99 Setting up libidn2-0:amd64 (2.3.8-2) ...
+#21 12.00 Setting up libgssapi-krb5-2:amd64 (1.21.3-5+deb13u1) ...
+#21 12.01 Setting up libgnutls30t64:amd64 (3.8.9-3+deb13u4) ...
+#21 12.01 Setting up libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+#21 12.02 Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+#21 12.03 Setting up libcurl4t64:amd64 (8.14.1-2+deb13u4) ...
+#21 12.03 Setting up curl (8.14.1-2+deb13u4) ...
+#21 12.04 Processing triggers for libc-bin (2.41-12+deb13u3) ...
+#21 DONE 12.1s
+
+#19 [web internal] load metadata for docker.io/library/node:22-alpine
+#19 ...
+
+#22 [bootstrap 4/7] COPY pyproject.toml README.md ./
+#22 DONE 0.0s
+
+#23 [bootstrap 5/7] COPY src ./src
+#23 DONE 0.4s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 ...
+
+#24 [bootstrap 6/7] COPY components/agentteams/install ./components/agentteams/install
+#24 DONE 0.0s
+
+#25 [bootstrap 7/7] RUN pip install --no-cache-dir .
+#25 1.607 Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+#25 1.607 Processing /app
+#25 1.611   Installing build dependencies: started
+#25 6.306   Installing build dependencies: finished with status 'done'
+#25 6.308   Getting requirements to build wheel: started
+#25 6.825   Getting requirements to build wheel: finished with status 'done'
+#25 6.826   Preparing metadata (pyproject.toml): started
+#25 7.366   Preparing metadata (pyproject.toml): finished with status 'done'
+#25 8.276 Collecting alembic<2,>=1.14 (from repomesh==0.1.0)
+#25 8.524   Downloading https://mirrors.aliyun.com/pypi/packages/20/89/e62cc37b69ad357cc8ecd6e7367f5245f523d3cbb338a66197212bdf6749/alembic-1.19.1-py3-none-any.whl (265 kB)
+#25 9.319 Collecting asyncpg<1,>=0.30 (from repomesh==0.1.0)
+#25 9.518   Downloading https://mirrors.aliyun.com/pypi/packages/8c/d1/a867c2150f9c6e7af6462637f613ba67f78a314b00db220cd26ff559d532/asyncpg-0.31.0-cp312-cp312-manylinux_2_28_x86_64.whl (3.5 MB)
+#25 10.29      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.5/3.5 MB 5.5 MB/s eta 0:00:00
+#25 10.77 Collecting cryptography<46,>=44 (from repomesh==0.1.0)
+#25 10.97   Downloading https://mirrors.aliyun.com/pypi/packages/0e/e4/b3e68a4ac363406a56cf7b741eeb80d05284d8c60ee1a55cdc7587e2a553/cryptography-45.0.7-cp311-abi3-manylinux_2_34_x86_64.whl (4.5 MB)
+#25 11.87      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.5/4.5 MB 4.8 MB/s eta 0:00:00
+#25 12.14 Collecting fastapi<1,>=0.115 (from repomesh==0.1.0)
+#25 12.34   Downloading https://mirrors.aliyun.com/pypi/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl (131 kB)
+#25 12.76 Collecting httpx<1,>=0.27 (from repomesh==0.1.0)
+#25 12.96   Downloading https://mirrors.aliyun.com/pypi/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl (73 kB)
+#25 13.18 Collecting minio<8,>=7.2 (from repomesh==0.1.0)
+#25 13.37   Downloading https://mirrors.aliyun.com/pypi/packages/3e/9a/b697530a882588a84db616580f2ba5d1d515c815e11c30d219145afeec87/minio-7.2.20-py3-none-any.whl (93 kB)
+#25 13.79 Collecting opentelemetry-exporter-otlp-proto-http<2,>=1.29 (from repomesh==0.1.0)
+#25 13.98   Downloading https://mirrors.aliyun.com/pypi/packages/cd/d0/fdeb1a98d8d3a6205f5f297c51b4a9bfe65126ab60339669bbe3dd54c2e2/opentelemetry_exporter_otlp_proto_http-1.44.0-py3-none-any.whl (21 kB)
+#25 14.39 Collecting opentelemetry-sdk<2,>=1.29 (from repomesh==0.1.0)
+#25 14.59   Downloading https://mirrors.aliyun.com/pypi/packages/e7/23/ff077e61886ee020a17ce9c8b6fa11c601c8d8345b09ea24f605445df62a/opentelemetry_sdk-1.44.0-py3-none-any.whl (137 kB)
+#25 15.00 Collecting pydantic-settings<3,>=2.6 (from repomesh==0.1.0)
+#25 15.20   Downloading https://mirrors.aliyun.com/pypi/packages/30/a4/2bffa9f8e804325a09867f0e9d30795c80ea9f8d62560bd1b6ad6220eb2f/pydantic_settings-2.15.0-py3-none-any.whl (69 kB)
+#25 15.60 Collecting python-multipart<1,>=0.0.9 (from repomesh==0.1.0)
+#25 15.80   Downloading https://mirrors.aliyun.com/pypi/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl (30 kB)
+#25 16.19 Collecting python-docx<2,>=1.1 (from repomesh==0.1.0)
+#25 16.39   Downloading https://mirrors.aliyun.com/pypi/packages/d0/00/1e03a4989fa5795da308cd774f05b704ace555a70f9bf9d3be057b680bcf/python_docx-1.2.0-py3-none-any.whl (252 kB)
+#25 16.63 Collecting pypdf<7,>=4 (from repomesh==0.1.0)
+#25 16.82   Downloading https://mirrors.aliyun.com/pypi/packages/13/f1/a2da3b55acd4ab737bf728c97edaaed5ec1d3c1236acb639dcdfa97e42c7/pypdf-6.16.2-py3-none-any.whl (385 kB)
+#25 17.08 Collecting pyyaml<7,>=6 (from repomesh==0.1.0)
+#25 17.27   Downloading https://mirrors.aliyun.com/pypi/packages/8b/9d/b3589d3877982d4f2329302ef98a8026e7f4443c765c46cfecc8858c6b4b/pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (807 kB)
+#25 17.34      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 807.9/807.9 kB 12.3 MB/s eta 0:00:00
+#25 17.93 Collecting sqlalchemy<3,>=2.0.36 (from sqlalchemy[asyncio]<3,>=2.0.36->repomesh==0.1.0)
+#25 18.12   Downloading https://mirrors.aliyun.com/pypi/packages/be/57/2eadf93a552568c57e8680b7e58bb5e9770d80942a1bdbaf4f2f63f0d7c8/sqlalchemy-2.0.52-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (3.4 MB)
+#25 19.01      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.4/3.4 MB 3.6 MB/s eta 0:00:00
+#25 19.25 Collecting uvicorn<1,>=0.32 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#25 19.44   Downloading https://mirrors.aliyun.com/pypi/packages/f1/79/4a20b54ab0491485ccd8c077db2d39187c7f12b3e15485d38a7be37c81b4/uvicorn-0.52.4-py3-none-any.whl (79 kB)
+#25 19.87 Collecting Mako (from alembic<2,>=1.14->repomesh==0.1.0)
+#25 20.07   Downloading https://mirrors.aliyun.com/pypi/packages/a5/54/12ed58d458474aaab5c3d180173e745a4fe131bb330370596876d19ff60f/mako-1.4.1-py3-none-any.whl (80 kB)
+#25 20.48 Collecting typing-extensions>=4.12 (from alembic<2,>=1.14->repomesh==0.1.0)
+#25 20.74   Downloading https://mirrors.aliyun.com/pypi/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+#25 21.07 Collecting cffi>=1.14 (from cryptography<46,>=44->repomesh==0.1.0)
+#25 21.26   Downloading https://mirrors.aliyun.com/pypi/packages/b1/db/dceb9dd5b231e1da801793f8acc9f3c52a7e1afe40bb1aae37e02b0faad5/cffi-2.1.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (221 kB)
+#25 21.51 Collecting starlette>=0.46.0 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#25 21.70   Downloading https://mirrors.aliyun.com/pypi/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl (75 kB)
+#25 22.09 Collecting pydantic>=2.9.0 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#25 22.28   Downloading https://mirrors.aliyun.com/pypi/packages/eb/47/c95ffc2009878c7aac0c5e08528022dcb885933252a88b5f170058014464/pydantic-2.13.5-py3-none-any.whl (472 kB)
+#25 22.72 Collecting typing-inspection>=0.4.2 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#25 23.12   Downloading https://mirrors.aliyun.com/pypi/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+#25 23.52 Collecting annotated-doc>=0.0.2 (from fastapi<1,>=0.115->repomesh==0.1.0)
+#25 23.91   Downloading https://mirrors.aliyun.com/pypi/packages/3e/30/e900b21425a860e195f32e37657aa1f7c7f2b1bfb26f03ca209b90933c06/annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+#25 24.32 Collecting anyio (from httpx<1,>=0.27->repomesh==0.1.0)
+#25 24.51   Downloading https://mirrors.aliyun.com/pypi/packages/da/35/f2287558c17e29fafc8ef3daf819bb9834061cfa43bff8014f7df7f63bdc/anyio-4.14.2-py3-none-any.whl (125 kB)
+#25 24.93 Collecting certifi (from httpx<1,>=0.27->repomesh==0.1.0)
+#25 25.12   Downloading https://mirrors.aliyun.com/pypi/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl (136 kB)
+#25 25.54 Collecting httpcore==1.* (from httpx<1,>=0.27->repomesh==0.1.0)
+#25 25.73   Downloading https://mirrors.aliyun.com/pypi/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl (78 kB)
+#25 26.14 Collecting idna (from httpx<1,>=0.27->repomesh==0.1.0)
+#25 26.33   Downloading https://mirrors.aliyun.com/pypi/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl (68 kB)
+#25 26.74 Collecting h11>=0.16 (from httpcore==1.*->httpx<1,>=0.27->repomesh==0.1.0)
+#25 26.93   Downloading https://mirrors.aliyun.com/pypi/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl (37 kB)
+#25 27.14 Collecting argon2-cffi (from minio<8,>=7.2->repomesh==0.1.0)
+#25 27.53   Downloading https://mirrors.aliyun.com/pypi/packages/4f/d3/a8b22fa575b297cd6e3e3b0155c7e25db170edf1c74783d6a31a2490b8d9/argon2_cffi-25.1.0-py3-none-any.whl (14 kB)
+#25 27.82 Collecting pycryptodome (from minio<8,>=7.2->repomesh==0.1.0)
+#25 28.01   Downloading https://mirrors.aliyun.com/pypi/packages/5f/e9/a09476d436d0ff1402ac3867d933c61805ec2326c6ea557aeeac3825604e/pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.3 MB)
+#25 28.67      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 3.2 MB/s eta 0:00:00
+#25 28.88 Collecting urllib3 (from minio<8,>=7.2->repomesh==0.1.0)
+#25 29.08   Downloading https://mirrors.aliyun.com/pypi/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl (131 kB)
+#25 29.50 Collecting googleapis-common-protos~=1.52 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 29.70   Downloading https://mirrors.aliyun.com/pypi/packages/47/5b/1c9e55363c3b1890a98cae813de5b4ea327845756cd8fb7ee690140c7eac/googleapis_common_protos-1.75.2-py3-none-any.whl (307 kB)
+#25 30.14 Collecting opentelemetry-api~=1.15 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 30.33   Downloading https://mirrors.aliyun.com/pypi/packages/ca/6f/a04e900f465ff3221ccc395522503e2d10e79fa21f2723c8e177aae1e0d1/opentelemetry_api-1.44.0-py3-none-any.whl (60 kB)
+#25 30.74 Collecting opentelemetry-exporter-otlp-proto-common==1.44.0 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 30.93   Downloading https://mirrors.aliyun.com/pypi/packages/5e/71/65fd9d54c10b860f87c045ccee1264cab7011268895d3528818a29c1172a/opentelemetry_exporter_otlp_proto_common-1.44.0-py3-none-any.whl (17 kB)
+#25 31.34 Collecting opentelemetry-proto==1.44.0 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 31.54   Downloading https://mirrors.aliyun.com/pypi/packages/d1/7c/8be563d68e93bbefa5c8affb82ddcff91b3ad858ce49957ba7b16fd3e0ab/opentelemetry_proto-1.44.0-py3-none-any.whl (72 kB)
+#25 31.77 Collecting requests~=2.7 (from opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 31.96   Downloading https://mirrors.aliyun.com/pypi/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl (73 kB)
+#25 32.39 Collecting protobuf<8.0,>=5.0 (from opentelemetry-proto==1.44.0->opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 32.58   Downloading https://mirrors.aliyun.com/pypi/packages/22/df/c799fe7a05ef16ba853a59db01f3a2c5f7d0676469589ccc4874f76a2a88/protobuf-7.36.1-cp310-abi3-manylinux2014_x86_64.whl (343 kB)
+#25 33.03 Collecting opentelemetry-semantic-conventions==0.65b0 (from opentelemetry-sdk<2,>=1.29->repomesh==0.1.0)
+#25 33.23   Downloading https://mirrors.aliyun.com/pypi/packages/a6/0e/49df70d9b81fb5cbae4bbf2a49d865b09bcbcbc4eb53f5851b1027738d78/opentelemetry_semantic_conventions-0.65b0-py3-none-any.whl (204 kB)
+#25 33.66 Collecting python-dotenv>=0.21.0 (from pydantic-settings<3,>=2.6->repomesh==0.1.0)
+#25 33.86   Downloading https://mirrors.aliyun.com/pypi/packages/0d/17/c5c6b53ddc18f297992099b3d9ec16c855c0ccc83263a21fe4d1c625ec6c/python_dotenv-1.2.3-py3-none-any.whl (22 kB)
+#25 34.46 Collecting lxml>=3.1.0 (from python-docx<2,>=1.1->repomesh==0.1.0)
+#25 34.65   Downloading https://mirrors.aliyun.com/pypi/packages/3d/e0/a65b64f34d556925faef2c4f14167d58c571bc15a3e1f2bba71138830562/lxml-6.1.2-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (5.2 MB)
+#25 36.16      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.2/5.2 MB 3.3 MB/s eta 0:00:00
+#25 36.57 Collecting greenlet>=1 (from sqlalchemy<3,>=2.0.36->sqlalchemy[asyncio]<3,>=2.0.36->repomesh==0.1.0)
+#25 36.76   Downloading https://mirrors.aliyun.com/pypi/packages/78/ac/5c5b959999b6f09c3026b5dfe171575bc3121c5236ce74f495096f25b203/greenlet-3.5.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl (621 kB)
+#25 36.82      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 621.4/621.4 kB 12.5 MB/s eta 0:00:00
+#25 37.24 Collecting click>=7.0 (from uvicorn<1,>=0.32->uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#25 37.43   Downloading https://mirrors.aliyun.com/pypi/packages/58/50/6c0d534c5f134586a8e1ba4e330569e32f057e33372ae556463212fb4cd3/click-8.5.0-py3-none-any.whl (125 kB)
+#25 37.67 Collecting httptools>=0.8.0 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#25 37.86   Downloading https://mirrors.aliyun.com/pypi/packages/e3/a6/febbb8b8db0f58b38e44ad6cb946e6a255ae49b55f2e8543408fb7501ccd/httptools-0.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (523 kB)
+#25 38.14 Collecting uvloop>=0.15.1 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#25 38.35   Downloading https://mirrors.aliyun.com/pypi/packages/5f/6f/e62b4dfc7ad6518e7eff2516f680d02a0f6eb62c0c212e152ca708a0085e/uvloop-0.22.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (4.4 MB)
+#25 39.67      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.4/4.4 MB 3.2 MB/s eta 0:00:00
+#25 39.97 Collecting watchfiles>=0.20 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#25 40.16   Downloading https://mirrors.aliyun.com/pypi/packages/22/24/ed72f68cbc1333ca9b9f2200aa048bb6658ae41709bc1caad4310f4bdffd/watchfiles-1.2.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (456 kB)
+#25 40.55 Collecting websockets>=13.0 (from uvicorn[standard]<1,>=0.32->repomesh==0.1.0)
+#25 40.75   Downloading https://mirrors.aliyun.com/pypi/packages/fb/05/9f82d090c8d2d861604147ef6dfb938a90b039f9358d5193f1df62558593/websockets-17.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (224 kB)
+#25 41.17 Collecting pycparser (from cffi>=1.14->cryptography<46,>=44->repomesh==0.1.0)
+#25 41.37   Downloading https://mirrors.aliyun.com/pypi/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl (48 kB)
+#25 41.79 Collecting annotated-types>=0.6.0 (from pydantic>=2.9.0->fastapi<1,>=0.115->repomesh==0.1.0)
+#25 42.19   Downloading https://mirrors.aliyun.com/pypi/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl (13 kB)
+#25 43.51 Collecting pydantic-core==2.46.5 (from pydantic>=2.9.0->fastapi<1,>=0.115->repomesh==0.1.0)
+#25 43.71   Downloading https://mirrors.aliyun.com/pypi/packages/c0/a4/eb9409ec0736e50aa70a412f16c204ed149516846912f7e6724d4c73ee53/pydantic_core-2.46.5-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.1 MB)
+#25 44.02      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.1/2.1 MB 6.3 MB/s eta 0:00:00
+#25 44.56 Collecting charset_normalizer<4,>=2 (from requests~=2.7->opentelemetry-exporter-otlp-proto-http<2,>=1.29->repomesh==0.1.0)
+#25 44.76   Downloading https://mirrors.aliyun.com/pypi/packages/6f/89/bb5108dc6c3651dca963f2b0a3ba19bbcb370c94e1b6d3e0e844a58e6dca/charset_normalizer-3.5.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (248 kB)
+#25 45.25 Collecting argon2-cffi-bindings (from argon2-cffi->minio<8,>=7.2->repomesh==0.1.0)
+#25 45.44   Downloading https://mirrors.aliyun.com/pypi/packages/6f/86/5363df11b86d02cf3662208e7406496327649cc90eb365bf6f4e8a54a41f/argon2_cffi_bindings-26.1.0-cp310-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (26 kB)
+#25 45.70 Collecting MarkupSafe>=2.0 (from Mako->alembic<2,>=1.14->repomesh==0.1.0)
+#25 45.89   Downloading https://mirrors.aliyun.com/pypi/packages/3c/2e/8d0c2ab90a8c1d9a24f0399058ab8519a3279d1bd4289511d74e909f060e/markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
+#25 45.91 Building wheels for collected packages: repomesh
+#25 45.92   Building wheel for repomesh (pyproject.toml): started
+#25 46.79   Building wheel for repomesh (pyproject.toml): finished with status 'done'
+#25 46.79   Created wheel for repomesh: filename=repomesh-0.1.0-py3-none-any.whl size=1074709 sha256=623ace5a634a071b0bf52054cbd65c496420d68e0a6e273d75685bd9c0e6ec1f
+#25 46.79   Stored in directory: /tmp/pip-ephem-wheel-cache-o3t47l02/wheels/54/1b/b7/aa63e25c8f14f4f2ae7b04e6097bdecb770e455c5c1ee0a600
+#25 46.79 Successfully built repomesh
+#25 46.87 Installing collected packages: websockets, uvloop, urllib3, typing-extensions, pyyaml, python-multipart, python-dotenv, pypdf, pycryptodome, pycparser, protobuf, MarkupSafe, lxml, idna, httptools, h11, greenlet, click, charset_normalizer, certifi, asyncpg, annotated-types, annotated-doc, uvicorn, typing-inspection, sqlalchemy, requests, python-docx, pydantic-core, opentelemetry-proto, opentelemetry-api, Mako, httpcore, googleapis-common-protos, cffi, anyio, watchfiles, starlette, pydantic, opentelemetry-semantic-conventions, opentelemetry-exporter-otlp-proto-common, httpx, cryptography, argon2-cffi-bindings, alembic, pydantic-settings, opentelemetry-sdk, fastapi, argon2-cffi, opentelemetry-exporter-otlp-proto-http, minio, repomesh
+#25 52.41 Successfully installed Mako-1.4.1 MarkupSafe-3.0.3 alembic-1.19.1 annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.14.2 argon2-cffi-25.1.0 argon2-cffi-bindings-26.1.0 asyncpg-0.31.0 certifi-2026.7.22 cffi-2.1.1 charset_normalizer-3.5.1 click-8.5.0 cryptography-45.0.7 fastapi-0.141.1 googleapis-common-protos-1.75.2 greenlet-3.5.5 h11-0.16.0 httpcore-1.0.9 httptools-0.8.0 httpx-0.28.1 idna-3.19 lxml-6.1.2 minio-7.2.20 opentelemetry-api-1.44.0 opentelemetry-exporter-otlp-proto-common-1.44.0 opentelemetry-exporter-otlp-proto-http-1.44.0 opentelemetry-proto-1.44.0 opentelemetry-sdk-1.44.0 opentelemetry-semantic-conventions-0.65b0 protobuf-7.36.1 pycparser-3.0 pycryptodome-3.23.0 pydantic-2.13.5 pydantic-core-2.46.5 pydantic-settings-2.15.0 pypdf-6.16.2 python-docx-1.2.0 python-dotenv-1.2.3 python-multipart-0.0.32 pyyaml-6.0.3 repomesh-0.1.0 requests-2.34.2 sqlalchemy-2.0.52 starlette-1.6.0 typing-extensions-4.16.0 typing-inspection-0.4.4 urllib3-2.7.0 uvicorn-0.52.4 uvloop-0.22.1 watchfiles-1.2.0 websockets-17.1
+#25 52.41 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#25 53.39 
+#25 53.39 [notice] A new release of pip is available: 25.0.1 -> 26.2.1
+#25 53.39 [notice] To update, run: pip install --upgrade pip
+#25 DONE 54.0s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 ...
+
+#26 [bootstrap] exporting to image
+#26 exporting layers
+#26 exporting layers 0.9s done
+#26 writing image sha256:dfcb2253957d9d8dd54a343b877125fb79f5d867b73795c4d6720a2754c0a602 done
+#26 naming to docker.io/library/goai-infra-repomesh-bootstrap done
+#26 DONE 0.9s
+
+#27 [bootstrap] resolving provenance for metadata file
+#27 DONE 0.0s
+
+#18 [web internal] load metadata for docker.io/library/nginx:1.27-alpine
+#18 DONE 272.0s
+
+#19 [web internal] load metadata for docker.io/library/node:22-alpine
+#19 DONE 272.3s
+
+#28 [web internal] load .dockerignore
+#28 transferring context: 123B done
+#28 DONE 0.0s
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 resolve docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 0.0s done
+#29 ...
+
+#30 [web internal] load build context
+#30 transferring context: 1.06MB 0.0s done
+#30 DONE 0.1s
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 sha256:6769dc3a703c719c1d2756bda113659be28ae16cf0da58dd5fd823d6b9a050ea 10.79kB / 10.79kB done
+#29 sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10 10.33kB / 10.33kB done
+#29 sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8 2.50kB / 2.50kB done
+#29 ...
+
+#31 [web build 1/6] FROM docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+#31 resolve docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 0.0s done
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 5.0s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 5.0s
+#31 sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 6.41kB / 6.41kB done
+#31 sha256:76789712cd1ae89a1225eac9077010d68987a423588042dac30446f502f1858c 1.72kB / 1.72kB done
+#31 sha256:395425e54d98ebbd748d388685a0c2de151a30fa92fffc10ba30fa63f3db64d6 6.56kB / 6.56kB done
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 5.0s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 10.0s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 10.0s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 10.0s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 15.1s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 15.1s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 15.1s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 20.2s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 20.2s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 20.2s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 25.2s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 25.4s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 25.4s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 30.4s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 30.6s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 30.6s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 35.5s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 35.8s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 35.8s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 40.6s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 40.9s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 40.9s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 45.7s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 46.0s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 46.0s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 50.7s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 51.1s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 51.1s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 0B / 52.63MB 55.8s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0B / 1.26MB 56.2s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 0B / 445B 56.2s
+#31 sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 445B / 445B 58.2s done
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 1.05MB / 1.26MB 59.4s
+#31 sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 1.26MB / 1.26MB 59.4s done
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 3.15MB / 52.63MB 59.6s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 6.29MB / 52.63MB 59.8s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 9.44MB / 52.63MB 60.7s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 12.58MB / 52.63MB 61.2s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 15.73MB / 52.63MB 61.6s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 18.87MB / 52.63MB 62.4s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 22.02MB / 52.63MB 62.7s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 26.21MB / 52.63MB 63.3s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 29.36MB / 52.63MB 63.8s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 32.51MB / 52.63MB 64.2s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 36.70MB / 52.63MB 64.8s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 41.94MB / 52.63MB 65.6s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 45.09MB / 52.63MB 65.9s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 49.28MB / 52.63MB 66.3s
+#31 sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 52.63MB / 52.63MB 66.5s done
+#31 extracting sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a
+#31 extracting sha256:efbef6f9e333972a10ca323e700496a64e7ddcc3a6725e6afbbae52e690f4a4a 1.7s done
+#31 ...
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 68.3s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 68.3s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 68.3s
+#29 ...
+
+#31 [web build 1/6] FROM docker.io/library/node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+#31 extracting sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0
+#31 extracting sha256:a2980c1fee17dfd6263234b253955e0e9d5f38d47c0e71c001139897134899d0 0.0s done
+#31 extracting sha256:16da5a6403776464b5bf551ef294de57da242eac594527ea551a46e7f76ac2d6 done
+#31 DONE 68.6s
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 ...
+
+#32 [web build 2/6] WORKDIR /app
+#32 DONE 0.1s
+
+#33 [web build 3/6] COPY package.json package-lock.json ./
+#33 DONE 0.0s
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 73.3s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 73.3s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 73.3s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 78.4s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 78.4s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 78.4s
+#29 ...
+
+#34 [web build 4/6] RUN npm ci --registry=https://registry.npmmirror.com
+#34 ...
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 ...
+
+#34 [web build 4/6] RUN npm ci --registry=https://registry.npmmirror.com
+#34 12.67 
+#34 12.67 added 49 packages in 12s
+#34 12.67 
+#34 12.67 14 packages are looking for funding
+#34 12.67   run `npm fund` for details
+#34 12.67 npm notice
+#34 12.67 npm notice New major version of npm available! 10.9.8 -> 12.0.2
+#34 12.67 npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+#34 12.67 npm notice To update run: npm install -g npm@12.0.2
+#34 12.67 npm notice
+#34 DONE 12.7s
+
+#35 [web build 5/6] COPY . .
+#35 DONE 0.0s
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 83.4s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 83.4s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 83.4s
+#29 ...
+
+#36 [web build 6/6] RUN npm run build
+#36 0.626 
+#36 0.626 > frontend@0.0.0 build
+#36 0.626 > tsc -b && vite build
+#36 0.626 
+#36 5.794 vite v8.2.1 building client environment for production...
+#36 5.807 [2Ktransforming...✓ 89 modules transformed.
+#36 6.086 rendering chunks...
+#36 6.148 computing gzip size...
+#36 6.157 dist/index.html                   0.47 kB │ gzip:   0.32 kB
+#36 6.157 dist/assets/index-lLL8WVHe.css   37.26 kB │ gzip:   7.66 kB
+#36 6.157 dist/assets/index-2NINEzRY.js   567.07 kB │ gzip: 163.49 kB
+#36 6.157 
+#36 6.157 ✓ built in 362ms
+#36 6.158 [plugin builtin:vite-reporter] 
+#36 6.158 (!) Some chunks are larger than 500 kB after minification. Consider:
+#36 6.158 - Using dynamic import() to code-split the application
+#36 6.158 - Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+#36 6.158 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+#36 DONE 6.2s
+
+#29 [web stage-1 1/6] FROM docker.io/library/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 88.5s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 88.5s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 88.5s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 93.6s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 93.6s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 93.6s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 98.7s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 98.7s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 98.7s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 103.7s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 103.7s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 103.7s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 108.8s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 108.8s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 108.8s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0B / 1.79MB 113.8s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 0B / 629B 114.0s
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 0B / 955B 114.0s
+#29 sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 629B / 629B 117.5s done
+#29 sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 955B / 955B 117.4s done
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 117.6s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 117.6s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 1.05MB / 1.79MB 118.5s
+#29 sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 1.79MB / 1.79MB 118.6s done
+#29 extracting sha256:61ca4f733c802afd9e05a32f0de0361b6d713b8b53292dc15fb093229f648674 0.0s done
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 118.6s
+#29 extracting sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235
+#29 extracting sha256:b464cfdf2a6319875aeb27359ec549790ce14d8214fcb16ef915e4530e5ed235 done
+#29 extracting sha256:d7e5070240863957ebb0b5a44a5729963c3462666baa2947d00628cb5f2d5773 done
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 122.7s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 122.7s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 123.7s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 127.8s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 127.8s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 128.8s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 132.8s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 132.8s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 133.9s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 137.8s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 137.8s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 139.0s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 142.9s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 142.9s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 144.2s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 147.9s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 147.9s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 149.3s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 153.1s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 153.1s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 154.5s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 158.2s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 158.2s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 159.7s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 163.4s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 163.4s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 164.7s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 168.4s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 168.4s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 169.8s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 0B / 402B 173.6s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 0B / 1.21kB 173.6s
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 0B / 1.40kB 174.9s
+#29 sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 1.21kB / 1.21kB 175.5s done
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 175.5s
+#29 sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 402B / 402B 175.7s done
+#29 sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 1.40kB / 1.40kB 175.5s done
+#29 extracting sha256:81bd8ed7ec6789b0cb7f1b47ee731c522f6dba83201ec73cd6bca1350f582948 done
+#29 extracting sha256:197eb75867ef4fcecd4724f17b0972ab0489436860a594a9445f8eaff8155053 done
+#29 extracting sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102
+#29 extracting sha256:34a64644b756511a2e217f0508e11d1a572085d66cd6dc9a555a082ad49a3102 done
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 180.6s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 185.7s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 190.9s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 196.1s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 201.3s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 206.4s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 211.6s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 216.7s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 221.8s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 226.8s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0B / 15.52MB 231.9s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 1.05MB / 15.52MB 236.3s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 2.10MB / 15.52MB 236.4s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 3.15MB / 15.52MB 236.5s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 5.24MB / 15.52MB 236.7s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 6.29MB / 15.52MB 236.9s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 9.44MB / 15.52MB 237.2s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 11.53MB / 15.52MB 237.4s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 12.58MB / 15.52MB 237.8s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 14.68MB / 15.52MB 238.3s
+#29 sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 15.52MB / 15.52MB 238.4s done
+#29 extracting sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0.1s
+#29 extracting sha256:39c2ddfd6010082a4a646e7ca44e95aca9bf3eaebc00f17f7ccc2954004f2a7d 0.4s done
+#29 DONE 238.9s
+
+#37 [web stage-1 2/6] COPY nginx.conf /etc/nginx/conf.d/default.conf
+#37 DONE 0.1s
+
+#38 [web stage-1 3/6] RUN sed -i "s/__REPOMESH_API_UPSTREAM__/api/g" /etc/nginx/conf.d/default.conf
+#38 DONE 0.3s
+
+#39 [web stage-1 4/6] COPY --from=build /app/dist /usr/share/nginx/html
+#39 DONE 0.0s
+
+#40 [web stage-1 5/6] COPY docker-entrypoint.d/40-runtime-config.sh /docker-entrypoint.d/40-runtime-config.sh
+#40 DONE 0.0s
+
+#41 [web stage-1 6/6] RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh
+#41 DONE 0.5s
+
+#42 [web] exporting to image
+#42 exporting layers 0.0s done
+#42 writing image sha256:038af7ae9ba6064bc1b5217a0fc5399a938ad0e09794c1f8299965f162cab600 done
+#42 naming to docker.io/library/goai-infra-repomesh-web done
+#42 DONE 0.1s
+
+#43 [web] resolving provenance for metadata file
+#43 DONE 0.0s
+ api  Built
+ bootstrap  Built
+ web  Built
+network agentteams-net declared as external, but could not be found
+EXIT=1
+2026-09-02 03:54:42 end

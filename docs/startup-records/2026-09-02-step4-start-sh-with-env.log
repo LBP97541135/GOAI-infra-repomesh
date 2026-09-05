@@ -1,0 +1,515 @@
+2026-09-02 04:02:45 start
+ Container goai-infra-repomesh-postgres-1  Running
+AgentTeams Controller is missing; installing it automatically.
+
+========================================
+AgentTeams Installation Log
+Started: Wed Sep  2 04:02:48     2026
+User: 18092
+System: MINGW64_NT-10.0-26200 XuBoHan��PC 3.5.7-463ebcdc.x86_64 2025-03-03 17:26 UTC x86_64 Msys
+Log file: /c/Users/18092/agentteams-install.log
+========================================
+
+
+[33m[AgentTeams WARNING][0m Could not detect timezone automatically.
+[33m[AgentTeams][0m Please enter your timezone (e.g., Asia/Shanghai, America/New_York).
+
+[36m[AgentTeams][0m Using default timezone: Asia/Shanghai
+[36m[AgentTeams][0m === AgentTeams Manager 安装 ===
+[36m[AgentTeams][0m 镜像仓库: higress-registry.cn-hangzhou.cr.aliyuncs.com
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 安装目录: /d/Project4work/GOAI-infra-repomesh
+[36m[AgentTeams][0m   （env 文件 'agentteams-manager.env' 将保存到 HOME 目录。）
+[36m[AgentTeams][0m   （请从您希望管理此安装的目录运行此脚本。）
+[36m[AgentTeams][0m 
+
+[36m[AgentTeams][0m ⚠️  检测到残留数据卷 'agentteams-data'，但未找到对应的 env 配置文件。
+[36m[AgentTeams][0m 这可能是之前安装的残留数据，会导致新安装出现异常（如密码冲突、服务启动失败）。
+[36m[AgentTeams][0m 非交互模式: 自动清理残留数据卷...
+[36m[AgentTeams][0m 正在清理残留数据卷...
+[36m[AgentTeams][0m 残留数据卷已清理。继续全新安装...
+[36m[AgentTeams][0m --- LLM 配置 ---
+[36m[AgentTeams][0m   提供商: openai-compat
+[36m[AgentTeams][0m   Base URL: https://api.deepseek.com/v1
+[36m[AgentTeams][0m   模型: deepseek-chat（默认）
+[36m[AgentTeams][0m   LLM API Key = （已通过环境变量预设）
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- Manager 运行时 ---
+
+  1) QwenPaw
+  2) OpenClaw
+
+[36m[AgentTeams][0m Manager 运行时: copaw
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- 默认 Worker 运行时 ---
+
+  1) QwenPaw
+  2) OpenClaw
+  3) Hermes
+
+[36m[AgentTeams][0m 默认 Worker 运行时: copaw
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- 管理员凭据 ---
+[36m[AgentTeams][0m   管理员用户名 = （已通过环境变量预设）
+[36m[AgentTeams][0m   已自动生成管理员密码
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- 网络访问模式 ---
+
+  1)   仅本机使用，无需开放外部端口（推荐）
+  2)   允许外部访问（局域网 / 公网）
+
+[36m[AgentTeams][0m 端口已绑定到 127.0.0.1（仅本机访问）
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- 端口配置（按回车使用默认值）---
+[36m[AgentTeams][0m   网关主机端口（容器内 8080） = 18080（默认）
+[36m[AgentTeams][0m   Higress 控制台主机端口（容器内 8001） = 18001（默认）
+[36m[AgentTeams][0m   Element Web 直接访问主机端口（容器内 8088） = 18088（默认）
+[36m[AgentTeams][0m   Manager 控制台主机端口（容器内 18888） = 18888（默认）
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- 域名配置（按回车使用默认值）---
+[36m[AgentTeams][0m 提示: 自定义域名前必须事先做好 DNS 解析。单机 ECS 部署时无需修改 aigw、fs 等域名；Element Web 和 Matrix Server 也可通过 IP 直接访问。
+[36m[AgentTeams][0m   Matrix 域名 = matrix-local.agentteams.io:18080（默认）
+[36m[AgentTeams][0m   Element Web 域名 = matrix-client-local.agentteams.io（默认）
+[36m[AgentTeams][0m   AI 网关域名 = aigw-local.agentteams.io（默认）
+[36m[AgentTeams][0m   文件系统域名 = fs-local.agentteams.io（默认）
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m --- GitHub 集成（可选，按回车跳过）---
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m --- Skills 注册中心（可选，按回车使用默认 nacos://market.agentteams.io:80/public）---
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m Dashboard 配置: 端口=13000 镜像=higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-dashboard:v1.2.0-beta.1 (non-interactive)
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m --- Matrix 端到端加密（E2EE）---
+[36m[AgentTeams][0m   Matrix E2EE = 0 (non-interactive, skipped)
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m   Docker API 代理 = 1 (non-interactive, skipped)
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m   Worker 空闲超时（分钟） = 720 (non-interactive, skipped)
+[36m[AgentTeams][0m （输入 b 返回上一步）
+[36m[AgentTeams][0m   host_share.label = /c/Users/18092 (non-interactive, skipped)
+[36m[AgentTeams][0m 
+[36m[AgentTeams][0m 正在生成密钥...
+[36m[AgentTeams][0m 配置已保存到 /c/Users/18092/agentteams-manager.env
+[36m[AgentTeams][0m 未找到容器运行时 socket（Manager 无法直接创建 Worker 容器，需要你手动执行 docker 命令创建）
+[36m[AgentTeams][0m 共享主机目录: /c/Users/18092 -> 容器内 /host-share
+[36m[AgentTeams][0m 正在拉取 Manager 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-manager-copaw
+206356c42440: Pulling fs layer
+206709444425: Pulling fs layer
+bbf418262cbe: Pulling fs layer
+43272e9c9d4b: Pulling fs layer
+45ecf9a33135: Pulling fs layer
+c433d709f594: Pulling fs layer
+3877faaf10cc: Pulling fs layer
+5f2f5e9ef69e: Pulling fs layer
+94e019b0a5fe: Pulling fs layer
+ec499310aec8: Pulling fs layer
+7e4ef5af1738: Pulling fs layer
+8d59847c064d: Pulling fs layer
+4e57b52fd042: Pulling fs layer
+68815debad86: Pulling fs layer
+b870cff2a397: Pulling fs layer
+e32a2286d02e: Pulling fs layer
+d3f095ea49af: Pulling fs layer
+0eb785b168ec: Pulling fs layer
+e389964b5a52: Pulling fs layer
+a16897a4b939: Pulling fs layer
+e4c499c886e9: Pulling fs layer
+459bb263aa7c: Pulling fs layer
+b5318351e4a4: Pulling fs layer
+57a2c05ae28e: Pulling fs layer
+4e5be1b1be84: Pulling fs layer
+c433d709f594: Waiting
+3877faaf10cc: Waiting
+a6e9ded0db27: Pulling fs layer
+5f2f5e9ef69e: Waiting
+4f4fb700ef54: Pulling fs layer
+94e019b0a5fe: Waiting
+ec499310aec8: Waiting
+4e57b52fd042: Waiting
+7e4ef5af1738: Waiting
+68815debad86: Waiting
+43272e9c9d4b: Waiting
+459bb263aa7c: Waiting
+b870cff2a397: Waiting
+8d59847c064d: Waiting
+a6e9ded0db27: Waiting
+b5318351e4a4: Waiting
+e32a2286d02e: Waiting
+4f4fb700ef54: Waiting
+57a2c05ae28e: Waiting
+d3f095ea49af: Waiting
+0eb785b168ec: Waiting
+4e5be1b1be84: Waiting
+e389964b5a52: Waiting
+e4c499c886e9: Waiting
+45ecf9a33135: Waiting
+206709444425: Verifying Checksum
+bbf418262cbe: Verifying Checksum
+bbf418262cbe: Download complete
+43272e9c9d4b: Verifying Checksum
+43272e9c9d4b: Download complete
+206356c42440: Verifying Checksum
+206356c42440: Download complete
+206356c42440: Pull complete
+c433d709f594: Verifying Checksum
+c433d709f594: Download complete
+206709444425: Pull complete
+bbf418262cbe: Pull complete
+43272e9c9d4b: Pull complete
+3877faaf10cc: Verifying Checksum
+3877faaf10cc: Download complete
+5f2f5e9ef69e: Verifying Checksum
+5f2f5e9ef69e: Download complete
+94e019b0a5fe: Verifying Checksum
+94e019b0a5fe: Download complete
+45ecf9a33135: Verifying Checksum
+45ecf9a33135: Download complete
+ec499310aec8: Verifying Checksum
+ec499310aec8: Download complete
+8d59847c064d: Verifying Checksum
+8d59847c064d: Download complete
+4e57b52fd042: Download complete
+68815debad86: Verifying Checksum
+68815debad86: Download complete
+b870cff2a397: Verifying Checksum
+b870cff2a397: Download complete
+e32a2286d02e: Download complete
+d3f095ea49af: Verifying Checksum
+d3f095ea49af: Download complete
+45ecf9a33135: Pull complete
+c433d709f594: Pull complete
+3877faaf10cc: Pull complete
+5f2f5e9ef69e: Pull complete
+0eb785b168ec: Verifying Checksum
+0eb785b168ec: Download complete
+e389964b5a52: Verifying Checksum
+e389964b5a52: Download complete
+94e019b0a5fe: Pull complete
+ec499310aec8: Pull complete
+a16897a4b939: Verifying Checksum
+a16897a4b939: Download complete
+e4c499c886e9: Verifying Checksum
+e4c499c886e9: Download complete
+459bb263aa7c: Verifying Checksum
+459bb263aa7c: Download complete
+b5318351e4a4: Download complete
+57a2c05ae28e: Verifying Checksum
+57a2c05ae28e: Download complete
+4e5be1b1be84: Verifying Checksum
+4e5be1b1be84: Download complete
+a6e9ded0db27: Download complete
+4f4fb700ef54: Download complete
+7e4ef5af1738: Verifying Checksum
+7e4ef5af1738: Download complete
+7e4ef5af1738: Pull complete
+8d59847c064d: Pull complete
+4e57b52fd042: Pull complete
+68815debad86: Pull complete
+b870cff2a397: Pull complete
+e32a2286d02e: Pull complete
+d3f095ea49af: Pull complete
+0eb785b168ec: Pull complete
+e389964b5a52: Pull complete
+a16897a4b939: Pull complete
+e4c499c886e9: Pull complete
+459bb263aa7c: Pull complete
+b5318351e4a4: Pull complete
+57a2c05ae28e: Pull complete
+4e5be1b1be84: Pull complete
+a6e9ded0db27: Pull complete
+4f4fb700ef54: Pull complete
+Digest: sha256:29429e47118f859191fa133f8d617434019c0f03221b405474be7e467bad87b4
+Status: Downloaded newer image for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0
+[36m[AgentTeams][0m 正在拉取 Worker 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-worker
+a3629ac5b9f4: Pulling fs layer
+f31d0eba8c1c: Pulling fs layer
+e0d109c0c2bd: Pulling fs layer
+4001969f6c9b: Pulling fs layer
+c61654c96f82: Pulling fs layer
+f651a94fe55d: Pulling fs layer
+eefd659ab486: Pulling fs layer
+6a58c0927e8d: Pulling fs layer
+8856c2dd7564: Pulling fs layer
+33b75ca3c348: Pulling fs layer
+275f9e6ee603: Pulling fs layer
+d223f38c4e48: Pulling fs layer
+25559f5ab103: Pulling fs layer
+a5f9800d9f4d: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+8856c2dd7564: Waiting
+6a58c0927e8d: Waiting
+33b75ca3c348: Waiting
+275f9e6ee603: Waiting
+d223f38c4e48: Waiting
+25559f5ab103: Waiting
+a5f9800d9f4d: Waiting
+4f4fb700ef54: Waiting
+4001969f6c9b: Waiting
+c61654c96f82: Waiting
+eefd659ab486: Waiting
+f651a94fe55d: Waiting
+a3629ac5b9f4: Verifying Checksum
+a3629ac5b9f4: Download complete
+a3629ac5b9f4: Pull complete
+e0d109c0c2bd: Verifying Checksum
+e0d109c0c2bd: Download complete
+f31d0eba8c1c: Verifying Checksum
+f31d0eba8c1c: Download complete
+c61654c96f82: Verifying Checksum
+c61654c96f82: Download complete
+f31d0eba8c1c: Pull complete
+f651a94fe55d: Verifying Checksum
+f651a94fe55d: Download complete
+e0d109c0c2bd: Pull complete
+eefd659ab486: Verifying Checksum
+eefd659ab486: Download complete
+8856c2dd7564: Download complete
+6a58c0927e8d: Verifying Checksum
+6a58c0927e8d: Download complete
+33b75ca3c348: Download complete
+275f9e6ee603: Verifying Checksum
+275f9e6ee603: Download complete
+d223f38c4e48: Download complete
+25559f5ab103: Verifying Checksum
+25559f5ab103: Download complete
+a5f9800d9f4d: Download complete
+4f4fb700ef54: Verifying Checksum
+4f4fb700ef54: Download complete
+4001969f6c9b: Download complete
+4001969f6c9b: Pull complete
+c61654c96f82: Pull complete
+f651a94fe55d: Pull complete
+eefd659ab486: Pull complete
+6a58c0927e8d: Pull complete
+8856c2dd7564: Pull complete
+33b75ca3c348: Pull complete
+275f9e6ee603: Pull complete
+d223f38c4e48: Pull complete
+25559f5ab103: Pull complete
+a5f9800d9f4d: Pull complete
+4f4fb700ef54: Pull complete
+Digest: sha256:daf587ad042f9564abb2347db5c4205ecc25d1b322e09fdd0d58a2a16c2d5c85
+Status: Downloaded newer image for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-worker:v1.2.0
+[36m[AgentTeams][0m 正在拉取 Worker 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-copaw-worker
+206356c42440: Already exists
+206709444425: Already exists
+bbf418262cbe: Already exists
+43272e9c9d4b: Already exists
+eac63dbd6d8c: Pulling fs layer
+796851e1ef89: Pulling fs layer
+1965690c33b8: Pulling fs layer
+943067c64c0f: Pulling fs layer
+47eabb6a87a3: Pulling fs layer
+1519ca553b1c: Pulling fs layer
+5950bbec1242: Pulling fs layer
+5b3806aa5caa: Pulling fs layer
+699e0279d5b7: Pulling fs layer
+aeadcd585b00: Pulling fs layer
+55d8e5fb048a: Pulling fs layer
+58640815a68a: Pulling fs layer
+7c39bcebe560: Pulling fs layer
+8447e627f261: Pulling fs layer
+38dbf195eb6d: Pulling fs layer
+f413d45863ca: Pulling fs layer
+de0409062612: Pulling fs layer
+f26aeece48af: Pulling fs layer
+62c74f0f5823: Pulling fs layer
+b23ef86e959d: Pulling fs layer
+5c8b03233efe: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+58640815a68a: Waiting
+1519ca553b1c: Waiting
+7c39bcebe560: Waiting
+5950bbec1242: Waiting
+8447e627f261: Waiting
+38dbf195eb6d: Waiting
+f413d45863ca: Waiting
+55d8e5fb048a: Waiting
+de0409062612: Waiting
+5c8b03233efe: Waiting
+f26aeece48af: Waiting
+4f4fb700ef54: Waiting
+5b3806aa5caa: Waiting
+62c74f0f5823: Waiting
+699e0279d5b7: Waiting
+b23ef86e959d: Waiting
+aeadcd585b00: Waiting
+943067c64c0f: Waiting
+47eabb6a87a3: Waiting
+796851e1ef89: Verifying Checksum
+796851e1ef89: Download complete
+1965690c33b8: Verifying Checksum
+1965690c33b8: Download complete
+943067c64c0f: Verifying Checksum
+943067c64c0f: Download complete
+eac63dbd6d8c: Verifying Checksum
+eac63dbd6d8c: Download complete
+eac63dbd6d8c: Pull complete
+796851e1ef89: Pull complete
+1965690c33b8: Pull complete
+943067c64c0f: Pull complete
+1519ca553b1c: Verifying Checksum
+1519ca553b1c: Download complete
+5b3806aa5caa: Verifying Checksum
+5b3806aa5caa: Download complete
+47eabb6a87a3: Verifying Checksum
+47eabb6a87a3: Download complete
+699e0279d5b7: Verifying Checksum
+699e0279d5b7: Download complete
+5950bbec1242: Verifying Checksum
+5950bbec1242: Download complete
+47eabb6a87a3: Pull complete
+55d8e5fb048a: Verifying Checksum
+55d8e5fb048a: Download complete
+1519ca553b1c: Pull complete
+5950bbec1242: Pull complete
+5b3806aa5caa: Pull complete
+699e0279d5b7: Pull complete
+7c39bcebe560: Verifying Checksum
+7c39bcebe560: Download complete
+8447e627f261: Verifying Checksum
+8447e627f261: Download complete
+38dbf195eb6d: Download complete
+f413d45863ca: Verifying Checksum
+f413d45863ca: Download complete
+de0409062612: Download complete
+f26aeece48af: Verifying Checksum
+f26aeece48af: Download complete
+62c74f0f5823: Verifying Checksum
+62c74f0f5823: Download complete
+b23ef86e959d: Verifying Checksum
+b23ef86e959d: Download complete
+5c8b03233efe: Download complete
+4f4fb700ef54: Download complete
+aeadcd585b00: Verifying Checksum
+aeadcd585b00: Download complete
+58640815a68a: Verifying Checksum
+58640815a68a: Download complete
+aeadcd585b00: Pull complete
+55d8e5fb048a: Pull complete
+58640815a68a: Pull complete
+7c39bcebe560: Pull complete
+8447e627f261: Pull complete
+38dbf195eb6d: Pull complete
+f413d45863ca: Pull complete
+de0409062612: Pull complete
+f26aeece48af: Pull complete
+62c74f0f5823: Pull complete
+b23ef86e959d: Pull complete
+5c8b03233efe: Pull complete
+4f4fb700ef54: Pull complete
+Digest: sha256:dcdd9103535cfac247267e0f69661820c801396d58e2c8e0c14eefd40b63b7bc
+Status: Downloaded newer image for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0
+[36m[AgentTeams][0m 正在拉取 Worker 镜像: higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker:v1.2.0
+v1.2.0: Pulling from agentteams/agentteams-hermes-worker
+206356c42440: Already exists
+206709444425: Already exists
+bbf418262cbe: Already exists
+43272e9c9d4b: Already exists
+fc9fbd0af512: Pulling fs layer
+a379acf6535c: Pulling fs layer
+fc4a8e239814: Pulling fs layer
+08f86b9abb76: Pulling fs layer
+f11892ac448d: Pulling fs layer
+933a72dcb959: Pulling fs layer
+71fc7d244557: Pulling fs layer
+aa4598594f07: Pulling fs layer
+782e09f5c0ce: Pulling fs layer
+c14bfb6d73a9: Pulling fs layer
+71bddfb4f8d5: Pulling fs layer
+808a9d871671: Pulling fs layer
+075696bcb0ed: Pulling fs layer
+f7a245ecf91b: Pulling fs layer
+b865b24e536a: Pulling fs layer
+772c0665e2fc: Pulling fs layer
+7b3a43f5c764: Pulling fs layer
+b582a3e7c988: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+08f86b9abb76: Waiting
+f11892ac448d: Waiting
+933a72dcb959: Waiting
+71fc7d244557: Waiting
+aa4598594f07: Waiting
+782e09f5c0ce: Waiting
+c14bfb6d73a9: Waiting
+71bddfb4f8d5: Waiting
+808a9d871671: Waiting
+075696bcb0ed: Waiting
+f7a245ecf91b: Waiting
+4f4fb700ef54: Waiting
+b865b24e536a: Waiting
+772c0665e2fc: Waiting
+7b3a43f5c764: Waiting
+b582a3e7c988: Waiting
+a379acf6535c: Verifying Checksum
+a379acf6535c: Download complete
+fc4a8e239814: Verifying Checksum
+fc4a8e239814: Download complete
+08f86b9abb76: Download complete
+f11892ac448d: Verifying Checksum
+f11892ac448d: Download complete
+933a72dcb959: Verifying Checksum
+933a72dcb959: Download complete
+71fc7d244557: Verifying Checksum
+71fc7d244557: Download complete
+aa4598594f07: Download complete
+782e09f5c0ce: Verifying Checksum
+782e09f5c0ce: Download complete
+71bddfb4f8d5: Verifying Checksum
+71bddfb4f8d5: Download complete
+808a9d871671: Verifying Checksum
+808a9d871671: Download complete
+075696bcb0ed: Verifying Checksum
+075696bcb0ed: Download complete
+c14bfb6d73a9: Verifying Checksum
+c14bfb6d73a9: Download complete
+b865b24e536a: Download complete
+f7a245ecf91b: Download complete
+7b3a43f5c764: Verifying Checksum
+7b3a43f5c764: Download complete
+772c0665e2fc: Verifying Checksum
+772c0665e2fc: Download complete
+4f4fb700ef54: Download complete
+b582a3e7c988: Download complete
+fc9fbd0af512: Verifying Checksum
+fc9fbd0af512: Download complete
+fc9fbd0af512: Pull complete
+a379acf6535c: Pull complete
+fc4a8e239814: Pull complete
+08f86b9abb76: Pull complete
+f11892ac448d: Pull complete
+933a72dcb959: Pull complete
+71fc7d244557: Pull complete
+aa4598594f07: Pull complete
+782e09f5c0ce: Pull complete
+c14bfb6d73a9: Pull complete
+71bddfb4f8d5: Pull complete
+808a9d871671: Pull complete
+075696bcb0ed: Pull complete
+f7a245ecf91b: Pull complete
+b865b24e536a: Pull complete
+772c0665e2fc: Pull complete
+7b3a43f5c764: Pull complete
+b582a3e7c988: Pull complete
+4f4fb700ef54: Pull complete
+Digest: sha256:60cdf6be43dea6eafcb85b26f592756a991ac6221fd1faf49face91e1592ec2a
+Status: Downloaded newer image for higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker:v1.2.0
+higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-hermes-worker:v1.2.0
+[36m[AgentTeams][0m 正在启动 Manager 容器...
+docker: invalid spec: :/var/run/docker.sock: empty section between colons
+
+Run 'docker run --help' for more information
+EXIT=125
+2026-09-02 04:15:43 end

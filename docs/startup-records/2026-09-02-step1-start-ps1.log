@@ -1,0 +1,10 @@
+2026-09-02 03:33:57 start
+docker : WARNING: No blkio throttle.read_bps_device support
+所在位置 D:\Project4work\GOAI-infra-repomesh\scripts\start.ps1:45 字符: 1
++ docker info *> $null
++ ~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (WARNING: No blk..._device support:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+EXIT=1
+2026-09-02 03:33:59 end

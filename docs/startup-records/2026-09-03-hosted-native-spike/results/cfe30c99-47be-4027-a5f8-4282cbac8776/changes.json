@@ -1,0 +1,19 @@
+{
+  "attempt_id": "cfe30c99-47be-4027-a5f8-4282cbac8776",
+  "base_sha": "882231dd887688a986b0faec656a90d29141406c",
+  "head_sha": "9e1b38ab8e705184a51211f52baada26768d571f",
+  "changed_files": [
+    {
+      "status": "M",
+      "path": "README.md"
+    },
+    {
+      "status": "M",
+      "path": "src/pricing_core/quote.py"
+    },
+    {
+      "status": "M",
+      "path": "tests/test_quote.py"
+    }
+  ]
+}
