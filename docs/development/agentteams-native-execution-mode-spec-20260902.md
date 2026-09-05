@@ -95,7 +95,7 @@
 | D-9 | fencing 复用既有 `task_assignment_attempts.generation` 与 `worker_execution_reservations.{id,version,lease}`；只新增一张 `hosted_native_attempts` 存 worker 侧阶段 | 事件收件箱已按这四个 id 拒绝错代次事件；过期租约回收循环已存在，不造第二套 | `runner_store.py:336`；`bootstrap/app.py:698`；`assignment.py:64` 唯一活跃约束 |
 | D-10 | **验证调度就是一条 `runner_dispatches` 行**，`adapterId = "repomesh-verifier"`；复验器用 control token 轮询 `runner-tasks/next?adapter=repomesh-verifier`，结果以 Runtime v1 事件回投 | 删除测试：另起一套验证流水线要重做收件箱、证据、终态迁移、批次推进；全部是 v1 可选加法 | `gateway.py:96-149`；`runner_store.py:251-291`；`contracts/runtime/README.md:31-35` |
 | D-11 | 候选工作树由 api 在 Leader `ACCEPT` 时物化：把 `candidate.bundle` fetch 进镜像仓、`git worktree add --detach <sha>`，路径写进验证调度的 `workspace.path` | 交付终结器要「磁盘上 HEAD == commit_sha 的工作树」+ `base_sha` + `test_results`；api 已拥有镜像仓与工作树管理，复验器只管测试 | `plan_delivery.py:317-374`；`git_branch.py:58`；`integrations/workspace/git_worktree.py:32` |
-| D-12（09-03 实证修订） | 尝试预算 = 执行预留的租约长度（默认 2700 s）；到期走既有 `WorkerRecoveryReconciler` → `WorkerRecoveryCoordinator.decide`，`max_execution_attempts`（默认 3）即尝试上限。**中断信号分三级**：① 预算到期是唯一保证生效的兜底；② **worker 进程重启即中断**——以 worker 进程/容器的启动时间晚于尝试 `notified_at` 为准（`reason="worker_restarted"`），旧尝试封存、开新代次；③ 控制器 `phase != Running` 或 `containerState` 非 running 作补充信号（`reason="worker_not_running"`）。房间里的「等待审批」文字与 `phase` 都不能单独当中断依据。信号②的启动时间载体见 §8.16，PR-A 施工前定；载体落定前只有①③生效 | 不造第二个计时器；重试/改派/升级三种决策已有。实证 S-6：`docker restart` 7 秒完成，控制器 `phase` 大概率一直 Running，工作区与未提交改动保留，只有会话内存（含待审批）丢失，worker 不自发续做——真正的信号是进程重启，不是 `phase`；S-5：DeepSeek 会输出仿冒的等待文字 | `bootstrap/app.py:698-727`；`integrations/runner/recovery.py:31-59`；`settings.py:89-95`；`agentteams-controller/api/v1beta1/types.go:371-383`（`WorkerStatus` 无 `startedAt`）；`2026-09-03-hosted-native-spike.md` §4 S-5、S-6 |
+| D-12（09-03 实证修订） | 尝试预算 = 执行预留的租约长度（默认 2700 s）；到期走既有 `WorkerRecoveryReconciler` → `WorkerRecoveryCoordinator.decide`，`max_execution_attempts`（默认 3）即尝试上限。**中断信号分三级**：① 预算到期是唯一保证生效的兜底；② **worker 进程重启即中断**——以 worker 进程/容器的启动时间晚于尝试 `notified_at` 为准（`reason="worker_restarted"`），旧尝试封存、开新代次；③ 控制器 `phase != Running` 或 `containerState` 非 running 作补充信号（`reason="worker_not_running"`）。房间里的「等待审批」文字与 `phase` 都不能单独当中断依据。信号②的启动时间载体见 §8.16（**09-05 对照后定为 (b) verifier 心跳附带容器 `State.StartedAt`**，PR-B 落地前只有①③生效） | 不造第二个计时器；重试/改派/升级三种决策已有。实证 S-6：`docker restart` 7 秒完成，控制器 `phase` 大概率一直 Running，工作区与未提交改动保留，只有会话内存（含待审批）丢失，worker 不自发续做——真正的信号是进程重启，不是 `phase`；S-5：DeepSeek 会输出仿冒的等待文字 | `bootstrap/app.py:698-727`；`integrations/runner/recovery.py:31-59`；`settings.py:89-95`；`agentteams-controller/api/v1beta1/types.go:371-383`（`WorkerStatus` 无 `startedAt`）；`2026-09-03-hosted-native-spike.md` §4 S-5、S-6 |
 | D-13 | Leader 审阅预算 900 s；超时不跳过，任务 blocked 并开人工检查点；Leader 容器不在 Running 进开工门禁 | `ACCEPT` 是进入复验的前置（目的文档 §7.1）；Leader BLOCKED/FAILED 已有升级路径 | `task_orchestration/application.py:706` |
 | D-14 | 越界修改由复验器判定：变更路径不在 `allowedPaths` 或命中 `deniedPaths` → `runner.failed`，`blockers=["changed_path_denied: <path>"]`，计一次尝试 | worker 在容器内无法被技术约束；路径策略沿用任务投影已有来源 | `integrations/runner/task_projection.py:100-120,185-187` |
 | D-15 | 第一版一个默认工具链镜像（git + python3 + node）；`repositories.toolchain` 列与按团队 worker `image` 留第二波 | 三个夹具仓只需 python/node；Worker CRD 已有 `image` 字段可后接 | `types.go:178` |
@@ -246,6 +246,15 @@ helper_script: bytes, policy: PathPolicy, test_commands, review: ReviewInputs | 
 
 `_digest` 改为覆盖所有文件的有序拼接；`:76-80` 的冲突检查改比 v2 摘要。两个适配器（磁盘、MinIO）同步改。
 
+**09-05 落地（提交 `fdc42f8d`）**，与上文的差异：
+① `PackageInputs` / `PathPolicy` / `ReviewInputs` 定义在 `task_orchestration/contracts.py`（发布器端口所在模块），
+`PackageInputs` 多带 `workspace_root="/work"`、`test_timeout_seconds=600`，`base/package.json` 相应多 `schema`、`test_timeout_seconds`、`helper` 三个键（`package.schema.json` 是 `additionalProperties: false` 的全集）；
+② 包在 `task_publishing.py` 里**一次装配成有序字节**（`assemble_v1_package` / `assemble_v2_package`），磁盘与 MinIO 适配器只做 read/write，两通道字节与摘要逐文件相同；
+v1 磁盘通道照旧做「已存在即比摘要」，v1 MinIO 通道照旧覆盖写（今天如此），只有 v2 尝试目录在两个通道都做 fencing；
+③ 模板与帮手脚本作为包数据放 `integrations/agentteams/task_package/`（`pyproject` `package-data`），四条命令行的唯一定义处是该包的 `HELPER_COMMANDS`；
+④ 审阅包也带 `base/package.json` 与帮手脚本（schema 统一），不带 bundle；`review_of` 只在 `meta.repomesh`；
+⑤ v2 spec **没有** v1 的「Database change requirements」段（见 §8.18）。
+
 #### M4 `repomesh_verifier` — 独立进程
 
 位置：`src/repomesh_verifier/`（与 runner/bridge/launcher 平级），`pyproject.toml` 加 `repomesh-verifier = "repomesh_verifier.main:run"`。
@@ -307,6 +316,15 @@ def derive_runtime(mode: ConstructionMode) -> DerivedRuntime  # hosted_native �
 
 `RepositoryTeam.construction_mode`（默认 `HOSTED_NATIVE`）；`with_adopted_leader` 的 LEADER 闸只在 `LOCAL_CLI` 下生效。
 `TeamConstructionModeReader` 协议 + `PersistedTeamConstructionModeReader`（照 `infrastructure.py:591-625` 抄）。
+
+**09-05 落地（提交 `277959b4`，分支 `feat/hosted-native-wave1`）**，与上文的三处差异：
+① `WorkerRuntime` 经 `agent_runtime.contracts` 再导出后才能进 `project.contracts`（架构测试只允许跨模块 import `contracts`）；
+② 投影 `ProjectRuntimeProjection` 不再注入任何 worker runtime，也**没有**注入 `TeamConstructionModeReader`——它本来就加载整个拓扑，直接按 `team.construction_mode` 逐团队 `derive_runtime()`，
+读取器留给投递分叉 / 门禁 / 观察器这些不持有拓扑的消费者（容器里已注册 `team_construction_mode_reader()`）；
+③ 接团队请求的 `construction_mode` 只决定**创建时刻**的控制器投影（runtime + `container_managed`），
+拓扑行的模式由 `CreateProjectAgentTopology(construction_mode=settings.construction_mode_default)` 写入——
+接团队时的选择目前**没有持久化载体**能带到 materialize 时才建的拓扑行（没有「catalog 团队记录」这种东西），
+所以一个部署要么统一用 `REPOMESH_CONSTRUCTION_MODE_DEFAULT`，要么按 §5.3.1 对个别行 `UPDATE`；按仓库持久化该选择的候选位置是 catalog 仓库行（与 `capability_profile` 同型的供给侧开关），列第二波。
 
 #### M8 `ExecutionPlaneReadiness` — 就绪真相
 
@@ -401,33 +419,33 @@ class RequireExecutionPlaneReady:    # 组合门禁
 
 | 迁移 | 内容 | 样板 |
 |---|---|---|
-| `20260904_0055_team_construction_mode.py` | `project.repository_agent_teams` 加 `construction_mode String(20) NOT NULL server_default 'hosted_native'` + 索引 `ix_project_repository_agent_teams_construction_mode`；`downgrade` 删列 | `20260830_0047_team_decomposition_mode.py:63-111` |
+| `20260904_0055_team_construction_mode.py`（**09-05 已落地**，索引名按命名约定实为 `ix_repository_agent_teams_construction_mode`） | `project.repository_agent_teams` 加 `construction_mode String(20) NOT NULL server_default 'hosted_native'` + 索引；`downgrade` 删列 | `20260830_0047_team_decomposition_mode.py:63-111` |
 | `20260904_0056_hosted_native_attempts.py` | 表 `agent_runtime.hosted_native_attempts(id PK, task_id, worker_agent_id, leader_agent_id, team_name, assignment_attempt_id, generation, execution_id, phase String(30), package_dir, review_dir NULL, budget_until, notified_at, acknowledged_at, submitted_at, submit_status, review_verdict, verification_run_id, fenced_at, fence_reason, created_at, updated_at)`，部分唯一索引「每 task 一个非终态尝试」；表 `agent_runtime.hosted_native_events(id PK, attempt_id, kind String(30), marker String(200), payload JSONB, observed_at, applied_at NULL, UNIQUE(attempt_id, kind, marker))` | `delivery/infrastructure.py:188-217`；`assignment.py:58-88` |
 | `20260904_0057_repository_toolchain.py`（第二波） | `repository_intelligence.repositories.toolchain String(64) NULL` | `models.py:15-58` |
 
 存量数据：迁移后所有团队默认 `hosted_native`；曾以外部成员建的团队由管理员一次性 `UPDATE ... SET construction_mode='local_cli'`（活体里目前没有这类团队）。
 
-集成测试：`tests/integration/test_hosted_native_postgres.py`，照 `test_leader_assignments_postgres.py:106-238` 的子进程 alembic 红→绿→降级回环。
+集成测试：`tests/integration/test_hosted_native_postgres.py`，照 `test_leader_assignments_postgres.py:106-238` 的子进程 alembic 红→绿→降级回环（09-05 已落地：0054 处写拓扑必 `42703`、head 处 `local_cli` 往返、降级再升级后旧行读回 `hosted_native`）。
 
 #### 5.3.2 后端文件级改动
 
 | 区域 | 文件 | 改动 |
 |---|---|---|
-| 项目模块（M7） | `modules/project/contracts.py`、`domain.py:162-281`、`infrastructure.py:138-197,533-625` | 枚举、字段、列映射、`PersistedTeamConstructionModeReader`；`with_adopted_leader` 加模式闸 |
-| 设置 | `settings.py` | `construction_mode_default=HOSTED_NATIVE`、`hosted_native_attempt_budget_seconds=2700`、`hosted_native_review_budget_seconds=900`、`hosted_native_observer_interval_seconds=10`、`verifier_heartbeat_ttl_seconds=45`、`verifier_default_toolchain_image="repomesh-toolchain:default"`；`worker_recovery_enabled` 默认改 `True` |
-| 接团队 | `api/human_control_models.py:120-127`、`api/human_control.py:224-357`、`api/platform_setup.py:76-83` | 去 `leader_runtime/worker_runtime`，加 `construction_mode`；用 `derive_runtime()` 决定 `RegisterNativeAgent` 的 runtime 与 `container_managed`；写团队行时落模式（拓扑行由 `_ensure_topology` 建，模式从 catalog 团队记录带过去） |
-| 投影 | `integrations/agentteams/runtime_projection.py:159-205,279-293` | 构造入参从全局 `worker_runtime` 改为 `TeamConstructionModeReader`；`_register` 按团队 `derive_runtime()`；MCP 投影**保留**（D-18） |
+| 项目模块（M7）**09-05 已落地** | `modules/project/contracts.py`、`domain.py`、`infrastructure.py`、`application.py`（`CreateProjectAgentTopology(construction_mode=...)`） | 枚举、字段、列映射、`PersistedTeamConstructionModeReader`；`with_adopted_leader` 加模式闸；拓扑创建器按注入的模式写行 |
+| 设置 | `settings.py` | **已落地** `construction_mode_default=HOSTED_NATIVE`（`.env.example` 已写）；待落地 `hosted_native_attempt_budget_seconds=2700`、`hosted_native_review_budget_seconds=900`、`hosted_native_observer_interval_seconds=10`、`verifier_heartbeat_ttl_seconds=45`、`verifier_default_toolchain_image="repomesh-toolchain:default"`；`worker_recovery_enabled` 默认改 `True`（随恢复分支一起） |
+| 接团队 **09-05 已落地** | `api/human_control_models.py`、`api/human_control.py`、`api/platform_setup.py:76-83`（走默认，未改） | 去 `leader_runtime/worker_runtime`，加 `construction_mode: ConstructionMode \| None`（`None` = `settings.construction_mode_default`）；用 `derive_runtime()` 决定 `RegisterNativeAgent` 的 runtime 与 `container_managed`；响应回报 `construction_mode`。**拓扑行的模式不从这里带过去**（见 §4.2 M7 落地注 ③） |
+| 投影 **09-05 已落地** | `integrations/agentteams/runtime_projection.py` | 构造入参去掉全局 `worker_runtime`（未注入读取器，直接读已加载拓扑的 `team.construction_mode`）；`_register` 按团队 `derive_runtime()` 设 runtime 与 `container_managed`；MCP 投影**保留**（D-18）；`ExternalWorkerProjection`（Bridge 线）不动 |
 | 装配 | `bootstrap/container.py:548-549,627,683,2306-2325`、`bootstrap/app.py:234-251,592-727` | 注入模式读取器；MinIO 读适配器与发布器同条件选择；注册 `SharedTaskDirectoryObserver` 后台服务；装配 M1/M5/M6/M8 |
 | 投递分叉 | `modules/task_orchestration/application.py:534-565` | `_deliver_assignment`：团队 `hosted_native` 且 `assignee.role == WORKER` → `HostedNativeRound.open()`；否则走现有 publish+send。`_assignment_body:792-816` 加托管原生文案（不提 MCP） |
 | 尝试（M1） | 新 `integrations/hosted_native/{round,observer,approval,package,storage,store,messages}.py` | 见 4.2；`store.py` 含 Postgres 与内存两实现；`approval.py` 是观察器的自动审批分支（D-23：逐字比对 `helper_commands`，先写事件再回 `/approve`） |
-| 发布器（M3） | `integrations/agentteams/task_publishing.py:20-105,131-206` | `PackageInputs`、v2 manifest、全文件摘要、`base/` 写入；`_render_spec` 分 construction/review 两模板 |
+| 发布器（M3）**09-05 已落地** | `integrations/agentteams/task_publishing.py`、`task_package/`、`task_orchestration/contracts.py`（`PackageInputs`） | `PackageInputs`、v2 manifest、全文件摘要、`base/` 写入；construction/review 两模板；一次装配、两适配器只存字节（见 §4.2 M3 落地注） |
 | 工作树（M5/M6） | 新 `integrations/workspace/candidate_worktree.py`、`base_bundle.py` | 见 4.2；复用 `git_worktree.py` 的镜像仓布局 |
 | 验证调度投影 | `integrations/runner/task_projection.py` | `TaskProjection` 加可选 `candidate`；`adapterId` 由调用方给 `repomesh-verifier`；`workspace.path` 为 M5 返回的容器内路径 |
 | 领任务过滤 | `modules/agent_runtime/api/router.py`（`next_runner_task`）、`runner_store.py`（`lease_next`）、`integrations/runner/gateway.py`；runner 侧 `repomesh_runner/{runtime_env,task_source,profiles,main}.py` | **09-04 已落地（分支 `feat/hosted-native-wave1`，先于 M1）**：可重复的 `adapter` 查询参数（也接受逗号分隔），按冻结 payload 的 `adapterId` 过滤，不加列；control token 无 `adapter` → 400；无主体调用永远领不到**持有自己 worker 令牌**的成员队列（`REPOMESH_RUNNER_WORKER_TOKENS` 的 id 集合：点名即 403，不点名即跳过）——按部署凭据表判定而不是每次领活读控制器绑定，控制器宕机时领活代价不变。runner 进程用 `REPOMESH_RUNNER_ADAPTERS` 广播可跑的 profile，未设则取本机能启动的 profile，一个都没有就拒绝启动；compose 默认 `mock` |
 | 心跳与门禁（M8） | 新 `modules/agent_runtime/application/execution_plane.py`；`router.py` 加 `POST /runtime/v1/verifier/heartbeat`（control token）；`repository_intelligence/ports/member_readiness.py:62` 加 `ExecutionPlaneGate`；`discovery_materialization.py:358-366` 改调组合门禁；`api/discovery_chain.py:530-538,677` 新 409 与预检 | 见 4.2 |
 | 设置状态 | `api/platform_setup.py:152-190` | `execution_plane` 检查 |
 | 恢复 | `bootstrap/app.py:698`（`_discover`）、`integrations/runner/recovery.py:31-59`、`integrations/recovery/actions.py` | 过期预留若无调度且尝试表 phase 属 worker 侧阶段 → `reason="budget_expired"`；决策沿用 `decide()`（retry 同 worker = `open()` 新代次；reassign = 团队内其他 worker；escalate = 人工检查点）；新增两种探测（D-12）：worker 进程/容器启动时间晚于尝试 `notified_at` → `reason="worker_restarted"`（载体见 §8.16）；`WorkerBindingReader.get_worker(...).phase != "Running"` 或 `containerState` 非 running → `reason="worker_not_running"` |
-| 读模型 | `api/read_models/service.py:1594-1642,2202-2207`；交付读模型任务视图 | `construction_mode`；`native_attempt` 块从 `hosted_native_attempts` 取 |
+| 读模型 | `api/read_models/service.py`（`list_teams`，**`construction_mode` 09-05 已落地**）；交付读模型任务视图 | `construction_mode`；`native_attempt` 块从 `hosted_native_attempts` 取（待 M1） |
 | 复验器（M4） | 新 `src/repomesh_verifier/{__main__,main,config,executor,docker_executor,verify.sh,heartbeat}.py`；`pyproject.toml:39-41` | 见 4.2 |
 | MCP | `api/worker_mcp.py` | 不改；`.env.example` 不再写 `REPOMESH_DIRECT_WORKER_MCP_ENABLED` |
 
@@ -435,7 +453,8 @@ class RequireExecutionPlaneReady:    # 组合门禁
 
 新增：`tests/hosted_native/test_round.py`（三个动词、fencing、每种回执分支，全内存适配器）、`test_observer.py`（去重、marker、按目录名认领不读 `meta.repomesh`、自动审批只批与 `helper_commands` 逐字相同的命令行且先写事件再发）、`test_package_v2.py`（磁盘与 MinIO 假实现产同样摘要）、
 `tests/workspace/test_candidate_worktree.py`（临时裸仓 + bundle）、`tests/verifier/test_executor.py`（Scripted）、`tests/verifier/test_verify_sh.py`（本机有 git 时跑真脚本，标 `integration`）、
-`tests/contracts/test_agentteams_task_v2_contract.py`、`tests/api/test_execution_plane_gate.py`。
+`tests/contracts/test_agentteams_task_v2_contract.py`（**09-05 已落地**，含 Tool Guard 规则夹具 `tests/contracts/fixtures/copaw_tool_guard_rules.json`）、`tests/api/test_execution_plane_gate.py`；
+09-05 另落地 `tests/contracts/test_project_construction_mode_contract.py`、`tests/api/test_repository_team_onboarding.py`、`tests/integration/test_hosted_native_postgres.py`（v2 包的磁盘/MinIO 同摘要测试并入 `tests/integrations/agentteams/test_task_publishing.py`，未另开 `test_package_v2.py`）。
 
 更新：`tests/integrations/agentteams/test_task_publishing.py`、`test_runtime_projection.py`、`tests/api/test_issue_materialize.py`、`tests/task_orchestration/test_task_publication_translation.py`、
 `tests/api/test_runner_scoped_auth.py`（`adapter` 规则）、`tests/test_worker_failure_recovery.py`、`tests/contracts/test_runtime_v1_contract.py`。
@@ -542,6 +561,9 @@ PR-A 与 PR-B 之间只有两个契约相连：`runner_dispatches` 行（`adapte
 14. **实证新增：worker 完成通知的对象。已裁决 → D-3 修订（`@admin` 或不 @，Leader 只在自己房收审阅包）。** worker 按 AgentTeams 技能在团队房 `@Leader TASK_COMPLETED`，Leader 两次因此陷入身份混淆（无破坏，但浪费一轮推理）；Leader 在自己房收结构化审阅包则正常。派单 spec 应让 worker 通知 `@admin`（平台身份）或不 @；Leader 只在 Leader 房收审阅包。
 15. **实证新增：房间文字不是事件源（再证）。** DeepSeek 一次只输出「⏳ Waiting for approval」文字而没有真调工具，停了 9 分钟。M2 只看 `meta.json`/`result.md` 的做法是对的；预算到期（D-12）是唯一兜底，必须真的落地。
 16. **09-04 裁决遗留：worker 启动时间的载体（PR-A 施工前定）。** D-12 修订后的信号②需要「worker 进程/容器启动时间」。控制器 `WorkerStatus` 今天只有 `phase / containerState / lastHeartbeat / lastActiveAt`，没有 `startedAt`（`agentteams-controller/api/v1beta1/types.go:371-383`）；api 不持 docker socket（D-4）。候选按代价排序：a) 观察器读控制器 `lastHeartbeat` / `containerState` 的序列，重启表现为心跳断档后 `containerState` 回到 running——要在活体上用 `docker restart` 对照一次才能采信；b) 持 socket 的 verifier 在心跳里附带各 worker 容器的 `State.StartedAt`（M8 `VerifierView` 多一个字段）——但 verifier 属 PR-B；c) fork 控制器给 `WorkerStatus` 加 `startedAt`——fork 镜像无发布链（D-2），第一阶段不选。载体落定前只有信号①③生效，M1 的 `expire` 必须先于信号②落地。
+    **09-05 活体对照结论（`docs/startup-records/2026-09-05-live-verify-runner-and-restart.md` §3）：(a) 出局。**控制器 REST 投影（`internal/server/resource_handler.go:718 workerToResponse`）根本不输出 `lastHeartbeat`/`lastActiveAt`（236 个样本全空）；`docker restart` 全程 `phase=Running`；`containerState` 只在停止→再起之间露出 ≤ 4.3 s 的 `stopped` 窗口（Docker 在 SIGTERM 后的 ~8 s 停止阶段仍报 running），10 s 观察器命中概率 ≤ 43%，且命中也给不出「启动时间晚于 `notified_at`」。`docker inspect` 在同一秒给出新 `State.StartedAt`（08:04:15.65Z vs 旧 07:40:16.04Z），可直接比较。**口径：D-12 信号②的载体 = (b) verifier 心跳附带各 worker 容器 `State.StartedAt`（PR-B）；PR-B 未到前只有①③生效**；若 PR-B 滞后，第一阶段的便宜落点是 bootstrap 容器（已挂 `/var/run/docker.sock`）在其既有对账循环里回报 `StartedAt`——但这让 bootstrap 越出 D-4「只保障服务存在」的边界，要单独裁决。`containerState` 非 running 只当 D-12 ③ 的补充信号（`worker_not_running`），不当重启证据。
+17. **09-05 M3 落地遗留：D-23 逐字比对的形态。** 波次 0 里 worker 实际敲的是 `cd <任务目录> && bash base/tools/rm-work.sh init`（S-1 记录的 7 次执行全是这个形态），与 `helper_commands[]` 的裸命令行**不逐字相等**。契约测试已证明 `cd shared/tasks/<id> && …` 前缀形态同样不命中任何规则，但 M2 的自动审批要么只批裸命令行（波次 1 实走可能一条都批不出去），要么做「剥掉 `cd <该尝试目录> &&` 前缀后再逐字比」的归一化——M2 施工前定，倾向后者且只认该尝试自己的目录。
+18. **09-05 M3 落地遗留：v2 spec 没有数据库变更段。** v1 spec 的「Database change requirements」（`task.database_change`）没进 construction 模板；托管原生第一阶段的三个夹具仓都没有数据库变更，先不加；需要时加进模板并让复验器检查 `.repomesh/database-change-report.json`。
 
 ## 9. 波次 0 实证对 §3 决策的挑战（2026-09-04 已裁决，写回 §3）
 
