@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -157,8 +158,22 @@ class PostgresRunnerGatewayStore:
             )
 
     async def lease_next(
-        self, worker_agent_id: UUID | None, *, lease_seconds: int = 60
+        self,
+        worker_agent_id: UUID | None,
+        *,
+        lease_seconds: int = 60,
+        adapters: Collection[str] | None = None,
+        exclude_worker_ids: Collection[UUID] = (),
     ) -> dict[str, object] | None:
+        """Lease the oldest runnable dispatch that fits the caller.
+
+        ``worker_agent_id`` pins one queue. ``adapters`` keeps only dispatches
+        whose ``adapterId`` is listed (``None`` is "any"), read from the frozen
+        payload so no column is added for it. ``exclude_worker_ids`` are queues
+        this caller must never drain — the router's way of keeping a subjectless
+        Runner off the Bridges' work.
+        """
+
         now = datetime.now(UTC)
         async with self._database.transaction() as session:
             statement = (
@@ -176,6 +191,14 @@ class PostgresRunnerGatewayStore:
             )
             if worker_agent_id is not None:
                 statement = statement.where(RunnerDispatchRecord.worker_agent_id == worker_agent_id)
+            if adapters is not None:
+                statement = statement.where(
+                    RunnerDispatchRecord.task_payload["adapterId"].as_string().in_(sorted(adapters))
+                )
+            if exclude_worker_ids:
+                statement = statement.where(
+                    RunnerDispatchRecord.worker_agent_id.not_in(list(exclude_worker_ids))
+                )
             record = await session.scalar(statement)
             if record is None:
                 return None

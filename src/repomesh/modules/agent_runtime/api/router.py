@@ -54,8 +54,30 @@ router = APIRouter(tags=["agent-runtime"])
 async def next_runner_task(
     request: Request,
     worker_agent_id: Annotated[UUID | None, Query(alias="workerAgentId")] = None,
+    adapters: Annotated[list[str] | None, Query(alias="adapter")] = None,
 ) -> dict[str, object] | Response:
+    """Lease the next dispatch this caller is allowed to run.
+
+    Two credentials, two scopes. A worker token names one worker and drains
+    only that queue; ``adapter`` is optional for it and merely narrows further.
+    The global control token has no subject, and since the one-shot stack
+    started running a Runner on it (``compose.yaml`` ``runner``, 2026-09-03)
+    that queue-wide reach is shared with every Bridge and, next, the hosted
+    native verifier — three consumers on one table, told apart only by what
+    they can run. So a subjectless caller must name the adapters it serves
+    (``?adapter=mock&adapter=codex``, or comma separated) and is handed only
+    dispatches whose ``adapterId`` is one of them; a poll that names none is a
+    400 rather than a silent lease of somebody else's work. It also never
+    drains an external member's queue: a worker with a credential of its own
+    (``REPOMESH_RUNNER_WORKER_TOKENS``, ADR 0004 decision 6) is a Bridge's, and
+    only that Bridge's token may lease it — decided from the deployment's
+    credential map rather than a controller read per poll, so a lease costs the
+    same with the control plane down.
+    """
+
     authenticated = _authorize_runner(request)
+    wanted = _adapter_filter(adapters)
+    excluded: frozenset[UUID] = frozenset()
     if authenticated is not None:
         # ``workerAgentId`` is a self-report, and a credential that names one
         # worker outranks it: it may only be repeated back, never used to lease
@@ -65,8 +87,36 @@ async def next_runner_task(
                 status_code=403, detail="a worker credential may only lease its own tasks"
             )
         worker_agent_id = authenticated
-    payload = await request.app.state.container.runner_gateway().next_task(worker_agent_id)
+    else:
+        if wanted is None:
+            raise HTTPException(
+                status_code=400,
+                detail="a subjectless runner credential must name the adapters it serves "
+                "(?adapter=<id>)",
+            )
+        excluded = frozenset(worker_id for worker_id, _ in _worker_credentials())
+        if worker_agent_id is not None and worker_agent_id in excluded:
+            raise HTTPException(
+                status_code=403,
+                detail="a subjectless credential may not lease an external member's queue",
+            )
+    payload = await request.app.state.container.runner_gateway().next_task(
+        worker_agent_id, adapters=wanted, exclude_worker_ids=excluded
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT) if payload is None else payload
+
+
+def _adapter_filter(raw: list[str] | None) -> frozenset[str] | None:
+    """The ``adapter`` query values as one set: repeated keys or comma lists, blanks dropped.
+
+    ``None`` when the caller said nothing, so the store reads "any adapter"; a
+    parameter that names nothing usable counts as saying nothing.
+    """
+
+    if raw is None:
+        return None
+    names = frozenset(part.strip() for item in raw for part in item.split(",") if part.strip())
+    return names or None
 
 
 @router.post("/runtime/runner-events", status_code=202)

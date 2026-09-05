@@ -14,7 +14,7 @@ waits locally, backed off.
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -77,9 +77,14 @@ class HttpLongPollTaskSource:
         control_token: str | None = None,
         workspace_path_from: str | None = None,
         workspace_path_to: str | None = None,
+        adapters: Sequence[str] | None = None,
     ) -> None:
         self._url = url
         self._timeout_seconds = timeout_seconds
+        # What this process can run, sent as repeated ``adapter`` query values so
+        # the dispatcher hands over only matching ``adapterId``s. Required of a
+        # subjectless (control-token) caller; a worker credential may omit it.
+        self._adapters = tuple(adapters or ())
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=timeout_seconds + _REQUEST_TIMEOUT_MARGIN_SECONDS
@@ -95,12 +100,11 @@ class HttpLongPollTaskSource:
 
     async def next_task(self) -> RunnerTask | None:
         started_at = self._monotonic()
+        params: dict[str, object] = {"wait": self._timeout_seconds}
+        if self._adapters:
+            params["adapter"] = list(self._adapters)
         try:
-            response = await self._client.get(
-                self._url,
-                params={"wait": self._timeout_seconds},
-                headers=self._headers,
-            )
+            response = await self._client.get(self._url, params=params, headers=self._headers)
         except httpx.HTTPError as error:
             _logger.warning("task source request failed: %s", type(error).__name__)
             await self._back_off()

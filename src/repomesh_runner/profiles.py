@@ -14,7 +14,7 @@ so the hard boundary remains the workspace, container, and network scope around
 the process — never the flags handed to the agent.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from repomesh_runner.contracts import RunnerPermissionMode
@@ -192,3 +192,20 @@ def get_profile(profile_id: str) -> CliProfile:
         if profile.id == profile_id:
             return profile
     raise UnknownProfile(f"unknown runner profile: {profile_id}")
+
+
+def launchable_profiles(
+    binary_resolver: Callable[[tuple[str, ...]], str | None],
+) -> tuple[str, ...]:
+    """Ids of the profiles this host can actually run: launchable, and a binary found.
+
+    What a Runner advertises to ``runner-tasks/next`` when nothing narrower is
+    configured, so a host without ``codex`` on it never leases a codex dispatch
+    only to fail it with ``binary_not_found`` in somebody else's lane.
+    """
+
+    return tuple(
+        profile.id
+        for profile in PROFILES
+        if profile.launchable and binary_resolver(profile.binaries) is not None
+    )

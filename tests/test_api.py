@@ -606,10 +606,17 @@ def test_runner_control_requires_configured_token(
             )
             authorized = client.get(
                 "/api/v1/runtime/runner-tasks/next",
+                params={"adapter": "mock"},
+                headers={"Authorization": "Bearer runner-secret"},
+            )
+            unnamed = client.get(
+                "/api/v1/runtime/runner-tasks/next",
                 headers={"Authorization": "Bearer runner-secret"},
             )
         assert unauthorized.status_code == 401
         assert authorized.status_code == 204
+        # A subjectless credential must say what it can run (contracts/runtime/README.md).
+        assert unnamed.status_code == 400
     finally:
         get_settings.cache_clear()
 

@@ -23,9 +23,11 @@ import sys
 from collections.abc import Mapping, Sequence
 
 from .contracts import RunnerExecutionResult, RunnerResultStatus, RunnerTask
+from .drivers.supervision import resolve_binary
 from .engine import ExecuteRunnerTask, RunnerEventSink, RunnerExecutor
 from .event_sink import EventDeliveryError, HttpEventSink
 from .executor import build_default_executor
+from .profiles import launchable_profiles
 from .runtime_env import RunnerRuntimeEnv, RuntimeEnvError, load_runtime_env
 from .state_store import TaskLedger
 from .task_source import HttpLongPollTaskSource, TaskSource
@@ -145,6 +147,17 @@ def run(environ: Mapping[str, str] = os.environ, argv: Sequence[str] | None = No
         print(f"repomesh-runner: {error}", file=sys.stderr)
         return EXIT_ENVIRONMENT
 
+    # What this process tells the dispatcher it can run. A Runner that can run
+    # nothing would be refused every lease, so that is an environment error too.
+    adapters = env.adapters or launchable_profiles(resolve_binary)
+    if not adapters:
+        print(
+            "repomesh-runner: no launchable adapter on this host; install a coding CLI or set "
+            "REPOMESH_RUNNER_ADAPTERS",
+            file=sys.stderr,
+        )
+        return EXIT_ENVIRONMENT
+
     # Optional and outside the runtime contract: load_runtime_env ignores unknown
     # variables, and without an endpoint this is a no-op.
     setup_tracing(
@@ -171,16 +184,17 @@ def run(environ: Mapping[str, str] = os.environ, argv: Sequence[str] | None = No
         )
 
     _logger.info(
-        "starting runner: workspace_root=%s state_dir=%s labels=%s",
+        "starting runner: workspace_root=%s state_dir=%s labels=%s adapters=%s",
         env.workspace_root,
         env.state_dir,
         ",".join(sorted(env.labels)) or "-",
+        ",".join(adapters),
     )
-    asyncio.run(_serve_forever(env))
+    asyncio.run(_serve_forever(env, adapters))
     return EXIT_OK
 
 
-async def _serve_forever(env: RunnerRuntimeEnv) -> None:
+async def _serve_forever(env: RunnerRuntimeEnv, adapters: Sequence[str]) -> None:
     shutdown = Shutdown()
     install_signal_handlers(shutdown)
 
@@ -190,6 +204,7 @@ async def _serve_forever(env: RunnerRuntimeEnv) -> None:
         control_token=env.control_token,
         workspace_path_from=env.workspace_path_from,
         workspace_path_to=env.workspace_path_to,
+        adapters=adapters,
     )
     sink = HttpEventSink(env.event_sink_url, control_token=env.control_token)
     try:

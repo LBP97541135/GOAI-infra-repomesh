@@ -80,10 +80,18 @@ class StubRunnerGateway:
         self._task = task
         self._owner = owner
         self.leased_for: list[UUID | None] = []
+        self.leased_with: list[tuple[frozenset[str] | None, frozenset[UUID]]] = []
         self.events: list[tuple[dict[str, object], UUID | None]] = []
 
-    async def next_task(self, worker_agent_id: UUID | None) -> dict[str, object] | None:
+    async def next_task(
+        self,
+        worker_agent_id: UUID | None,
+        *,
+        adapters: frozenset[str] | None = None,
+        exclude_worker_ids: frozenset[UUID] = frozenset(),
+    ) -> dict[str, object] | None:
         self.leased_for.append(worker_agent_id)
+        self.leased_with.append((adapters, frozenset(exclude_worker_ids)))
         return self._task
 
     async def receive_event(
@@ -247,24 +255,93 @@ def test_leasing_with_an_unknown_token_is_401(monkeypatch) -> None:
 
 
 def test_the_global_token_still_leases_for_the_worker_it_names(monkeypatch) -> None:
-    """The managed Runner's path, unchanged: it says whose queue and is believed.
+    """The managed Runner's path: it says whose queue and is believed.
 
     The token has no subject, so there is nothing to check the parameter
-    against — and the Runner leases for every worker it manages.
+    against — and the Runner leases for every managed worker. What it has to
+    say, since the one-shot stack runs a Runner on it, is which adapters it
+    serves.
     """
 
     gateway = StubRunnerGateway(task=TASK_PAYLOAD)
     client = _client(monkeypatch, container=StubContainer(gateway=gateway))
 
     named = client.get(
-        LEASE_URL, params={"workerAgentId": str(OTHER_WORKER_ID)}, headers=GLOBAL_HEADERS
+        LEASE_URL,
+        params={"workerAgentId": str(OTHER_WORKER_ID), "adapter": "codex"},
+        headers=GLOBAL_HEADERS,
     )
-    unnamed = client.get(LEASE_URL, headers=GLOBAL_HEADERS)
+    unnamed = client.get(LEASE_URL, params={"adapter": "codex"}, headers=GLOBAL_HEADERS)
 
     assert named.status_code == 200
     assert named.json() == TASK_PAYLOAD
     assert unnamed.status_code == 200
     assert gateway.leased_for == [OTHER_WORKER_ID, None]
+
+
+def test_a_subjectless_lease_must_name_its_adapters(monkeypatch) -> None:
+    """No ``adapter`` on the control token is a 400, not a queue-wide lease.
+
+    The compose Runner, every Bridge and the verifier drain one table. A
+    subjectless poll that does not say what it can run would take whatever is
+    oldest and fail it with ``binary_not_found`` in somebody else's lane, so
+    the store is never asked.
+    """
+
+    gateway = StubRunnerGateway(task=TASK_PAYLOAD)
+    client = _client(monkeypatch, container=StubContainer(gateway=gateway))
+
+    bare = client.get(LEASE_URL, headers=GLOBAL_HEADERS)
+    blank = client.get(LEASE_URL, params={"adapter": " , "}, headers=GLOBAL_HEADERS)
+
+    assert bare.status_code == 400
+    assert blank.status_code == 400
+    assert gateway.leased_for == []
+
+
+def test_a_subjectless_lease_is_narrowed_and_kept_off_external_members(monkeypatch) -> None:
+    """What the store is asked for: the adapters named, minus the Bridges' queues.
+
+    ``WORKER_ID`` holds a credential of its own, so it is a Bridge's worker and
+    the managed Runner never drains it. Repeated and comma-separated ``adapter``
+    values are one set.
+    """
+
+    gateway = StubRunnerGateway(task=TASK_PAYLOAD)
+    client = _client(monkeypatch, container=StubContainer(gateway=gateway))
+
+    response = client.get(
+        LEASE_URL, params=[("adapter", "mock,codex"), ("adapter", "mock")], headers=GLOBAL_HEADERS
+    )
+
+    assert response.status_code == 200
+    assert gateway.leased_with == [(frozenset({"mock", "codex"}), frozenset({WORKER_ID}))]
+
+
+def test_a_subjectless_credential_may_not_name_an_external_members_queue(monkeypatch) -> None:
+    gateway = StubRunnerGateway(task=TASK_PAYLOAD)
+    client = _client(monkeypatch, container=StubContainer(gateway=gateway))
+
+    response = client.get(
+        LEASE_URL,
+        params={"workerAgentId": str(WORKER_ID), "adapter": "codex"},
+        headers=GLOBAL_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert gateway.leased_for == []
+
+
+def test_a_worker_token_may_narrow_its_own_queue_by_adapter(monkeypatch) -> None:
+    """Optional for a Bridge: its credential already scopes the lease to one queue."""
+
+    gateway = StubRunnerGateway()
+    client = _client(monkeypatch, container=StubContainer(gateway=gateway))
+
+    response = client.get(LEASE_URL, params={"adapter": "codex"}, headers=SCOPED_HEADERS)
+
+    assert response.status_code == 204
+    assert gateway.leased_with == [(frozenset({"codex"}), frozenset())]
 
 
 def test_a_worker_token_leases_its_own_queue_without_saying_so(monkeypatch) -> None:
@@ -282,6 +359,8 @@ def test_a_worker_token_leases_its_own_queue_without_saying_so(monkeypatch) -> N
 
     assert response.status_code == 204
     assert gateway.leased_for == [WORKER_ID]
+    # No adapter narrowing and no exclusions: the credential already pins the queue.
+    assert gateway.leased_with == [(None, frozenset())]
 
 
 def test_a_worker_token_may_not_lease_another_workers_queue(monkeypatch) -> None:

@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from uuid import UUID
 
 from repomesh.modules.agent_runtime.runner_store import PostgresRunnerGatewayStore
@@ -33,8 +33,16 @@ class RunnerControlGateway:
             raise ValueError("runner dispatch requires worker_agent_id")
         await self._store.enqueue(task.to_wire())
 
-    async def next_task(self, worker_agent_id: UUID | None) -> dict[str, object] | None:
-        return await self._store.lease_next(worker_agent_id)
+    async def next_task(
+        self,
+        worker_agent_id: UUID | None,
+        *,
+        adapters: Collection[str] | None = None,
+        exclude_worker_ids: Collection[UUID] = (),
+    ) -> dict[str, object] | None:
+        return await self._store.lease_next(
+            worker_agent_id, adapters=adapters, exclude_worker_ids=exclude_worker_ids
+        )
 
     async def receive_event(
         self, event: dict[str, object], *, worker_agent_id: UUID | None = None

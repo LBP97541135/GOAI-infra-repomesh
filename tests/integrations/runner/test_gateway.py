@@ -38,6 +38,68 @@ async def test_runner_store_rejects_empty_idempotency_key_before_persistence() -
         await store.enqueue({"idempotencyKey": "   "})
 
 
+async def _enqueue(
+    gateway: RunnerControlGateway, *, worker: UUID, adapter: str, key: str
+) -> UUID:
+    run_id = uuid4()
+    await gateway.enqueue(
+        RunnerTask(
+            organization_id=uuid4(),
+            project_id=uuid4(),
+            task_id=uuid4(),
+            run_id=run_id,
+            correlation_id=uuid4(),
+            attempt=1,
+            adapter_id=adapter,
+            instruction="Do the work",
+            repository=RepositoryCheckout(uuid4(), "https://example/repo.git", "main"),
+            context_bundle=ContextBundleRef(uuid4(), 1, "file:///manifest.json", SHA),
+            permissions=RunnerPermissions(),
+            idempotency_key=key,
+            issued_at=datetime.now(UTC),
+            worker_agent_id=worker,
+        )
+    )
+    return run_id
+
+
+@pytest.mark.asyncio
+async def test_a_lease_is_narrowed_by_adapter_and_kept_off_excluded_queues(tmp_path) -> None:
+    """The store's half of the router's rule.
+
+    ``adapterId`` is read from the frozen payload, an excluded queue is never
+    drained by a subjectless lease, and a queue pinned by its own credential is
+    untouched by either filter.
+    """
+
+    database = Database(
+        f"sqlite+aiosqlite:///{tmp_path / 'runner.db'}",
+        schema_translate_map={schema: None for schema in ALL_SCHEMAS},
+    )
+    await database.create_all_for_tests()
+    gateway = RunnerControlGateway(
+        PostgresRunnerGatewayStore(database), PostgresTaskStore(database)
+    )
+    bridge_worker, managed_worker = uuid4(), uuid4()
+    codex_run = await _enqueue(gateway, worker=bridge_worker, adapter="codex", key="run-codex")
+    mock_run = await _enqueue(gateway, worker=managed_worker, adapter="mock", key="run-mock")
+
+    # A subjectless Runner that serves mock only, kept off the Bridge's queue.
+    leased = await gateway.next_task(None, adapters={"mock"}, exclude_worker_ids={bridge_worker})
+    assert leased is not None and leased["runId"] == str(mock_run)
+    # Nothing left for it: the only other runnable dispatch sits in the excluded queue.
+    assert (
+        await gateway.next_task(
+            None, adapters={"mock", "codex"}, exclude_worker_ids={bridge_worker}
+        )
+        is None
+    )
+    # The Bridge's own credential drains its queue regardless of any narrowing.
+    own = await gateway.next_task(bridge_worker)
+    assert own is not None and own["runId"] == str(codex_run)
+    await database.dispose()
+
+
 @pytest.mark.asyncio
 async def test_dispatch_event_and_business_task_writeback(tmp_path) -> None:
     database = Database(

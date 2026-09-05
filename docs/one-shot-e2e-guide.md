@@ -40,7 +40,7 @@ python scripts\seed_e2e_fixtures.py
 .\scripts\start-platform.ps1 -InstallAgentTeams
 ```
 
-该入口现在会一并拉起 platform profile 的 **runner** 服务：它长轮询 api 的 `/api/v1/runtime/runner-tasks/next` 租约任务、执行后回投 `runner-events`，镜像内置校验用 mock 编码代理（profile id `mock`，无模型无凭据），compose 已把 api 的 `REPOMESH_WORKER_DEFAULT_ADAPTER_ID` 默认为 `mock`。
+该入口现在会一并拉起 platform profile 的 **runner** 服务：它长轮询 api 的 `/api/v1/runtime/runner-tasks/next` 租约任务、执行后回投 `runner-events`，镜像内置校验用 mock 编码代理（profile id `mock`，无模型无凭据），compose 已把 api 的 `REPOMESH_WORKER_DEFAULT_ADAPTER_ID` 默认为 `mock`。runner 领活时会带 `adapter=mock`（`REPOMESH_RUNNER_ADAPTERS`，compose 默认 `mock`）：无主体的 control token 不带 `adapter` 会被 api 拒绝（400），带了也只领 `adapterId` 匹配的调度，不会抢走 Bridge 成员或复验器的活（规则见 `contracts/runtime/README.md`）。
 
 就绪标志：
 

@@ -55,6 +55,23 @@ def test_control_token_is_consumed(tmp_path: Path) -> None:
     assert load_runtime_env(environ).control_token == "runner-secret"
 
 
+def test_adapters_default_to_unset(tmp_path: Path) -> None:
+    assert load_runtime_env(base_environ(tmp_path)).adapters == ()
+
+
+def test_adapters_are_split_trimmed_and_deduplicated(tmp_path: Path) -> None:
+    environ = base_environ(tmp_path) | {"REPOMESH_RUNNER_ADAPTERS": " mock, codex ,mock,"}
+
+    assert load_runtime_env(environ).adapters == ("mock", "codex")
+
+
+def test_adapters_that_name_nothing_are_refused(tmp_path: Path) -> None:
+    environ = base_environ(tmp_path) | {"REPOMESH_RUNNER_ADAPTERS": " , ,"}
+
+    with pytest.raises(RuntimeEnvError, match="REPOMESH_RUNNER_ADAPTERS"):
+        load_runtime_env(environ)
+
+
 @pytest.mark.parametrize("value", ["soon", "0", "-1"])
 def test_unusable_poll_timeout_is_refused(tmp_path: Path, value: str) -> None:
     environ = base_environ(tmp_path) | {"REPOMESH_RUNNER_POLL_TIMEOUT_SECONDS": value}

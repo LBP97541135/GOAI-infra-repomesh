@@ -41,6 +41,7 @@ POLL_TIMEOUT_SECONDS = "REPOMESH_RUNNER_POLL_TIMEOUT_SECONDS"
 CONTROL_TOKEN = "REPOMESH_RUNNER_CONTROL_TOKEN"
 WORKSPACE_PATH_FROM = "REPOMESH_RUNNER_WORKSPACE_PATH_FROM"
 WORKSPACE_PATH_TO = "REPOMESH_RUNNER_WORKSPACE_PATH_TO"
+ADAPTERS = "REPOMESH_RUNNER_ADAPTERS"
 
 LABEL_PREFIX = "REPOMESH_LABEL_"
 
@@ -54,6 +55,7 @@ CONSUMED_VARIABLES = frozenset(
         CONTROL_TOKEN,
         WORKSPACE_PATH_FROM,
         WORKSPACE_PATH_TO,
+        ADAPTERS,
     }
 )
 
@@ -92,6 +94,9 @@ class RunnerRuntimeEnv:
     control_token: str | None = None
     workspace_path_from: str | None = None
     workspace_path_to: str | None = None
+    #: Profile ids this Runner advertises when it leases. Empty means "decide at
+    #: startup": every launchable profile whose binary is on this host.
+    adapters: tuple[str, ...] = ()
 
 
 def load_runtime_env(environ: Mapping[str, str]) -> RunnerRuntimeEnv:
@@ -127,6 +132,7 @@ def load_runtime_env(environ: Mapping[str, str]) -> RunnerRuntimeEnv:
         control_token=_optional(environ, CONTROL_TOKEN),
         workspace_path_from=path_from,
         workspace_path_to=path_to,
+        adapters=_adapters(environ),
     )
 
 
@@ -150,6 +156,24 @@ def _required(environ: Mapping[str, str], name: str) -> str:
 def _optional(environ: Mapping[str, str], name: str) -> str | None:
     value = environ.get(name)
     return value.strip() if value is not None else None
+
+
+def _adapters(environ: Mapping[str, str]) -> tuple[str, ...]:
+    """``REPOMESH_RUNNER_ADAPTERS``: the profile ids this Runner advertises when leasing.
+
+    Comma separated, trimmed, first occurrence wins. Unset or blank means "work it out at
+    startup" (every launchable profile whose binary is on this host); a value that names nothing
+    usable is a misconfiguration rather than an empty list, because a Runner that advertises
+    nothing is refused every lease.
+    """
+
+    raw = _optional(environ, ADAPTERS)
+    if not raw:
+        return ()
+    names = tuple(dict.fromkeys(part.strip() for part in raw.split(",") if part.strip()))
+    if not names:
+        raise RuntimeEnvError(f"{ADAPTERS} must list at least one adapter id")
+    return names
 
 
 def _poll_timeout(environ: Mapping[str, str]) -> float:

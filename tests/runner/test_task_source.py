@@ -131,6 +131,26 @@ async def test_control_token_is_sent_as_bearer_auth() -> None:
 
 
 @pytest.mark.asyncio
+async def test_advertised_adapters_are_sent_as_repeated_query_parameters() -> None:
+    source, _, requests = build_source(
+        lambda request: httpx.Response(204), adapters=("mock", "codex")
+    )
+
+    await source.next_task()
+
+    assert requests[0].url.params.get_list("adapter") == ["mock", "codex"]
+
+
+@pytest.mark.asyncio
+async def test_no_adapter_parameter_is_sent_when_nothing_is_advertised() -> None:
+    source, _, requests = build_source(lambda request: httpx.Response(204))
+
+    await source.next_task()
+
+    assert "adapter" not in requests[0].url.params
+
+
+@pytest.mark.asyncio
 async def test_an_instant_two_hundred_four_is_paced_out_to_the_full_window() -> None:
     source, sleep, _ = build_source(lambda request: httpx.Response(204), monotonic=FakeClock(0.0))
 
