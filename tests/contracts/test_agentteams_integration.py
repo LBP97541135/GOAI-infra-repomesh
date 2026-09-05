@@ -154,7 +154,11 @@ async def test_ensure_worker_mcp_servers_updates_a_worker_missing_them() -> None
     servers, under a distinct idempotency key."""
     requests: list[httpx.Request] = []
     servers = [
-        {"name": "repomesh-task-control", "url": "http://api:8000/api/v1/mcp/worker", "transport": "http"}
+        {
+            "name": "repomesh-task-control",
+            "url": "http://api:8000/api/v1/mcp/worker",
+            "transport": "http",
+        }
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:

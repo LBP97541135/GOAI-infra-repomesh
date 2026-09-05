@@ -74,7 +74,17 @@ class McpCallResult:
 #: contract RepoMesh cannot verify, so writes stay single-shot. ``start`` is
 #: here because starting an execution mints a run — a re-fire after a lost
 #: response is a second run, whatever the executor's own dedup may promise.
-_WRITE_VERBS = ("write", "create", "start", "update", "delete", "merge", "submit", "push", "mutation")
+_WRITE_VERBS = (
+    "write",
+    "create",
+    "start",
+    "update",
+    "delete",
+    "merge",
+    "submit",
+    "push",
+    "mutation",
+)
 
 
 def _is_read_only(operation: str) -> bool:
