@@ -1,0 +1,20 @@
+{
+  "project_id": "ff6a9f90-1e0c-5fe7-8a9f-9b354c1aa754",
+  "task_id": "b6e0bc59-255a-4edc-a186-47f5eeb3050c",
+  "organization_id": "7ce7e70e-f501-5ece-b998-ce2f4c4cd550",
+  "repository_id": "dfb8a4cd-a6f7-4ee7-95e4-197963151308",
+  "repository": "repomesh-e2e-pricing-core",
+  "base_sha": "882231dd887688a986b0faec656a90d29141406c",
+  "team_name": "repomesh-team-dfb8a4cda6f74ee795e4197963151308",
+  "worker": "agt-worker-dfb8a4cda6f7",
+  "leader": "agt-leader-dfb8a4cda6f7",
+  "team_room_id": "!3IU075BSWiAQORHR4e:matrix-local.agentteams.io:18080",
+  "leader_room_id": "!NRE6tUlYtVZwKDXyBN:matrix-local.agentteams.io:18080",
+  "budget_seconds": 2700,
+  "review_budget_seconds": 900,
+  "test_commands": ["python scripts/run_tests.py"],
+  "test_timeout_seconds": 600,
+  "allowed_paths": ["src/**", "tests/**", "README.md"],
+  "denied_paths": [".github/**"],
+  "instruction": "Modify quote() to accept a mandatory currency parameter (ISO 4217 code). Implement currency-specific rounding: for zero-decimal currencies (e.g., JPY), round the amount to the nearest integer; for other currencies, use standard decimal places. Update all unit tests to cover multi-currency scenarios, including JPY and a standard decimal currency, and ensure existing tests pass."
+}

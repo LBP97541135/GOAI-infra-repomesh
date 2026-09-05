@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Baseline probes after the issue was created: scenes 07, 08, 19, 20.
+source "$(dirname "$0")/probe_lib.sh"
+export ISSUE=69ae763c-f81b-5eaf-bfd4-dfa7c0f0c035
+
+probe 07 'echo "## driver output (POST /issues and the four discovery steps), recorded at creation time:"; sed -n "1,3p" "$OUT/07-08.driver.txt"; echo "## GET /issues now"; curl -sS -H "Authorization: Bearer $T" $API/issues | python -c "import json,sys; rows=json.load(sys.stdin)[\"issues\"]; print(len(rows), \"issues\"); [print(r[\"issue_id\"], \"|\", r[\"state\"], r[\"phase\"], \"|\", r.get(\"phase_note\"), \"|\", r[\"title\"][:60]) for r in rows]"'
+
+probe 08 'echo "## driver output for the discovery steps:"; sed -n "4,40p" "$OUT/07-08.driver.txt" | cut -c1-220; echo "## plan snapshot rows for the issue"; $PSQL -c "select project_id, plan_version, jsonb_array_length(task_dag) as task_nodes, jsonb_array_length(execution_batches) as batches, execution_batches::text from repository_intelligence.plan_snapshots where project_id='"'"'$ISSUE'"'"' order by plan_version" 2>&1 | cut -c1-600; echo "## columns available"; $PSQL -c "\d repository_intelligence.plan_snapshots" | cut -d"|" -f1 | tr "\n" " "; echo'
+
+probe 19 'curl -sS -H "Authorization: Bearer $T" "$API/observe/trace/sessions" | python -c "import json,sys; d=json.load(sys.stdin); ss=d.get(\"sessions\", d); print(\"sessions:\", len(ss)); [print(s.get(\"session_id\"), \"|\", s.get(\"agent_id\") or s.get(\"worker\") or s.get(\"task_id\"), \"|\", s.get(\"event_count\") or s.get(\"events\"), \"|\", s.get(\"last_seen_at\") or s.get(\"last_event_at\")) for s in ss[:12]]"; echo "## trace issue groups"; curl -sS -H "Authorization: Bearer $T" "$API/observe/trace/issues" | head -c 600; echo'
+
+probe 20 'curl -sS -H "Authorization: Bearer $T" $API/observe/issues | python -c "import json,sys,os; rows=json.load(sys.stdin)[\"issues\"]; print(len(rows), \"issues with usage\"); [print(r[\"issue_id\"], \"| calls\", r[\"calls\"], \"| tokens\", r[\"total_tokens\"], \"| cost\", r[\"estimated_cost_usd\"], \"| last\", r[\"last_usage_at\"]) for r in rows]; print(\"contains baseline issue:\", any(r[\"issue_id\"]==os.environ[\"ISSUE\"] for r in rows))"; echo "## summary"; curl -sS -H "Authorization: Bearer $T" $API/observe/summary | python -c "import json,sys; d=json.load(sys.stdin); print({k:d[k] for k in (\"calls\",\"success_calls\",\"error_calls\",\"total_tokens\",\"estimated_cost_usd\",\"last_usage_at\")})"'

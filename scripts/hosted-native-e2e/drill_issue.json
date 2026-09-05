@@ -1,0 +1,5 @@
+{
+  "requirement_text": "告警联动演练（基线验收 2026-09-03，幕 28）：在告警规则触发中新建本 issue，验证 intake_paused 是否拒绝；本 issue 只用于演练，不跑发现链、不物化。",
+  "created_by_agent_id": "703b1dfa-024d-41f0-ab10-ce3ebec025c1",
+  "idempotency_key": "bl0903-drill28-1"
+}
