@@ -59,10 +59,14 @@ from repomesh.modules.platform_config import (
 from repomesh.modules.project.contracts import (
     ProjectAgentTopologyView,
     ProjectTopologyReader,
+    TeamConstructionModeReader,
     TeamDecompositionMode,
     TeamDecompositionModeReader,
 )
-from repomesh.modules.project.infrastructure import PersistedTeamDecompositionModeReader
+from repomesh.modules.project.infrastructure import (
+    PersistedTeamConstructionModeReader,
+    PersistedTeamDecompositionModeReader,
+)
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
@@ -447,7 +451,13 @@ class ApplicationContainer:
     def project_topology_creator(self):
         from repomesh.modules.project import CreateProjectAgentTopology
 
-        return CreateProjectAgentTopology(self.agent_directory, self.project_topology_store)
+        return CreateProjectAgentTopology(
+            self.agent_directory,
+            self.project_topology_store,
+            # Every team a console round creates is written with the
+            # deployment's construction mode (hosted-native spec M7).
+            construction_mode=get_settings().construction_mode_default,
+        )
 
     def project_topology_provisioner(self):
         """Contract v0.4 §8: the topology a console round makes on its way to work.
@@ -547,7 +557,6 @@ class ApplicationContainer:
                         model=settings.deepseek_model,
                         manager_runtime=settings.agentteams_manager_runtime,
                         manager_image=settings.agentteams_manager_image,
-                        worker_runtime=settings.agentteams_worker_runtime,
                         worker_task_control_url=settings.worker_task_control_url,
                         repository_catalog=repository_catalog,
                     ).project(project_id)
@@ -2141,6 +2150,18 @@ class ApplicationContainer:
         """
 
         return PersistedTeamDecompositionModeReader(self.project_topology_store)
+
+    @cached_service
+    def team_construction_mode_reader(self) -> TeamConstructionModeReader:
+        """Who builds each team's code and where (hosted-native spec M7, D-17).
+
+        The twin of the reader above over the same persisted topology: the
+        mode is a row, written when the team was staffed, and read here
+        without asking the controller anything. Teams that predate the column
+        answer ``HOSTED_NATIVE``, the product default.
+        """
+
+        return PersistedTeamConstructionModeReader(self.project_topology_store)
 
     @cached_service
     def leader_assignment_reader(self) -> ReadLeaderAssignment:

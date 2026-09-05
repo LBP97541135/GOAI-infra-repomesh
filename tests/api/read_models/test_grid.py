@@ -21,7 +21,7 @@ from repomesh.modules.agent_directory.contracts import (
     AgentRole,
 )
 from repomesh.modules.delivery.contracts import ChangeSetStatus
-from repomesh.modules.project.contracts import TeamDecompositionMode
+from repomesh.modules.project.contracts import ConstructionMode, TeamDecompositionMode
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus, TaskStatus
 
 from .test_issues import StubTopology, _snapshot, _topology
@@ -282,6 +282,50 @@ async def test_team_list_reports_who_decomposes_without_asking_the_controller(
     assert item["decomposition_mode"] == expected
     # The role fact an operator checks beside it, on the same row.
     assert item["leader"]["role"] == "repository_leader"
+    assert item["runtime"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (ConstructionMode.HOSTED_NATIVE, "hosted_native"),
+        (ConstructionMode.LOCAL_CLI, "local_cli"),
+    ],
+)
+async def test_team_list_reports_who_builds_without_asking_the_controller(
+    mode: ConstructionMode, expected: str
+) -> None:
+    """The construction mode is the fourth persisted fact on the row (spec M7).
+
+    Same rule as the decomposition mode beside it: an operator checking
+    whether a team is served by Bridges or by hosted copaw workers reads a
+    row, not a probe, so the answer holds with the controller unreachable.
+    """
+
+    project_id = uuid4()
+    repository_id = uuid4()
+    topology_view = _topology(project_id, repository_id)
+    topology_view = replace(
+        topology_view,
+        repository_teams=(
+            replace(topology_view.repository_teams[0], construction_mode=mode),
+        ),
+    )
+    service = _service(
+        StubPlans(_plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)),
+        StubSnapshots(),
+        StubTasks(),
+        StubChangeSets({}),
+        StubArchives(),
+        topology=StubTopology({project_id: topology_view}),
+        runtime=StubRuntime({}),
+    )
+
+    payload = await service.list_teams(with_runtime=False)
+
+    item = payload["teams"][0]
+    assert item["construction_mode"] == expected
     assert item["runtime"] is None
 
 

@@ -4,6 +4,8 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
+from repomesh.modules.agent_runtime.contracts import WorkerRuntime
+
 
 class ProjectTeamRuntimeStatus(StrEnum):
     PENDING = "pending"
@@ -126,6 +128,74 @@ class TeamDecompositionMode(StrEnum):
     LEADER = "leader"
 
 
+class ConstructionMode(StrEnum):
+    """Who builds a repository team's code, and where (hosted-native spec D-1, D-17).
+
+    ``HOSTED_NATIVE`` is the product's default: the team's copaw workers build
+    inside their own controller-managed containers, and nothing else — no
+    coding CLI in the container, no runner dispatch (D-2). ``LOCAL_CLI`` is the
+    Bridge line: every member's body is a process an operator runs outside the
+    cluster, so the controller keeps the Matrix identity and the rooms but no
+    container (ADR 0004).
+
+    The mode is a persisted fact on the team row, chosen when the team is
+    staffed. Everything the two lines used to configure separately — whether
+    the controller containerizes a worker, which controller runtime it asks
+    for, and whether the team may be raised into ``LEADER`` decomposition — is
+    *derived* from it through :func:`derive_runtime`, so there is one value to
+    set instead of three that had to agree (D-17: the onboarding request and
+    the settings each defaulted a runtime, and they defaulted different ones).
+    """
+
+    HOSTED_NATIVE = "hosted_native"
+    LOCAL_CLI = "local_cli"
+
+
+@dataclass(frozen=True, slots=True)
+class DerivedRuntime:
+    """What a construction mode implies for the controller-side projection.
+
+    ``container_managed`` is the field ``WorkerProjection`` carries under that
+    name; ``worker_runtime`` is the controller runtime the projection asks for;
+    ``decomposition_default`` is where a fresh team of this mode starts before
+    adoption has anything to say.
+    """
+
+    container_managed: bool
+    worker_runtime: WorkerRuntime
+    decomposition_default: TeamDecompositionMode
+
+
+_DERIVED: dict[ConstructionMode, DerivedRuntime] = {
+    # Both modes ask the controller for copaw: hosted-native because that is
+    # the worker that builds (D-2), local CLI because the resource still needs
+    # a Matrix identity and a room and copaw is the runtime this deployment
+    # pairs an image with (settings ``agentteams_worker_runtime``). The one
+    # field that differs is the body.
+    ConstructionMode.HOSTED_NATIVE: DerivedRuntime(
+        container_managed=True,
+        worker_runtime=WorkerRuntime.COPAW,
+        decomposition_default=TeamDecompositionMode.SERVER,
+    ),
+    ConstructionMode.LOCAL_CLI: DerivedRuntime(
+        container_managed=False,
+        worker_runtime=WorkerRuntime.COPAW,
+        decomposition_default=TeamDecompositionMode.SERVER,
+    ),
+}
+
+
+def derive_runtime(mode: ConstructionMode) -> DerivedRuntime:
+    """The projection facts a construction mode settles (spec §4.2 M7).
+
+    Total over the enum by construction: a third mode is a code change that
+    has to add its row here, never a value that quietly projects as one of
+    the existing two.
+    """
+
+    return _DERIVED[mode]
+
+
 @dataclass(frozen=True, slots=True)
 class RepositoryTeamView:
     id: UUID
@@ -138,6 +208,7 @@ class RepositoryTeamView:
     room_id: str | None
     leader_room_id: str | None
     decomposition_mode: TeamDecompositionMode = TeamDecompositionMode.SERVER
+    construction_mode: ConstructionMode = ConstructionMode.HOSTED_NATIVE
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +242,23 @@ class TeamDecompositionModeReader(Protocol):
     async def decomposition_mode(
         self, project_id: UUID, repository_id: UUID
     ) -> TeamDecompositionMode: ...
+
+
+class TeamConstructionModeReader(Protocol):
+    """The one question the delivery fork asks per assignment (spec §5.3.2).
+
+    Same shape and same reasoning as ``TeamDecompositionModeReader``: the
+    caller — ``_deliver_assignment`` deciding between a hosted-native round and
+    the publish-and-send path, the readiness gate, the shared-directory
+    observer — already knows project and repository and must not be handed the
+    whole topology. A team that does not exist resolves to ``HOSTED_NATIVE``,
+    the product default, so the protocol has no error channel to misuse; a
+    missing row is not a reason to start a Bridge dispatch for nobody.
+    """
+
+    async def construction_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> ConstructionMode: ...
 
 
 class ProjectTopologyProvisioner(Protocol):

@@ -67,7 +67,11 @@ from repomesh.modules.agent_runtime.ports.agent_team import (
     WorkerRuntime,
     WorkerRuntimeRef,
 )
-from repomesh.modules.project.contracts import ProjectAgentTopologyView
+from repomesh.modules.project.contracts import (
+    DerivedRuntime,
+    ProjectAgentTopologyView,
+    derive_runtime,
+)
 from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.ports import ProjectTopologyStore
 from repomesh.modules.repository_intelligence.ports.catalog import RepositoryCatalog
@@ -164,7 +168,6 @@ class ProjectRuntimeProjection:
         *,
         model: str,
         manager_runtime: ManagerRuntime,
-        worker_runtime: WorkerRuntime,
         manager_image: str | None = None,
         worker_task_control_url: str | None = None,
         repository_catalog: RepositoryCatalog | None = None,
@@ -177,9 +180,15 @@ class ProjectRuntimeProjection:
         # composition root owns configuration. Required rather than defaulted,
         # so the value cannot quietly disagree with the one
         # ``scripts/run_pipeline.py`` uses; both take it from
-        # ``REPOMESH_AGENTTEAMS_{MANAGER,WORKER}_RUNTIME``.
+        # ``REPOMESH_AGENTTEAMS_MANAGER_RUNTIME``.
+        #
+        # There is no worker counterpart any more. What a team's Workers run
+        # under — the controller runtime and whether the controller owns their
+        # containers — is derived per team from its persisted construction
+        # mode (hosted-native spec M7, D-17), read off the same topology this
+        # pass already loads. A global worker runtime here was the second of
+        # the two defaults D-17 found disagreeing.
         self._manager_runtime = manager_runtime
-        self._worker_runtime = worker_runtime
         # Same injection rule, same single source
         # (``REPOMESH_AGENTTEAMS_MANAGER_IMAGE``): the controller's image
         # fallback is role-blind, so an imageless manager CR boots on the
@@ -204,8 +213,12 @@ class ProjectRuntimeProjection:
         await self._register(topology.organization_leader_id, project_id)
         workers: list[str] = []
         for team in topology.repository_teams:
+            # The team's mode settles the Worker projection for its leader and
+            # workers alike: a local-CLI team's members get an identity and a
+            # seat but no container, a hosted-native team's get copaw bodies.
+            derived = derive_runtime(team.construction_mode)
             for agent_id in (team.leader_agent_id, *team.worker_agent_ids):
-                workers.append(await self._register(agent_id, project_id))
+                workers.append(await self._register(agent_id, project_id, derived=derived))
 
         view = await self._reconcile.execute(project_id)
         self._assert_rooms(view)
@@ -214,8 +227,14 @@ class ProjectRuntimeProjection:
 
     # ------------------------------------------------------------ registration
 
-    async def _register(self, agent_id: UUID, project_id: UUID) -> str:
+    async def _register(
+        self, agent_id: UUID, project_id: UUID, *, derived: DerivedRuntime | None = None
+    ) -> str:
         """Read the resource this principal is bound to, or create it.
+
+        ``derived`` is the team's construction mode spelled out as projection
+        facts, for the leader and workers of a repository team; the
+        organization leader is a Manager and has none.
 
         Read *first*, and this is the correction that ends the 409 deadlock
         (arch-team T2 §6). A repository staffed through onboarding already has
@@ -281,15 +300,20 @@ class ProjectRuntimeProjection:
                 idempotency_key=f"{key}:agentteams",
             )
             return name
+        if derived is None:
+            raise ProjectTopologyViolation(
+                f"agent {agent_id} is a {principal.role.value} outside any repository team"
+            )
         projection = with_task_control(
             WorkerProjection(
                 name=name,
                 model=self._model,
-                runtime=self._worker_runtime,
+                runtime=derived.worker_runtime,
                 skills=agentteams_skills(
                     principal.role, _SKILLS[principal.role], profile=profile
                 ),
                 state=DesiredRuntimeState.RUNNING,
+                container_managed=derived.container_managed,
             ),
             self._worker_task_control_url,
         )

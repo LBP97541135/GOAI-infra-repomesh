@@ -7,6 +7,7 @@ from repomesh.modules.agent_runtime.ports.agent_team import ManagerRuntime, Work
 from repomesh.modules.project.contracts import (
     CheckpointDecisionKind,
     CodeAccessLevel,
+    ConstructionMode,
     HumanControlAction,
     HumanProjectRole,
     ProjectCheckpoint,
@@ -122,8 +123,12 @@ class RepositoryAgentTeamOnboard(BaseModel):
     organization_id: UUID
     worker_count: int = Field(default=1, ge=1, le=20)
     model: str | None = Field(default=None, min_length=1, max_length=100)
-    leader_runtime: WorkerRuntime = WorkerRuntime.COPAW
-    worker_runtime: WorkerRuntime = WorkerRuntime.REPOMESH_RUNNER
+    #: How this team builds (hosted-native spec D-17). Replaces the
+    #: ``leader_runtime`` / ``worker_runtime`` pair: the controller runtime
+    #: and whether the controller containerizes the members are derived from
+    #: the mode, so there is no second runtime default here to disagree with
+    #: the settings. ``None`` takes ``settings.construction_mode_default``.
+    construction_mode: ConstructionMode | None = None
     responsibility_paths: list[str] = Field(default_factory=lambda: ["**"])
     idempotency_key: str = Field(min_length=1, max_length=200)
 

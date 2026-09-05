@@ -1628,6 +1628,10 @@ class DeliveryReadModelService:
                         # reading a row, not a probe, so it stays truthful with
                         # the controller unreachable.
                         "decomposition_mode": team.decomposition_mode.value,
+                        # Who builds this team's code and where (hosted-native
+                        # spec M7): the persisted choice, for the same reason
+                        # the row above is read from the row.
+                        "construction_mode": team.construction_mode.value,
                         "team_room_id": team.room_id,
                         "leader_room_id": team.leader_room_id,
                         "leader": await self._member(team.leader_agent_id, "repository_leader"),

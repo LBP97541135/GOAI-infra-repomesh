@@ -10,6 +10,7 @@ from repomesh.modules.agent_directory.contracts import (
 )
 from repomesh.modules.project.contracts import (
     CodeAccessLevel,
+    ConstructionMode,
     HumanControlAction,
     HumanProjectRole,
     ProjectAgentTopologyView,
@@ -66,9 +67,25 @@ class CreateAutomaticProjectTopologyRequest:
 
 
 class CreateProjectAgentTopology:
-    def __init__(self, directory: AgentPrincipalReader, store: ProjectTopologyStore) -> None:
+    def __init__(
+        self,
+        directory: AgentPrincipalReader,
+        store: ProjectTopologyStore,
+        *,
+        construction_mode: ConstructionMode = ConstructionMode.HOSTED_NATIVE,
+    ) -> None:
         self._directory = directory
         self._store = store
+        # The mode every team created here is written with (hosted-native
+        # spec M7). A constructor argument rather than a request field on
+        # purpose: the request is fingerprinted for idempotency, and a field
+        # added to it would change the fingerprint of every replay of a
+        # topology created before the column existed. The composition root
+        # passes the deployment default (``settings.construction_mode_default``);
+        # a per-repository choice made at onboarding has no persisted carrier
+        # yet and reaches the row by the operator's one-time UPDATE (spec
+        # §5.3.1).
+        self._construction_mode = construction_mode
 
     async def execute(
         self, request: CreateProjectAgentTopologyRequest, *, idempotency_key: str
@@ -116,6 +133,7 @@ class CreateProjectAgentTopology:
                     repository_id=assignment.repository_id,
                     leader_agent_id=assignment.leader_agent_id,
                     worker_agent_ids=assignment.worker_agent_ids,
+                    construction_mode=self._construction_mode,
                 )
             )
         topology = ProjectAgentTopology(

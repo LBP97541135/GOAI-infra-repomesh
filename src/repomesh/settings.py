@@ -6,6 +6,7 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from repomesh.modules.agent_runtime.ports.agent_team import ManagerRuntime, WorkerRuntime
+from repomesh.modules.project.contracts import ConstructionMode
 
 
 class Settings(BaseSettings):
@@ -34,6 +35,13 @@ class Settings(BaseSettings):
     #: dispatch, and so the allowed set is not copied here.
     agentteams_manager_runtime: ManagerRuntime = ManagerRuntime.COPAW
     agentteams_worker_runtime: WorkerRuntime = WorkerRuntime.COPAW
+    #: The construction mode a repository team is staffed and written with
+    #: when nobody chose one (hosted-native spec M7, D-17). ``hosted_native``
+    #: is the product default; a deployment whose teams are served by Bridges
+    #: sets ``local_cli`` so its topology rows say so without an UPDATE. This
+    #: is the *only* default — the onboarding request no longer carries a
+    #: runtime of its own to disagree with it.
+    construction_mode_default: ConstructionMode = ConstructionMode.HOSTED_NATIVE
     #: Container image the projected Manager asks the controller to run
     #: (``image`` on the Manager CR). The controller's image fallback is
     #: role-blind: a Manager created without one is handed the *worker*

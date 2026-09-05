@@ -77,6 +77,7 @@ from repomesh.modules.project import (
     CreateProjectAgentTopologyRequest,
     RepositoryTeamAssignment,
 )
+from repomesh.modules.project.contracts import ConstructionMode, derive_runtime
 from repomesh.modules.project.domain import ProjectTopologyViolation
 from repomesh.modules.project.infrastructure import InMemoryProjectTopologyStore
 from repomesh.modules.repository_intelligence.domain import RepositoryProfile
@@ -95,8 +96,11 @@ MODEL = "deepseek-chat"
 _DEFAULTS = Settings()
 _RUNTIMES = {
     "manager_runtime": _DEFAULTS.agentteams_manager_runtime,
-    "worker_runtime": _DEFAULTS.agentteams_worker_runtime,
 }
+#: The worker runtime is no longer injected: ``ProjectRuntimeProjection``
+#: derives it per team from the persisted construction mode (hosted-native
+#: spec M7). The Bridge-side ``ExternalWorkerProjection`` still takes it.
+_WORKER_RUNTIME = _DEFAULTS.agentteams_worker_runtime
 
 
 class RecordingControlPlane:
@@ -233,6 +237,7 @@ async def _console_project(
     store: InMemoryProjectTopologyStore,
     *,
     repositories: int = 2,
+    construction_mode: ConstructionMode = ConstructionMode.HOSTED_NATIVE,
 ) -> UUID:
     """A project in exactly the state materialize's ``ensure topology`` leaves.
 
@@ -269,7 +274,9 @@ async def _console_project(
                 worker_agent_ids=tuple(worker.id for worker in team.workers),
             )
         )
-    await CreateProjectAgentTopology(directory, store).execute(
+    await CreateProjectAgentTopology(
+        directory, store, construction_mode=construction_mode
+    ).execute(
         CreateProjectAgentTopologyRequest(
             organization_id=organization_id,
             project_id=project_id,
@@ -408,7 +415,9 @@ async def test_the_projections_match_the_pipeline_script() -> None:
     assert set(by_skills) == {("code-review", "planning"), ("coding",)}
     for worker in control_plane.workers:
         assert worker.model == MODEL
-        assert worker.runtime is _RUNTIMES["worker_runtime"]
+        # Derived from the team's construction mode, which a console topology
+        # takes from the deployment default (hosted-native spec M7).
+        assert worker.runtime is derive_runtime(ConstructionMode.HOSTED_NATIVE).worker_runtime
         assert worker.state.value == "Running"
         # The task-control MCP server, injected the one way `RegisterNativeAgent`
         # injects it — a second spelling would make the two paths conflict.
@@ -1227,7 +1236,7 @@ def _external_projection(
     return ExternalWorkerProjection(
         control_plane,  # type: ignore[arg-type]
         model=MODEL,
-        worker_runtime=_RUNTIMES["worker_runtime"],
+        worker_runtime=_WORKER_RUNTIME,
         worker_task_control_url=task_control,
     )
 
@@ -1297,6 +1306,38 @@ async def test_the_default_project_path_still_projects_managed_workers() -> None
 
     assert control_plane.workers
     assert all(worker.container_managed is True for worker in control_plane.workers)
+
+
+@pytest.mark.asyncio
+async def test_a_local_cli_team_is_projected_without_containers() -> None:
+    """The mode decides the body (hosted-native spec M7, D-17).
+
+    One persisted fact on the team row replaces the runtime pair the
+    onboarding request used to carry: a ``local_cli`` team's leader and
+    workers are asked for with ``containerManaged: false`` — a Matrix identity
+    and a seat in the Team, no container, a Bridge for a body — and with the
+    copaw runtime both modes derive, so a Bridge-served repository and a
+    hosted-native one differ on exactly the field that matters and no other.
+    The organization leader is a Manager and is untouched by the team's mode.
+    """
+
+    directory = InMemoryAgentDirectory()
+    store = InMemoryProjectTopologyStore()
+    project_id = await _console_project(
+        directory, store, repositories=1, construction_mode=ConstructionMode.LOCAL_CLI
+    )
+
+    control_plane = RecordingControlPlane()
+    await ProjectRuntimeProjection(
+        directory, store, control_plane, model=MODEL, **_RUNTIMES  # type: ignore[arg-type]
+    ).project(project_id)
+
+    derived = derive_runtime(ConstructionMode.LOCAL_CLI)
+    assert derived.container_managed is False
+    assert len(control_plane.workers) == 2  # the repository leader and its worker
+    assert all(worker.container_managed is False for worker in control_plane.workers)
+    assert all(worker.runtime is derived.worker_runtime for worker in control_plane.workers)
+    assert len(control_plane.managers) == 1
 
 
 @pytest.mark.asyncio

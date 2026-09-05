@@ -34,7 +34,11 @@ from repomesh.modules.project import (
     CreateProjectAgentTopologyRequest,
     RepositoryTeamAssignment,
 )
-from repomesh.modules.project.contracts import ProjectTeamRuntimeStatus, TeamDecompositionMode
+from repomesh.modules.project.contracts import (
+    ConstructionMode,
+    ProjectTeamRuntimeStatus,
+    TeamDecompositionMode,
+)
 from repomesh.modules.project.domain import ProjectAgentTopology, RepositoryTeam
 from repomesh.modules.project.infrastructure import (
     InMemoryProjectTopologyStore,
@@ -45,8 +49,14 @@ from repomesh.settings import Settings
 _DEFAULTS = Settings()
 _RUNTIMES = {
     "manager_runtime": _DEFAULTS.agentteams_manager_runtime,
-    "worker_runtime": _DEFAULTS.agentteams_worker_runtime,
 }
+
+#: Every team in this file is staffed for Bridges. Adoption is the Bridge
+#: line's mechanism (hosted-native spec M7: the ``LEADER`` latch exists only
+#: under ``local_cli``), so the teams here say so explicitly; the one test
+#: that builds a hosted-native team is the one that asserts the latch stays
+#: shut for it.
+_LOCAL_CLI = ConstructionMode.LOCAL_CLI
 
 
 class LeaderAwareControlPlane(RecordingControlPlane):
@@ -123,13 +133,18 @@ class ProvisionedControlPlane(LeaderAwareControlPlane):
         return await super().get_worker(name) or managed(name)
 
 
-def a_team(mode: TeamDecompositionMode = TeamDecompositionMode.SERVER) -> RepositoryTeam:
+def a_team(
+    mode: TeamDecompositionMode = TeamDecompositionMode.SERVER,
+    *,
+    construction_mode: ConstructionMode = _LOCAL_CLI,
+) -> RepositoryTeam:
     return RepositoryTeam(
         project_id=uuid4(),
         repository_id=uuid4(),
         leader_agent_id=uuid4(),
         worker_agent_ids=(uuid4(),),
         decomposition_mode=mode,
+        construction_mode=construction_mode,
     )
 
 
@@ -179,15 +194,51 @@ def test_the_mode_reaches_the_view_the_contract_freezes() -> None:
     assert a_team().to_view().decomposition_mode is TeamDecompositionMode.SERVER
 
 
+def test_a_hosted_native_team_is_never_raised_by_an_external_leader() -> None:
+    """The latch exists for one construction mode (hosted-native spec M7).
+
+    A hosted-native leader is a copaw container that reviews candidates; it
+    never receives a parked batch, and nothing on the hosted-native side serves
+    the leader-actions lane. So a worker document that *looks* external — a
+    controller answering ``containerManaged: false`` about it, for whatever
+    reason — must not move the team onto that lane.
+    """
+
+    hosted = a_team(construction_mode=ConstructionMode.HOSTED_NATIVE)
+
+    assert hosted.with_adopted_leader(external=True) is hosted
+    assert hosted.decomposition_mode is TeamDecompositionMode.SERVER
+    assert hosted.construction_mode is ConstructionMode.HOSTED_NATIVE
+
+
+def test_the_default_construction_mode_is_hosted_native() -> None:
+    """The resting state: a team that says nothing is a hosted-native team."""
+
+    team = RepositoryTeam(
+        project_id=uuid4(),
+        repository_id=uuid4(),
+        leader_agent_id=uuid4(),
+        worker_agent_ids=(uuid4(),),
+    )
+    assert team.construction_mode is ConstructionMode.HOSTED_NATIVE
+    assert team.to_view().construction_mode is ConstructionMode.HOSTED_NATIVE
+
+
 # ---------------------------------------------------------------------------
 # The adoption pass: one read, two facts
 # ---------------------------------------------------------------------------
 
 
-async def _topology_with_one_team(store: InMemoryProjectTopologyStore):
+async def _topology_with_one_team(
+    store: InMemoryProjectTopologyStore,
+    *,
+    construction_mode: ConstructionMode = _LOCAL_CLI,
+):
     directory, organization_id, organization_leader, teams = await build_agents(1)
     project_id = uuid4()
-    await CreateProjectAgentTopology(directory, store).execute(
+    await CreateProjectAgentTopology(
+        directory, store, construction_mode=construction_mode
+    ).execute(
         CreateProjectAgentTopologyRequest(
             organization_id=organization_id,
             project_id=project_id,
@@ -230,6 +281,32 @@ async def test_the_reconcile_sets_the_mode_from_the_leaders_worker_document(
     assert view.repository_teams[0].decomposition_mode is expected
     stored = await store.get(project_id)
     assert stored.repository_teams[0].decomposition_mode is expected
+
+
+@pytest.mark.asyncio
+async def test_the_reconcile_does_not_adopt_for_a_hosted_native_team() -> None:
+    """The latch, at the layer that pulls it.
+
+    Same external document, same pass — only the team's construction mode
+    differs, and it is the product default. The Team name is still adopted
+    (that is the identity fact, A-8); the lane is not.
+    """
+
+    store = InMemoryProjectTopologyStore()
+    directory, project_id, team = await _topology_with_one_team(
+        store, construction_mode=ConstructionMode.HOSTED_NATIVE
+    )
+    principal = await directory.get_view(team.leader.id)
+    name = principal.agentteams_resource_name
+    control_plane = LeaderAwareControlPlane({name: external(name, team="adopted-elsewhere")})
+
+    view = await ReconcileProjectAgentTopology(directory, store, control_plane).execute(project_id)
+
+    assert view.repository_teams[0].agentteams_team_name == "adopted-elsewhere"
+    assert view.repository_teams[0].decomposition_mode is TeamDecompositionMode.SERVER
+    assert view.repository_teams[0].construction_mode is ConstructionMode.HOSTED_NATIVE
+    stored = await store.get(project_id)
+    assert stored.repository_teams[0].decomposition_mode is TeamDecompositionMode.SERVER
 
 
 @pytest.mark.asyncio
@@ -409,7 +486,7 @@ async def test_the_mode_survives_a_real_store_round_trip(
     store = application_container.project_topology_store
     directory, organization_id, organization_leader, teams = await build_agents(1)
     project_id = uuid4()
-    await CreateProjectAgentTopology(directory, store).execute(
+    await CreateProjectAgentTopology(directory, store, construction_mode=_LOCAL_CLI).execute(
         CreateProjectAgentTopologyRequest(
             organization_id=organization_id,
             project_id=project_id,
@@ -477,6 +554,7 @@ def _persisted_topology(
                 worker_agent_ids=(environment.worker_ids[0],),
                 runtime_status=ProjectTeamRuntimeStatus.READY,
                 decomposition_mode=mode,
+                construction_mode=_LOCAL_CLI,
             ),
         ),
     )

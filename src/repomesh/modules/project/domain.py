@@ -6,6 +6,7 @@ from repomesh.modules.agent_runtime.contracts import AGENTTEAMS_NAME_PREFIX
 from repomesh.modules.project.contracts import (
     CheckpointDecisionKind,
     CodeAccessLevel,
+    ConstructionMode,
     HumanControlAction,
     HumanProjectGrantView,
     HumanProjectRole,
@@ -177,6 +178,16 @@ class RepositoryTeam:
     #: field keeps today's behavior, and ``LEADER`` is something the adoption
     #: path below has to go out of its way to say.
     decomposition_mode: TeamDecompositionMode = TeamDecompositionMode.SERVER
+    #: Who builds this team's code and where (hosted-native spec D-1, D-17).
+    #:
+    #: Defaulted to ``HOSTED_NATIVE`` for the same reason ``decomposition_mode``
+    #: defaults to ``SERVER``: it is the product's resting state, every row
+    #: written before the column existed means it (migration 0055), and
+    #: ``LOCAL_CLI`` is something the staffing path has to say out loud. The
+    #: runtime facts a team needs — whether the controller containerizes its
+    #: members, which runtime it asks for — are derived from this field through
+    #: ``contracts.derive_runtime`` rather than stored beside it.
+    construction_mode: ConstructionMode = ConstructionMode.HOSTED_NATIVE
 
     def __post_init__(self) -> None:
         if not self.worker_agent_ids:
@@ -260,8 +271,19 @@ class RepositoryTeam:
         Idempotent by construction: adopting an already-adopted team returns
         the same object, which is what makes a re-run of materialize a no-op
         here rather than a rewrite.
+
+        The latch exists for one construction mode. Leader decomposition is
+        the Bridge line's shape — a Repository Leader planning from its own
+        CLI over the leader-actions surface — and a hosted-native team's leader
+        is a copaw container that reviews candidates but never receives a
+        parked batch (hosted-native spec D-3, M7). So under ``HOSTED_NATIVE``
+        an external-looking leader document is not an adoption, whatever it
+        says: that is the only reading under which a team staffed
+        hosted-native cannot be moved onto a lane nothing on its side serves.
         """
 
+        if self.construction_mode is not ConstructionMode.LOCAL_CLI:
+            return self
         if not external or self.decomposition_mode is TeamDecompositionMode.LEADER:
             return self
         return replace(self, decomposition_mode=TeamDecompositionMode.LEADER)
@@ -278,6 +300,7 @@ class RepositoryTeam:
             room_id=self.room_id,
             leader_room_id=self.leader_room_id,
             decomposition_mode=self.decomposition_mode,
+            construction_mode=self.construction_mode,
         )
 
 

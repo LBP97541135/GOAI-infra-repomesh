@@ -45,7 +45,11 @@ from repomesh.modules.project import (
     RecordCheckpointDecisionCommand,
     RepositoryTeamAssignment,
 )
-from repomesh.modules.project.contracts import HumanReviewStatus, ProjectCheckpoint
+from repomesh.modules.project.contracts import (
+    HumanReviewStatus,
+    ProjectCheckpoint,
+    derive_runtime,
+)
 from repomesh.modules.project.domain import (
     HumanProjectGrant,
     ProjectTopologyConflict,
@@ -270,6 +274,12 @@ async def onboard_repository_agent_team(
     # they are chosen once, here). Set the profile before onboarding: a later
     # change reaches only resources that do not exist yet.
     profile = repository.capability_profile
+    # One choice, three projection facts (hosted-native spec D-17): the mode
+    # decides the controller runtime and whether the controller containerizes
+    # the leader and the workers. ``local_cli`` members get a Matrix identity
+    # and a seat in the Team but no container — their bodies are Bridges.
+    construction_mode = body.construction_mode or get_settings().construction_mode_default
+    derived = derive_runtime(construction_mode)
     leader_skills = agentteams_skills(
         AgentRole.REPOSITORY_LEADER,
         ("worker-management", "spec-authoring", "code-review"),
@@ -294,9 +304,10 @@ async def onboard_repository_agent_team(
                 worker=WorkerProjection(
                     name=leader_name,
                     model=model,
-                    runtime=body.leader_runtime,
+                    runtime=derived.worker_runtime,
                     identity=f"Repository Leader for {repository.name}",
                     skills=leader_skills,
+                    container_managed=derived.container_managed,
                 ),
             ),
             idempotency_key=f"{body.idempotency_key}:leader",
@@ -318,9 +329,10 @@ async def onboard_repository_agent_team(
                         worker=WorkerProjection(
                             name=worker_name,
                             model=model,
-                            runtime=body.worker_runtime,
+                            runtime=derived.worker_runtime,
                             identity=f"Coding Worker for {repository.name}",
                             skills=worker_skills,
+                            container_managed=derived.container_managed,
                         ),
                     ),
                     idempotency_key=f"{body.idempotency_key}:worker:{index:02d}",
@@ -362,6 +374,7 @@ async def onboard_repository_agent_team(
     return {
         "repository_id": repository_id,
         "repository_name": repository.name,
+        "construction_mode": construction_mode.value,
         "leader": asdict(leader.principal),
         "workers": [asdict(item.principal) for item in workers],
         "team": asdict(team),

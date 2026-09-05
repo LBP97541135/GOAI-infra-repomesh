@@ -22,6 +22,7 @@ from sqlalchemy.types import Uuid
 from repomesh.modules.project.contracts import (
     CheckpointDecisionKind,
     CodeAccessLevel,
+    ConstructionMode,
     HumanControlAction,
     HumanProjectRole,
     HumanReviewStatus,
@@ -194,6 +195,26 @@ class ProjectRepositoryTeamRecord(Base):
 
     Indexed because ``PersistedTeamDecompositionModeReader`` is asked once per
     batch item on the dispatch path.
+    """
+    construction_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=ConstructionMode.HOSTED_NATIVE.value,
+        default=ConstructionMode.HOSTED_NATIVE.value,
+        index=True,
+    )
+    """Who builds this team's code and where (hosted-native spec D-17, revision 0055).
+
+    Stored exactly as ``decomposition_mode`` above is stored, for the same
+    reasons: a plain string read back through ``ConstructionMode(...)``, and a
+    ``server_default`` so that every row written before the column existed
+    means ``hosted_native`` — the product default, and what every team in an
+    installation that never staffed a Bridge fleet already was. A deployment
+    that did staff one flips those rows once by hand (spec §5.3.1); nothing
+    here guesses which ones they are.
+
+    Indexed because ``PersistedTeamConstructionModeReader`` is asked once per
+    assignment on the delivery path.
     """
 
 
@@ -545,6 +566,7 @@ class PostgresProjectTopologyStore:
                 room_id=team.room_id,
                 leader_room_id=team.leader_room_id,
                 decomposition_mode=team.decomposition_mode.value,
+                construction_mode=team.construction_mode.value,
             )
             for team in topology.repository_teams
         )
@@ -582,10 +604,48 @@ class PostgresProjectTopologyStore:
                     decomposition_mode=TeamDecompositionMode(
                         team.decomposition_mode or TeamDecompositionMode.SERVER.value
                     ),
+                    # Same ``or`` for the same reason, one revision later
+                    # (0055): an unrefreshed pre-column row is a hosted-native
+                    # team.
+                    construction_mode=ConstructionMode(
+                        team.construction_mode or ConstructionMode.HOSTED_NATIVE.value
+                    ),
                 )
                 for team in teams
             ),
         )
+
+
+class PersistedTeamConstructionModeReader:
+    """``TeamConstructionModeReader`` answered from the topology on disk (spec M7).
+
+    The twin of ``PersistedTeamDecompositionModeReader`` below, and written the
+    same way for the same reasons: the mode is a persisted fact chosen when
+    the team was staffed, so this reads the row and asks the controller
+    nothing — a live lookup on the delivery path would let a controller outage
+    decide whether a task goes to a hosted-native round or a Bridge dispatch.
+    Written against ``ProjectTopologyStore`` so the production reader and the
+    one the tests drive are one class over two stores, and there is no second
+    row-to-mode mapping free to disagree with ``_to_domain``.
+
+    Every absence resolves to ``HOSTED_NATIVE``: a project with no topology
+    and a repository with no team are both "nothing here was staffed for a
+    Bridge", and the product default is the only honest answer.
+    """
+
+    def __init__(self, store: ProjectTopologyStore) -> None:
+        self._store = store
+
+    async def construction_mode(
+        self, project_id: UUID, repository_id: UUID
+    ) -> ConstructionMode:
+        topology = await self._store.get(project_id)
+        if topology is None:
+            return ConstructionMode.HOSTED_NATIVE
+        for team in topology.repository_teams:
+            if team.repository_id == repository_id:
+                return team.construction_mode
+        return ConstructionMode.HOSTED_NATIVE
 
 
 class PersistedTeamDecompositionModeReader:

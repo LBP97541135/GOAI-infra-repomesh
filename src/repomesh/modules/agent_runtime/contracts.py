@@ -10,6 +10,11 @@ from repomesh.modules.context.contracts import ExecutionContextGrant
 
 from .ports.agent_team import AGENTTEAMS_NAME_PREFIX as AGENTTEAMS_NAME_PREFIX
 from .ports.agent_team import ExternalMemberRole as ExternalMemberRole
+
+# Re-exported for the project module: ``derive_runtime`` (hosted-native spec
+# M7, D-17) answers which controller runtime a team's workers run under, and
+# the cross-module rule lets it reach this module through ``contracts`` only.
+from .ports.agent_team import WorkerRuntime as WorkerRuntime
 from .ports.coding_agent import CodingRunRequest
 
 
