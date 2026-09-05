@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agentteams-task/v2/manifest.schema.json",
+  "title": "RepoMesh AgentTeams Task Package v2 Manifest",
+  "description": "manifest.json at the root of one attempt directory. It lists every file the platform published (never manifest.json itself, never the worker's candidate/ or copaw's result.md) and pins their digests. content_hash is the sha256 of the concatenation of \"<path>\\0<digest>\\n\" over files in sorted order; a publisher that finds an existing manifest compares this value and either replays (equal) or refuses (different).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "attempt_id",
+    "files",
+    "file_digests",
+    "file_sizes",
+    "content_hash"
+  ],
+  "properties": {
+    "schema": {"const": "repomesh.agentteams-task.v2"},
+    "kind": {"enum": ["construction", "review"]},
+    "attempt_id": {
+      "description": "Equals the directory name (D-8) and meta.json.task_id (D-6).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "files": {
+      "description": "Sorted, posix-separated relative paths. Must contain meta.json and spec.md; may contain base/** and review/**. Every entry has a digest and a size.",
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^(meta\\.json|spec\\.md|base/[^\\s]+|review/[^\\s]+)$"
+      }
+    },
+    "file_digests": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "file_sizes": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "content_hash": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

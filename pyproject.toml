@@ -43,6 +43,11 @@ repomesh-agent-bridge = "repomesh_agent_bridge.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Worker-facing files that ship inside a hosted-native task package (spec §4.2 M3):
+# the spec templates the publisher renders and the helper script it copies verbatim.
+"repomesh.integrations.agentteams.task_package" = ["*.tpl", "*.sh"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

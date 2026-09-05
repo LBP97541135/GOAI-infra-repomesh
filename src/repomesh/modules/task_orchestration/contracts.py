@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 
@@ -351,6 +351,90 @@ class PublishedTaskPackage:
     content_hash: str
 
 
+@dataclass(frozen=True, slots=True)
+class PathPolicy:
+    """Which repository paths one attempt may change.
+
+    Globs relative to the repository root, in the same vocabulary the runner
+    task's ``permissions.allowedPaths`` / ``deniedPaths`` use. The worker sees
+    them in ``spec.md`` and ``base/package.json``; the verifier enforces them
+    (spec D-14) — the package only carries the policy, it cannot impose it.
+    """
+
+    allowed_paths: tuple[str, ...]
+    denied_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewInputs:
+    """The candidate a review package puts in front of the Team Leader.
+
+    ``changes_json`` and ``evidence_json`` are the raw texts of the worker's
+    ``candidate/changes.json`` and ``candidate/evidence.json`` (shape in
+    ``contracts/agentteams-task/v2/candidate.schema.json``); the publisher
+    copies them under ``review/`` unchanged and only parses them to render the
+    summary in ``spec.md``.
+    """
+
+    review_of: UUID
+    head_sha: str
+    candidate_diff: str
+    changes_json: str
+    evidence_json: str
+
+
+@dataclass(frozen=True, slots=True)
+class PackageInputs:
+    """Everything a hosted-native attempt adds to a Worker task package.
+
+    ``publish(task, ..., package=None)`` keeps writing the v1 package; with a
+    ``PackageInputs`` it writes the v2 layout under
+    ``teams/<team>/shared/tasks/<attempt_id>/`` (spec §4.2 M3). One attempt
+    is one native task directory and the directory name is the attempt id
+    (D-8), so the caller — not the publisher — mints ``attempt_id``.
+
+    ``kind="construction"`` needs the base bundle the worker clones from and
+    must not carry review inputs; ``kind="review"`` needs the review inputs
+    and ignores any bundle (the Leader reads a diff, it does not build).
+    """
+
+    kind: Literal["construction", "review"]
+    attempt_id: UUID
+    generation: int
+    budget_seconds: int
+    base_sha: str
+    helper_script: bytes
+    policy: PathPolicy
+    test_commands: tuple[str, ...]
+    base_bundle: bytes | None = None
+    workspace_root: str = "/work"
+    test_timeout_seconds: int = 600
+    review: ReviewInputs | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in ("construction", "review"):
+            raise ValueError("package kind must be 'construction' or 'review'")
+        if self.generation < 1:
+            raise ValueError("package generation must be >= 1")
+        if self.budget_seconds <= 0:
+            raise ValueError("package budget_seconds must be > 0")
+        if self.test_timeout_seconds <= 0:
+            raise ValueError("package test_timeout_seconds must be > 0")
+        if not self.base_sha.strip():
+            raise ValueError("package base_sha is required")
+        if not self.helper_script:
+            raise ValueError("package helper_script is required")
+        if not self.workspace_root.strip():
+            raise ValueError("package workspace_root is required")
+        if self.kind == "construction":
+            if self.base_bundle is None:
+                raise ValueError("construction package requires base_bundle")
+            if self.review is not None:
+                raise ValueError("construction package cannot carry review inputs")
+        elif self.review is None:
+            raise ValueError("review package requires review inputs")
+
+
 class TaskPublicationUnavailable(RuntimeError):
     """The store that carries a Worker's task package cannot take it — yet.
 
@@ -383,6 +467,7 @@ class TaskAssignmentPublisher(Protocol):
         room_id: str,
         assignee_resource_name: str,
         idempotency_key: str,
+        package: PackageInputs | None = None,
     ) -> PublishedTaskPackage: ...
 
 

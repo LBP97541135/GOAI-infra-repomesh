@@ -100,6 +100,7 @@ from repomesh.modules.task_orchestration import (
     SubmitRepositoryReview,
 )
 from repomesh.modules.task_orchestration.contracts import (
+    PackageInputs,
     PublishedTaskPackage,
     TaskAssignmentGateway,
     TaskAssignmentPublisher,
@@ -334,6 +335,7 @@ def storage_backed_task_publisher(
             room_id: str,
             assignee_resource_name: str,
             idempotency_key: str,
+            package: PackageInputs | None = None,
         ) -> PublishedTaskPackage:
             try:
                 return await publisher.publish(
@@ -342,6 +344,7 @@ def storage_backed_task_publisher(
                     room_id=room_id,
                     assignee_resource_name=assignee_resource_name,
                     idempotency_key=idempotency_key,
+                    package=package,
                 )
             except unavailable as error:
                 raise TaskPublicationUnavailable(str(error)) from error

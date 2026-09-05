@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agentteams-task/v2/candidate.schema.json",
+  "title": "RepoMesh AgentTeams Task Package v2 Candidate Files",
+  "description": "The two JSON files helper `bundle` writes into candidate/ (and the platform copies verbatim into a review package's review/). Validate changes.json against $defs/changes and evidence.json against $defs/evidence. This is the minimal evidence set: the request id of CONTEXT.md's four-tuple is replaced by attempt_id, and base_sha / head_sha pin the exact commit the evidence is about.",
+  "$defs": {
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "changes": {
+      "title": "candidate/changes.json",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "base_sha", "head_sha", "changed_files"],
+      "properties": {
+        "attempt_id": {"type": "string", "format": "uuid"},
+        "base_sha": {"$ref": "#/$defs/git_sha"},
+        "head_sha": {
+          "description": "The single candidate commit; its parent is base_sha.",
+          "$ref": "#/$defs/git_sha"
+        },
+        "changed_files": {
+          "description": "`git diff --name-status base_sha head_sha`, one entry per path.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "path"],
+            "properties": {
+              "status": {
+                "description": "First letter of git's name-status code (A M D R C T U X B).",
+                "type": "string",
+                "pattern": "^[AMDRCTUXB]$"
+              },
+              "path": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "evidence": {
+      "title": "candidate/evidence.json",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "base_sha", "head_sha", "tests", "produced_at"],
+      "properties": {
+        "attempt_id": {"type": "string", "format": "uuid"},
+        "base_sha": {"$ref": "#/$defs/git_sha"},
+        "head_sha": {"$ref": "#/$defs/git_sha"},
+        "tree": {
+          "description": "git tree hash of the whole working tree at the last `test` run; `bundle` refuses when the tree changed since.",
+          "oneOf": [{"$ref": "#/$defs/git_sha"}, {"type": "null"}]
+        },
+        "tests_ran_at": {"type": "string", "format": "date-time"},
+        "tests": {
+          "description": "One entry per frozen test command, in package.json order.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["command", "exit_code", "excerpt"],
+            "properties": {
+              "command": {"type": "string", "minLength": 1},
+              "exit_code": {
+                "description": "The command's exit status; 124 when the helper's timeout fired.",
+                "type": "integer"
+              },
+              "excerpt": {
+                "description": "Last 40 lines of combined stdout/stderr.",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "produced_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

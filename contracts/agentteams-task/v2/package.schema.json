@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agentteams-task/v2/package.schema.json",
+  "title": "RepoMesh AgentTeams Task Package v2 Control Data",
+  "description": "base/package.json: the platform's control data for one attempt. base/ is excluded from copaw's push-back (spike S-9) and is never modified after publish, which makes this file the one reliable carrier of what the attempt was told. Read by the helper script (init/test), by the observer (auto-approval, D-23) and by the verifier (test commands and path policy, D-14).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "kind",
+    "task_id",
+    "attempt_id",
+    "generation",
+    "budget_seconds",
+    "base_sha",
+    "repository_id",
+    "organization_id",
+    "test_commands",
+    "test_timeout_seconds",
+    "allowed_paths",
+    "denied_paths",
+    "workspace_root",
+    "helper",
+    "helper_commands"
+  ],
+  "properties": {
+    "schema": {"const": "repomesh.agentteams-task.v2/package"},
+    "kind": {"enum": ["construction", "review"]},
+    "task_id": {
+      "description": "The RepoMesh task id.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "attempt_id": {
+      "description": "Equals the directory name; the helper refuses to run when they differ.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "generation": {"type": "integer", "minimum": 1},
+    "budget_seconds": {"type": "integer", "minimum": 1},
+    "base_sha": {"$ref": "#/$defs/git_sha"},
+    "repository_id": {"type": "string", "format": "uuid"},
+    "organization_id": {"type": "string", "format": "uuid"},
+    "test_commands": {
+      "description": "Frozen test commands, run in order inside the workspace by helper `test` and re-run verbatim by the verifier.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "test_timeout_seconds": {"type": "integer", "minimum": 1},
+    "allowed_paths": {
+      "description": "Globs relative to the repository root; only these may change. Empty means unrestricted.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "denied_paths": {
+      "description": "Globs relative to the repository root that must not change; wins over allowed_paths.",
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "workspace_root": {
+      "description": "Absolute directory inside the worker container under which the helper creates <workspace_root>/<attempt_id>. REPOMESH_WORK_ROOT overrides it.",
+      "type": "string",
+      "minLength": 1
+    },
+    "helper": {
+      "description": "Task-relative path of the helper script.",
+      "const": "base/tools/repomesh-work.sh"
+    },
+    "helper_commands": {
+      "description": "The four complete command lines, verbatim and in order: init, test, bundle, clean. The observer's auto-approval (D-23) answers a copaw Tool Guard request only when the intercepted command line equals one of these character for character; any other command is left for a human. None of them may contain a token the Tool Guard reads as dangerous (D-21).",
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^bash base/tools/repomesh-work\\.sh (init|test|bundle|clean)$"}
+    }
+  },
+  "$defs": {
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
+  }
+}

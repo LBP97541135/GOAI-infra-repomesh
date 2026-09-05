@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://repomesh.dev/contracts/agentteams-task/v2/meta.schema.json",
+  "title": "RepoMesh AgentTeams Task Package v2 Meta (publish time)",
+  "description": "meta.json as the platform publishes it. The native fields are copaw's task record; task_id is the attempt id, not the RepoMesh task id (D-6, D-8). The repomesh object is valid ONLY at publish time: copaw rewrites meta.json from its own TaskMeta on ack_task and submit_task and drops the object, and the background push never brings it back (spike S-3). Consumers must not depend on it — the observer claims attempts by directory name and reads base/package.json for control data. This schema describes the file the platform writes, not the file copaw later rewrites.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "project_id",
+    "task_title",
+    "assigned_to",
+    "room_id",
+    "status",
+    "depends_on",
+    "repomesh"
+  ],
+  "properties": {
+    "task_id": {
+      "description": "The attempt id; equals the directory name.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "project_id": {"type": "string", "format": "uuid"},
+    "task_title": {"type": "string", "minLength": 1, "maxLength": 500},
+    "assigned_to": {
+      "description": "The assignee's AgentTeams resource name (Matrix localpart): the Worker for a construction package, the Team Leader for a review package.",
+      "type": "string",
+      "minLength": 1
+    },
+    "room_id": {
+      "description": "The team room for a construction package; the Leader's own room for a review package (D-3).",
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {"const": "assigned"},
+    "depends_on": {"type": "array", "items": {"type": "string"}},
+    "repomesh": {
+      "description": "Publish-time snapshot for humans and for the publisher's own conflict check. Gone after the assignee acks. Never read it back.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "task_id",
+        "attempt_id",
+        "generation",
+        "budget_seconds",
+        "base_sha",
+        "repository_id",
+        "organization_id",
+        "package"
+      ],
+      "properties": {
+        "kind": {"enum": ["construction", "review"]},
+        "task_id": {
+          "description": "The RepoMesh task id this attempt belongs to.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "attempt_id": {"type": "string", "format": "uuid"},
+        "generation": {"type": "integer", "minimum": 1},
+        "budget_seconds": {"type": "integer", "minimum": 1},
+        "base_sha": {"$ref": "#/$defs/git_sha"},
+        "repository_id": {"type": "string", "format": "uuid"},
+        "organization_id": {"type": "string", "format": "uuid"},
+        "review_of": {
+          "description": "Review packages only: the construction attempt under review.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "package": {
+          "description": "Where the control data actually lives.",
+          "const": "base/package.json"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
+  }
+}

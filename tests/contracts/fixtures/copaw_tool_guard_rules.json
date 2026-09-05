@@ -1,0 +1,265 @@
+{
+  "_provenance": {
+    "what": "copaw Tool Guard regex rule set (dangerous_shell_commands.yaml) exported unchanged from a live AgentTeams worker container; the only rule file RuleBasedToolGuardian loads by default (_DEFAULT_RULE_FILES).",
+    "exported_at": "2026-09-05",
+    "container": "agentteams-worker-agt-worker-dfb8a4cda6f7",
+    "image": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker:v1.2.0",
+    "image_id": "sha256:cf5d838d43accd9edb29b262f8361daa7919ef58ea2d21f9d80ab4f97377fe47",
+    "image_repo_digest": "higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-copaw-worker@sha256:dcdd9103535cfac247267e0f69661820c801396d58e2c8e0c14eefd40b63b7bc",
+    "copaw_version": "1.0.2",
+    "copaw_worker_version": "1.0.3",
+    "source_path": "/opt/venv/standard/lib/python3.11/site-packages/copaw/security/tool_guard/rules/dangerous_shell_commands.yaml",
+    "source_sha256": "9e7ebb354f11533e218aa94ca8bed34c4ca70380623859bc3ba3ac9af46ebf3c",
+    "export_command": "docker exec agentteams-worker-agt-worker-dfb8a4cda6f7 sh -c '/opt/venv/standard/bin/python -c \"import json, yaml; print(json.dumps(yaml.safe_load(open(\\\"/opt/venv/standard/lib/python3.11/site-packages/copaw/security/tool_guard/rules/dangerous_shell_commands.yaml\\\", encoding=\\\"utf-8\\\"))))\"'",
+    "match_semantics": "copaw/security/tool_guard/guardians/rule_guardian.py GuardRule: a rule applies when tool_name is in `tools` and the parameter name is in `params`; the parameter value is str()-ed; if any exclude_pattern matches (re.compile(p, re.IGNORECASE).search) the rule is skipped; otherwise the first pattern that matches with re.compile(p, re.IGNORECASE).search is a finding of the rule's severity. HIGH and CRITICAL findings make the call unsafe and trigger the room approval flow. Rules with disabled_rules in config.json are dropped; the live worker config has none.",
+    "not_covered": "FilePathToolGuardian (copaw/security/tool_guard/guardians/file_guardian.py) is not a regex rule set: it blocks paths under security.file_guard.sensitive_files (default: the worker's secret dir). The helper's relative paths never resolve there.",
+    "why": "spec D-21 / spike S-1: the vendored copaw source under components/agentteams carries only the ToolGuardConfig model, not the rules; the wave-0 helper name rm-work.sh hit TOOL_CMD_DANGEROUS_RM on every shell call."
+  },
+  "rules": [
+    {
+      "category": "command_injection",
+      "description": "Shell command contains 'rm' which may cause data loss",
+      "exclude_patterns": [
+        "^\\s*#"
+      ],
+      "id": "TOOL_CMD_DANGEROUS_RM",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\brm\\b",
+        "\\bdel\\b",
+        "\\bRemove-Item\\b"
+      ],
+      "remediation": "Confirm with the user before removing files or directories",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "command_injection",
+      "description": "Shell command contains 'mv' which may move or overwrite files unexpectedly",
+      "id": "TOOL_CMD_DANGEROUS_MV",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bmv\\b"
+      ],
+      "remediation": "Confirm with the user before moving or renaming files",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "command_injection",
+      "description": "Detects low-level disk formatting or wiping commands",
+      "id": "TOOL_CMD_FS_DESTRUCTION",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bmkfs(\\.[a-zA-Z0-9_]+)?\\b",
+        "\\bmke2fs\\b",
+        "\\bdd\\s+.*of=\\/dev\\/",
+        ">\\s*\\/dev\\/(sd[a-z][0-9]*|vd[a-z][0-9]*|nvme\\d+n\\d+(p\\d+)?)"
+      ],
+      "remediation": "Block operation. Agents should not format or overwrite raw block devices.",
+      "severity": "CRITICAL",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "resource_abuse",
+      "description": "Detects classic Bash fork bombs and mass process termination",
+      "id": "TOOL_CMD_DOS_FORK_BOMB",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        ":\\s*\\(\\s*\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:",
+        "\\bkill\\s+-9\\s+(-1\\b|1\\b)"
+      ],
+      "remediation": "Block immediately. These commands will crash the host system.",
+      "severity": "CRITICAL",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "code_execution",
+      "description": "Detects 'curl | bash' patterns used to download and immediately execute remote payloads",
+      "id": "TOOL_CMD_PIPE_TO_SHELL",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\b(curl|wget)\\b\\s+.*\\|.*\\b(bash|sh|zsh|ash|dash)\\b"
+      ],
+      "remediation": "Confirm with user. Agents should inspect scripts before executing them.",
+      "severity": "CRITICAL",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "network_abuse",
+      "description": "Detects attempts to establish reverse shells or unauthorized network tunnels",
+      "id": "TOOL_CMD_REVERSE_SHELL",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\/dev\\/(tcp|udp)\\/",
+        "\\bnc\\s+.*-e\\s*\\S+",
+        "\\bncat\\s+.*-e\\s*\\S+",
+        "\\bsocat\\s+.*EXEC:"
+      ],
+      "remediation": "Block operation. Agents do not need to bind interactive shells to network sockets.",
+      "severity": "CRITICAL",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "sensitive_file_access",
+      "description": "Detects access to cron jobs, SSH keys, or sudo permissions (including reads and modifications)",
+      "id": "TOOL_CMD_SYSTEM_TAMPERING",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bcrontab\\b",
+        "\\bauthorized_keys\\b",
+        "\\/etc\\/sudoers",
+        "\\/etc\\/crontab"
+      ],
+      "remediation": "Confirm with user. Treat any access to credential and scheduling files as sensitive and restrict when possible.",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "privilege_escalation",
+      "description": "Detects global permission downgrades (chmod 777) or setting immutable flags",
+      "id": "TOOL_CMD_UNSAFE_PERMISSIONS",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bchmod\\s+-[a-zA-Z]*R[a-zA-Z]*\\s+(777|a\\+rwx)\\s+\\/",
+        "\\bchattr\\s+\\+i"
+      ],
+      "remediation": "Prompt for confirmation. Suggest least-privilege permission models.",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "code_execution",
+      "description": "Detects execution of base64 encoded strings passed directly to a shell interpreter",
+      "id": "TOOL_CMD_OBFUSCATED_EXEC",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bbase64\\s+(-d|--decode)\\s*\\|\\s*\\b(bash|sh|zsh)\\b"
+      ],
+      "remediation": "Block execution. Agents should use plain text commands.",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "resource_abuse",
+      "description": "Detects system reboot or shutdown commands that will terminate the host system",
+      "id": "TOOL_CMD_SYSTEM_REBOOT",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\b(reboot|shutdown|halt|poweroff)\\b",
+        "\\binit\\s+(0|6)\\b",
+        "\\btelinit\\s+(0|6)\\b",
+        "\\bShutdown-Computer\\b",
+        "\\bRestart-Computer\\b"
+      ],
+      "remediation": "Block operation. Agents should not restart or shutdown the system.",
+      "severity": "CRITICAL",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "resource_abuse",
+      "description": "Detects service management commands that can disrupt system services",
+      "id": "TOOL_CMD_SERVICE_RESTART",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bsystemctl\\s+(restart|stop|start|reload|kill)\\b",
+        "\\bservice\\s+\\S+\\s+(restart|stop|start|reload)\\b",
+        "\\b(sc|net)\\s+(start|stop|restart)\\b",
+        "\\blaunchctl\\s+(load|unload|stop|start|kickstart|kill)\\b",
+        "\\brc-service\\s+(restart|stop|start)\\b"
+      ],
+      "remediation": "Confirm with user. Restarting services may cause downtime or data loss.",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "resource_abuse",
+      "description": "Detects process termination commands that may kill critical processes",
+      "exclude_patterns": [
+        "kill\\s+\\$\\$"
+      ],
+      "id": "TOOL_CMD_PROCESS_KILL",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\b(pkill|killall)\\b",
+        "\\bkill\\s+(-(9|KILL|15|TERM|1|HUP|2|INT)\\s+)?[^-\\s]",
+        "\\btaskkill\\s+\\/F\\b",
+        "\\bStop-Process\\b.*-Force\\b"
+      ],
+      "remediation": "Confirm with user. Killing processes may cause data loss or system instability.",
+      "severity": "HIGH",
+      "tools": [
+        "execute_shell_command"
+      ]
+    },
+    {
+      "category": "privilege_escalation",
+      "description": "Detects privilege escalation attempts using sudo, su, doas, pkexec, or runas",
+      "exclude_patterns": [
+        "^\\s*#"
+      ],
+      "id": "TOOL_CMD_PRIVILEGE_ESCALATION",
+      "params": [
+        "command"
+      ],
+      "patterns": [
+        "\\bsudo\\s+",
+        "\\bsu\\b",
+        "\\bdoas\\s+",
+        "\\bpkexec\\b",
+        "\\brunas\\s+\\/user:"
+      ],
+      "remediation": "Block operation. Agents should not execute commands with elevated privileges.",
+      "severity": "CRITICAL",
+      "tools": [
+        "execute_shell_command"
+      ]
+    }
+  ]
+}

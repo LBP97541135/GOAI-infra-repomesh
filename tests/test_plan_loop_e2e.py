@@ -214,6 +214,7 @@ class FakeTaskPublisher:
         room_id: str,
         assignee_resource_name: str,
         idempotency_key: str,
+        package: object | None = None,
     ) -> PublishedTaskPackage:
         self.published.append(task)
         return PublishedTaskPackage(
