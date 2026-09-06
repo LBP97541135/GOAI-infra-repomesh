@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PlanDagState } from "../../components/PlanDagPanel";
-import type { PolicyGate } from "../../components/DiscoveryPanel";
+export type PolicyGate = "resolving" | "open" | "sealed" | "unknown";
 import type { PlanAnchor } from "../../types";
 import type { IssueDetailView } from "../../api/contract";
 import { fetchPlanGraphEdges, fetchRepositoryPlan } from "../../api/rooms";

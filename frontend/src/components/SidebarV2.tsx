@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account } from "../api/auth";
-import type { OrganizationView } from "../api/contract";
-import { errText } from "../display";
+import type { IssueListItemView, OrganizationView } from "../api/contract";
+import { PHASE_SKIN, PHASE_SKIN_FALLBACK, errText } from "../display";
 
 /** v2 侧栏（CONS-40 → B-2 接线）：工作区切换器 → 新建 issue → 四导航 → 设置底锚 → 身份块。
  *  信息架构见 frontend-prototype/DESIGN-DECISION-V2.md §2、原型 redesign-issue-centric.html。
@@ -25,7 +25,7 @@ export type NavKey =
   | "settings";
 
 const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
-  { key: "issues", label: "issue" },
+  { key: "issues", label: "会话" },
   { key: "reviews", label: "审核" },
   { key: "repositories", label: "仓库" },
   { key: "teams", label: "团队" },
@@ -112,6 +112,9 @@ export function SidebarV2({
   onCreateWorkspace,
   onNavigate,
   onNewIssue,
+  sessions,
+  activeSessionId,
+  onSelectSession,
   onLogout,
   onToast,
 }: {
@@ -132,6 +135,10 @@ export function SidebarV2({
   onCreateWorkspace: (name: string, idempotencyKey: string) => Promise<void>;
   onNavigate: (nav: NavKey) => void;
   onNewIssue: () => void;
+  //** 侧栏会话列表（期 5）：近期 open 会话，点击直达该会话工作台。
+  sessions: IssueListItemView[] | null;
+  activeSessionId: string | null;
+  onSelectSession: (issueId: string) => void;
   onLogout: () => void;
   onToast: (text: string) => void;
 }) {
@@ -309,7 +316,7 @@ export function SidebarV2({
         className="mt-3 mb-1 flex w-full items-center justify-center gap-1.5 rounded-hard bg-amber py-[7px] text-[12.5px] font-extrabold tracking-[0.04em] text-on-amber hover:bg-amber-hi"
         onClick={onNewIssue}
       >
-        + 新建 issue
+        ＋ 新会话
       </button>
 
       <nav className="mt-2 grid gap-0.5">
@@ -338,6 +345,35 @@ export function SidebarV2({
           );
         })}
       </nav>
+
+      {/* 会话列表（期 5）：近期 open 会话，点击直达工作台。null = 数据源未提供。 */}
+      <div className="mt-3 min-h-0 flex-1">
+        <div className="microlabel px-2 pb-1">近期会话</div>
+        <div className="max-h-[38vh] overflow-y-auto pr-0.5">
+          {sessions === null && <div className="px-2 py-1 text-[11px] text-tx3">会话列表不可用</div>}
+          {sessions !== null && sessions.length === 0 && (
+            <div className="px-2 py-1 text-[11px] text-tx3">还没有会话</div>
+          )}
+          {sessions !== null &&
+            sessions.map((item) => {
+              const skin = PHASE_SKIN[item.phase] ?? PHASE_SKIN_FALLBACK;
+              const active = activeSessionId === item.issue_id;
+              return (
+                <button
+                  key={item.issue_id}
+                  className={`mb-0.5 flex w-full items-center gap-2 rounded-hard px-2 py-[5px] text-left ${
+                    active ? "bg-amber/10" : "hover:bg-amber/5"
+                  }`}
+                  onClick={() => onSelectSession(item.issue_id)}
+                  title={`${item.title} · ${item.phase_note}`}
+                >
+                  <span className={`size-[6px] flex-none rounded-full ${skin.dot}`} />
+                  <span className="min-w-0 flex-1 truncate text-[11.5px] text-tx">{item.title}</span>
+                </button>
+              );
+            })}
+        </div>
+      </div>
 
       <div className="mt-auto grid gap-0.5 border-t border-line pt-2">
         <button

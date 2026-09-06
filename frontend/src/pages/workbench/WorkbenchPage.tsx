@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { DeliveryAggregate, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
+import type { DeliveryAggregate, IssueDetailView, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
 import { parseRequirementDocument } from "../../api/issues";
 import { fetchIssueDetail, fetchRooms } from "../../api/rooms";
 import {
@@ -25,7 +25,13 @@ import { useIssueFlowState } from "./useIssueFlowState";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
 import { dayLabel, errText, shortId } from "../../display";
 import type { Decision, EvidenceView } from "../../types";
-import { approvalForDecision, evidenceFromAggregate } from "../../viewmodel";
+import type { RedispatchScope, RollbackScopeView } from "../../api/contract";
+import { RedispatchModal } from "../../components/RedispatchModal";
+import { RollbackModal } from "../../components/RollbackModal";
+import { archiveRound, redispatchRound } from "../../api/decisions";
+import { submitRollback } from "../../api/rollback";
+import { approvalForDecision, dagExecutionFromAggregate, evidenceFromAggregate } from "../../viewmodel";
+import { PlanDagPanel } from "../../components/PlanDagPanel";
 import {
   buildWorkStream,
   newSessionStream,
@@ -56,7 +62,7 @@ import { RoomPanel } from "./RoomPanel";
 
 const DOC_ACCEPT = ".txt,.md,.docx,.pdf,.odt,.rtf";
 const POLL_MS = 5000;
-/** 发现链步号 → 触发端点的幂等键前缀（与 DiscoveryPanel 同一套键位）。 */
+/** 发现链步号 → 触发端点的幂等键前缀（与发现链四步触发同一套键位）。 */
 const STEP_KEY_BY_STEP = {
   1: "analysis",
   2: "candidates",
@@ -185,12 +191,14 @@ export function WorkbenchPage({
   // 再叠 reload 会造成每轮双倍请求。
   }, [isNew, detail, activeRoundId, activeRoundIndex]);
 
-  // ── 各轮任务明细（轮次卡的 tick 行） ──
+  // ── 各轮任务明细 + 回滚范围（轮次卡的 tick 行与轮次操作的数据源） ──
   const [tasksByRound, setTasksByRound] = useState<Record<string, import("../../api/contract").DeliveryTaskView[]>>({});
+  const [rollbackByRound, setRollbackByRound] = useState<Record<string, import("../../api/contract").RollbackScopeView | null>>({});
   const historyEpoch = useRef(0);
   useEffect(() => {
     if (isNew || !detail || detail.rounds.length === 0) {
       setTasksByRound({});
+      setRollbackByRound({});
       return;
     }
     const epoch = ++historyEpoch.current;
@@ -200,12 +208,13 @@ export function WorkbenchPage({
           // A6 同款：换代后在途响应不落桶
           if (epoch !== historyEpoch.current) return;
           setTasksByRound((prev) => ({ ...prev, [round.round_id]: data.tasks }));
+          setRollbackByRound((prev) => ({ ...prev, [round.round_id]: data.rollback }));
         })
         .catch(() => {
           // replay 夹具未覆盖历史轮等：该轮没有明细就明说，不摆假进度
         });
     });
-  }, [isNew, detail]);
+  }, [isNew, detail, reload]);
 
   // ── 治理决策主体（流内批准的「谁在批」） ──
   const organizationId = detail?.organization_id ?? null;
@@ -290,6 +299,37 @@ export function WorkbenchPage({
     !discovery.analysis.sufficient &&
     discovery.analysis.questions.length > 0;
   const [clarifySending, setClarifySending] = useState(false);
+
+  // ── 顶部折叠 DAG 条（期 4）──
+  const [dagOpen, setDagOpen] = useState(false);
+  /** 八相 → 四阶段进度点（规划/执行/审核/交付）。failed 不点亮进度，由 phase 标签自己说话。 */
+  const stageOfPhase = (phase: IssueDetailView["phase"]): number => {
+    switch (phase) {
+      case "contract":
+      case "plan":
+        return 0;
+      case "execute":
+        return 1;
+      case "validate":
+        return 2;
+      case "release":
+      case "delivered":
+        return 3;
+      default:
+        return -1;
+    }
+  };
+  const STAGES = ["规划", "执行", "审核", "交付"] as const;
+  /** 阶段点 → 对话流锚点：规划落在计划卡，其余落在当前轮次卡，交付落回阶段卡。 */
+  const stageAnchor = (stage: number): string => {
+    if (stage === 0) return "work-card-plan";
+    if (stage === 3) return "work-card-phase";
+    return `work-card-round-${Math.max(activeRoundIndex, 1)}`;
+  };
+  const scrollToCard = (anchorId: string) => {
+    document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const handleRetryStep = (step: 1 | 2 | 3 | 4) => {
     if (!detail) return;
     autoTrigger.delete(`${detail.issue_id}:${step}`);
@@ -393,6 +433,122 @@ export function WorkbenchPage({
     setEvidenceOpen(true);
   };
 
+  // ── 轮次操作（期 5）：重新派工 / 归档 / 回滚 ──
+  const [redispatch, setRedispatch] = useState<{
+    open: boolean;
+    roundId: string | null;
+    roundLabel: string;
+    tasks: import("../../api/contract").DeliveryTaskView[];
+    scope: RedispatchScope;
+    submitting: boolean;
+    error: string | null;
+  }>({ open: false, roundId: null, roundLabel: "", tasks: [], scope: "unfinished", submitting: false, error: null });
+  const [rollback, setRollback] = useState<{
+    open: boolean;
+    roundId: string | null;
+    roundLabel: string;
+    scope: RollbackScopeView | null;
+    submitting: boolean;
+    error: string | null;
+  }>({ open: false, roundId: null, roundLabel: "", scope: null, submitting: false, error: null });
+  /** 归档两步确认（与旧容器同一交互）：第一步只点亮「确认？」，8s 无第二击自动复位 */
+  const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!archiveConfirmId) return;
+    const timer = window.setTimeout(() => setArchiveConfirmId(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [archiveConfirmId]);
+
+  const roundLabelOf = (index: number) => `第 ${index} 轮`;
+
+  const handleRedispatchOpen = (card: Extract<WorkCard, { kind: "round" }>) => {
+    setRedispatch({
+      open: true,
+      roundId: card.roundId,
+      roundLabel: roundLabelOf(card.index),
+      tasks: tasksByRound[card.roundId] ?? [],
+      scope: "unfinished",
+      submitting: false,
+      error: null,
+    });
+  };
+  const handleRedispatchConfirm = () => {
+    if (!redispatch.roundId) return;
+    setRedispatch((prev) => ({ ...prev, submitting: true, error: null }));
+    redispatchRound(redispatch.roundId, redispatch.scope)
+      .then((receipt) => {
+        setRedispatch((prev) => ({ ...prev, open: false }));
+        onToast(
+          `已重发 ${receipt.task_ids.length} 个任务的任务包与点名` +
+            (receipt.reopened_task_ids.length > 0 ? `，${receipt.reopened_task_ids.length} 个已完成任务被送回重做` : "") +
+            "；agent 是否响应看房间事件流。",
+        );
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409（本轮无可派任务）/503（执行面接不住）——原文留在弹窗里不飘走
+        setRedispatch((prev) => ({ ...prev, error: errText(err) }));
+      })
+      .finally(() => setRedispatch((prev) => ({ ...prev, submitting: false })));
+  };
+  const handleArchive = (card: Extract<WorkCard, { kind: "round" }>) => {
+    if (archiveConfirmId !== card.roundId) {
+      setArchiveConfirmId(card.roundId);
+      return;
+    }
+    if (resolveDataSourceMode() === "replay") {
+      setArchiveConfirmId(null);
+      onToast("已归档（回放演示，未写入后端）");
+      return;
+    }
+    setArchivingId(card.roundId);
+    archiveRound(card.roundId)
+      .then(() => {
+        setArchiveConfirmId(null);
+        onToast(`${roundLabelOf(card.index)}已归档（轮次级；issue 的开关状态仍由服务端派生）`);
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409 = 活跃轮次拒绝归档等，原文上 toast 不静默
+        setArchiveConfirmId(null);
+        onToast(`归档失败：${errText(err)}`);
+      })
+      .finally(() => setArchivingId(null));
+  };
+  const handleRollbackOpen = (card: Extract<WorkCard, { kind: "round" }>) => {
+    const scope = rollbackByRound[card.roundId] ?? null;
+    if (!scope) {
+      onToast("回滚范围未取到（§4.6 投影缺失或该轮无可回滚项）");
+      return;
+    }
+    setRollback({ open: true, roundId: card.roundId, roundLabel: roundLabelOf(card.index), scope, submitting: false, error: null });
+  };
+  const handleRollbackConfirm = (reason: string) => {
+    if (!rollback.roundId || !rollback.scope) return;
+    if (resolveDataSourceMode() === "replay") {
+      setRollback((prev) => ({ ...prev, error: "回放模式不写后端：回滚会关 PR、开 revert PR、动 base 分支。加 ?source=live 后可真实执行。" }));
+      return;
+    }
+    if (!principal) {
+      setRollback((prev) => ({ ...prev, error: "决策主体未接入，无法提交。" }));
+      return;
+    }
+    setRollback((prev) => ({ ...prev, submitting: true, error: null }));
+    submitRollback(rollback.roundId, rollback.scope, reason, principal.agentId)
+      .then((receipt) => {
+        setRollback((prev) => ({ ...prev, open: false }));
+        onToast(
+          receipt.replayed
+            ? "同一份回滚请求已记录过，本次为重放（后端零写入）；执行进度看房间事件流。"
+            : "回滚决策已记录，merge gate 已堵死；执行由回滚 saga 接管（每 30s 一轮），进度看房间事件流。",
+        );
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => setRollback((prev) => ({ ...prev, error: errText(err) })))
+      .finally(() => setRollback((prev) => ({ ...prev, submitting: false })));
+  };
+
   // ── 输入框（新会话可用；既有会话按已知缺口置灰） ──
   const [draft, setDraft] = useState("");
   /** 附件（真上传形态）：文档解析文本**不进输入框**，挂在附件位上随消息发送。
@@ -455,25 +611,54 @@ export function WorkbenchPage({
     <div className="flex h-full min-w-0 flex-1">
       {/* ── 中央列 ── */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* 顶部折叠 DAG 条（期 1 占位：真实阶段条与展开图在期 4 接入） */}
+        {/* 顶部折叠 DAG 条（期 4）：阶段点点击滚到对话流对应卡片；DAG 展开为计划图 */}
         <div className="flex-none border-b border-line bg-ink px-6">
           <div className="flex h-11 items-center gap-3">
             {!isNew && onBack && (
               <button
                 className="flex-none rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:border-amber hover:text-amber-hi"
                 onClick={onBack}
-                title="返回议题列表"
+                title="返回会话列表"
               >
-                ‹ 议题列表
+                ‹ 会话列表
               </button>
             )}
             <span className="eyebrow">流程</span>
             {detail ? (
               <>
-                <span className="rounded-hard border border-line px-2 py-px font-mono text-[10.5px] text-tx2">
-                  {detail.phase}
-                </span>
-                <span className="truncate text-[11.5px] text-tx2">{detail.phase_note}</span>
+                {/* 阶段进度点：点一下滚到对话流里对应的卡片 */}
+                <div className="flex items-center gap-1">
+                  {STAGES.map((title, i) => {
+                    const currentStage = detail.phase === "failed" ? -1 : stageOfPhase(detail.phase);
+                    const done = i < currentStage;
+                    const now = i === currentStage && detail.phase !== "failed";
+                    return (
+                      <button
+                        key={title}
+                        className="flex items-center gap-1"
+                        title={`定位到「${title}」相关消息`}
+                        onClick={() => scrollToCard(stageAnchor(i))}
+                      >
+                        {i > 0 && <span className="mx-0.5 h-px w-3 bg-line-strong" />}
+                        <span
+                          className={`grid size-[15px] place-items-center rounded-full border-[1.5px] text-[8.5px] font-bold ${
+                            now
+                              ? "border-amber bg-amber text-on-amber"
+                              : done
+                                ? "border-olive bg-olive text-on-amber"
+                                : "border-line-strong text-tx3"
+                          }`}
+                        >
+                          {done ? "✓" : now ? "●" : i + 1}
+                        </span>
+                        <span className={`text-[10.5px] ${now ? "text-tx" : "text-tx3"}`}>{title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {detail.phase === "failed" && (
+                  <span className="rounded-hard border border-salmon px-1.5 py-px font-mono text-[10px] text-salmon">failed</span>
+                )}
                 <span className="ml-auto font-mono text-[10.5px] text-tx3">
                   {detail.repositories.length} 仓 · {detail.round_count} 轮
                 </span>
@@ -482,13 +667,27 @@ export function WorkbenchPage({
               <span className="text-[11.5px] text-tx3">{isNew ? "新会话 · 发送需求后开始规划" : "…"}</span>
             )}
             <button
-              className="ml-2 flex-none rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx3"
-              disabled
-              title="期 4 接入：折叠 DAG 条与展开图"
+              className="ml-2 flex-none rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:border-amber hover:text-amber-hi disabled:opacity-40"
+              disabled={isNew}
+              onClick={() => setDagOpen((v) => !v)}
+              title={dagOpen ? "收起计划图" : "展开计划 DAG"}
             >
-              DAG ▾
+              {dagOpen ? "DAG ▴" : "DAG ▾"}
             </button>
           </div>
+          {dagOpen && (
+            <div className="border-t border-dashed border-line px-1 py-3">
+              <PlanDagPanel
+                state={flow.planState}
+                execution={
+                  activeDeck
+                    ? dagExecutionFromAggregate(activeDeck.aggregate, `第 ${activeDeck.roundIndex} 轮`)
+                    : null
+                }
+                onRetry={flow.reloadPlan}
+              />
+            </div>
+          )}
         </div>
 
         {/* 对话流 */}
@@ -517,6 +716,17 @@ export function WorkbenchPage({
                     principalResolving={principalResolving}
                     onApprove={handleApprove}
                     onEvidence={handleEvidence}
+                    roundOps={
+                      detail
+                        ? {
+                            redispatch: handleRedispatchOpen,
+                            archive: handleArchive,
+                            rollback: handleRollbackOpen,
+                          }
+                        : undefined
+                    }
+                    archiveConfirmId={archiveConfirmId}
+                    archivingId={archivingId}
                   />
                   {card.anchor === "requirement" && showDiscovery && detail && (
                     <AssistantFlow
@@ -686,6 +896,36 @@ export function WorkbenchPage({
         evidence={evidence}
         onClose={() => setEvidenceOpen(false)}
       />
+
+      <RedispatchModal
+        open={redispatch.open}
+        roundLabel={redispatch.roundLabel}
+        tasks={redispatch.tasks}
+        scope={redispatch.scope}
+        submitting={redispatch.submitting}
+        errorText={redispatch.error}
+        onScopeChange={(scope) => setRedispatch((prev) => ({ ...prev, scope }))}
+        onCancel={() => setRedispatch((prev) => ({ ...prev, open: false }))}
+        onConfirm={handleRedispatchConfirm}
+      />
+      <RollbackModal
+        open={rollback.open}
+        roundLabel={rollback.roundLabel}
+        scope={rollback.scope}
+        principal={
+          resolveDataSourceMode() === "replay"
+            ? { state: "replay", label: "回放演示（不写后端）" }
+            : principalResolving
+              ? { state: "resolving", label: "解析中…" }
+              : principal
+                ? { state: "ready", label: `AGENT ${principal.label}` }
+                : { state: "missing", label: "决策主体未接入" }
+        }
+        submitting={rollback.submitting}
+        errorText={rollback.error}
+        onCancel={() => setRollback((prev) => ({ ...prev, open: false }))}
+        onConfirm={handleRollbackConfirm}
+      />
     </div>
   );
 }
@@ -779,6 +1019,9 @@ function WorkCardView({
   principalResolving,
   onApprove,
   onEvidence,
+  roundOps,
+  archiveConfirmId,
+  archivingId,
 }: {
   card: WorkCard;
   onOpenRepo: (repo: IssueRepositoryRef & { roomId: string | null }) => void;
@@ -789,6 +1032,14 @@ function WorkCardView({
   principalResolving: boolean;
   onApprove: (card: Extract<WorkCard, { kind: "decision" }>) => void;
   onEvidence: (card: Extract<WorkCard, { kind: "decision" }>) => void;
+  /** 轮次操作（期 5）：活跃轮=重派/回滚，非活跃轮=归档；由页面提供，缺省不渲染 */
+  roundOps?: {
+    redispatch: (card: Extract<WorkCard, { kind: "round" }>) => void;
+    archive: (card: Extract<WorkCard, { kind: "round" }>) => void;
+    rollback: (card: Extract<WorkCard, { kind: "round" }>) => void;
+  };
+  archiveConfirmId: string | null;
+  archivingId: string | null;
 }) {
   switch (card.kind) {
     case "requirement":
@@ -879,6 +1130,42 @@ function WorkCardView({
             </div>
           ) : (
             <p className="mt-1.5 text-[11px] text-tx3">本轮还没有任务（尚未派工或计划未生成）。</p>
+          )}
+          {roundOps && (
+            <div className="mt-2 flex gap-2 border-t border-dashed border-line pt-2">
+              {card.active ? (
+                <>
+                  <button
+                    className="rounded-hard border border-line-strong bg-panel px-2.5 py-1 text-[11px] text-tx hover:border-amber disabled:opacity-40"
+                    disabled={(card.tasks?.length ?? 0) === 0}
+                    title="重发这一轮未完成任务的包与点名"
+                    onClick={() => roundOps.redispatch(card)}
+                  >
+                    重新派工
+                  </button>
+                  <button
+                    className="rounded-hard border border-salmon/50 bg-panel px-2.5 py-1 text-[11px] text-salmon hover:bg-salmon/10 disabled:opacity-40"
+                    title="对这一轮发起回滚（范围见 §4.6 投影）"
+                    onClick={() => roundOps.rollback(card)}
+                  >
+                    回滚
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="rounded-hard border border-line-strong bg-panel px-2.5 py-1 text-[11px] text-tx2 hover:border-amber disabled:opacity-40"
+                  disabled={archivingId === card.roundId}
+                  title="轮次级归档；活跃轮次服务端会拒绝"
+                  onClick={() => roundOps.archive(card)}
+                >
+                  {archivingId === card.roundId
+                    ? "归档中…"
+                    : archiveConfirmId === card.roundId
+                      ? "确认归档？（8 秒内再点一次）"
+                      : "归档本轮"}
+                </button>
+              )}
+            </div>
           )}
         </div>
       );

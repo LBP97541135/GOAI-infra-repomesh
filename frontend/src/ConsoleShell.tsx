@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Toast } from "./components/Toast";
 import { AuthError, authApi, type Account } from "./api/auth";
 import { LoginPage } from "./components/LoginPage";
-import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
 import type { IssueListItemView, IssueListResponse, OrganizationView } from "./api/contract";
 import { archiveIssue, createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
@@ -50,7 +49,6 @@ export default function ConsoleShell() {
   const [setupReady, setSetupReady] = useState<boolean | null>(null);
   const [setupRequested, setSetupRequested] = useState(false);
   const [route, setRoute] = useState<Route>(readRoute);
-  const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
 
@@ -232,6 +230,13 @@ export default function ConsoleShell() {
     setRoute({ nav: "issues", issueId, roomId: null, observeSection: null, settingsSection: null });
   };
 
+  /** 新建 issue = 主页对话框：#/issues/new 就是「空流 + 可用输入框」的新会话态，
+   *  发送即建 issue 并进入其对话视图（原 NewIssueModal 弹窗已按用户裁决退役）。 */
+  const openNewSession = () => {
+    window.location.hash = "#/issues/new";
+    setRoute({ nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null });
+  };
+
   const openRoom = (issueId: string, roomId: string) => {
     window.location.hash = `#/issues/${issueId}/rooms/${encodeURIComponent(roomId)}`;
     setRoute({ nav: "issues", issueId, roomId, observeSection: null, settingsSection: null });
@@ -246,7 +251,6 @@ export default function ConsoleShell() {
     documentFilename: string | null,
   ) => {
     const issue = await createIssue(text, workspaceId, idempotencyKey, documentFilename);
-    setNewIssueOpen(false);
     showToast(`issue 已创建：#${shortId(issue.issue_id)}（虚拟草稿，等待规划）`);
     setIssuesReload((n) => n + 1);
     openIssue(issue.issue_id);
@@ -355,7 +359,14 @@ export default function ConsoleShell() {
         onSelectWorkspace={setWorkspaceId}
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
-        onNewIssue={() => setNewIssueOpen(true)}
+        onNewIssue={openNewSession}
+        sessions={issues?.issues ?? null}
+        activeSessionId={
+          route.nav === "issues" && route.issueId !== null && route.issueId !== "new"
+            ? route.issueId
+            : null
+        }
+        onSelectSession={openIssue}
         onLogout={handleLogout}
         onToast={showToast}
       />
@@ -461,20 +472,6 @@ export default function ConsoleShell() {
           />
         )}
       </main>
-
-      <NewIssueModal
-        open={newIssueOpen}
-        workspaceLabel={
-          workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? "全部工作区"
-        }
-        organizationId={workspaceId}
-        mode={issuesSourceMode()}
-        onClose={() => setNewIssueOpen(false)}
-        onToast={showToast}
-        onCreate={async (text, key, filename) => {
-          await handleCreateIssue(text, key, filename);
-        }}
-      />
 
       {toast && <Toast text={toast} />}
     </div>
