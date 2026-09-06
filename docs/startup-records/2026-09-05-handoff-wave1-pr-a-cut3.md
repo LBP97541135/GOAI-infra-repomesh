@@ -10,7 +10,7 @@ store+迁移 / round / observer+approval 三路 agent 并行施工，测试由�
 
 ## 0. 一句话
 
-托管原生第二刀四笔提交在 `feat/hosted-native-wave1`，**未推送**：§8.17 裁决 `63e5052e` → M1 `5f35e11c` → M2 `7205b35c` → 本次 docs。
+托管原生第二刀四笔提交在 `feat/hosted-native-wave1`：§8.17 裁决 `63e5052e` → M1 `5f35e11c` → M2 `7205b35c` → docs `f0a3a5e7`，**连同上一刀共七笔已于 09-05 推送到 origin（`2ac657fd..f0a3a5e7`）**；分支推送不触发 CI，要看绿得开 PR。
 `integrations/hosted_native/` 从零到七个模块 + 迁移 `20260904_0056` + 三条 settings；`HostedNativeRound` 三个动词、观察器、自动审批全部有测试。
 **一行都没接进 bootstrap**：投递分叉、观察器后台服务、审批扇入、恢复分支、M5/M6 真适配器都属 T5。
 
@@ -50,7 +50,7 @@ store+迁移 / round / observer+approval 三路 agent 并行施工，测试由�
 
 ## 4. 当前状态
 
-- 分支 `feat/hosted-native-wave1`：本次 docs → `7205b35c`（M2）→ `5f35e11c`（M1）→ `63e5052e`（§8.17）→ `d17fa054`（09-05 上一刀 docs）→ `fdc42f8d`（M3）→ `277959b4`（M7）→ `2ac657fd`（已推）。**本地领先 origin 七笔，未推送，推前要用户放行**；`main = origin/main = 6974698b`。
+- 分支 `feat/hosted-native-wave1`：`f0a3a5e7`（docs）→ `7205b35c`（M2）→ `5f35e11c`（M1）→ `63e5052e`（§8.17）→ `d17fa054`（09-05 上一刀 docs）→ `fdc42f8d`（M3）→ `277959b4`（M7）→ `2ac657fd`。**七笔已推送到 origin（用户放行后 `2ac657fd..f0a3a5e7`）**，本记录的推送状态更新是其后一笔；`main = origin/main = 6974698b`。PR 未开，CI 未跑。
 - 迁移头 `20260904_0056`；下一个 `20260904_0057_repository_toolchain.py`（第二波）。
 - 环境未动：Docker 引擎活着（本会话没碰坏 socket）；compose Postgres 5432 在，一次性库测试自建自删；api 仍是 09-02 镜像未重建（上一刀 §3 的放行项还在）。
 - 工作树里还有大量与本线无关的未跟踪文件（`docs/architecture/*.html/png`、`docs/development/*-proposal-*`、录屏 mp4、`defs.json`、`.playwright-cli/`）——**不是本线产出，别顺手 add**。
@@ -67,7 +67,7 @@ store+迁移 / round / observer+approval 三路 agent 并行施工，测试由�
 | T6 | PR-B verifier（含 §8.16 (b) 心跳带 `State.StartedAt`） | 未开工，可并行 |
 | T7 | PR-C 前端 | 未开工 |
 | T8 | 活体 mock 链：api 需 `compose build api` 重建才能验 adapter 过滤（等放行）；`.git` 0600 缺陷 | 未动 |
-| 新 | 推送四笔 + 是否开 PR 看 CI | **等用户放行** |
+| 新 | 推送七笔 | **完成**（`2ac657fd..f0a3a5e7`）；是否开 PR 看 CI——未开，下一会话先问 |
 
 ## 6. 坑（本会话）
 
@@ -81,7 +81,7 @@ store+迁移 / round / observer+approval 三路 agent 并行施工，测试由�
 
 ```text
 上一个会话（2026-09-05）把 PR-A 第二刀落地了：§8.17 归一化裁决（63e5052e）、M1 HostedNativeRound + store + 迁移 0056
-（5f35e11c）、M2 观察器 + 自动审批 + 读取器 + Matrix send_approval（7205b35c），都在 feat/hosted-native-wave1，未推送。
+（5f35e11c）、M2 观察器 + 自动审批 + 读取器 + Matrix send_approval（7205b35c），都在 feat/hosted-native-wave1，已推送到 origin（PR 未开）。
 spec §4.2 M1/M2 各有「09-05 落地」注写明偏离（attempts 多 room_id/base_sha/review_budget_until 三列；M5/M6 以
 BaseBundleSource / CandidateVerificationLauncher / ConstructionPolicySource 三个窄端口占位；escalate/recover 两个可选回调；
 审批是 MatrixInboundProcessor 由既有 /sync 轮询器扇入；expire 对 review_pending 走 D-13 block+人工检查点；代次前进封存旧尝试
