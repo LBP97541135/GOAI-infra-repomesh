@@ -5,6 +5,10 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from repomesh.integrations.hosted_native.store import (
+    HostedNativeAttemptRecord,
+    HostedNativeEventRecord,
+)
 from repomesh.modules.agent_directory.infrastructure.models import AgentPrincipalRecord
 from repomesh.modules.agent_runtime.execution_reservation import (
     WorkerExecutionReservationRecord,
@@ -104,6 +108,8 @@ _REGISTERED_MODELS = (
     AgentPrincipalRecord,
     WorkerExecutionReservationRecord,
     WorkerRecoveryOperationRecord,
+    HostedNativeAttemptRecord,
+    HostedNativeEventRecord,
     CollaborationMessageRecord,
     ProcessedMatrixEventRecord,
     ContextObjectRecord,

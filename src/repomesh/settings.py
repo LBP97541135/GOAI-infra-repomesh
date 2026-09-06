@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     #: is the *only* default — the onboarding request no longer carries a
     #: runtime of its own to disagree with it.
     construction_mode_default: ConstructionMode = ConstructionMode.HOSTED_NATIVE
+    #: How long a copaw worker holds one hosted-native attempt before the
+    #: platform fences it (spec D-12 ①): the ``budget_until`` written on the
+    #: attempt and the lease the execution reservation is taken with, so the
+    #: existing expired-lease sweep is what notices a worker that went quiet.
+    hosted_native_attempt_budget_seconds: int = Field(default=2700, ge=60)
+    #: How long the Team Leader has to answer a review package (spec D-13).
+    #: Not skipped when it runs out: the task is blocked and a human checkpoint
+    #: opens. Shorter than the attempt budget: the Leader reads a diff, it does
+    #: not build one.
+    hosted_native_review_budget_seconds: int = Field(default=900, ge=60)
+    #: How often the shared-directory observer (spec §4.2 M2) re-reads the
+    #: ``meta.json`` / ``result.md`` of every open attempt. Every read is
+    #: deduplicated through ``hosted_native_events``, so a smaller interval
+    #: costs object-store requests, never duplicate transitions.
+    hosted_native_observer_interval_seconds: int = Field(default=10, ge=1)
     #: Container image the projected Manager asks the controller to run
     #: (``image`` on the Manager CR). The controller's image fallback is
     #: role-blind: a Manager created without one is handed the *worker*
