@@ -106,7 +106,6 @@ export function WorkbenchPage({
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
-  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   /** 静默轮询与首载的界线：换 issue 才整页 loading，轮询只换数据不闪屏 */
   const loadedIssueRef = useRef<string | null>(null);
 
@@ -146,7 +145,6 @@ export function WorkbenchPage({
         setDetail(d);
         setRooms(r);
         setLoading(false);
-        setLastSyncAt(new Date());
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -366,7 +364,7 @@ export function WorkbenchPage({
   useEffect(() => {
     if (loading || error) return;
     if (nearBottomRef.current) scrollToBottom();
-  }, [loading, error, cards.length, lastSyncAt]);
+  }, [loading, error, cards.length]);
 
   // ── 右栏（期 3 接房间数据；本期先做壳与开合） ──
   const [panelRepo, setPanelRepo] = useState<(IssueRepositoryRef & { roomId: string | null }) | null>(null);
@@ -620,7 +618,7 @@ export function WorkbenchPage({
                 onClick={onBack}
                 title="返回会话列表"
               >
-                ‹ 会话列表
+                ‹ 议题列表
               </button>
             )}
             <span className="eyebrow">流程</span>
@@ -743,11 +741,6 @@ export function WorkbenchPage({
                   )}
                 </Fragment>
               ))}
-            {!loading && !error && !isNew && detail && (
-              <p className="pt-1 text-center font-mono text-[10px] text-tx3">
-                每 5s 自动同步{lastSyncAt ? ` · 上次 ${lastSyncAt.toLocaleTimeString()}` : " · 首次同步中…"}
-              </p>
-            )}
           </div>
         </div>
 

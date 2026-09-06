@@ -50,6 +50,8 @@
       REPOMESH_DEEPSEEK_API_KEY: ${REPOMESH_DEEPSEEK_API_KEY:-${REPOMESH_MODEL_API_KEY:-}}
       REPOMESH_DEEPSEEK_BASE_URL: ${REPOMESH_DEEPSEEK_BASE_URL:-${REPOMESH_MODEL_BASE_URL:-https://www.vibeapi.cn/v1}}
       REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-gpt-5.6-luna}}
+      # LLM 聊天读超时（默认 120s）：推理型模型/慢供应商需要更长窗口，从 .env 透传。
+      REPOMESH_LLM_TIMEOUT_SECONDS: ${REPOMESH_LLM_TIMEOUT_SECONDS:-120}
       # L3 semantic retrieval（decision-chain RAG）：从宿主机 .env 透传。
       # 留空 = 后端如实 503/structural 回退，语义检索不可用。
       REPOMESH_EMBEDDING_BASE_URL: ${REPOMESH_EMBEDDING_BASE_URL:-}
