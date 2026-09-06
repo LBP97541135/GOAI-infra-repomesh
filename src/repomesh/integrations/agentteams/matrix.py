@@ -202,3 +202,59 @@ class AgentTeamsMatrixClient:
         if not isinstance(event_id, str) or not event_id:
             raise AgentTeamsResponseError(200, "Matrix response missing event_id")
         return event_id
+
+    async def send_approval(
+        self,
+        room_id: str,
+        worker_matrix_user_id: str,
+        *,
+        transaction_id: str,
+    ) -> str:
+        """Answer a copaw Tool Guard prompt: body exactly ``/approve``, mentioning the worker.
+
+        This cannot go through ``send_task``. copaw accepts one shape only (spec
+        §8.10): the body must be exactly ``/approve`` and ``m.mentions.user_ids``
+        must name the worker. ``send_task`` prefixes the body with the
+        recipient's Matrix id to satisfy the room's ``requireMention``, and a
+        prefixed ``/approve`` is not in the channel's slash-command table, so
+        copaw forwards it to the runner as ordinary text — which the approval
+        matcher reads as a denial. Here the mention travels only in
+        ``m.mentions`` and the body carries nothing else. The transaction id
+        is the caller's idempotency key on the homeserver: the approver derives
+        it from its stored event id so a retry never approves twice.
+        """
+
+        room = room_id.strip()
+        worker = worker_matrix_user_id.strip()
+        transaction = transaction_id.strip()
+        if not room:
+            raise ValueError("AgentTeams room_id is required")
+        if not worker:
+            raise ValueError("worker_matrix_user_id is required for a Tool Guard approval")
+        if not transaction:
+            raise ValueError("transaction_id is required for idempotent Matrix delivery")
+        path = (
+            f"/_matrix/client/v3/rooms/{quote(room, safe='')}/send/"
+            f"m.room.message/{quote(transaction, safe='')}"
+        )
+        try:
+            response = await self._client.put(
+                path,
+                json={
+                    "msgtype": "m.text",
+                    "body": "/approve",
+                    "m.mentions": {"user_ids": [worker]},
+                },
+            )
+        except httpx.HTTPError as error:
+            raise AgentTeamsUnavailable("AgentTeams Matrix approval delivery failed") from error
+        if response.status_code != 200:
+            raise AgentTeamsResponseError(response.status_code, "Matrix approval delivery failed")
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise AgentTeamsResponseError(200, "invalid Matrix JSON response") from error
+        event_id = payload.get("event_id") if isinstance(payload, dict) else None
+        if not isinstance(event_id, str) or not event_id:
+            raise AgentTeamsResponseError(200, "Matrix response missing event_id")
+        return event_id
