@@ -190,6 +190,16 @@ class HostedNativeRound:
 | `CandidateWorktreeMaterializer`（M5） | 本地 | git 真实现 + 测试用临时仓 |
 | `RunnerControlGateway.enqueue` | 进程内 | 既有 |
 
+**09-05 落地（PR-A 第二刀）**，与上文的差异：
+① 接缝全部收在 `integrations/hosted_native/contracts.py`：`AttemptPhase`（`notified / acknowledged / review_pending / verifying` 为开放态，`verified / failed / blocked / fenced` 为终态）、`HostedNativeAttempt`、`HostedNativeEvent`、`HostedNativeAttemptStore`、`SharedTaskDirectoryReader`、`SharedTaskEvent`、`RoundTransition`（多一个 `next_attempt_id`：Leader `REVISION` 重开后指向新尝试）。
+② M5/M6 尚未施工，round 只依赖两个窄端口：`BaseBundleSource.build(repository_id) -> BaseBundle(base_sha, bundle)`（M6 的位置）与 `CandidateVerificationLauncher.launch(candidate, attempt=) -> run_id`（M5 + 验证调度投影 + `RunnerControlGateway.enqueue` 三件合一的位置）；路径策略与冻结测试命令经 `ConstructionPolicySource.resolve(task_id, worker_agent_id=)` 取（真实适配器 = `BuildCodingAgentPackage` ∪ catalog `test_paths`，同 runner 投影来源，T5 装配）。审阅包与验证调度用的策略**回读该尝试的 `base/package.json`**（worker 实际被告知的那份），文件缺失才重新解析。
+③ 人工检查点与恢复决策也是两个可选回调：`escalate(task_view, reason)`（worker `REVISION_NEEDED`、Leader `BLOCKED`、Leader 房缺失）与 `recover(attempt, reason)`（worker `BLOCKED`、候选文件不合格、`expire`）；T5 把前者接 `HumanReviewRequestStore.ensure`、后者接 D-12 的恢复决策。`expire` **不 block 任务**（reassign/escalate 由恢复决策做），只封存尝试、写 `expired` 事件、尽力 `fail_preparation`（租约已过期则留给恢复循环收）。
+④ `attempt_id = uuid4()`（不从 task+generation 派生：同代次被封存后重开的尝试要新目录，D-8）；幂等键 = 该 task 当前代次已有开放尝试即返回 `created=False`。旧代次仍开放的尝试在开新代次前先封存 `generation_advanced`（store 每 task 只许一个开放尝试）。
+⑤ 预留的 `task_payload` 绑成 `{"schema": "repomesh.hosted-native.attempt/v1", attemptId, taskId, generation, packageDir, budgetSeconds}`，租约 = 尝试预算，恢复循环的过期扫描据此区分托管原生尝试与 runner 调度；Leader `REVISION` 重开同一代次时**续租**同一条预留而不新建。
+⑥ 房间文案在 `messages.py`：施工通知写目录 `shared/tasks/<attempt_id>/spec.md`、`ack_task`、三条命令行（不含 `clean`）、`submit_task`、完成后 `@admin` 或不 @、永不 @Leader，全文不出现 MCP / `start_assigned_task`（D-18）；审阅通知以**组织 Leader 为发信身份**发给仓库 Leader——`SendCollaborationMessage._route` 只在组织 Leader 为一端时落 `leader_room_id`，方向校验（TASK_ASSIGNMENT 须直接下属）也恰好成立。
+⑦ 候选校验：四件齐全、两份 JSON 可解析、`attempt_id` 与 `base_sha` 都等于尝试行、`head_sha` 两份一致；不合格 → 尝试 `failed`（`fence_reason=candidate_invalid: …`）+ 任务 block + `recover`。`review.md` 的「状态赢文字」：`VERDICT:` 行与 `submit_task` 状态不一致时按状态走，并记一条 `review_submitted` 事件（marker 加 `:disagreement`）留痕。
+⑧ 装配（`bootstrap/container.py` / `app.py`）与 `_deliver_assignment` 分叉都**未接线**，属 T5；本刀只交模块与测试（`tests/hosted_native/test_round.py`）。
+
 #### M2 `SharedTaskDirectoryObserver` — 把共享盘的文件变化变成幂等事件
 
 位置：`src/repomesh/integrations/hosted_native/observer.py`，后台服务，形态同 `WorkerRecoveryReconciler`。
@@ -215,6 +225,13 @@ class SharedTaskDirectoryReader(Protocol):
 自动审批（D-23）：观察器同时以平台发信身份订阅每个有非终态尝试的团队房；对该尝试 worker 发出的 Tool Guard 审批请求，仅当被拦命令行与该尝试
 `base/package.json.helper_commands[]` 中某一条逐字相同时，先写 `hosted_native_events(kind=auto_approved, marker=<审批请求 event_id>)`，插入成功再回复
 正文恰好 `/approve` 且 `m.mentions.user_ids` 带该 worker；命令行不同、尝试不属于自己、或尝试已终态的请求一律不动。房间订阅复用既有 `CollaborationGateway` 的 Matrix 适配器与内存适配器，不新开接缝。
+
+**09-05 落地（PR-A 第二刀）**，与上文的差异：
+① 观察器（`observer.py`）只对开放尝试读文件：worker 侧阶段读该尝试目录的 `meta.json` / `result.md`，`review_pending` 读 `review_dir` 的；只解析 `status / acknowledged_at / submitted_at` 三个原生字段，**`meta.json.repomesh` 一个字节都不看**（D-6）。事件 marker = `acknowledged_at` / `submitted_at` 原字符串；`submitted` 要等 `result.md` 真的可读（copaw 逐文件推送，`meta.json` 可能先一拍到），否则这一轮跳过不报错；`result.md` 按 copaw `parse_task_result` 同规则解析，状态不在四值内计错误不发事件。Leader 的 ack 不是事件，只有 verdict 才动尝试。事件先 `record_event`，插入成功才 `round.observe`，事后 `mark_applied`；已记录但未 applied 的行（上次 round 抛错/进程死亡）下一轮重投同一行。一个尝试的异常不打断其他尝试的扫描（`ObserverReport.errors`）。
+② 读取器接缝三实现在 `storage.py`：`DiskSharedTaskDirectoryReader(root)`、`MinioSharedTaskDirectoryReader(client, bucket)`（与对象发布器同客户端构造，`from_endpoint` 同 scheme 处理）、`InMemorySharedTaskDirectoryReader`（记录每次读的键，测试用它证明「无行不读」）；键 = `teams/<team>/shared/tasks/<task_dir>/<name>`，`task_dir` 只接受目录名不接受路径。
+③ 自动审批（`approval.py`）不是观察器轮询房间，而是实现既有 `MatrixInboundProcessor.execute(InboundMatrixMessage)`，由既有 `/sync` 轮询器（`AgentTeamsMatrixInboundPoller`）扇入——一条 sync 循环两个消费者，不新开接缝；扇入的装配属 T5。闸门顺序：`parse_tool_guard_request`（正文有 `Waiting for approval`、工具行恰为 `execute_shell_command`、```json 块用 `json.loads` 解出字符串 `command`，S-5 的仿冒文字过不了这一关）→ 该房间存在 worker 侧阶段的开放尝试 → 发信 Matrix id 经 `MatrixSenderResolver`（生产 = `AgentTeamsMatrixIdentityResolver`）反解为该尝试的 `worker_agent_id` → 请求晚于 `notified_at` → §8.17 归一化 → 与该尝试 `base/package.json.helper_commands[]` 逐字相同 → 先写 `auto_approved` 事件（marker = 请求 event_id）→ `send_approval`（Matrix 事务 id = `hosted-native-approve-<事件 id>`）→ `mark_applied`。已 applied 的重复请求返回 `DUPLICATE` 不再发；记录了但发送失败的，下次同一事务 id 重发。
+④ Matrix 适配器加 `AgentTeamsMatrixClient.send_approval(room_id, worker_matrix_user_id, *, transaction_id)`：正文恰好 `/approve` + `m.mentions.user_ids`，不走会加收件人前缀的 `send_task`（§8.10）。
+⑤ 测试：`tests/hosted_native/test_observer.py`、`test_approval.py`、`tests/integrations/agentteams/test_matrix_approval.py`。
 
 #### M3 任务包 v2 — `task_publishing.py` 深化
 
@@ -420,7 +437,7 @@ class RequireExecutionPlaneReady:    # 组合门禁
 | 迁移 | 内容 | 样板 |
 |---|---|---|
 | `20260904_0055_team_construction_mode.py`（**09-05 已落地**，索引名按命名约定实为 `ix_repository_agent_teams_construction_mode`） | `project.repository_agent_teams` 加 `construction_mode String(20) NOT NULL server_default 'hosted_native'` + 索引；`downgrade` 删列 | `20260830_0047_team_decomposition_mode.py:63-111` |
-| `20260904_0056_hosted_native_attempts.py` | 表 `agent_runtime.hosted_native_attempts(id PK, task_id, worker_agent_id, leader_agent_id, team_name, assignment_attempt_id, generation, execution_id, phase String(30), package_dir, review_dir NULL, budget_until, notified_at, acknowledged_at, submitted_at, submit_status, review_verdict, verification_run_id, fenced_at, fence_reason, created_at, updated_at)`，部分唯一索引「每 task 一个非终态尝试」；表 `agent_runtime.hosted_native_events(id PK, attempt_id, kind String(30), marker String(200), payload JSONB, observed_at, applied_at NULL, UNIQUE(attempt_id, kind, marker))` | `delivery/infrastructure.py:188-217`；`assignment.py:58-88` |
+| `20260904_0056_hosted_native_attempts.py`（**09-05 已落地**） | 表 `agent_runtime.hosted_native_attempts(id PK, task_id, worker_agent_id, leader_agent_id, team_name, assignment_attempt_id, generation, execution_id, phase String(30), package_dir, review_dir NULL, budget_until, notified_at, acknowledged_at, submitted_at, submit_status, review_verdict, verification_run_id, fenced_at, fence_reason, created_at, updated_at)`，部分唯一索引「每 task 一个非终态尝试」；表 `agent_runtime.hosted_native_events(id PK, attempt_id, kind String(30), marker String(200), payload JSONB, observed_at, applied_at NULL, UNIQUE(attempt_id, kind, marker))`。**落地比原列多三列**：`room_id`（通知发到的团队房，自动审批按房间+发信人认领请求）、`base_sha`（bundle 钉住的提交，候选校验与复验都要）、`review_budget_until`（D-13 的审阅预算，与 worker 预算 `budget_until` 分开）；部分唯一索引名 `uq_hosted_native_attempts_open_task`，谓词 `phase IN ('notified','acknowledged','review_pending','verifying')`，终态 = `verified / failed / blocked / fenced`；记录类与 store 在 `integrations/hosted_native/store.py`（Postgres + 内存两实现），回环测试 `tests/integration/test_hosted_native_attempts_postgres.py` | `delivery/infrastructure.py:188-217`；`assignment.py:58-88` |
 | `20260904_0057_repository_toolchain.py`（第二波） | `repository_intelligence.repositories.toolchain String(64) NULL` | `models.py:15-58` |
 
 存量数据：迁移后所有团队默认 `hosted_native`；曾以外部成员建的团队由管理员一次性 `UPDATE ... SET construction_mode='local_cli'`（活体里目前没有这类团队）。
@@ -432,12 +449,12 @@ class RequireExecutionPlaneReady:    # 组合门禁
 | 区域 | 文件 | 改动 |
 |---|---|---|
 | 项目模块（M7）**09-05 已落地** | `modules/project/contracts.py`、`domain.py`、`infrastructure.py`、`application.py`（`CreateProjectAgentTopology(construction_mode=...)`） | 枚举、字段、列映射、`PersistedTeamConstructionModeReader`；`with_adopted_leader` 加模式闸；拓扑创建器按注入的模式写行 |
-| 设置 | `settings.py` | **已落地** `construction_mode_default=HOSTED_NATIVE`（`.env.example` 已写）；待落地 `hosted_native_attempt_budget_seconds=2700`、`hosted_native_review_budget_seconds=900`、`hosted_native_observer_interval_seconds=10`、`verifier_heartbeat_ttl_seconds=45`、`verifier_default_toolchain_image="repomesh-toolchain:default"`；`worker_recovery_enabled` 默认改 `True`（随恢复分支一起） |
+| 设置 | `settings.py` | **已落地** `construction_mode_default=HOSTED_NATIVE`（`.env.example` 已写）；**09-05 已落地** `hosted_native_attempt_budget_seconds=2700`、`hosted_native_review_budget_seconds=900`、`hosted_native_observer_interval_seconds=10`（`.env.example` 第一段已写）；待落地 `verifier_heartbeat_ttl_seconds=45`、`verifier_default_toolchain_image="repomesh-toolchain:default"`；`worker_recovery_enabled` 默认改 `True`（随恢复分支一起） |
 | 接团队 **09-05 已落地** | `api/human_control_models.py`、`api/human_control.py`、`api/platform_setup.py:76-83`（走默认，未改） | 去 `leader_runtime/worker_runtime`，加 `construction_mode: ConstructionMode \| None`（`None` = `settings.construction_mode_default`）；用 `derive_runtime()` 决定 `RegisterNativeAgent` 的 runtime 与 `container_managed`；响应回报 `construction_mode`。**拓扑行的模式不从这里带过去**（见 §4.2 M7 落地注 ③） |
 | 投影 **09-05 已落地** | `integrations/agentteams/runtime_projection.py` | 构造入参去掉全局 `worker_runtime`（未注入读取器，直接读已加载拓扑的 `team.construction_mode`）；`_register` 按团队 `derive_runtime()` 设 runtime 与 `container_managed`；MCP 投影**保留**（D-18）；`ExternalWorkerProjection`（Bridge 线）不动 |
 | 装配 | `bootstrap/container.py:548-549,627,683,2306-2325`、`bootstrap/app.py:234-251,592-727` | 注入模式读取器；MinIO 读适配器与发布器同条件选择；注册 `SharedTaskDirectoryObserver` 后台服务；装配 M1/M5/M6/M8 |
 | 投递分叉 | `modules/task_orchestration/application.py:534-565` | `_deliver_assignment`：团队 `hosted_native` 且 `assignee.role == WORKER` → `HostedNativeRound.open()`；否则走现有 publish+send。`_assignment_body:792-816` 加托管原生文案（不提 MCP） |
-| 尝试（M1） | 新 `integrations/hosted_native/{round,observer,approval,package,storage,store,messages}.py` | 见 4.2；`store.py` 含 Postgres 与内存两实现；`approval.py` 是观察器的自动审批分支（D-23：逐字比对 `helper_commands`，先写事件再回 `/approve`） |
+| 尝试（M1/M2）**09-05 已落地（模块与测试；装配见「装配」行，未接）** | 新 `integrations/hosted_native/{contracts,round,messages,observer,approval,storage,store}.py`（原计划的 `package.py` 并入 round/contracts） | 见 4.2 两条落地注；`store.py` 含 Postgres 与内存两实现；`approval.py` 是观察器的自动审批分支（D-23：§8.17 归一化后逐字比对 `helper_commands`，先写事件再回 `/approve`） |
 | 发布器（M3）**09-05 已落地** | `integrations/agentteams/task_publishing.py`、`task_package/`、`task_orchestration/contracts.py`（`PackageInputs`） | `PackageInputs`、v2 manifest、全文件摘要、`base/` 写入；construction/review 两模板；一次装配、两适配器只存字节（见 §4.2 M3 落地注） |
 | 工作树（M5/M6） | 新 `integrations/workspace/candidate_worktree.py`、`base_bundle.py` | 见 4.2；复用 `git_worktree.py` 的镜像仓布局 |
 | 验证调度投影 | `integrations/runner/task_projection.py` | `TaskProjection` 加可选 `candidate`；`adapterId` 由调用方给 `repomesh-verifier`；`workspace.path` 为 M5 返回的容器内路径 |
@@ -451,7 +468,7 @@ class RequireExecutionPlaneReady:    # 组合门禁
 
 #### 5.3.3 测试
 
-新增：`tests/hosted_native/test_round.py`（三个动词、fencing、每种回执分支，全内存适配器）、`test_observer.py`（去重、marker、按目录名认领不读 `meta.repomesh`、自动审批只批与 `helper_commands` 逐字相同的命令行且先写事件再发）、`test_package_v2.py`（磁盘与 MinIO 假实现产同样摘要）、
+新增：`tests/hosted_native/test_round.py`（**09-05 已落地**，29 例：三个动词、fencing、每种回执分支；task/assignment/reservation 三个既有 store 用 SQLite 版，其余内存/磁盘）、`test_observer.py` 与 `test_approval.py`（**09-05 已落地**，47 + 78 例：去重、marker、按目录名认领不读 `meta.repomesh`、`result.md` 未到不发事件、自动审批按 §8.17 归一化后只批与 `helper_commands` 逐字相同的命令行且先写事件再发、波次 0 真实审批请求正文作夹具）、`test_store.py`（**09-05 已落地**，内存/SQLite 双参数 31 例）、`tests/integrations/agentteams/test_matrix_approval.py`（**09-05 已落地**，`send_approval` 线上形状）、`tests/integration/test_hosted_native_attempts_postgres.py`（**09-05 已落地**，0056 回环）、`test_package_v2.py`（磁盘与 MinIO 假实现产同样摘要）、
 `tests/workspace/test_candidate_worktree.py`（临时裸仓 + bundle）、`tests/verifier/test_executor.py`（Scripted）、`tests/verifier/test_verify_sh.py`（本机有 git 时跑真脚本，标 `integration`）、
 `tests/contracts/test_agentteams_task_v2_contract.py`（**09-05 已落地**，含 Tool Guard 规则夹具 `tests/contracts/fixtures/copaw_tool_guard_rules.json`）、`tests/api/test_execution_plane_gate.py`；
 09-05 另落地 `tests/contracts/test_project_construction_mode_contract.py`、`tests/api/test_repository_team_onboarding.py`、`tests/integration/test_hosted_native_postgres.py`（v2 包的磁盘/MinIO 同摘要测试并入 `tests/integrations/agentteams/test_task_publishing.py`，未另开 `test_package_v2.py`）。
