@@ -52,6 +52,14 @@
       REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-gpt-5.6-luna}}
       # LLM 聊天读超时（默认 120s）：推理型模型/慢供应商需要更长窗口，从 .env 透传。
       REPOMESH_LLM_TIMEOUT_SECONDS: ${REPOMESH_LLM_TIMEOUT_SECONDS:-120}
+      # Worker 执行预约的租约回收协调器：worker 掉线/取消会留下孤儿 preparing 预约，
+      # 不开它就永远没人回收（任务假 running、房间报错循环）。默认 False 是历史原因。
+      REPOMESH_WORKER_RECOVERY_ENABLED: ${REPOMESH_WORKER_RECOVERY_ENABLED:-true}
+      # 容器内 git（clone/fetch）走宿主机代理：绕过对 github git 协议的限速。
+      # host.docker.internal 由 Docker Desktop 转发到宿主回环上的代理端口。
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: http.https://github.com/.proxy
+      GIT_CONFIG_VALUE_0: http://host.docker.internal:10808
       # L3 semantic retrieval（decision-chain RAG）：从宿主机 .env 透传。
       # 留空 = 后端如实 503/structural 回退，语义检索不可用。
       REPOMESH_EMBEDDING_BASE_URL: ${REPOMESH_EMBEDDING_BASE_URL:-}
