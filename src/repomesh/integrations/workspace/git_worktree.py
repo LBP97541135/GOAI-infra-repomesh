@@ -24,9 +24,16 @@ class PreparedGitWorkspace:
 class GitWorktreeManager:
     """Prepare one isolated, immutable-base worktree for each Runner run."""
 
-    def __init__(self, root: Path, *, git_binary: str = "git") -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        git_binary: str = "git",
+        command_timeout_seconds: float = 300.0,
+    ) -> None:
         self._root = root.resolve()
         self._git_binary = git_binary
+        self._command_timeout_seconds = command_timeout_seconds
         self._locks: dict[UUID, asyncio.Lock] = {}
 
     async def prepare(
@@ -163,13 +170,26 @@ class GitWorktreeManager:
         git_file.write_text(f"gitdir: {relative}\n", encoding="utf-8")
 
     async def _run(self, *arguments: str) -> str:
+        # 网络型 git 操作（clone/fetch）在限速或坏网络下可能挂任意久：没有超时，
+        # 一次慢握手就会把执行预约永久卡在 preparing（真实事故）。超时后按
+        # WorkspacePreparationError 失败，任务转 blocked 可重试，而不是假 running。
         process = await asyncio.create_subprocess_exec(
             self._git_binary,
             *arguments,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=self._command_timeout_seconds
+            )
+        except TimeoutError as error:
+            process.kill()
+            await process.wait()
+            raise WorkspacePreparationError(
+                f"git {arguments[0]} timed out after "
+                f"{self._command_timeout_seconds:g}s (network slow or blocked?)"
+            ) from error
         if process.returncode != 0:
             message = stderr.decode(errors="replace").strip()
             raise WorkspacePreparationError(message or "git command failed")
