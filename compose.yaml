@@ -128,6 +128,11 @@
       REPOMESH_AGENTTEAMS_MANAGER_IMAGE: ${REPOMESH_AGENTTEAMS_MANAGER_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0}
     ports:
       - "${REPOMESH_API_PORT:-8000}:8000"
+      # Worker 侧 MCP 直连口：agentteams-net 内的 worker 用 宿主IP:8001 调
+      # repomesh-task-control（compose 注释里有验证记录）。此前由一个 socat
+      # 桥容器承担，但它无重启策略、被 compose 收纳清理后就永久断链——
+      # 直接在 api 上多发布一个宿主端口，少一个会静默死掉的部件。
+      - "8001:8000"
     volumes:
       - ${REPOMESH_SECRETS_DIR:-./.secrets}:/app/.secrets:ro
       - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/runner-workspaces
