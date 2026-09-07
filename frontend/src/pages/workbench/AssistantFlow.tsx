@@ -37,6 +37,7 @@ export function AssistantFlow({
   principalResolving,
   materialize,
   clarifySending,
+  repoHosts,
   onAdvanced,
   onRetryStep,
   onToast,
@@ -50,6 +51,8 @@ export function AssistantFlow({
   materialize: { roundCount: number; planRepositoryCount: number | null; planUnresolvedCount: number };
   /** 追问回答发送中：输入框与按钮置灰的依据（状态在外层） */
   clarifySending: boolean;
+  /** 仓库名 → 地址 host（审批可见性：占位域名在门上一眼可见） */
+  repoHosts: Record<string, string>;
   /** 任何写成功后让外层整轮刷新 */
   onAdvanced: () => void;
   /** 失败重试：清防重发表 + 外层刷新，驱动器会用新键重发 */
@@ -224,7 +227,7 @@ export function AssistantFlow({
                 {discovery.classification !== null && discovery.approval.state === "not_requested" && (
                   <div className="mt-1 rounded-hard border border-line-strong bg-panel px-3 py-2">
                     <p className="text-[12px] text-tx">分档完成，请确认交付范围：</p>
-                    <TierSummary classification={discovery.classification} effectiveTiers={discovery.effective_tiers} />
+                    <TierSummary classification={discovery.classification} effectiveTiers={discovery.effective_tiers} repoHosts={repoHosts} />
                     {!adjustOpen ? (
                       <div className="mt-2 flex gap-2">
                         <button
@@ -378,12 +381,21 @@ function FailLine({ title, error, onRetry }: { title: string; error: string; onR
 function TierSummary({
   classification,
   effectiveTiers,
+  repoHosts,
 }: {
   classification: DiscoveryClassificationBlock;
   effectiveTiers: DiscoveryView["effective_tiers"];
+  repoHosts: Record<string, string>;
 }) {
   const names = (list: Array<{ repository: string }>) =>
-    list.length === 0 ? "无" : list.map((item) => item.repository).join(" · ");
+    list.length === 0
+      ? "无"
+      : list
+          .map((item) => {
+            const host = repoHosts[item.repository];
+            return host ? `${item.repository}（${host}）` : item.repository;
+          })
+          .join(" · ");
   return (
     <div className="mt-1 grid gap-0.5 font-mono text-[11px] text-tx2">
       <p>必需：{names(classification.required)}</p>

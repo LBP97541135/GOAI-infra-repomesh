@@ -10,6 +10,7 @@ import {
   type GovernanceAgent,
 } from "../../api/decisions";
 import { resolveDataSourceMode } from "../../api/source";
+import { fetchConsoleRepositories } from "../../api/grid";
 import {
   fetchDiscovery,
   newIdempotencyKey,
@@ -289,6 +290,30 @@ export function WorkbenchPage({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [discovery, principal]);
+
+  // ── 审批可见性：分档门上摆出每个仓库的地址 host，占位域名一眼可见 ──
+  const [repoHosts, setRepoHosts] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!showDiscovery) return;
+    let cancelled = false;
+    fetchConsoleRepositories()
+      .then((repos) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const r of repos) {
+          try {
+            map[r.name] = new URL(r.url).host;
+          } catch {
+            map[r.name] = r.url;
+          }
+        }
+        setRepoHosts(map);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [showDiscovery]);
 
   // ── 处理员对话组（纯对话式定稿：卡片与大面板均已退役）──
   const clarifyPending =
@@ -734,6 +759,7 @@ export function WorkbenchPage({
                       principalResolving={principalResolving}
                       materialize={flow.materialize}
                       clarifySending={clarifySending}
+                      repoHosts={repoHosts}
                       onAdvanced={() => setReload((n) => n + 1)}
                       onRetryStep={handleRetryStep}
                       onToast={onToast}
