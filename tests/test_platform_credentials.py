@@ -128,3 +128,120 @@ def test_setup_status_prefers_stored_model_credential(
         status = client.get("/api/v1/setup/status")
         assert status.status_code == 200
         assert status.json()["checks"]["model"] is True
+
+
+def test_manifest_flow_round_trips_github_app_credentials(
+    application_container: ApplicationContainer,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "repomesh.modules.platform_config.store.get_credentials_fernet",
+        lambda: Fernet(Fernet.generate_key()),
+    )
+
+    async def fake_exchange(code: str) -> dict:
+        assert code == "the-code"
+        return {
+            "id": 123456,
+            "slug": "repomesh-delivery-test",
+            "pem": "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----",
+            "webhook_secret": "whsec-123",
+        }
+
+    monkeypatch.setattr(
+        "repomesh.api.platform_credentials._exchange_manifest_code", fake_exchange
+    )
+    with TestClient(create_app(application_container)) as client:
+        refused = client.post("/api/v1/setup/credentials/github-app/manifest")
+        assert refused.status_code == 401
+        headers = _admin_headers(client)
+
+        issued = client.post(
+            "/api/v1/setup/credentials/github-app/manifest",
+            headers=headers,
+            json={"display_name": "RepoMesh Delivery (test)", "origin": "http://127.0.0.1:8100"},
+        )
+        assert issued.status_code == 200
+        body = issued.json()
+        assert body["github_url"] == "https://github.com/settings/apps/new"
+        redirect_url = body["manifest"]["redirect_url"]
+        # The wizard's browser origin wins over the proxied Host header
+        # (testserver), because the callback must round-trip the same origin.
+        assert redirect_url.startswith("http://127.0.0.1:8100/")
+        assert redirect_url.endswith(
+            "/api/v1/setup/credentials/github-app/manifest-callback"
+        )
+        assert body["manifest"]["name"] == "RepoMesh Delivery (test)"
+        assert body["manifest"]["hook_attributes"]["active"] is False
+
+        # An unknown state must not reach the exchange.
+        rejected = client.get(
+            "/api/v1/setup/credentials/github-app/manifest-callback",
+            params={"state": "bogus", "code": "the-code"},
+        )
+        assert rejected.status_code == 200
+        assert "失效" in rejected.text
+
+        callback = client.get(
+            "/api/v1/setup/credentials/github-app/manifest-callback",
+            params={"state": body["state"], "code": "the-code"},
+        )
+        assert callback.status_code == 200
+        assert "创建成功" in callback.text
+        assert "repomesh-delivery-test" in callback.text
+        # The return-to-console link uses the bound browser origin, not the
+        # proxied Host header.
+        assert 'href="http://127.0.0.1:8100/"' in callback.text
+
+        # The state is single-use: replaying it must fail without side effects.
+        replayed = client.get(
+            "/api/v1/setup/credentials/github-app/manifest-callback",
+            params={"state": body["state"], "code": "the-code"},
+        )
+        assert "失效" in replayed.text
+
+        status = client.get("/api/v1/setup/credentials", headers=headers).json()
+        assert status["github_app"]["app_id"]["set"] is True
+        assert status["github_app"]["app_id"]["masked"] == "****3456"
+        assert status["github_app"]["private_key"]["set"] is True
+        assert status["github_app"]["webhook_secret"]["set"] is True
+        setup = client.get("/api/v1/setup/status").json()
+        assert setup["checks"]["github_app"] is True
+
+
+def test_manifest_callback_reports_exchange_failure(
+    application_container: ApplicationContainer,
+    monkeypatch,
+) -> None:
+    import httpx
+
+    monkeypatch.setattr(
+        "repomesh.modules.platform_config.store.get_credentials_fernet",
+        lambda: Fernet(Fernet.generate_key()),
+    )
+
+    async def failing_exchange(code: str) -> dict:
+        raise httpx.HTTPStatusError(
+            "422 Unprocessable Entity",
+            request=httpx.Request("POST", "https://api.github.com/app-manifests/x/conversions"),
+            response=httpx.Response(422, request=None),
+        )
+
+    monkeypatch.setattr(
+        "repomesh.api.platform_credentials._exchange_manifest_code", failing_exchange
+    )
+    with TestClient(create_app(application_container)) as client:
+        headers = _admin_headers(client)
+        issued = client.post(
+            "/api/v1/setup/credentials/github-app/manifest", headers=headers, json={}
+        )
+        state = issued.json()["state"]
+        callback = client.get(
+            "/api/v1/setup/credentials/github-app/manifest-callback",
+            params={"state": state, "code": "the-code"},
+        )
+        assert callback.status_code == 200
+        assert "交换失败" in callback.text
+        # Nothing was stored.
+        status = client.get("/api/v1/setup/credentials", headers=headers).json()
+        assert status["github_app"]["app_id"]["set"] is False

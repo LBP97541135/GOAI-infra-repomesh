@@ -120,6 +120,21 @@ export function putGitHubAppCredential(payload: {
   });
 }
 
+export interface GitHubAppManifest {
+  state: string;
+  github_url: string;
+  manifest: Record<string, unknown>;
+}
+
+export function createGitHubAppManifest(): Promise<GitHubAppManifest> {
+  return sessionRequest<GitHubAppManifest>("/setup/credentials/github-app/manifest", {
+    method: "POST",
+    // The browser's own origin is authoritative for the GitHub callback URL:
+    // behind the nginx port mapping the Host header loses the external port.
+    body: JSON.stringify({ origin: window.location.origin }),
+  });
+}
+
 export function onboardRepositories(payload: {
   organization_id: string;
   org_url: string;
