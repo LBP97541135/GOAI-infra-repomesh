@@ -14,9 +14,12 @@ from repomesh.modules.change_orchestration.contracts import ExecutionPlaneUnavai
 from repomesh.modules.repository_intelligence.application import (
     DependencyGraphService,
     HandoffDocError,
+    IssueArchiveConflict,
+    IssueArchiveNotFound,
     IssueIntakeActorNotFound,
     IssueIntakeDenied,
     IssueIntakeKeyMismatch,
+    IssuePurgeNotArchived,
     RegisterRepository,
     RepositoryDiscoveryService,
     RepositoryNotFound,
@@ -420,6 +423,47 @@ async def create_issue(body: IssueIntakeCreate, request: Request) -> JSONRespons
     return JSONResponse(
         status_code=201 if receipt.created else 200, content=jsonable_encoder(summary)
     )
+
+
+@router.post("/issues/{issue_id}/archive", dependencies=[ACTION_TOKEN])
+async def archive_issue(issue_id: UUID, request: Request) -> dict:
+    """Archive an issue from the default delivery list — a marker, not a delete.
+
+    Mirrors ``POST /deliveries/{delivery_id}/archive``: the tombstone row is
+    the only new fact, every snapshot / decision / audit fact stays queryable,
+    and a replay returns the existing archive (idempotent, no second write).
+    404 when no snapshot evidences the issue; 409 when a round is still in
+    progress — the list must not hide live work.
+    """
+
+    service = request.app.state.container.issue_archive_service()
+    try:
+        archive = await service.archive(issue_id)
+    except IssueArchiveNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except IssueArchiveConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return asdict(archive)
+
+
+@router.post("/issues/{issue_id}/purge", dependencies=[ACTION_TOKEN])
+async def purge_issue(issue_id: UUID, request: Request) -> dict:
+    """彻底清除一个**已归档** issue 的全部业务事实（2026-09-08 用户裁决）。
+
+    与 archive 的「墓碑 + 保留」相对的第二步：硬删除计划快照、决策链节点
+    （含向量）与 checkpoint 决策等审计事件——只保留一条 ``IssuePurged`` 审计
+    （谁、何时、删了多少），删除动作本身必须可追溯。不可逆：执行后快照与
+    决策链不可恢复。
+
+    409 when the issue is not archived yet — 先归档再清除，两步确认各自成立。
+    """
+
+    service = request.app.state.container.issue_purge_service()
+    try:
+        receipt = await service.purge(issue_id)
+    except IssuePurgeNotArchived as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return receipt
 
 
 @router.post("/issues/parse-document", dependencies=[ACTION_TOKEN])

@@ -80,6 +80,43 @@ def write(client: TestClient, path: str) -> httpx.Response:
     return client.post(path, headers={"Origin": CONSOLE_ORIGIN, LAUNCHER_OP_HEADER: "1"})
 
 
+def put_json(client: TestClient, path: str, body: dict) -> httpx.Response:
+    """A PUT the same way: allowlisted Origin, custom header, JSON body."""
+    return client.put(
+        path,
+        json=body,
+        headers={"Origin": CONSOLE_ORIGIN, LAUNCHER_OP_HEADER: "1"},
+    )
+
+
+ROSTER_DOCUMENT = {
+    "organizationId": "4d1e6f00-0000-4000-8000-000000000000",
+    "repomeshEndpoint": "http://127.0.0.1:8077",
+    "codingProfile": "codex",
+    "members": [
+        {
+            "key": "alpha-leader",
+            "role": "repository_leader",
+            "agentId": "4d1e6f00-0000-4000-8000-0000000000a1",
+            "repositoryId": "1a1f0c37-9d40-4c11-9f01-0000000000a1",
+            "subsets": ["e1"],
+        },
+        {
+            "key": "alpha-worker",
+            "role": "worker",
+            "agentId": "4d1e6f00-0000-4000-8000-0000000000a2",
+            "leaderKey": "alpha-leader",
+            "subsets": ["e1"],
+        },
+    ],
+}
+
+ENV_FILE_CONTENT = (
+    "E1_ALPHA_LEADER_MATRIX_TOKEN=mtoken-alphaleader-9f8e\n"
+    "E1_ALPHA_LEADER_REPOMESH_TOKEN=rtoken-alphaleader-1a2b\n"
+)
+
+
 def test_status_reports_one_row_per_member_and_the_roster_version(
     client: TestClient, plane: MemoryMemberProcessPlane
 ) -> None:
@@ -350,3 +387,132 @@ def test_preflight_survives_the_custom_header_requirement(client: TestClient) ->
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == CONSOLE_ORIGIN
     assert LAUNCHER_OP_HEADER.lower() in response.headers["access-control-allow-headers"].lower()
+
+
+# --- document routes: roster + credential env (settings-page edits) ----------
+
+
+@pytest.fixture
+def roster_file(config: LauncherConfig) -> Path:
+    config.members_file.write_text(
+        json.dumps(ROSTER_DOCUMENT, ensure_ascii=False), encoding="utf-8"
+    )
+    return config.members_file
+
+
+@pytest.fixture
+def env_file(config: LauncherConfig) -> Path:
+    config.env_file.write_text(ENV_FILE_CONTENT, encoding="utf-8")
+    return config.env_file
+
+
+def test_get_roster_returns_the_document(client: TestClient, roster_file: Path) -> None:
+    response = client.get("/v1/roster")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rosterVersion"] == "e1-2026-08-29"
+    assert body["document"]["codingProfile"] == "codex"
+    assert len(body["document"]["members"]) == 2
+
+
+def test_put_roster_replaces_the_file_and_keeps_a_backup(
+    client: TestClient, roster_file: Path
+) -> None:
+    submitted = {
+        **ROSTER_DOCUMENT,
+        "repomeshEndpoint": "http://127.0.0.1:9999",
+        "members": ROSTER_DOCUMENT["members"][:1],
+    }
+
+    response = put_json(client, "/v1/roster", submitted)
+
+    assert response.status_code == 200
+    stored = json.loads(roster_file.read_text(encoding="utf-8"))
+    assert stored["repomeshEndpoint"] == "http://127.0.0.1:9999"
+    assert len(stored["members"]) == 1
+    backup = json.loads(roster_file.with_suffix(".json.bak").read_text(encoding="utf-8"))
+    assert backup["repomeshEndpoint"] == ROSTER_DOCUMENT["repomeshEndpoint"]
+
+
+def test_put_roster_refuses_a_member_missing_required_fields(
+    client: TestClient, roster_file: Path
+) -> None:
+    submitted = {
+        **ROSTER_DOCUMENT,
+        "members": [{"key": "new-member", "role": "worker"}],
+    }
+
+    response = put_json(client, "/v1/roster", submitted)
+
+    assert response.status_code == 422
+    # The file on disk is untouched: a refused write must not leave a half roster.
+    assert "codingProfile" in roster_file.read_text(encoding="utf-8")
+
+
+def test_put_roster_still_requires_the_console_write_guard(
+    client: TestClient, roster_file: Path
+) -> None:
+    bare = client.put("/v1/roster", json=ROSTER_DOCUMENT)
+    wrong_origin = client.put(
+        "/v1/roster",
+        json=ROSTER_DOCUMENT,
+        headers={"Origin": "http://127.0.0.1:9999", LAUNCHER_OP_HEADER: "1"},
+    )
+
+    assert bare.status_code == 403
+    assert wrong_origin.status_code == 403
+
+
+def test_get_secrets_answers_masked_tails_only(
+    client: TestClient, roster_file: Path, env_file: Path
+) -> None:
+    response = client.get("/v1/secrets")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {entry["name"] for entry in body["entries"]} == {
+        "E1_ALPHA_LEADER_MATRIX_TOKEN",
+        "E1_ALPHA_LEADER_REPOMESH_TOKEN",
+    }
+    assert all(entry["masked"].startswith("****") for entry in body["entries"])
+    # A full value is a reusable secret; it must not appear anywhere in the body.
+    assert "mtoken-alphaleader" not in response.text
+    assert "rtoken-alphaleader" not in response.text
+
+
+def test_put_secrets_updates_a_line_and_appends_a_new_one(
+    client: TestClient, roster_file: Path, env_file: Path
+) -> None:
+    response = put_json(
+        client,
+        "/v1/secrets",
+        {
+            "entries": [
+                {"name": "E1_ALPHA_LEADER_MATRIX_TOKEN", "value": "rotated-mtoken-7777"},
+                {"name": "E1_ALPHA_WORKER_REPOMESH_TOKEN", "value": "new-worker-token-8888"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    lines = env_file.read_text(encoding="utf-8").splitlines()
+    assert "E1_ALPHA_LEADER_MATRIX_TOKEN=rotated-mtoken-7777" in lines
+    assert "E1_ALPHA_WORKER_REPOMESH_TOKEN=new-worker-token-8888" in lines
+    assert "E1_ALPHA_LEADER_REPOMESH_TOKEN=rtoken-alphaleader-1a2b" in lines, "无关行原样保留"
+    assert env_file.with_suffix(".env.bak").exists()
+    # The answer carries masks, not the new values.
+    assert all("rotated-mtoken" not in entry["masked"] for entry in response.json()["entries"])
+
+
+def test_put_secrets_refuses_names_the_roster_does_not_own(
+    client: TestClient, roster_file: Path, env_file: Path
+) -> None:
+    response = put_json(
+        client,
+        "/v1/secrets",
+        {"entries": [{"name": "PATH", "value": "C:\evil"}]},
+    )
+
+    assert response.status_code == 422
+    assert "PATH=" not in env_file.read_text(encoding="utf-8"), "未知名一个字都不能落盘"

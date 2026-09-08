@@ -41,6 +41,7 @@ from .infrastructure import (
     PostgresDecisionEventSource,
 )
 from .ports import (
+    ArchivedIssueReader,
     DecisionChainStore,
     DecisionEmbeddingStore,
     DecisionEventSource,
@@ -49,6 +50,7 @@ from .ports import (
 )
 
 __all__ = [
+    "ArchivedIssueReader",
     "CHAIN_EVENT_TYPES",
     "DecisionChainNodes",
     "DecisionChainProjectionService",

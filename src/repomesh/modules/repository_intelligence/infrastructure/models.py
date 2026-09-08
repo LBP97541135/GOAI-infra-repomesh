@@ -143,3 +143,19 @@ class HandoffDocRecord(Base):
     superseded_by_version: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+
+
+class IssueArchiveRecord(Base):
+    """Issue archive tombstone (issue 粒度归档，delivery ``delivery_archives`` 同款).
+
+    One row per archived issue. The primary key *is* the idempotency marker:
+    a repeated archive cannot land a second row. Nothing else about the issue
+    moves — snapshots, decision-chain nodes, checkpoint decisions and audit
+    events all stay.
+    """
+
+    __tablename__ = "issue_archives"
+    __table_args__ = {"schema": "repository_intelligence"}
+
+    issue_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

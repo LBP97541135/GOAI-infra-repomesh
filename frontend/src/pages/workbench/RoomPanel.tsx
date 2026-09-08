@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Bot, Maximize2, X } from "lucide-react";
 import type { RoomListItemView, RoomStreamPage } from "../../api/contract";
 import {
   ROOM_POLL_MS,
@@ -156,14 +157,14 @@ export function RoomPanel({
               title="放大到全页房间视图"
               onClick={onExpand}
             >
-              ⤢
+              <Maximize2 size={11} />
             </button>
             <button
               className="h-6 w-6 rounded-hard border border-line-strong text-[11px] text-tx2 hover:border-amber hover:text-tx"
               title="收起"
               onClick={onClose}
             >
-              ✕
+              <X size={12} />
             </button>
           </div>
         </div>
@@ -191,7 +192,7 @@ export function RoomPanel({
               className="inline-flex items-center gap-1 rounded-full border border-line bg-well px-2 py-px text-[10px] text-tx2"
               title={`${m.role} · ${m.agent_id}`}
             >
-              <span className={`h-1.5 w-1.5 rounded-full ${room.live ? "bg-olive" : "bg-tx3"}`} />
+              <Bot size={10} strokeWidth={1.5} className="flex-none text-tx2" />
               {m.name ?? m.agent_id.slice(0, 8)}
             </span>
           ))}
@@ -260,11 +261,11 @@ function PanelHeader({ title, onClose, onExpand }: { title: string; onClose: () 
         <div className="ml-auto flex gap-1.5">
           {onExpand && (
             <button className="h-6 w-6 rounded-hard border border-line-strong text-[11px] text-tx2" onClick={onExpand}>
-              ⤢
+              <Maximize2 size={11} />
             </button>
           )}
           <button className="h-6 w-6 rounded-hard border border-line-strong text-[11px] text-tx2" onClick={onClose}>
-            ✕
+            <X size={12} />
           </button>
         </div>
       </div>

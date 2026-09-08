@@ -131,6 +131,27 @@ function teamRoomByRepository(rooms: RoomListItemView[]): Map<string, RoomListIt
   return map;
 }
 
+/** 需求文本里「用户手打的话」与「附件文档解析全文」的分界（U+2063 不可见分隔符，
+ *  正常输入不可能出现）。为什么要有它：契约里文档解析文本只能随 `requirement_text`
+ *  交给规划（创建议题没有独立的文档字段），但对话流不该把文档内容当用户的话贴
+ *  出来——用户没打字就一个字都不展示（气泡只留文件卡）。
+ *  无标记 = 旧数据或纯手输，整段照旧算用户的话。 */
+const DOC_SENTINEL = "\u2063";
+
+/** 发送侧唯一实现：手打文字在前，分界符，文档解析全文在后（规划两段都要读）。 */
+export function composeRequirementText(typed: string, documentText: string): string {
+  return typed ? `${typed}\n\n${DOC_SENTINEL}\n${documentText}` : `${DOC_SENTINEL}\n${documentText}`;
+}
+
+/** 展示侧唯一实现：分界符之前的才是用户自己的话；trim 后为空返回 null——
+ *  调用方据此只留文件卡，不擅自复述文档内容。 */
+export function typedRequirementText(text: string | null): string | null {
+  if (!text) return null;
+  const cut = text.indexOf(DOC_SENTINEL);
+  const typed = (cut === -1 ? text : text.slice(0, cut)).trim();
+  return typed || null;
+}
+
 export function buildWorkStream(input: WorkStreamInput): WorkCard[] {
   const { detail, rooms, tasksByRound, activeDeck } = input;
   const cards: WorkCard[] = [];

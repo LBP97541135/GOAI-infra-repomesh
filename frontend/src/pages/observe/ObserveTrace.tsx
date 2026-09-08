@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { defaultClient } from "../../api/client";
 import type {
   TraceEvent,
@@ -158,12 +159,12 @@ function SessionCard({
   onLoadMore: () => void;
 }) {
   return (
-    <div className="rounded-hard border border-line bg-panel">
+    <div className="rounded-[8px] border border-line bg-panel">
       <button
         onClick={onToggle}
         className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
       >
-        <span className="w-3 shrink-0 text-[10px] text-tx3">{expanded ? "▾" : "▸"}</span>
+        <span className="w-3 shrink-0 text-[10px] text-tx3"><ChevronDown size={12} strokeWidth={1.5} className={expanded ? "" : "-rotate-90"} /></span>
         <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-tx">
           {agentLabel(session.agent_name, session.id)}
         </span>
@@ -213,7 +214,7 @@ function SessionCard({
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5">
+    <div className="rounded-[8px] border border-line bg-panel px-3.5 py-2.5">
       <p className="text-[10px] text-tx3">{label}</p>
       <p className="mt-1 font-mono text-[22px] leading-none text-cream">{value}</p>
     </div>
@@ -222,7 +223,7 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 
 function EmptyTrace() {
   return (
-    <div className="mt-4 rounded-hard border border-line bg-panel px-4 py-10 text-center">
+    <div className="mt-4 rounded-[8px] border border-line bg-panel px-4 py-10 text-center">
       <p className="text-[12.5px] text-tx2">暂无推理轨迹</p>
       <p className="mt-1.5 text-[11px] leading-relaxed text-tx3">
         配置存储并运行 Agent 后，采集器会轮询解析 .copaw 会话文件；这里将展示每场会话的
@@ -475,11 +476,11 @@ export function ObserveTrace() {
           ) : groups === null ? (
             <LoadingLine text="按 Issue 分组加载中…" className="mt-3" />
           ) : groups.issues.length === 0 ? (
-            <p className="mt-4 rounded-hard border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
+            <p className="mt-4 rounded-[8px] border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
               暂无疑似关联 · 产生用量/日志的 issue 且窗口内有会话后，这里会按 issue 分组
             </p>
           ) : (
-            <div className="mt-3 divide-y divide-line rounded-hard border border-line bg-panel">
+            <div className="mt-3 divide-y divide-line rounded-[8px] border border-line bg-panel">
               {groups.issues.map((g) => (
                 <button
                   key={g.issue_id}
@@ -503,7 +504,7 @@ export function ObserveTrace() {
       ) : tab === "sessions" ? (
         <div className="mt-3 space-y-2">
           {issueFilter !== null ? (
-            <div className="flex items-center gap-2 rounded-hard border border-dashed border-line bg-panel px-3.5 py-2 text-[10.5px] text-tx3">
+            <div className="flex items-center gap-2 rounded-[8px] border border-dashed border-line bg-panel px-3.5 py-2 text-[10.5px] text-tx3">
               <span className="shrink-0">查看 issue</span>
               <span className="truncate font-mono text-tx2">#{shortId(issueFilter)}</span>
               <span className="shrink-0">
@@ -519,7 +520,7 @@ export function ObserveTrace() {
           ) : null}
           {sessions.sessions.length === 0 ? (
             issueFilter !== null ? (
-              <div className="mt-2 rounded-hard border border-line bg-panel px-4 py-10 text-center">
+              <div className="mt-2 rounded-[8px] border border-line bg-panel px-4 py-10 text-center">
                 <p className="text-[12.5px] text-tx2">该 issue 窗口内暂无疑似会话</p>
                 <p className="mt-1.5 text-[11px] leading-relaxed text-tx3">
                   可能是 issue 活动与 agent 会话时间未重叠，或该 issue 尚未触发 agent 执行
@@ -577,12 +578,12 @@ export function ObserveTrace() {
           ) : stream === null ? (
             <LoadingLine text="事件流加载中…" className="mt-3" />
           ) : stream.events.length === 0 ? (
-            <p className="mt-4 rounded-hard border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
+            <p className="mt-4 rounded-[8px] border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
               该筛选下暂无事件
             </p>
           ) : (
             <>
-              <div className="mt-3 rounded-hard border border-line bg-panel px-3.5 py-1">
+              <div className="mt-3 rounded-[8px] border border-line bg-panel px-3.5 py-1">
                 {stream.events.map((e) => (
                   <EventRow key={e.id} event={e} showAgent />
                 ))}

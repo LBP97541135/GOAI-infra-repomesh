@@ -918,11 +918,36 @@ class ApplicationContainer:
 
         return self.plan_snapshot_requirement_reader()
 
+    def decision_chain_archived_issue_reader(self):
+        """Port adapter: issue archive tombstones → decision_chain's port.
+
+        The composition root is the only place repository_intelligence and
+        decision_chain meet over this seam (AGENTS: wire adapters here). The
+        read model's per-listing N+1 guard does not apply here: the tombstone
+        table is tiny and these retrievals already load candidate sheets.
+        """
+
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            PostgresIssueArchiveStore,
+        )
+
+        archive_store = PostgresIssueArchiveStore(self.database)
+
+        class _ArchivedIssues:
+            async def archived_issue_ids(self) -> frozenset:
+                views = await archive_store.list_all()
+                return frozenset(view.issue_id for view in views)
+
+        return _ArchivedIssues()
+
     @cached_service
     def decision_chain_similarity_service(self):
         from repomesh.modules.decision_chain import DecisionChainSimilarityService
 
-        return DecisionChainSimilarityService(self.decision_chain_store())
+        return DecisionChainSimilarityService(
+            self.decision_chain_store(),
+            self.decision_chain_archived_issue_reader(),
+        )
 
     def decision_history_from_chain(self):
         """Port adapter: decision-chain similarity → ``DecisionHistoryPort``.
@@ -972,7 +997,10 @@ class ApplicationContainer:
             DecisionChainSemanticSearchService,
         )
 
-        return DecisionChainSemanticSearchService(self.decision_embedding_store())
+        return DecisionChainSemanticSearchService(
+            self.decision_embedding_store(),
+            self.decision_chain_archived_issue_reader(),
+        )
 
     def decision_embedding_service(self):
         """L3 batch refresher service (B8); ``None`` when no embedding endpoint.
@@ -1205,6 +1233,9 @@ class ApplicationContainer:
             PostgresDeliveryArchiveStore,
             PostgresSCMObservationStore,
             delivery_change_set_key,
+        )
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            PostgresIssueArchiveStore,
         )
         from repomesh.modules.review_validation import PostgresValidationSnapshotStore
         from repomesh.modules.specification.contracts import (
@@ -1528,6 +1559,7 @@ class ApplicationContainer:
             tasks=_Tasks(),
             change_sets=_ChangeSets(),
             archives=archive_store,
+            issue_archives=PostgresIssueArchiveStore(self.database),
             validations=_Validations(),
             specifications=_Specifications(),
             repositories=_Repositories(),
@@ -1707,6 +1739,53 @@ class ApplicationContainer:
         return IssueIntakeService(
             self.plan_snapshot_store(),
             self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def issue_archive_service(self):
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.repository_intelligence.application import (
+            IssueArchiveService,
+        )
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            PostgresIssueArchiveStore,
+        )
+
+        # The plan reader gives the service the whole plan table; the service
+        # scopes it by project, the same shape the read model reads through.
+        plans = self.execution_plan_store()
+
+        class _AllPlans:
+            async def list_all(self):
+                return tuple(plan.to_view() for plan in await plans.list_all())
+
+        return IssueArchiveService(
+            PostgresIssueArchiveStore(self.database),
+            self.plan_snapshot_store(),
+            _AllPlans(),
+            self.agent_directory,
+            PostgresDeliveryAuditLog(self.database),
+        )
+
+    def issue_purge_service(self):
+        """彻底清除（2026-09-08 用户裁决）：归档之外的第二个不可逆动作。
+
+        跨模块红线下的装配样例：快照删除是本模块实现；决策链与审计的删除
+        分别由 decision_chain / delivery 模块的实现承担——本容器只把「能删」
+        的具体实现插进端口，purge 服务本身不摸别人的表。"""
+        from repomesh.modules.decision_chain import PostgresDecisionChainStore
+        from repomesh.modules.delivery import PostgresDeliveryAuditLog
+        from repomesh.modules.repository_intelligence.application import (
+            IssuePurgeService,
+        )
+        from repomesh.modules.repository_intelligence.infrastructure import (
+            PostgresIssueArchiveStore,
+        )
+
+        return IssuePurgeService(
+            PostgresIssueArchiveStore(self.database),
+            self.plan_snapshot_store(),
+            PostgresDecisionChainStore(self.database),
             PostgresDeliveryAuditLog(self.database),
         )
 

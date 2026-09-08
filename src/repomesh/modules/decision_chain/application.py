@@ -29,6 +29,7 @@ from repomesh.modules.decision_chain.contracts import (
     SemanticDecisionHit,
 )
 from repomesh.modules.decision_chain.ports import (
+    ArchivedIssueReader,
     DecisionChainStore,
     DecisionEmbeddingStore,
     DecisionEventSource,
@@ -253,8 +254,15 @@ class DecisionChainSimilarityService:
     which knows the repositories at classification time).
     """
 
-    def __init__(self, store: DecisionChainStore) -> None:
+    def __init__(
+        self,
+        store: DecisionChainStore,
+        archived: ArchivedIssueReader | None = None,
+    ) -> None:
         self._store = store
+        # None = this composition carries no archive store; every project then
+        # reads as unarchived (the pre-archive behaviour, an honest degrade).
+        self._archived = archived
 
     async def find_similar(
         self,
@@ -269,13 +277,19 @@ class DecisionChainSimilarityService:
         Q6: 同仓库 + 最近 N 条起步. The store already orders newest-first and
         collapses each other project to its latest decision sheet; the bounded
         recency ("最近 N 条") is this ``top_k`` cut. A time window is a tuning
-        knob deliberately left out of v0.1.
+        knob deliberately left out of v0.1. Archived projects never surface:
+        the sheet feeds both the audit "similar history" panel and the
+        discovery pipeline's decision-history evidence, and a shelved
+        requirement is not history a new one should inherit.
         """
         hits = await self._store.find_similar_structural(
             organization_id=organization_id,
             project_id=project_id,
             same_repository_ids=same_repository_ids,
         )
+        if self._archived is not None:
+            archived = await self._archived.archived_issue_ids()
+            hits = [hit for hit in hits if hit.project_id not in archived]
         return hits[: max(0, top_k)]
 
 
@@ -377,8 +391,15 @@ class DecisionChainSemanticSearchService:
     dialect-free pattern ``find_similar_structural`` uses.
     """
 
-    def __init__(self, store: DecisionEmbeddingStore) -> None:
+    def __init__(
+        self,
+        store: DecisionEmbeddingStore,
+        archived: ArchivedIssueReader | None = None,
+    ) -> None:
         self._store = store
+        # Same contract as the structural service: None degrades to
+        # "nothing is archived", and archived projects never match.
+        self._archived = archived
 
     async def find_similar(
         self,
@@ -393,12 +414,19 @@ class DecisionChainSemanticSearchService:
             organization_id=organization_id
         )
         scope = set(same_repository_ids)
+        archived = (
+            frozenset()
+            if self._archived is None
+            else await self._archived.archived_issue_ids()
+        )
         # Per project keep the best-matching sheet (cosine), ties to the
         # newest — the requirement is the retrieval unit, the sheet is only
         # the evidence of why it matched.
         best: dict[UUID, tuple[float, EmbeddedDecision]] = {}
         for hit in candidates:
             if project_id is not None and hit.node.project_id == project_id:
+                continue
+            if hit.node.project_id in archived:
                 continue
             if scope and not (scope & set(hit.node.affected_repository_ids)):
                 continue

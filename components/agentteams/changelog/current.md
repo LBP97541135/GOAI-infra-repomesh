@@ -15,6 +15,7 @@ Record release-facing changes here before the next release.
 
 **What's New**
 
+- **Embedded docker workers share the host directory at `/host-share`**: In embedded mode the Controller now binds `AGENTTEAMS_HOST_SHARE_DIR` into every Worker container with the same fixed `/host-share` mount point the Manager already receives, so a workspace path prepared on the host resolves to one identical in-container path across Manager, Worker and Runner. K8s mode is unchanged — no HostPath is ever created there. ([RepoMesh worker workspace mount fix](../../../docs/architecture/runtime-planes.md))
 - **Optional AgentTeams Dashboard**: Local installation can deploy the AgentTeams Dashboard for visual Worker, Team, Human, Manager, and Matrix management. Dashboard versioning remains independent from the AgentTeams release. ([#1075](https://github.com/agentscope-ai/AgentTeams/pull/1075), [#1081](https://github.com/agentscope-ai/AgentTeams/pull/1081))
 - **Containerized installer workspace volumes**: Non-interactive local installation accepts named Docker volumes for Manager workspace and host-share mounts, allowing a bootstrap container to drive the host Docker daemon without inventing host bind paths. ([RepoMesh bootstrap spec](../../../docs/development/execution-plane-reconciler-implementation-spec.md))
 

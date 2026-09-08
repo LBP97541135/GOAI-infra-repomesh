@@ -1012,10 +1012,21 @@ export interface DiscoveryForcedContinue {
 }
 
 /** §2.2 `requirement_analysis` 直投影（GUI 步 1 / 管线 Step 0）。 */
+/** §2.2 `analysis.dimensions[]` 单条：四维度（业务场景/行为描述/变更类型/技术约束）
+ *  逐项判定。旧快照（该字段上线前完成的分析）没有此数组，消费方按缺失渲染。 */
+export interface DiscoveryDimensionView {
+  name: string;
+  covered: boolean;
+  note: string;
+}
+
+/** §2.2 `requirement_analysis` 直投影（GUI 步 1 / 管线 Step 0）。 */
 export interface DiscoveryAnalysisBlock {
   sufficient: boolean;
   confidence: number;
   missing_dimensions: string[];
+  /** 四维度逐项判定；旧快照缺省（undefined），不编造 */
+  dimensions?: DiscoveryDimensionView[];
   questions: string[];
   extracted_keywords: string[];
   /** 上一次追问的回答；拼接规则唯一实现在服务端（§4.3，前端拼即第二事实源） */

@@ -143,6 +143,11 @@ class RunnerTaskProjector:
         instruction = (
             "Read .repomesh/context/current-task.md and the mounted RepoMesh skills. "
             f"Complete only the assigned task: {package.instruction}"
+            # 房间语言规约（2026-09-08 用户裁决）：房间对话不是英文流水账。
+            # 代码/命令/标识符保持原样，人读的发言一律简体中文。
+            " All room messages — progress updates, questions, blockers, and"
+            " final summaries — MUST be written in Simplified Chinese (简体中文);"
+            " keep code, commands, file paths, and identifiers unchanged."
         )
         if any(skill.id == "tdd" for skill in request.capabilities.skills):
             # The mandatory-TDD mount (capabilities/skills/tdd): naming the file

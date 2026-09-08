@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import type { ScanTaskView, UrlIdentification } from "../api/contract";
 import { ApiError } from "../api/client";
 import {
@@ -282,7 +283,7 @@ export function AddRepositoryCard({
       <div className="flex items-baseline gap-2">
         <span className="text-[12.5px] text-cream">添加备选仓库</span>
         <button className="ml-auto text-[13px] text-tx2 hover:text-amber-hi" onClick={onClose}>
-          ✕
+          <X size={13} />
         </button>
       </div>
 

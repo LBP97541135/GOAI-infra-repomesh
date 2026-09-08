@@ -338,3 +338,11 @@ def test_context_materialization_is_idempotent(tmp_path: Path) -> None:
     second = materializer.materialize(task, package, capabilities)
 
     assert first.file_hashes == second.file_hashes
+
+
+def test_the_instruction_mandates_simplified_chinese_room_messages(tmp_path: Path) -> None:
+    """房间语言规约（2026-09-08 用户裁决）：指令必须要求房间发言用简体中文。"""
+
+    request, _, _ = scenario(tmp_path)
+    task = RunnerTaskProjector().project(request)
+    assert "Simplified Chinese (简体中文)" in task.instruction

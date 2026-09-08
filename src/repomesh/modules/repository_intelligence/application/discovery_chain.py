@@ -275,6 +275,11 @@ class DiscoveryPipeline:
             "missing_dimensions": list(result.missing_dimensions),
             "questions": list(result.questions),
             "extracted_keywords": list(result.extracted_keywords),
+            # 四维度逐项判定（name/covered/note），前端展开面板按维度渲染
+            "dimensions": [dict(d) for d in result.dimensions],
+            # 读模型列表标题优先用它（service._title）；分析失败时缺失，
+            # 标题退回需求文本截断——宁要诚实的截断，不要编造的总结。
+            "suggested_title": result.suggested_title,
         }
 
     async def score_candidates(
@@ -887,6 +892,7 @@ class DiscoveryChainService:
             record.setdefault("questions", [])
             record.setdefault("missing_dimensions", [])
             record.setdefault("extracted_keywords", [])
+            record.setdefault("suggested_title", "")
             block["analysis"] = record
             await self._commit(target, block)
             raise

@@ -4,8 +4,9 @@
  *  组件 ref：组件重挂载（切会话再切回来）会重置 ref，重置后撞上读投影滞后就会
  *  对正在跑的步骤重复开火（409 的根源）。
  *
- *  消费方：WorkbenchPage 的驱动器（写入）；AssistantFlow 的失败重试（删除后让
- *  驱动器用新键重跑）。 */
+ *  消费方：WorkbenchPage 的驱动器（写入）；WorkbenchPage 的失败重试（换新键
+ *  **直接重发**——驱动器只在 idle 开火，failed 态永远轮不到它）；AssistantFlow
+ *  的重新分档（删除后让驱动器对回到 idle 的步骤用新键重跑）。 */
 const map = new Map<string, string>();
 
 export const autoTrigger = {

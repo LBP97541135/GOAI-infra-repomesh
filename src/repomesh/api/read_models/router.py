@@ -119,8 +119,14 @@ async def list_issues(
     organization_id: UUID | None = None,
     cursor: str | None = None,
     limit: int = 100,
+    include_archived: bool = False,
 ) -> dict:
-    """Contract v0.2 §2; `state` defaults to open like a GitHub issue list."""
+    """Contract v0.2 §2; `state` defaults to open like a GitHub issue list.
+
+    ``include_archived`` (v0.5 increment) re-admits archived issues; the
+    default listing and both tab counts exclude them, same rule as
+    ``GET /deliveries``.
+    """
 
     if state not in _ISSUE_STATES:
         raise HTTPException(status_code=422, detail=f"unknown issue state: {state}")
@@ -129,6 +135,7 @@ async def list_issues(
         organization_id=organization_id,
         offset=_offset(cursor),
         limit=max(1, min(limit, 500)),
+        include_archived=include_archived,
     )
 
 

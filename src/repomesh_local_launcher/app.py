@@ -1,14 +1,22 @@
-"""Four routes, three guards, one response shape.
+"""Four process routes, two document routes, three guards, one response shape.
 
-The routes are fixed and there are no others (FR-09). A caller reads status,
-starts everything, stops everything, or restarts one member it can name only by
-agent id. There is no route that takes a path, a command, an interpreter or a
-member definition, which is why nothing here validates one.
+FR-09 fixed four routes and "no member definition from the page". The Console's
+settings page now edits the roster and the credential env **through** this
+process, because the browser cannot touch this machine's files and the launcher
+is the process already trusted with starts and stops. The structural guarantee
+survives, narrowed to what it guarded: the page still supplies no path, no
+command, no interpreter. It supplies content for the two documents this
+process owns by config (``documents.py``), both writes atomically backed up,
+and every document write rides the same Origin-allowlist + op-header guard as
+starting a process.
 """
+
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import documents
 from .config import LauncherConfig
 from .process import (
     MemberProcess,
@@ -104,7 +112,7 @@ def create_app(config: LauncherConfig, plane: MemberProcessPlane) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(config.allowed_origins),
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT"],
         allow_headers=[LAUNCHER_OP_HEADER],
     )
     write = [Depends(require_console_write)]
@@ -132,6 +140,92 @@ def create_app(config: LauncherConfig, plane: MemberProcessPlane) -> FastAPI:
             raise HTTPException(status_code=404, detail=UNKNOWN_MEMBER) from None
         except StalePidFileClaimed as blocked:
             raise HTTPException(status_code=409, detail=_blocked(blocked)) from None
+
+    @app.get("/v1/roster")
+    def read_roster() -> dict[str, object]:
+        """The roster document as the operator's file holds it, no secrets in it.
+
+        Same read class as ``/v1/status`` -- names and ids the operator can
+        already see in their own files -- so it rides unguarded with CORS doing
+        the read-side work. The settings page edits this document's connection
+        fields and member rows and puts the whole thing back.
+        """
+
+        return {
+            "rosterVersion": config.roster_version,
+            "document": documents.read_roster(config.members_file),
+        }
+
+    @app.put("/v1/roster", dependencies=write)
+    def write_roster(document: dict[str, Any]) -> dict[str, object]:
+        """Replace the roster file with the submitted document.
+
+        The page supplies content for a file this process already owns by
+        config -- never a path, never a command line, so the structural half of
+        FR-09 stands. Shape validation is the shallow kind documents.validate
+        states: the plane needs key/agentId/role per member, everything else is
+        operator data. Written atomically with a ``.bak`` of the previous file;
+        the plane re-reads the file per call, so the next status already
+        reflects it.
+        """
+
+        try:
+            documents.write_roster(config.members_file, document)
+        except documents.DocumentInvalid as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return {"saved": True, "rosterVersion": config.roster_version}
+
+    @app.get("/v1/secrets")
+    def read_secrets() -> dict[str, object]:
+        """The member credential env, masked. Values never leave this file."""
+
+        roster = documents.read_roster(config.members_file)
+        allowed = documents.allowed_env_names(roster)
+        entries = [
+            entry
+            for entry in documents.read_env_entries(config.env_file)
+            if entry["name"] in allowed
+        ]
+        return {"entries": entries}
+
+    @app.put("/v1/secrets", dependencies=write)
+    def write_secrets(body: dict[str, Any]) -> dict[str, object]:
+        """Set member tokens in the credential env; names must be roster-derived.
+
+        The body is ``{"entries": [{"name", "value"}]}`` and every name must
+        be one this roster's members actually own -- an unknown name is a 422,
+        not a new line in a file that is exported into member processes. Values
+        are answered with their mask only.
+        """
+
+        entries = body.get("entries")
+        if not isinstance(entries, list):
+            raise HTTPException(status_code=422, detail="entries must be a list")
+        updates: dict[str, str] = {}
+        for entry in entries:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("name"), str)
+                or not isinstance(entry.get("value"), str)
+                or not entry["value"].strip()
+            ):
+                raise HTTPException(
+                    status_code=422, detail="each entry needs a name and a non-empty value"
+                )
+            updates[entry["name"]] = entry["value"]
+        roster = documents.read_roster(config.members_file)
+        allowed = documents.allowed_env_names(roster)
+        try:
+            documents.write_env_entries(config.env_file, updates, allowed)
+        except documents.DocumentInvalid as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return {
+            "saved": True,
+            "entries": [
+                {"name": name, "masked": documents.mask_secret(value)}
+                for name, value in updates.items()
+            ],
+        }
 
     return app
 

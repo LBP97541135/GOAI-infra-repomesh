@@ -106,7 +106,9 @@
       # start_assigned_task 未显式给 adapter 时的回退。本地一键栈的 Runner 镜像
       # 只装了校验用 mock 编码代理（repomesh-mock-agent），所以默认 mock；接入
       # 真实 CLI 的部署把它改成该 CLI 在 runner profile 目录里的 id。
-      REPOMESH_WORKER_DEFAULT_ADAPTER_ID: ${REPOMESH_WORKER_DEFAULT_ADAPTER_ID:-mock}
+      # 真实编码代理：runner 容器内的 codex CLI（app-server 模式）。
+      # 依赖两个绑定：宿主的 codex Linux 二进制 + ~/.codex 凭据目录。
+      REPOMESH_WORKER_DEFAULT_ADAPTER_ID: ${REPOMESH_WORKER_DEFAULT_ADAPTER_ID:-codex}
       # 告警触达风险边界时的自动姿态：none 只告警不动手；degrade_writes /
       # pause_intake 会让 OperationalGate 真正咬合（如 pause_intake 拒绝新建
       # issue）。部署自己声明愿意让告警联动多深，默认只观测不干预。
@@ -135,7 +137,11 @@
       - "8001:8000"
     volumes:
       - ${REPOMESH_SECRETS_DIR:-./.secrets}:/app/.secrets:ro
-      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/runner-workspaces
+      # 工作区根目录默认落在 AgentTeams 宿主共享目录（AGENTTEAMS_HOST_SHARE_DIR，
+      # embedded 安装即用户主目录）之下：控制器给每个 worker 容器挂同样的 /host-share，
+      # 于是 api 视角的 /runner-workspaces/<run> 在 worker 侧恒为
+      # /host-share/.repomesh-workspaces/<run>，两侧视角经 runner 的 FROM/TO 对齐。
+      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-${AGENTTEAMS_HOST_SHARE_DIR:-.}/.repomesh-workspaces}:/runner-workspaces
       - agentteams-storage:/agentteams-data
     depends_on:
       postgres:
@@ -186,10 +192,11 @@
   # REPOMESH_WORKER_DEFAULT_ADAPTER_ID on the api to use one.
   #
   # The api prepares each workspace under /runner-workspaces and the task
-  # carries that path; the runner remaps it into its own /workspace mount of
-  # the same host directory (WORKSPACE_PATH_FROM/TO), and the worktree's .git
-  # pointer is written relative (git_worktree._make_gitdir_portable) so one
-  # tree serves both containers.
+  # carries that path; the runner remaps it into the shared /host-share view
+  # (WORKSPACE_PATH_FROM/TO) — the same path AgentTeams worker containers see,
+  # because the controller binds the host share directory into every worker at
+  # /host-share. The worktree's .git pointer is written relative
+  # (git_worktree._make_gitdir_portable) so one tree serves every container.
   runner:
     profiles: ["platform"]
     build:
@@ -200,10 +207,21 @@
       REPOMESH_RUNNER_TASK_SOURCE_URL: http://api:8000/api/v1/runtime/runner-tasks/next
       REPOMESH_RUNNER_EVENT_SINK_URL: http://api:8000/api/v1/runtime/runner-events
       REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
+      # /host-share/.repomesh-workspaces is the worker-container view of the
+      # same host directory the api mounts at /runner-workspaces; keeping the
+      # runner's own view identical to the worker's means every path the
+      # runner logs, reports or hands downstream is already valid where the
+      # worker runs. The image bakes WORKSPACE_ROOT=/workspace, so an explicit
+      # override is required — build_default_executor resolves worktrees
+      # against it.
       REPOMESH_RUNNER_WORKSPACE_PATH_FROM: /runner-workspaces
-      REPOMESH_RUNNER_WORKSPACE_PATH_TO: /workspace
+      REPOMESH_RUNNER_WORKSPACE_PATH_TO: /host-share/.repomesh-workspaces
+      REPOMESH_RUNNER_WORKSPACE_ROOT: /host-share/.repomesh-workspaces
     volumes:
-      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/workspace
+      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-${AGENTTEAMS_HOST_SHARE_DIR:-.}/.repomesh-workspaces}:/host-share/.repomesh-workspaces
+      # 真实编码代理：宿主的 codex Linux 二进制 + 凭据目录挂进 runner
+      - ${REPOMESH_CODEX_BIN_HOST_PATH:-./.repomesh-workspaces/bin/codex}:/usr/local/bin/codex:ro
+      - ${REPOMESH_CODEX_HOME:-C:\Users\PC\.codex}:/home/runner/.codex
     depends_on:
       api:
         condition: service_healthy

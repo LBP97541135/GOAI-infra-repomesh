@@ -1,4 +1,6 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
+import { Check, ChevronDown, Loader2, Sparkles, X } from "lucide-react";
 import type {
   DiscoveryClassificationBlock,
   DiscoveryView,
@@ -11,14 +13,10 @@ import {
   newIdempotencyKey,
   submitDiscoveryApproval,
 } from "../../api/discovery";
-import { fetchPolicyDraft } from "../../api/humanControl";
 import { resolveDataSourceMode } from "../../api/source";
 import type { GovernanceAgent } from "../../api/decisions";
-import type { ApprovalPrincipal } from "../../components/DiscoveryApproval";
-import { MaterializeModal } from "../../components/MaterializeModal";
-import type { PolicyDraftState } from "../../components/SupervisionPolicyCard";
 import { ShiningText } from "../../components/ui/shining-text";
-import { errText } from "../../display";
+import { READINESS_LABEL, READINESS_SKIN, errText, shortId } from "../../display";
 import { autoTrigger } from "./autoTrigger";
 
 /** 处理员（期 2.5 重构定稿）：发现→计划全过程的**对话式**呈现。
@@ -34,30 +32,28 @@ export function AssistantFlow({
   detail,
   discovery,
   principal,
-  principalResolving,
-  materialize,
   clarifySending,
   repoHosts,
   onAdvanced,
   onRetryStep,
   onToast,
+  planBatches,
 }: {
   detail: IssueDetailView;
   /** 发现读投影（外层 2.5s 轮询）；null = 还没取到 */
   discovery: DiscoveryView | null;
   principal: GovernanceAgent | null;
-  principalResolving: boolean;
-  /** 物化确认弹窗的 M/N 上下文（来自 useIssueFlowState） */
-  materialize: { roundCount: number; planRepositoryCount: number | null; planUnresolvedCount: number };
   /** 追问回答发送中：输入框与按钮置灰的依据（状态在外层） */
   clarifySending: boolean;
   /** 仓库名 → 地址 host（审批可见性：占位域名在门上一眼可见） */
   repoHosts: Record<string, string>;
   /** 任何写成功后让外层整轮刷新 */
   onAdvanced: () => void;
-  /** 失败重试：清防重发表 + 外层刷新，驱动器会用新键重发 */
+  /** 失败重试：换新幂等键**直接**重发该步（驱动器只在 idle 开火，failed 态轮不到它） */
   onRetryStep: (step: 1 | 2 | 3 | 4) => void;
   onToast: (text: string) => void;
+  /** 计划批次概览（仓库名按批次分组）——与顶部 DAG 胶囊同源（planState）；null = 尚未取到 */
+  planBatches: string[][] | null;
 }) {
   const replay = resolveDataSourceMode() === "replay";
 
@@ -97,45 +93,27 @@ export function AssistantFlow({
       .finally(() => setApproving(false));
   };
 
-  // ── 物化开工（门 2）──
-  const [mOpen, setMOpen] = useState(false);
+  // ── 物化开工（门 2）：无弹窗。按钮就地生效，单击即发；不可逆这件事由按钮
+  //  title 与出错行里的服务端原话承担。成员没起来时服务端 409 的结构化成员清单
+  //  就地逐行摊开——那是唯一一份「每个字段都是解法的一部分」的拒绝。 ──
   const [mBusy, setMBusy] = useState(false);
   const [mError, setMError] = useState<string | null>(null);
   const [mNotReady, setMNotReady] = useState<ExternalMembersNotReadyDetail | null>(null);
-  const [policy, setPolicy] = useState<PolicyDraftState>({ kind: "loading" });
-  const openMaterialize = () => {
-    setMOpen(true);
-    setMError(null);
-    if (replay) {
-      setPolicy({ kind: "unset" });
-      return;
-    }
-    // 档案在物化后锁死，这是最后一次看到草稿的机会——弹窗旁边必须摆出来。
-    // 404 = 从未设定（「未设定」是事实不是错误）；401 会话过期不重试。
-    fetchPolicyDraft(detail.issue_id)
-      .then((draft) => setPolicy({ kind: "set", draft }))
-      .catch((err: unknown) => {
-        const status = err && typeof err === "object" && "status" in err ? (err as { status: number }).status : 0;
-        setPolicy(status === 404 ? { kind: "unset" } : { kind: "unset" });
-      });
-  };
   const handleMaterialize = () => {
+    if (mBusy) return;
     if (replay) {
-      setMError("回放模式不写后端：物化会真实建团队、开房间。加 ?source=live 后可真实执行。");
+      onToast("回放模式不写后端：物化会真实建团队、开房间。加 ?source=live 后可真实执行。");
       return;
     }
-    if (!principal) {
-      setMError("决策主体未接入，无法物化。");
-      return;
-    }
+    if (!principal) return;
     setMBusy(true);
     setMError(null);
+    setMNotReady(null);
     materializeDiscovery(detail.issue_id, {
       created_by_agent_id: principal.agentId,
       idempotency_key: newIdempotencyKey("materialize"),
     })
       .then(() => {
-        setMOpen(false);
         onToast("已物化开工：团队与房间组建中，轮次会流进对话");
         onAdvanced();
       })
@@ -146,18 +124,10 @@ export function AssistantFlow({
       .finally(() => setMBusy(false));
   };
 
-  const approvalPrincipal: ApprovalPrincipal = replay
-    ? { state: "replay", label: "回放演示（不写后端）" }
-    : principalResolving
-      ? { state: "resolving", label: "解析中…" }
-      : principal
-        ? { state: "ready", label: `AGENT ${principal.label}` }
-        : { state: "missing", label: "决策主体未接入" };
-
   return (
     <div className="flex gap-2">
       {/* ZCode 对话式：一个小图标，右边就是信息——没有身份、没有名字、没有头像框 */}
-      <span className="flex-none pt-[3px] text-[11px] leading-none text-amber">✦</span>
+      <span className="flex-none pt-[3px] text-[11px] leading-none text-amber"><Sparkles size={12} strokeWidth={1.5} /></span>
       <div className="min-w-0 flex-1 grid gap-1">
         {!discovery && <RunLine title="正在接手需求" />}
 
@@ -180,15 +150,18 @@ export function AssistantFlow({
                 </p>
               </div>
             )}
-            {(discovery.step > 1 || (discovery.step === 1 && discovery.step_state === "done" && !clarifyPendingOf(discovery))) && (
-              <DoneLine
+            {(discovery.step > 1 || (discovery.step === 1 && discovery.step_state === "done" && !clarifyPendingOf(discovery))) &&
+              discovery.analysis !== null && (
+              <ExpandDone
                 title="需求已解析"
                 summary={
-                  discovery.analysis && discovery.analysis.extracted_keywords.length > 0
+                  discovery.analysis.extracted_keywords.length > 0
                     ? `关键词：${discovery.analysis.extracted_keywords.slice(0, 6).join("・")}`
                     : null
                 }
-              />
+              >
+                <KeywordDetail analysis={discovery.analysis} />
+              </ExpandDone>
             )}
             {discovery.step === 1 && discovery.step_state === "failed" && (
               <FailLine
@@ -203,14 +176,45 @@ export function AssistantFlow({
               <>
                 {discovery.step === 2 && discovery.step_state !== "done" && <RunLine title="正在评估候选仓库" />}
                 {discovery.step > 2 && discovery.candidates !== null && (
-                  <DoneLine
+                  <ExpandDone
                     title={`发现 ${discovery.candidates.items.length} 个候选仓库`}
                     summary={
                       discovery.candidates.items.length > 0
                         ? `${discovery.candidates.items.slice(0, 5).map((c) => c.repository_name).join(" · ")}${discovery.candidates.llm_used ? "" : " · 关键词回退评分"}`
                         : "无候选"
                     }
-                  />
+                  >
+                    {discovery.candidates.items.length === 0 ? (
+                      <p className="text-[11px] text-tx3">评分没有产出候选。</p>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {discovery.candidates.items.map((c) => {
+                          const ratio = Math.max(0, Math.min(1, c.score <= 1 ? c.score : c.score / 100));
+                          return (
+                            <div key={c.repository_id} className="flex flex-col gap-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-[11px] text-tx">{c.repository_name}</span>
+                                {c.is_entry_point && (
+                                  <span className="flex-none rounded-full border border-line px-1.5 text-[9.5px] text-tx3">入口</span>
+                                )}
+                                <span className="ml-auto flex-none font-mono text-[10.5px] text-tx2">{ratio.toFixed(2)}</span>
+                                <span className="h-1 w-16 flex-none overflow-hidden rounded-full bg-well">
+                                  <span
+                                    className="block h-full rounded-full bg-amber"
+                                    style={{ width: `${Math.max(3, ratio * 100)}%` }}
+                                  />
+                                </span>
+                              </div>
+                              <p className="text-[11px] leading-[1.6] text-tx3">{c.rationale}</p>
+                            </div>
+                          );
+                        })}
+                        {!discovery.candidates.llm_used && (
+                          <p className="text-[10.5px] text-tx3">以上为关键词回退评分，非模型评分。</p>
+                        )}
+                      </div>
+                    )}
+                  </ExpandDone>
                 )}
                 {discovery.step === 2 && discovery.step_state === "failed" && (
                   <FailLine title="候选评分" error={discovery.candidates?.error?.message ?? "执行失败"} onRetry={() => onRetryStep(2)} />
@@ -271,11 +275,28 @@ export function AssistantFlow({
                     {approvalError && <p className="mt-1.5 text-[11px] text-salmon">{approvalError}</p>}
                   </div>
                 )}
-                {discovery.approval.state !== "not_requested" && (
-                  <DoneLine
+                {discovery.approval.state !== "not_requested" && discovery.classification !== null && (
+                  <ExpandDone
                     title="分档已确认"
                     summary={discovery.approval.state === "approved" ? "已批准" : "已要求改动"}
-                  />
+                  >
+                    <div className="flex flex-col gap-1 font-mono text-[11px] text-tx2">
+                      <p>必需：{tierNames(discovery.classification.required, repoHosts)}</p>
+                      <p>可能：{tierNames(discovery.classification.maybe, repoHosts)}</p>
+                      <p>排除：{tierNames(discovery.classification.excluded, repoHosts)}</p>
+                      {discovery.classification.supplements.length > 0 && (
+                        <div className="mt-0.5 flex flex-col gap-0.5 text-tx3">
+                          <p>图预补充：</p>
+                          {discovery.classification.supplements.map((sup) => (
+                            <p key={sup.repository}>
+                              {sup.repository} ← {sup.via}（{sup.confidence} ·{" "}
+                              {sup.mechanism === "forward_dependencies" ? "正向依赖" : "反向依赖"}）
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </ExpandDone>
                 )}
                 {discovery.step === 3 && discovery.step_state === "failed" && (
                   <FailLine title="分档审批" error={discovery.classification?.error?.message ?? "执行失败"} onRetry={() => onRetryStep(3)} />
@@ -289,17 +310,57 @@ export function AssistantFlow({
                 {discovery.step === 4 && discovery.step_state !== "done" && <RunLine title="正在生成计划" />}
                 {discovery.step === 4 && discovery.step_state === "done" && (
                   <>
-                    <DoneLine title="计划已生成" summary={discovery.integration ? `${discovery.integration.task_dag_count} 个任务` : null} />
+                    <ExpandDone
+                      title="计划已生成"
+                      summary={discovery.integration ? `${discovery.integration.task_dag_count} 个任务` : null}
+                    >
+                      {planBatches === null ? (
+                        <p className="text-[11px] text-tx3">批次明细加载中…</p>
+                      ) : planBatches.length === 0 ? (
+                        <p className="text-[11px] text-tx3">该计划没有执行批次。</p>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          {planBatches!.map((batch, i) => (
+                            <p key={i} className="text-[11px] text-tx2">
+                              批次 {i + 1} · {batch.length} 仓
+                              <span className="text-tx3">：{batch.join("、")}</span>
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                    </ExpandDone>
                     <div className="mt-1.5">
                       <button
                         className="rounded-hard bg-amber px-3.5 py-1.5 text-[11.5px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-40"
-                        disabled={!principal}
-                        title={principal ? "确认后为每个仓库组建团队并开设房间" : "决策主体未接入"}
-                        onClick={openMaterialize}
+                        disabled={mBusy || !principal}
+                        title={principal ? "确认后为每个仓库组建团队并开设房间，不可逆" : "决策主体未接入"}
+                        onClick={handleMaterialize}
                       >
-                        物化并开工
+                        {mBusy ? "物化中…" : "物化并开工"}
                       </button>
                     </div>
+                    {mNotReady ? (
+                      <div className="mt-1.5 border-l-2 border-salmon bg-salmon-well px-2.5 py-1.5 text-[11.5px] leading-[1.7] text-salmon-hi">
+                        <b className="mr-1.5 font-mono">本地 CLI 未就绪</b>
+                        {mNotReady.message}
+                        <ul className="mt-1">
+                          {mNotReady.members.map((member) => (
+                            <li key={member.agentId} className="flex flex-wrap items-baseline gap-x-2">
+                              <span className={`rounded-hard border px-1.5 py-px text-[10px] ${READINESS_SKIN[member.status]}`}>
+                                {READINESS_LABEL[member.status]}
+                              </span>
+                              <span className="font-mono text-[11px]">
+                                {member.role} · {shortId(member.agentId)}
+                              </span>
+                              <span className="text-tx3">{member.reason}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="mt-1 text-[11px]">先把它们起来（「本地 CLI」页），再点上面的按钮。</p>
+                      </div>
+                    ) : (
+                      mError && <p className="mt-1.5 text-[11px] text-salmon" title={mError}>{mError}</p>
+                    )}
                   </>
                 )}
                 {discovery.step === 4 && discovery.step_state === "failed" && (
@@ -310,22 +371,6 @@ export function AssistantFlow({
           </>
         )}
       </div>
-
-      <MaterializeModal
-        open={mOpen}
-        issueId={detail.issue_id}
-        planVersion={discovery?.plan_version ?? 0}
-        taskCount={discovery?.integration?.task_dag_count ?? 0}
-        teamCount={materialize.planRepositoryCount}
-        unresolvedCount={materialize.planUnresolvedCount}
-        policy={policy}
-        principal={approvalPrincipal}
-        submitting={mBusy}
-        errorText={mError}
-        notReady={mNotReady}
-        onCancel={() => setMOpen(false)}
-        onConfirm={handleMaterialize}
-      />
     </div>
   );
 }
@@ -342,37 +387,136 @@ function clarifyPendingOf(discovery: DiscoveryView): boolean {
 function RunLine({ title }: { title: string }) {
   return (
     <p className="flex items-center gap-2 text-[12px] text-tx">
-      <i className="blink inline-block size-[5px] flex-none rounded-full bg-amber not-italic" />
+      <Loader2 size={13} strokeWidth={2} className="flex-none animate-spin text-amber" />
       <ShiningText text={`${title}…`} className="text-[12px]" />
     </p>
   );
 }
 
-function DoneLine({ title, summary }: { title: string; summary: string | null }) {
+/** 可展开的完成行：绿片 Check + 标题 + 收起态摘要 + 展开箭头；
+ *  展开区用 grid-rows 过渡（300ms），内容左缘以细竖线对齐到标题。 */
+function ExpandDone({
+  title,
+  summary,
+  children,
+}: {
+  title: string;
+  summary: string | null;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
   return (
     <div className="text-[12px] leading-[1.6]">
-      <p className="text-tx">
-        <span className="mr-1.5 text-olive">✓</span>
-        {title}
-      </p>
-      {summary && <p className="min-w-0 truncate pl-[18px] text-[11px] text-tx3">{summary}</p>}
+      <button
+        className="flex w-full items-start gap-2 text-left"
+        onClick={() => setOpen((v) => !v)}
+        title={open ? "收起" : "展开详情"}
+      >
+        <span className="mt-[2px] grid size-[16px] flex-none place-items-center rounded-full bg-olive/10 text-olive">
+          <Check size={11} strokeWidth={2.5} />
+        </span>
+        <span className="flex-none text-tx">{title}</span>
+        <span className={`min-w-0 flex-1 truncate pt-px text-right text-[11px] text-tx3 ${open ? "opacity-0" : ""}`}>
+          {summary}
+        </span>
+        <ChevronDown
+          size={12}
+          strokeWidth={1.5}
+          className={`mt-[2px] flex-none text-tx3 transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      <div
+        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+        }`}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="ml-1 mt-1.5 border-l border-line pl-4">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
 
+/** 需求分析展开区：关键词胶囊 + 待澄清问题与已提交的回答。 */
+function KeywordDetail({
+  analysis,
+}: {
+  analysis: NonNullable<DiscoveryView["analysis"]>;
+}) {
+  const dimensions = analysis.dimensions ?? [];
+  return (
+    <div className="flex flex-col gap-1.5">
+      {dimensions.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          {dimensions.map((d) => (
+            <p key={d.name} className="flex items-start gap-1.5 text-[11px] leading-[1.6] text-tx2">
+              {d.covered ? (
+                <Check size={11} strokeWidth={2.5} className="mt-[3px] flex-none text-olive" />
+              ) : (
+                <X size={11} strokeWidth={2.5} className="mt-[3px] flex-none text-salmon" />
+              )}
+              <span>
+                {d.name}：{d.note || (d.covered ? "已说清" : "缺失")}
+              </span>
+            </p>
+          ))}
+        </div>
+      )}
+      {analysis.extracted_keywords.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {analysis.extracted_keywords.slice(0, 8).map((k) => (
+            <span key={k} className="rounded-full border border-line bg-well px-2 py-px text-[10.5px] text-tx2">
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
+      {analysis.questions.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {analysis.questions.map((q, i) => {
+            const answered = analysis.answers.find((a) => a.question === q);
+            return (
+              <p key={q} className="text-[11px] leading-[1.6] text-tx2">
+                问 {i + 1}：{q}
+                {answered && <span className="text-tx">—— 答：{answered.answer}</span>}
+              </p>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 三档名单的措辞（含地址 host）；与审批盒里的 TierSummary 同一条格式。 */
+function tierNames(list: Array<{ repository: string }>, repoHosts: Record<string, string>): string {
+  if (list.length === 0) return "无";
+  return list
+    .map((item) => {
+      const host = repoHosts[item.repository];
+      return host ? `${item.repository}（${host}）` : item.repository;
+    })
+    .join(" · ");
+}
+
 function FailLine({ title, error, onRetry }: { title: string; error: string; onRetry: () => void }) {
   return (
-    <div className="text-[12px] leading-[1.6]">
-      <p className="text-salmon">
-        <span className="mr-1.5">✕</span>
-        {title}失败
-        <button className="ml-2 text-[11px] text-tx2 underline hover:text-tx" onClick={onRetry}>
-          重试
-        </button>
-      </p>
-      <p className="min-w-0 truncate pl-[18px] text-[11px] text-tx3" title={error}>
-        {error}
-      </p>
+    <div className="flex items-start gap-2 text-[12px] leading-[1.6]">
+      <span className="mt-[2px] grid size-[16px] flex-none place-items-center rounded-full bg-salmon/10 text-salmon">
+        <X size={11} strokeWidth={2.5} />
+      </span>
+      <div className="min-w-0">
+        <p className="text-salmon">
+          {title}失败
+          <button className="ml-2 text-[11px] text-tx2 underline hover:text-tx" onClick={onRetry}>
+            重试
+          </button>
+        </p>
+        <p className="truncate text-[11px] text-tx3" title={error}>
+          {error}
+        </p>
+      </div>
     </div>
   );
 }

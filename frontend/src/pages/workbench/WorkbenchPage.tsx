@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, FileText, X } from "lucide-react";
 import type { DeliveryAggregate, IssueDetailView, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
 import { parseRequirementDocument } from "../../api/issues";
 import { fetchIssueDetail, fetchRooms } from "../../api/rooms";
@@ -23,7 +24,9 @@ import type { DiscoveryView } from "../../api/contract";
 import { AssistantFlow } from "./AssistantFlow";
 import { autoTrigger } from "./autoTrigger";
 import { useIssueFlowState } from "./useIssueFlowState";
+import { PlanDagCapsule } from "../../components/PlanDagCapsule";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
+import { AIChatInput } from "../../components/ui/ai-chat-input";
 import { dayLabel, errText, shortId } from "../../display";
 import type { Decision, EvidenceView } from "../../types";
 import type { RedispatchScope, RollbackScopeView } from "../../api/contract";
@@ -32,10 +35,11 @@ import { RollbackModal } from "../../components/RollbackModal";
 import { archiveRound, redispatchRound } from "../../api/decisions";
 import { submitRollback } from "../../api/rollback";
 import { approvalForDecision, dagExecutionFromAggregate, evidenceFromAggregate } from "../../viewmodel";
-import { PlanDagPanel } from "../../components/PlanDagPanel";
 import {
   buildWorkStream,
+  composeRequirementText,
   newSessionStream,
+  typedRequirementText,
   workCardAnchor,
   type RoundTaskRow,
   type WorkCard,
@@ -70,6 +74,7 @@ const STEP_KEY_BY_STEP = {
   3: "classification",
   4: "plan",
 } as const;
+
 
 interface ActiveDeck {
   roundId: string;
@@ -323,8 +328,8 @@ export function WorkbenchPage({
     discovery.analysis.questions.length > 0;
   const [clarifySending, setClarifySending] = useState(false);
 
-  // ── 顶部折叠 DAG 条（期 4）──
-  const [dagOpen, setDagOpen] = useState(false);
+  // ── 顶部折叠 DAG 条（期 4）：计划 DAG 由悬浮胶囊承载（PlanDagCapsule，
+  //    2026-09-08 用户确认保留胶囊形态）──
   /** 八相 → 四阶段进度点（规划/执行/审核/交付）。failed 不点亮进度，由 phase 标签自己说话。 */
   const stageOfPhase = (phase: IssueDetailView["phase"]): number => {
     switch (phase) {
@@ -355,8 +360,38 @@ export function WorkbenchPage({
 
   const handleRetryStep = (step: 1 | 2 | 3 | 4) => {
     if (!detail) return;
-    autoTrigger.delete(`${detail.issue_id}:${step}`);
-    setReload((n) => n + 1);
+    if (resolveDataSourceMode() === "replay") {
+      onToast("回放模式不写后端：失败重试同样是一次真实触发，加 ?source=live 后可执行。");
+      return;
+    }
+    if (!principal) {
+      onToast("决策主体未接入，无法重试。");
+      return;
+    }
+    // 失败步的投影是 failed 不是 idle，而驱动器的第一道闸就是「非 idle 不开火」——
+    // 「清防重发表 + 刷新等驱动器重发」等的是一个永远不会来的信号（重试失灵的根源）。
+    // 这里换新幂等键**直接**重发：failed 态意味着没有在跑的任务，single-flight 不会拦；
+    // 先占住键，窗口期里投影即便短暂回到 idle，驱动器也会被防重发表挡住、不会双发。
+    const key = `${detail.issue_id}:${step}`;
+    autoTrigger.set(key, newIdempotencyKey(STEP_KEY_BY_STEP[step]));
+    const payload = {
+      created_by_agent_id: principal.agentId,
+      idempotency_key: autoTrigger.get(key)!,
+    };
+    const fire =
+      step === 1
+        ? triggerAnalysis(detail.issue_id, payload)
+        : step === 2
+          ? triggerCandidates(detail.issue_id, payload)
+          : step === 3
+            ? triggerClassification(detail.issue_id, payload)
+            : triggerPlan(detail.issue_id, payload);
+    fire
+      .then(() => setReload((n) => n + 1))
+      .catch((err: unknown) => {
+        autoTrigger.delete(key);
+        onToast(`重试失败：${errText(err)}`);
+      });
   };
   /** 追问回答走底部输入框：一条回答附到全部分析问题后（服务端拼接规则唯一实现） */
   const handleClarifySubmit = (text: string) => {
@@ -578,9 +613,12 @@ export function WorkbenchPage({
    *  requirement_text 携带解析文本（规划要读的就是它，parse 端点截断 20k），
    *  聊天里只显示文件卡片——点开看全文。 */
   const [attachment, setAttachment] = useState<{ filename: string; text: string } | null>(null);
+  /** 新会话欢迎区上传卡片的拖拽高亮 */
+  const [docDragging, setDocDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const idempotencyKey = useRef(crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepth = useRef(0);
 
   const handleDraftChange = (text: string) => {
     setDraft(text);
@@ -599,12 +637,12 @@ export function WorkbenchPage({
       return;
     }
     if (!typed && !attachment) return;
-    // 纯文档发送：需求文本 = 解析文本（后端把文档按这条通道交给规划）；
-    // 文字 + 文档一起发：文字在前，解析全文随后（气泡里只展示文字与文件卡片）。
-    const text =
-      typed && attachment
-        ? `${typed}\n\n${attachment.text}`
-        : typed || attachment!.text;
+    // 文档解析文本必须随 requirement_text 交给规划（契约没有独立的文档字段），
+    // 但对话流只展示用户自己的话——分界符由 streamModel 的展示侧拆开：
+    // 没打字时气泡只留文件卡，不擅自复述文档内容。
+    const text = attachment
+      ? composeRequirementText(typed, attachment.text)
+      : typed;
     setSending(true);
     onCreateIssue(text, idempotencyKey.current, attachment?.filename ?? null)
       .then(() => {
@@ -630,20 +668,88 @@ export function WorkbenchPage({
       });
   };
 
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "上午好" : hour < 18 ? "下午好" : "晚上好";
+
   return (
     <div className="flex h-full min-w-0 flex-1">
       {/* ── 中央列 ── */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {isNew ? (
+          /* ── 新会话：极简欢迎式（2026-09-08 二次裁决）——时段问候 + 居中输入框；
+             上传收进回形针，整页也接受拖拽（松开即解析）；创建后路由切会话工作台 ── */
+          <div
+            className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 pb-24"
+            onDragEnter={(e) => {
+              e.preventDefault();
+              dragDepth.current += 1;
+              setDocDragging(true);
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            onDragLeave={() => {
+              dragDepth.current -= 1;
+              if (dragDepth.current <= 0) setDocDragging(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              dragDepth.current = 0;
+              setDocDragging(false);
+              handlePickDocument(e.dataTransfer.files?.[0]);
+            }}
+          >
+            {docDragging && (
+              <div className="absolute inset-4 z-10 grid place-items-center rounded-[12px] border-2 border-dashed border-amber bg-panel/80">
+                <p className="text-[13px] text-tx2">松开以解析需求文档</p>
+              </div>
+            )}
+            <div className="flex flex-col items-center gap-2 text-center">
+              <h1 className="text-[19px] font-medium text-cream">{greeting}，要规划什么需求？</h1>
+              <p className="text-[12px] text-tx2">发送即创建 issue 并开始规划</p>
+            </div>
+            <div className="w-full max-w-[720px]">
+              <AIChatInput
+                value={draft}
+                onValueChange={handleDraftChange}
+                onSend={handleSend}
+                sending={sending}
+                placeholder="输入需求 —— 发送即创建 issue 并开始规划（Ctrl ⏎ 发送）"
+                onAttach={() => fileInputRef.current?.click()}
+                attachTitle="上传需求文档 · 支持 .txt / .md / .docx / .pdf / .odt / .rtf"
+                sendDisabled={draft.trim() === "" && attachment === null}
+                attachment={
+                  attachment ? (
+                    <div className="flex items-center gap-2 border-t border-line px-3 py-1.5">
+                      <FileText size={13} className="flex-none text-tx2" />
+                      <span className="min-w-0 truncate font-mono text-[11px] text-tx2" title={attachment.filename}>
+                        {attachment.filename}
+                      </span>
+                      <button
+                        type="button"
+                        className="ml-auto flex-none text-[11px] text-tx3 hover:text-salmon"
+                        title="移除附件"
+                        onClick={() => setAttachment(null)}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <>
         {/* 顶部折叠 DAG 条（期 4）：阶段点点击滚到对话流对应卡片；DAG 展开为计划图 */}
         <div className="flex-none border-b border-line bg-ink px-6">
           <div className="flex h-11 items-center gap-3">
             {!isNew && onBack && (
               <button
-                className="flex-none rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:border-amber hover:text-amber-hi"
+                className="flex flex-none items-center gap-0.5 rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:border-amber hover:text-amber-hi"
                 onClick={onBack}
                 title="返回会话列表"
               >
-                ‹ 议题列表
+                <ChevronLeft size={12} strokeWidth={2} />
+                issue 列表
               </button>
             )}
             <span className="eyebrow">流程</span>
@@ -682,35 +788,23 @@ export function WorkbenchPage({
                 {detail.phase === "failed" && (
                   <span className="rounded-hard border border-salmon px-1.5 py-px font-mono text-[10px] text-salmon">failed</span>
                 )}
-                <span className="ml-auto font-mono text-[10.5px] text-tx3">
-                  {detail.repositories.length} 仓 · {detail.round_count} 轮
-                </span>
               </>
             ) : (
-              <span className="text-[11.5px] text-tx3">{isNew ? "新会话 · 发送需求后开始规划" : "…"}</span>
+              <span className="text-[11.5px] text-tx3">{"…"}</span>
             )}
-            <button
-              className="ml-2 flex-none rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:border-amber hover:text-amber-hi disabled:opacity-40"
-              disabled={isNew}
-              onClick={() => setDagOpen((v) => !v)}
-              title={dagOpen ? "收起计划图" : "展开计划 DAG"}
-            >
-              {dagOpen ? "DAG ▴" : "DAG ▾"}
-            </button>
+            {/* 计划 DAG 胶囊（参照 ZCode 顶部任务胶囊）：钉在顶栏右侧，点开悬浮面板、
+                点外部或再点胶囊收起。批次图在展开面板里（PlanDagPanel）。 */}
+            <PlanDagCapsule
+              state={flow.planState}
+              execution={
+                activeDeck
+                  ? dagExecutionFromAggregate(activeDeck.aggregate, `第 ${activeDeck.roundIndex} 轮`)
+                  : null
+              }
+              onRetry={flow.reloadPlan}
+              resetKey={issueId ?? "new"}
+            />
           </div>
-          {dagOpen && (
-            <div className="border-t border-dashed border-line px-1 py-3">
-              <PlanDagPanel
-                state={flow.planState}
-                execution={
-                  activeDeck
-                    ? dagExecutionFromAggregate(activeDeck.aggregate, `第 ${activeDeck.roundIndex} 轮`)
-                    : null
-                }
-                onRetry={flow.reloadPlan}
-              />
-            </div>
-          )}
         </div>
 
         {/* 对话流 */}
@@ -756,13 +850,16 @@ export function WorkbenchPage({
                       detail={detail}
                       discovery={discovery}
                       principal={principal}
-                      principalResolving={principalResolving}
-                      materialize={flow.materialize}
                       clarifySending={clarifySending}
                       repoHosts={repoHosts}
                       onAdvanced={() => setReload((n) => n + 1)}
                       onRetryStep={handleRetryStep}
                       onToast={onToast}
+                      planBatches={
+                        flow.planState.status === "ready"
+                          ? flow.planState.plan.execution_batches
+                          : null
+                      }
                     />
                   )}
                 </Fragment>
@@ -770,103 +867,62 @@ export function WorkbenchPage({
           </div>
         </div>
 
-        {/* 吸底输入框 */}
-        <div className="flex-none border-t border-line bg-ink px-6 pb-4 pt-2.5">
+        {/* 吸底输入框（AIChatInput）：单行静态框、右侧仅发送；业务态（幂等键、
+            追问回答、附件解析）沿用原有回路 */}
+        <div className="flex-none bg-ink px-6 pb-4 pt-2.5">
           <div className="mx-auto max-w-[720px]">
-            <div className="rounded-[8px] border border-line-strong bg-panel focus-within:border-amber">
-              <textarea
-                className="block h-[46px] w-full resize-none bg-transparent px-3.5 pt-2.5 font-sans text-[12.5px] leading-[1.5] text-tx outline-none"
-                placeholder={
-                  isNew
-                    ? "输入需求 —— 发送即创建 issue 并开始规划（可先 📎 附文档；Ctrl ⏎ 发送）"
-                    : clarifyPending
-                      ? "回答处理员的追问 —— 发送后它会带着你的补充继续分析（Ctrl ⏎ 发送）"
-                      : "会话内补充说明待后端立项，暂不可发送（新建需求请回侧栏「＋ 新会话」）"
-                }
-                disabled={!isNew && !clarifyPending}
-                value={draft}
-                onChange={(e) => handleDraftChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-              />
-              <div className="flex items-center gap-1 px-2 pb-1.5 pl-2.5">
-                <span
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line-strong px-2.5 py-[2.5px] font-mono text-[11px] text-tx2"
-                  title={
-                    isNew
-                      ? "需求归属当前工作区；未选工作区时由花名册唯一活跃 Org Leader 处理，交付范围由发现链确定"
-                      : "本会话的交付范围（由服务端派生）"
-                  }
-                >
-                  <span className="h-1.5 w-1.5 flex-none rounded-full bg-bluegray" />
-                  {isNew
-                    ? workspaceName ?? "全部工作区"
-                    : detail
-                      ? `${detail.repositories.length} 个仓库`
-                      : "…"}
-                </span>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={DOC_ACCEPT}
-                  className="hidden"
-                  onChange={(e) => handlePickDocument(e.target.files?.[0])}
-                />
-                <button
-                  className="grid h-[27px] w-[27px] place-items-center rounded-hard text-[13px] text-tx3 hover:bg-panel-2 hover:text-tx disabled:opacity-40"
-                  title={isNew ? "上传需求文档（作为附件随消息发送）" : "仅新会话可用"}
-                  disabled={!isNew}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  📎
-                </button>
-                <button
-                  className="grid h-[27px] w-[27px] place-items-center rounded-hard text-[13px] text-tx3 hover:bg-panel-2 hover:text-tx"
-                  disabled
-                  title="截图 / 粘贴图片（二期）"
-                >
-                  🖼
-                </button>
-                <button
-                  className="ml-auto grid h-7 w-7 place-items-center rounded-hard bg-amber text-[12px] text-on-amber hover:bg-amber-hi disabled:opacity-40"
-                  title={
-                    isNew
-                      ? "发送（Ctrl+Enter）"
-                      : clarifyPending
-                        ? "发送回答（Ctrl+Enter）"
-                        : "会话内补充说明待后端立项"
-                  }
-                  disabled={(!isNew && !clarifyPending) || sending || clarifySending || (draft.trim() === "" && !attachment)}
-                  onClick={handleSend}
-                >
-                  {sending || clarifySending ? "…" : "➤"}
-                </button>
-              </div>
-              {attachment && (
-                <div className="flex items-center gap-2 border-t border-line px-3 py-1.5">
-                  <span className="text-[13px]">📄</span>
-                  <span className="min-w-0 truncate font-mono text-[11px] text-tx2" title={attachment.filename}>
-                    {attachment.filename}
-                  </span>
-                  <span className="flex-none text-[10px] text-tx3">已解析 · 发送时作为附件随消息提交</span>
-                  <button
-                    type="button"
-                    className="ml-auto flex-none text-[11px] text-tx3 hover:text-salmon"
-                    title="移除附件"
-                    onClick={() => setAttachment(null)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              )}
-            </div>
+            <AIChatInput
+              value={draft}
+              onValueChange={handleDraftChange}
+              onSend={handleSend}
+              sending={sending || clarifySending}
+              disabled={!isNew && !clarifyPending}
+              placeholder={
+                isNew
+                  ? "输入需求 —— 发送即创建 issue 并开始规划（Ctrl ⏎ 发送）"
+                  : clarifyPending
+                    ? "回答处理员的追问 —— 发送后它会带着你的补充继续分析（Ctrl ⏎ 发送）"
+                    : "会话内补充说明待后端立项，暂不可发送（新建需求请回侧栏「＋ 新会话」）"
+              }
+              onAttach={() => fileInputRef.current?.click()}
+              attachDisabled={!isNew}
+              attachTitle={isNew ? "上传需求文档（作为附件随消息发送）" : "仅新会话可用"}
+              sendTitle={
+                isNew ? "发送（Ctrl+Enter）" : clarifyPending ? "发送回答（Ctrl+Enter）" : "会话内补充说明待后端立项"
+              }
+              sendDisabled={draft.trim() === "" && attachment === null}
+              attachment={
+                attachment ? (
+                  <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
+                    <FileText size={13} className="flex-none text-tx2" />
+                    <span className="min-w-0 truncate font-mono text-[11px] text-tx2" title={attachment.filename}>
+                      {attachment.filename}
+                    </span>
+                    <button
+                      type="button"
+                      className="ml-auto flex-none text-[11px] text-tx3 hover:text-salmon"
+                      title="移除附件"
+                      onClick={() => setAttachment(null)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : null
+              }
+            />
           </div>
         </div>
+          </>
+        )}
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={DOC_ACCEPT}
+        className="hidden"
+        onChange={(e) => handlePickDocument(e.target.files?.[0])}
+      />
 
       {/* ── 右栏：仓库房间面板（只读；写路径在 ⤢ 放大的全页房间） ── */}
       <aside
@@ -896,7 +952,7 @@ export function WorkbenchPage({
                   title="收起"
                   onClick={() => setPanelRepo(null)}
                 >
-                  ✕
+                  <X size={12} />
                 </button>
               </div>
             </div>
@@ -950,20 +1006,16 @@ export function WorkbenchPage({
 }
 
 /** 任务 tick：display_status 原值决定符号与配色（前端不翻译状态，只挑皮肤）。 */
-/** 用户需求气泡：带附件时渲染成**文件卡片**（点开看全文预览），不把文档文本
- *  铺进对话——规划读的解析文本在 requirement_text 里，界面只欠一个「这是文件」
- *  的样子。无附件时照旧显示全文。 */
+/** 用户需求气泡：带附件时渲染成**文件卡片**（点开看全文预览），只展示**用户自己
+ *  打的字**——附件文档的解析全文是规划要读的，不是聊天气泡要复述的；用户没打字
+ *  就只留文件卡，一个字都不擅自替他说。无附件时照旧显示全文。 */
 function RequirementBubble({ card }: { card: Extract<WorkCard, { kind: "requirement" }> }) {
   const [previewOpen, setPreviewOpen] = useState(false);
-  const excerpt = card.text.length > 160 ? `${card.text.slice(0, 160)}…` : card.text;
+  const typedText = typedRequirementText(card.text);
 
   return (
     <div className="flex justify-end" id={workCardAnchor(card)}>
       <div className="max-w-[78%] rounded-[10px_10px_3px_10px] bg-amber px-3.5 py-2.5 text-on-amber">
-        <div className="mb-0.5 font-mono text-[10px] opacity-65">
-          你 · {dayLabel(card.openedAt)}
-          {card.openedByName ? ` · ${card.openedByName}` : ""}
-        </div>
         {card.documentFilename ? (
           <>
             <button
@@ -971,13 +1023,15 @@ function RequirementBubble({ card }: { card: Extract<WorkCard, { kind: "requirem
               onClick={() => setPreviewOpen(true)}
               title="点击查看文档内容"
             >
-              <span className="text-[17px]">📄</span>
+              <FileText size={17} className="flex-none text-tx2" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-mono text-[11.5px] font-bold">{card.documentFilename}</span>
                 <span className="block text-[10px] opacity-70">需求文档 · 点击查看内容</span>
               </span>
             </button>
-            <div className="mt-1.5 whitespace-pre-wrap text-[11.5px] leading-[1.6] opacity-90">{excerpt}</div>
+            {typedText && (
+              <div className="mt-1.5 whitespace-pre-wrap text-[11.5px] leading-[1.6] opacity-90">{typedText}</div>
+            )}
           </>
         ) : (
           <div className="whitespace-pre-wrap text-[12.5px] leading-[1.65]">{card.text}</div>
@@ -990,7 +1044,7 @@ function RequirementBubble({ card }: { card: Extract<WorkCard, { kind: "requirem
         onClose={() => setPreviewOpen(false)}
       >
         <div className="flex items-baseline gap-2 border-b border-line px-4 py-2.5">
-          <span className="text-[14px]">📄</span>
+          <FileText size={14} className="flex-none text-tx2" />
           <h2 className="min-w-0 truncate font-mono text-[13px] font-bold text-cream">
             {card.documentFilename ?? "需求全文"}
           </h2>
@@ -998,7 +1052,7 @@ function RequirementBubble({ card }: { card: Extract<WorkCard, { kind: "requirem
             className="ml-auto flex-none text-[12px] text-tx3 hover:text-tx"
             onClick={() => setPreviewOpen(false)}
           >
-            ✕
+            <X size={12} />
           </button>
         </div>
         <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
@@ -1084,7 +1138,7 @@ function WorkCardView({
             <span className="text-[12.5px] font-bold text-cream">plan v{card.planVersion} 已冻结</span>
             <span className="ml-auto font-mono text-[10px] text-tx3">{dayLabel(card.at)}</span>
           </div>
-          <p className="text-[11.5px] text-tx2">第 {card.roundIndex} 轮快照 · 任务级 DAG 在顶部「DAG」展开查看（期 4 接入）。</p>
+          <p className="text-[11.5px] text-tx2">第 {card.roundIndex} 轮快照 · 任务级 DAG 在顶部「DAG」展开查看。</p>
         </div>
       );
     case "teams":
@@ -1117,7 +1171,7 @@ function WorkCardView({
               >
                 <span className={`h-[7px] w-[7px] rounded-full ${repo.team_id ? "bg-olive" : "bg-tx3"}`} />
                 {repo.name}
-                <span className="text-[9px] text-tx3">▸</span>
+                <ChevronRight size={9} className="text-tx3" />
               </button>
             ))}
           </div>

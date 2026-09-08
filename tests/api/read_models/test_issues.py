@@ -30,6 +30,7 @@ from repomesh.modules.task_orchestration.contracts import ExecutionPlanStatus
 from .test_service_stubs import (
     StubArchives,
     StubChangeSets,
+    StubIssueArchives,
     StubPlans,
     StubSnapshots,
     StubTasks,
@@ -245,7 +246,15 @@ class StubAgents:
 
 
 def _issue_service(
-    *, plans, snapshots, change_sets, topology=None, tasks=None, agents=None, archived=()
+    *,
+    plans,
+    snapshots,
+    change_sets,
+    topology=None,
+    tasks=None,
+    agents=None,
+    archived=(),
+    issue_archived=(),
 ):
     return _service(
         StubPlans(*plans),
@@ -253,6 +262,7 @@ def _issue_service(
         StubTasks(*(tasks or ())),
         StubChangeSets(change_sets),
         StubArchives(*archived),
+        StubIssueArchives(*issue_archived),
         topology=topology,
         agents=agents,
     )
@@ -726,3 +736,65 @@ async def test_the_list_reads_each_source_once_per_request() -> None:
     assert plans.calls.get("list_all", 0) == 1
     assert repositories.calls.get("list", 0) == 1
     assert tasks.calls.get("list_by_project", 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_archived_issues_leave_the_default_listing_and_the_tab_counts() -> None:
+    """A tombstone hides the issue from the default view *and* both counts.
+
+    The counts answer "what still needs someone"; include_archived re-admits
+    the issue with the tombstone fields and restores the true totals.
+    """
+
+    repository_id = uuid4()
+    live_project, archived_project = uuid4(), uuid4()
+    live_plan = _plan(live_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
+    archived_plan = _plan(
+        archived_project, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED
+    )
+    live_snapshot = _snapshot(live_project, live_plan.id)
+    archived_snapshot = _snapshot(archived_project, archived_plan.id)
+    change_sets = {
+        live_plan.id: _manual_intervention_change_set(live_plan, repository_id, uuid4()),
+        archived_plan.id: _manual_intervention_change_set(
+            archived_plan, repository_id, uuid4()
+        ),
+    }
+    service = _issue_service(
+        plans=[live_plan, archived_plan],
+        snapshots=[live_snapshot, archived_snapshot],
+        change_sets=change_sets,
+        issue_archived=(archived_project,),
+    )
+
+    default = await service.list_issues(state="all")
+    assert [str(item["issue_id"]) for item in default["issues"]] == [str(live_project)]
+    assert default["open_count"] == 1
+    assert default["closed_count"] == 0
+
+    admitted = await service.list_issues(state="all", include_archived=True)
+    by_id = {item["issue_id"]: item for item in admitted["issues"]}
+    assert set(by_id) == {live_project, archived_project}
+    assert by_id[live_project]["archived"] is False
+    assert by_id[live_project]["archived_at"] is None
+    assert by_id[archived_project]["archived"] is True
+    assert by_id[archived_project]["archived_at"] is not None
+    assert admitted["open_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_issue_summary_carries_the_tombstone() -> None:
+    repository_id = uuid4()
+    project_id = uuid4()
+    plan = _plan(project_id, repository_id, uuid4(), ExecutionPlanStatus.COMPLETED)
+    service = _issue_service(
+        plans=[plan],
+        snapshots=[_snapshot(project_id, plan.id)],
+        change_sets={plan.id: _manual_intervention_change_set(plan, repository_id, uuid4())},
+        issue_archived=(project_id,),
+    )
+
+    summary = await service.issue_summary(project_id)
+    assert summary is not None
+    assert summary["archived"] is True
+    assert summary["archived_at"] is not None

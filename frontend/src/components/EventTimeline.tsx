@@ -1,4 +1,5 @@
 import type { DeliveryEventItem, DeliveryEventKind } from "../api/contract";
+import { TriangleAlert } from "lucide-react";
 import { eventTime } from "../display";
 
 /** 环境窗「事件时间线」段（CONS-14，契约 §4.1）。kind/text 直投影不做映射。
@@ -78,7 +79,14 @@ export function EventTimeline({
               {e.kind}
             </span>
             <span className={`min-w-0 ${violation ? "text-salmon" : "text-tx"}`}>
-              {violation ? `⚠ 契约违约条目（deny 不应由后端产出）：${e.text}` : e.text}
+              {violation ? (
+                <span className="inline-flex items-center gap-1">
+                  <TriangleAlert size={11} strokeWidth={1.5} className="flex-none" />
+                  契约违约条目（deny 不应由后端产出）：{e.text}
+                </span>
+              ) : (
+                e.text
+              )}
             </span>
           </div>
         );
@@ -91,7 +99,7 @@ export function EventTimeline({
           className="mx-2.5 mt-1 mb-0.5 rounded-hard border border-line px-2 py-[3px] text-[11px] text-tx2 hover:border-amber hover:text-amber-hi"
           onClick={onLoadMore}
         >
-          ↓ 加载后续
+          加载后续
         </button>
       )}
     </div>

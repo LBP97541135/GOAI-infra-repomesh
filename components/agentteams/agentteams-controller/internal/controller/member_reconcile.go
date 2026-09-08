@@ -263,6 +263,14 @@ type MemberDeps struct {
 	WorkerDepsStorageEndpoint string
 	MountAuthType             string
 	MountRoleName             string
+
+	// DockerHostShareDir is the host directory embedded (docker) deployments
+	// share at the fixed /host-share mount point, mirroring the Manager
+	// container. Workers need the same view so paths a Runner prepares on the
+	// host resolve identically inside every member container. Empty (and any
+	// non-docker backend) mounts nothing: HostPath binds are a docker-only
+	// concept.
+	DockerHostShareDir string
 }
 
 // ValidateMemberDeployment checks the deployment fields for managed pod
@@ -745,6 +753,16 @@ func createMemberContainer(ctx context.Context, d MemberDeps, m MemberContext, s
 		Owner:       m.Owner,
 		DeployMode:  m.DeployMode,
 		WorkersDeps: workerDeps,
+	}
+	// Embedded docker deployments give workers the same /host-share view the
+	// Manager already gets, so a workspace path prepared on the host resolves
+	// to one identical in-container path across Manager, Worker and Runner.
+	// HostPath binds are docker-only; every other backend stays untouched.
+	if wb.Name() == "docker" && d.DockerHostShareDir != "" {
+		createReq.Volumes = append(createReq.Volumes, backend.VolumeMount{
+			HostPath:      d.DockerHostShareDir,
+			ContainerPath: "/host-share",
+		})
 	}
 	if wb.Name() != "k8s" && wb.Name() != "sandbox" {
 		token, _, err := d.Provisioner.RequestSAToken(ctx, m.Name)

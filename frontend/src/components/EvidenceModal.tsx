@@ -1,4 +1,5 @@
 import type { EvidenceView } from "../types";
+import { X } from "lucide-react";
 import { eventTime, governanceLabel, governanceSkin, shortId } from "../display";
 import { AgentVerificationBlock } from "./AgentVerificationBlock";
 import { Modal } from "./Modal";
@@ -36,7 +37,7 @@ export function EvidenceModal({
         <span className="text-[12px] text-tx2">{roundLabel}</span>
         {evidence && <span className="font-mono text-[12px] text-tx">{evidence.repositoryName}</span>}
         <button className="ml-auto text-[14px] text-tx2 hover:text-amber-hi" onClick={onClose}>
-          ✕
+          <X size={14} />
         </button>
       </div>
 

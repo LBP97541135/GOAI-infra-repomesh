@@ -1,4 +1,16 @@
 import { useEffect, useState } from "react";
+import {
+  Activity,
+  ArrowRight,
+  ArrowUpRight,
+  BarChart3,
+  BellRing,
+  Cloud,
+  ScrollText,
+  Server,
+  Waypoints,
+  type LucideIcon,
+} from "lucide-react";
 import { defaultClient } from "../../api/client";
 import type { ObserveSummary } from "../../api/contract";
 import { fetchAgentloopConfig, type AgentLoopConfig } from "../../api/agentloop";
@@ -42,42 +54,47 @@ function savedAgentloopUrl(): string {
  *    地址由服务端从部署既有 OTLP 配置推导，用户手改只存本机。
  *
  * 选择记进 localStorage，下次直落上次的门；顶部入口条常驻（两个 pill），随时切回。
- * 告警横幅全局可见（不分入口）。摘要条只在本地面拉一次（门户不需要 30s 轮询）。 */
+ * 告警横幅全局可见（不分入口）。摘要条只在本地面拉一次（门户不需要 30s 轮询）。
+ *
+ * 2026-09-08 图标语言统一（用户两轮裁决）：四大板块改「图标瓦片卡」——lucide
+ * 图标瓦片 + 标题 + 描述 + 计数胶囊徽标，rounded-[8px]；两扇门同语言翻新
+ * （⛓/⌁/◈/✎/⚠ 等字符图标全部退役）；计数徽标对齐侧栏 badge，告警触发中 >0
+ * 用红色语义。 */
 
 const SECTION_CARDS: Array<{
   section: ObserveSection;
   title: string;
   desc: string;
   status: "ready" | "building";
-  icon: string;
+  icon: LucideIcon;
 }> = [
   {
     section: "trace",
     title: "推理轨迹",
     desc: "Trace · Skill 调用 / MCP 工具 / RAG 检索 / Agent 会话全链路（赛题点名覆盖项）",
     status: "ready",
-    icon: "⌁",
+    icon: Waypoints,
   },
   {
     section: "usage",
     title: "用量大盘",
     desc: "Metrics · LLM token / 成本 / 延迟 / 成功率聚合、趋势、模型分布、Issue 归因",
     status: "ready",
-    icon: "◈",
+    icon: BarChart3,
   },
   {
     section: "logs",
     title: "日志",
     desc: "Log · 统一日志查询（级别 / 来源 / Issue / 全文检索），支撑异常定位",
     status: "ready",
-    icon: "✎",
+    icon: ScrollText,
   },
   {
     section: "alerts",
     title: "告警",
     desc: "在线监控与告警 · 阈值规则 + 触发历史，命中即时可见",
     status: "ready",
-    icon: "⚠",
+    icon: BellRing,
   },
 ];
 
@@ -188,6 +205,21 @@ export function ObserveHome() {
     return null;
   };
 
+  /** 计数胶囊徽标：与侧栏 badge 同语言；告警触发中 >0 用红色语义。 */
+  const statBadge = (section: ObserveSection, stat: string | null) => {
+    if (!stat) return null;
+    const firing = section === "alerts" && (activeCount ?? 0) > 0;
+    return (
+      <span
+        className={`flex h-5 items-center rounded-full px-2 font-mono text-[10px] font-medium ${
+          firing ? "bg-salmon/10 text-salmon" : "bg-side-active/70 text-tx2"
+        }`}
+      >
+        {stat}
+      </span>
+    );
+  };
+
   /** 入口条：两扇门的常驻切换器（进入任一面后收成一行 pill，随时切回/换门）。 */
   const surfaceSwitch = (
     <div className="flex items-center gap-2">
@@ -196,18 +228,19 @@ export function ObserveHome() {
         onClick={() => enterSurface("local")}
         className={`rounded-full border px-3 py-[3px] text-[11px] transition-colors ${
           surface === "local"
-            ? "border-amber bg-amber/10 text-amber"
-            : "border-line text-tx2 hover:border-amber/50 hover:text-tx"
+            ? "border-line bg-side-active font-medium text-tx"
+            : "border-line text-tx2 hover:text-tx"
         }`}
       >
         自研 · 本地
       </button>
       <button
         onClick={openAgentloop}
-        className="rounded-full border border-line px-3 py-[3px] text-[11px] text-tx2 transition-colors hover:border-amber/50 hover:text-tx"
+        className="inline-flex items-center gap-1 rounded-full border border-line px-3 py-[3px] text-[11px] text-tx2 transition-colors hover:text-tx"
         title={agentloopJumpUrl ? "新窗口打开 AgentLoop 控制台" : "首次点击进行配置"}
       >
-        AgentLoop ↗
+        AgentLoop
+        <ArrowUpRight size={11} strokeWidth={1.5} />
       </button>
     </div>
   );
@@ -229,30 +262,37 @@ export function ObserveHome() {
         <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
           <button
             onClick={() => enterSurface("local")}
-            className="group flex flex-col rounded-hard border border-line bg-panel px-5 py-5 text-left transition-colors hover:border-amber"
+            className="group flex flex-col rounded-[8px] border border-line bg-panel px-5 py-5 text-left transition-colors hover:border-amber/50"
           >
-            <div className="flex items-center gap-2.5">
-              <span className="text-[20px] leading-none text-amber">◎</span>
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 flex-none place-items-center rounded-[8px] bg-side-active text-tx">
+                <Server size={18} strokeWidth={1.5} />
+              </span>
               <span className="text-[15px] font-bold text-cream">自研观测 · 本地</span>
             </div>
-            <p className="mt-2 text-[12px] leading-relaxed text-tx2">
+            <p className="mt-3 text-[12px] leading-relaxed text-tx2">
               进入本地四大板块：推理轨迹 / 用量大盘 / 日志 / 告警。数据来自 RepoMesh
               observability 模块读模型，按 Issue 归因。
             </p>
             <div className="mt-3 flex items-baseline justify-between">
               <span className="font-mono text-[11px] text-tx2">4 个板块已就绪</span>
-              <span className="text-[11.5px] text-tx2 transition-colors group-hover:text-amber-hi">进入 →</span>
+              <span className="inline-flex items-center gap-1 text-[11.5px] text-tx2 transition-colors group-hover:text-amber-hi">
+                进入
+                <ArrowRight size={12} strokeWidth={1.5} className="transition-transform group-hover:translate-x-0.5" />
+              </span>
             </div>
           </button>
           <button
             onClick={openAgentloop}
-            className="group flex flex-col rounded-hard border border-line bg-panel px-5 py-5 text-left transition-colors hover:border-amber"
+            className="group flex flex-col rounded-[8px] border border-line bg-panel px-5 py-5 text-left transition-colors hover:border-amber/50"
           >
-            <div className="flex items-center gap-2.5">
-              <span className="text-[20px] leading-none text-amber">⛓</span>
+            <div className="flex items-center gap-3">
+              <span className="grid size-10 flex-none place-items-center rounded-[8px] bg-side-active text-tx">
+                <Cloud size={18} strokeWidth={1.5} />
+              </span>
               <span className="text-[15px] font-bold text-cream">AgentLoop · 阿里云</span>
             </div>
-            <p className="mt-2 text-[12px] leading-relaxed text-tx2">
+            <p className="mt-3 text-[12px] leading-relaxed text-tx2">
               跳转云端控制台：span 全链路瀑布 / 时序指标趋势 / 长期留存。全量遥测已从本部署同步上报。
             </p>
             <div className="mt-3 flex items-baseline justify-between">
@@ -263,7 +303,10 @@ export function ObserveHome() {
                     : "已连接"
                   : "未配置 · 首次点击进行配置"}
               </span>
-              <span className="text-[11.5px] text-tx2 transition-colors group-hover:text-amber-hi">新窗口跳转 ↗</span>
+              <span className="inline-flex items-center gap-1 text-[11.5px] text-tx2 transition-colors group-hover:text-amber-hi">
+                新窗口跳转
+                <ArrowUpRight size={12} strokeWidth={1.5} className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
+              </span>
             </div>
           </button>
         </div>
@@ -272,23 +315,65 @@ export function ObserveHome() {
       {/* ═══ 自研面：健康摘要 + 四大板块 ═══ */}
       {surface === "local" && (
         <>
-          {/* 健康摘要条：只放三个关键数字，其余进板块页 */}
+          {/* 健康摘要条：成功率用圆形百分表，其余保持数字卡（2026-09-08 用户裁决） */}
           <div className="mt-4 grid grid-cols-3 gap-3">
-            <div className="rounded-hard border border-line bg-panel px-4 py-3">
-              <div className="eyebrow text-tx2">近 7 天调用</div>
-              <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
+            <div className="rounded-[8px] border border-line bg-panel px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                <Activity size={12} strokeWidth={1.5} className="text-tx3" />
+                <div className="eyebrow text-tx2">近 7 天调用</div>
+              </div>
+              <div className="mt-1 font-mono text-[20px] leading-tight text-cream">
                 {summary ? fmt(summary.calls) : "—"}
               </div>
             </div>
-            <div className="rounded-hard border border-line bg-panel px-4 py-3">
-              <div className="eyebrow text-tx2">成功率</div>
-              <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
-                {summary && summary.success_rate !== null ? `${(summary.success_rate * 100).toFixed(1)}%` : "—"}
+            <div className="flex items-center gap-3 rounded-[8px] border border-line bg-panel px-4 py-3">
+              <svg viewBox="0 0 64 64" className="size-14 flex-none">
+                <circle cx="32" cy="32" r="26" fill="none" stroke="var(--color-side-active)" strokeWidth="7" />
+                {summary && summary.success_rate !== null && (
+                  <circle
+                    cx="32"
+                    cy="32"
+                    r="26"
+                    fill="none"
+                    stroke="var(--color-olive)"
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                    strokeDasharray={`${2 * Math.PI * 26 * summary.success_rate} ${2 * Math.PI * 26}`}
+                    transform="rotate(-90 32 32)"
+                  />
+                )}
+                <text
+                  x="32"
+                  y="37"
+                  textAnchor="middle"
+                  className="fill-cream font-mono text-[13px] font-semibold"
+                >
+                  {summary && summary.success_rate !== null ? `${Math.round(summary.success_rate * 100)}%` : "—"}
+                </text>
+              </svg>
+              <div className="min-w-0">
+                <div className="eyebrow text-tx2">成功率</div>
+                <div className="mt-0.5 truncate text-[11px] text-tx3">
+                  {summary && summary.success_rate !== null
+                    ? `${(summary.success_rate * 100).toFixed(1)}% · 近 7 天`
+                    : "暂无数据"}
+                </div>
               </div>
             </div>
-            <div className="rounded-hard border border-line bg-panel px-4 py-3">
-              <div className="eyebrow text-tx2">活跃告警</div>
-              <div className="mt-1 font-mono text-[18px] leading-tight text-cream">
+            <div className="rounded-[8px] border border-line bg-panel px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                <BellRing
+                  size={12}
+                  strokeWidth={1.5}
+                  className={(activeCount ?? 0) > 0 ? "text-salmon" : "text-tx3"}
+                />
+                <div className="eyebrow text-tx2">活跃告警</div>
+              </div>
+              <div
+                className={`mt-1 font-mono text-[20px] leading-tight ${
+                  (activeCount ?? 0) > 0 ? "text-salmon" : "text-cream"
+                }`}
+              >
                 {activeCount === null ? "—" : activeCount}
               </div>
             </div>
@@ -299,53 +384,49 @@ export function ObserveHome() {
           <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
             {SECTION_CARDS.map((card) => {
               const stat = cardStat(card.section);
+              const Icon = card.icon;
               return (
                 <button
                   key={card.section}
                   onClick={() => {
                     window.location.hash = `#/observe/${card.section}`;
                   }}
-                  className="group flex flex-col rounded-hard border border-line bg-panel px-4 py-3.5 text-left transition-colors hover:border-amber/50"
+                  className="group flex flex-col rounded-[8px] border border-line bg-panel px-4 py-3.5 text-left transition-colors hover:border-amber/50"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="text-[15px] leading-none text-amber">{card.icon}</span>
-                    <span className="text-[13px] font-semibold text-cream">{card.title}</span>
-                    {card.status === "building" && (
-                      <span className="ml-auto rounded-full border border-line px-2 py-0.5 text-[9.5px] text-tx3">
-                        建设中
-                      </span>
-                    )}
+                  <div className="flex items-center gap-2.5">
+                    <span className="grid size-8 flex-none place-items-center rounded-[6px] bg-side-active text-tx">
+                      <Icon size={16} strokeWidth={1.5} />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-cream">
+                      {card.title}
+                    </span>
+                    {statBadge(card.section, stat)}
                   </div>
-                  <p className="mt-1.5 text-[11.5px] leading-relaxed text-tx3">{card.desc}</p>
-                  <div className="mt-2.5 flex items-baseline justify-between">
-                    {stat ? (
-                      <span className="font-mono text-[11px] text-tx2">{stat}</span>
-                    ) : (
-                      <span className="text-[11px] text-tx3">{card.status === "building" ? "尚未接入数据源" : ""}</span>
-                    )}
-                    <span className="text-[11px] text-tx2 transition-colors group-hover:text-amber-hi">
-                      进入 →
+                  <p className="mt-2 text-[11.5px] leading-relaxed text-tx3">{card.desc}</p>
+                  <div className="mt-2.5 flex items-center justify-between">
+                    <span className="text-[11px] text-tx3">
+                      {card.status === "building" ? "尚未接入数据源" : card.status === "ready" ? "已就绪" : ""}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[11px] text-tx3 transition-colors group-hover:text-amber-hi">
+                      进入
+                      <ArrowRight
+                        size={11}
+                        strokeWidth={1.5}
+                        className="transition-transform group-hover:translate-x-0.5"
+                      />
                     </span>
                   </div>
                 </button>
               );
             })}
           </div>
-
-          <p className="pt-5 text-[11px] leading-relaxed text-tx3">
-            板块划分对照赛题可观测要求：<b className="text-tx2">推理轨迹</b>（Skill / MCP /
-            Agent 会话）为赛题点名的全链路推理轨迹覆盖项，<b className="text-tx2">用量大盘</b>
-            （Metrics）与<b className="text-tx2">日志</b>（Log）为数据类型覆盖，<b className="text-tx2">告警</b>
-            为「在线监控与告警」场景。已实心板块的数据来自 RepoMesh 规划侧；
-            执行侧 Agent 数据经「推理轨迹」板块接入（路线 1）。
-          </p>
         </>
       )}
 
       {/* 一次性配置弹层：只在跳转地址缺失或用户主动改地址时出现 */}
       <Modal
         open={agentloopDialog}
-        className="m-auto w-[min(520px,92vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
+        className="m-auto w-[min(520px,92vw)] rounded-[8px] border border-line-strong bg-panel p-0 text-tx shadow-pop"
         onClose={() => setAgentloopDialog(false)}
       >
         <div className="px-6 py-5">
@@ -357,7 +438,7 @@ export function ObserveHome() {
               : "已按部署配置自动推导，通常无需修改；如有出入可粘贴控制台地址覆盖（只存本机）。"}
           </p>
           <input
-            className="mt-3 w-full rounded-hard border border-line bg-well px-2.5 py-1.5 font-mono text-[11.5px] text-tx outline-none focus:border-amber"
+            className="mt-3 w-full rounded-[8px] border border-line bg-well px-2.5 py-1.5 font-mono text-[11.5px] text-tx outline-none focus:border-amber"
             placeholder="https://arms.console.aliyun.com/?regionId=cn-hangzhou"
             value={dialogUrl}
             onChange={(e) => setDialogUrl(e.target.value)}
@@ -368,13 +449,13 @@ export function ObserveHome() {
           />
           <div className="mt-4 flex justify-end gap-2">
             <button
-              className="rounded-hard border border-line-strong bg-panel px-3 py-1.5 text-[11.5px] text-tx2 hover:border-amber hover:text-tx"
+              className="rounded-[8px] border border-line-strong bg-panel px-3 py-1.5 text-[11.5px] text-tx2 hover:border-amber hover:text-tx"
               onClick={() => setAgentloopDialog(false)}
             >
               取消
             </button>
             <button
-              className="rounded-hard bg-amber px-3 py-1.5 text-[11.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-[8px] bg-amber px-3 py-1.5 text-[11.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
               disabled={dialogUrl.trim() === ""}
               onClick={saveAndEnter}
             >

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type {
   DeliveryEventKind,
   GateDisplay,
@@ -205,7 +206,7 @@ function EnvFloat({
       <div className="sticky top-0 flex items-center border-b border-line bg-well px-3 py-2.5">
         <span className="font-mono text-[11px] tracking-[0.16em] text-tx">环境 · {repositoryName}</span>
         <button className="ml-auto px-0.5 text-[13px] text-tx2 hover:text-amber-hi" onClick={() => setMin((v) => !v)}>
-          {min ? "▸" : "▾"}
+          <ChevronDown size={13} strokeWidth={1.5} className={min ? "-rotate-90" : ""} />
         </button>
       </div>
 
@@ -372,7 +373,9 @@ export function RoomView({
 
   return (
     <div className="pr-[268px]">
-      <div className="-mx-8 -mt-5 mb-3.5 flex items-center gap-2.5 border-b border-line bg-panel px-8 py-3">
+      {/* 吸顶（用户裁决）：下滚时返回键与 房间/DAG·PLAN·SPEC 切换始终可见，
+          不用再划回最上方；负边距让吸顶后仍与 main 内容区左右贴边 */}
+      <div className="sticky top-0 z-20 -mx-8 -mt-5 mb-3.5 flex items-center gap-2.5 border-b border-line bg-panel px-8 py-3">
         <button className="text-[11.5px] text-tx2 hover:text-tx" onClick={onBack}>
           ‹
         </button>

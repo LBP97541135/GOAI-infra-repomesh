@@ -113,6 +113,12 @@ class AgentTeamsTaskPublisher(TaskAssignmentPublisher):
             )
         return (
             f"# {task.title}\n\n"
+            "## Communication language / 沟通语言\n\n"
+            "All room messages — progress updates, questions, blockers, and"
+            " summaries — MUST be written in Simplified Chinese (简体中文)."
+            " Code, commands, file paths, and identifiers stay as-is.\n"
+            "所有房间发言（进度汇报、提问、阻塞说明与总结）一律使用简体中文；"
+            "代码、命令、文件路径与标识符保持原样。\n\n"
             f"## Current task\n\n{task.instruction}\n\n"
             f"## Acceptance criteria\n\n{acceptance}\n{database_section}"
         )

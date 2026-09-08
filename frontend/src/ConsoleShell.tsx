@@ -3,8 +3,9 @@ import { Toast } from "./components/Toast";
 import { AuthError, authApi, type Account } from "./api/auth";
 import { LoginPage } from "./components/LoginPage";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
+import { CommandPalette } from "./components/CommandPalette";
 import type { IssueListItemView, IssueListResponse, OrganizationView } from "./api/contract";
-import { archiveIssue, createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
+import { archiveIssue, createIssue, fetchIssues, issuesSourceMode, purgeIssue } from "./api/issues";
 import { createWorkspace, fetchWorkspaces } from "./api/workspaces";
 import { errText, shortId } from "./display";
 import type { HumanReviewRequestView } from "./api/reviewDesk";
@@ -51,6 +52,19 @@ export default function ConsoleShell() {
   const [route, setRoute] = useState<Route>(readRoute);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+
+  // ⌘K/Ctrl+K 命令面板：状态与全局快捷键在外壳（数据源同侧栏的 issues 轮询）。
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // issue 列表：state 由服务端筛选（?state=），不做本地分 tab——分页下本地过滤
   // 等于拿部分结果冒充全量。工作区（organization_id）由前端持有，当前无组织读模型
@@ -274,6 +288,25 @@ export default function ConsoleShell() {
     }
   };
 
+  /** 彻底清除回路（2026-09-08 用户裁决）：POST /issues/{id}/purge——不可逆的
+   *  硬删除（快照/决策链/审计，仅留一条清除审计）。回放模式同上兜底拒绝。 */
+  const handlePurgeIssue = async (item: IssueListItemView) => {
+    if (issuesSourceMode() === "replay") {
+      showToast("回放模式 · 彻底清除不适用于夹具数据");
+      return;
+    }
+    try {
+      const receipt = await purgeIssue(item.issue_id);
+      showToast(
+        `issue 已彻底清除：#${shortId(item.issue_id)}（快照 ${receipt.snapshots} · ` +
+          `决策链 ${receipt.decision_chain_nodes} · 审计 ${receipt.audit_events}）`,
+      );
+      setIssuesReload((n) => n + 1);
+    } catch (err) {
+      showToast(`清除失败：${errText(err)}`);
+    }
+  };
+
   /** B-2 创建回路：建组织 + 登记 Org Leader → 刷新列表 → 选中新工作区。 */
   const handleCreateWorkspace = async (name: string, idempotencyKey: string) => {
     const created = await createWorkspace(name, idempotencyKey);
@@ -360,15 +393,18 @@ export default function ConsoleShell() {
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
         onNewIssue={openNewSession}
-        sessions={issues?.issues ?? null}
-        activeSessionId={
-          route.nav === "issues" && route.issueId !== null && route.issueId !== "new"
-            ? route.issueId
-            : null
-        }
-        onSelectSession={openIssue}
         onLogout={handleLogout}
         onToast={showToast}
+        onOpenSearch={() => setPaletteOpen(true)}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        issues={issues?.issues ?? null}
+        onNavigate={navigate}
+        onOpenIssue={openIssue}
+        onNewIssue={openNewSession}
       />
 
       {/* 工作台自带内滚与吸底输入框：容器不给页边距，交给页面自己（其余页面照旧） */}
@@ -397,6 +433,7 @@ export default function ConsoleShell() {
               onTab={setIssueTab}
               onToggleArchived={() => setShowArchived((v) => !v)}
               onArchive={handleArchiveIssue}
+              onPurge={handlePurgeIssue}
               onLoadMore={loadMoreIssues}
               onRetry={() => setIssuesReload((n) => n + 1)}
               onOpenIssue={(item) => openIssue(item.issue_id)}

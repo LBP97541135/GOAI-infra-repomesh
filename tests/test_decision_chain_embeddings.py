@@ -31,6 +31,7 @@ from test_decision_chain_projection import (
     _store_services,
     _task_event,
 )
+from test_decision_chain_similarity import _ArchivedIssues
 
 from repomesh.integrations.llm import embeddings as embeddings_module
 from repomesh.integrations.llm.embeddings import (
@@ -401,6 +402,38 @@ async def test_semantic_ranks_by_cosine_collapses_projects_and_excludes_self() -
     assert hits[0].score == pytest.approx(1.0)
     assert hits[0].decision.step == DecisionStep.CLASSIFICATION
     assert all(hit.decision.project_id != project_a for hit in hits)
+
+
+async def test_semantic_search_excludes_archived_projects() -> None:
+    """墓碑项目的决策单不进语义检索语料（契约 v0.5 §4）。"""
+
+    org, leader = uuid4(), uuid4()
+    project_a, peer_b, peer_c = uuid4(), uuid4(), uuid4()
+    base = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
+    projection, chain_store = _store_services(
+        _chain_events(org, project_a, leader)
+        + [
+            _classified(org, peer_b, leader, repos=["ts-notify"], at=base),
+            _classified(org, peer_c, leader, repos=["ts-notify"], at=base),
+        ]
+    )
+    await projection.drain()
+
+    embed_store = InMemoryDecisionEmbeddingStore(chain_store)
+    nodes = list(chain_store._nodes.values())  # noqa: SLF001 (test twin)
+    by_project = {node.project_id: node for node in nodes}
+    query = [1.0, 0.0, 0.0, 0.0]
+    # B 与查询同向——若不排除，它会以最高分排在最前。
+    await embed_store.upsert(by_project[peer_b].decision_id, [1.0, 0.0, 0.0, 0.0])
+    await embed_store.upsert(by_project[peer_c].decision_id, [0.0, 1.0, 0.0, 0.0])
+
+    service = DecisionChainSemanticSearchService(
+        embed_store, _ArchivedIssues(peer_b)
+    )
+    hits = await service.find_similar(
+        organization_id=org, project_id=project_a, query_embedding=query
+    )
+    assert [hit.decision.project_id for hit in hits] == [peer_c]
 
 
 async def test_semantic_collapses_each_project_to_its_best_matching_sheet() -> None:
