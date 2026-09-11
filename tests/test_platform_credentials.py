@@ -449,11 +449,27 @@ def test_manifest_flow_round_trips_credentials_then_redirects_to_install(
             "http://127.0.0.1:8100/api/v1/setup/credentials/github-app/installed"
         )
         assert manifest["name"] == "RepoMesh Delivery (test)"
-        assert manifest["hook_attributes"]["active"] is False
+        # 127.0.0.1 can never receive webhooks and GitHub hard-rejects the
+        # whole manifest over an unreachable hook URL, so the hook is omitted.
+        assert "hook_attributes" not in manifest
         # The token mint sends the provider's permissions verbatim and GitHub
         # 422s anything the App was never granted, so the manifest has to be a
         # superset of them.
         assert set(manifest["default_permissions"]) >= {"contents", "pull_requests", "checks"}
+
+        hosted = client.post(
+            "/api/v1/setup/credentials/github-app/manifest",
+            # The origin check requires the supplied host to match the request's
+            # Host — a public deployment's proxy declares it the same way.
+            headers={**headers, "X-Forwarded-Host": "console.example.com"},
+            json={"origin": "https://console.example.com"},
+        )
+        assert hosted.status_code == 200
+        hosted_manifest = hosted.json()["manifest"]
+        assert hosted_manifest["hook_attributes"] == {
+            "url": "https://console.example.com/api/v1/delivery/github-webhook",
+            "active": False,
+        }
 
         # An unknown state must not reach the exchange.
         rejected = client.get(

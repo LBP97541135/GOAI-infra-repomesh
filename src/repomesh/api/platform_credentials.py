@@ -255,6 +255,20 @@ _MANIFEST_CALLBACK_PATH = "/api/v1/setup/credentials/github-app/manifest-callbac
 _INSTALL_CALLBACK_PATH = "/api/v1/setup/credentials/github-app/installed"
 
 
+def _hook_is_publicly_plausible(origin: str) -> bool:
+    """Whether the origin can plausibly receive GitHub webhooks.
+
+    GitHub hard-rejects manifests whose hook URL points at a loopback or
+    private address ("not reachable over the public Internet"), so those
+    deployments must omit `hook_attributes` altogether — the App is created
+    without a webhook, which is exactly how it ships (`active: false`,
+    events via the observation poller). Hostnames cannot be resolved here
+    cheaply and authoritatively, so an unreachable public hostname is
+    GitHub's error to give, not ours to guess at.
+    """
+    return not _is_local_hostname((urlparse(origin).hostname or "").lower())
+
+
 class ManifestRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=_MAX_APP_NAME)
     #: Empty means "my personal account"; otherwise the organization the App
@@ -492,13 +506,6 @@ async def create_github_app_manifest(request: Request, body: ManifestRequest | N
     manifest = {
         "name": app_name,
         "url": origin,
-        # Webhooks need a publicly reachable URL; local deployments get their
-        # events from the observation poller instead, so the hook ships inactive
-        # and the URL is a placeholder for public deployments to enable.
-        "hook_attributes": {
-            "url": f"{origin}/api/v1/delivery/github-webhook",
-            "active": False,
-        },
         "redirect_url": callback_url,
         "callback_urls": [callback_url],
         "setup_url": f"{origin}{_INSTALL_CALLBACK_PATH}",
@@ -516,6 +523,17 @@ async def create_github_app_manifest(request: Request, body: ManifestRequest | N
         },
         "default_events": ["pull_request", "pull_request_review", "check_run"],
     }
+    # GitHub rejects a manifest whose hook URL is not publicly reachable
+    # (observed live against 127.0.0.1: "Hook url is not supported because it
+    # isn't reachable over the public Internet"). Local deployments cannot
+    # receive webhooks anyway — events come from the observation poller — so
+    # they simply omit the hook; public-hostname deployments keep it (inactive
+    # by default) and can enable it in the App settings later.
+    if _hook_is_publicly_plausible(origin):
+        manifest["hook_attributes"] = {
+            "url": f"{origin}/api/v1/delivery/github-webhook",
+            "active": False,
+        }
     state = await container.github_app_manifest_state_store().issue(
         kind=MANIFEST_STATE_CREATE,
         requested_name=app_name,
