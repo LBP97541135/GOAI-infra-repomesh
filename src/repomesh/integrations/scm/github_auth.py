@@ -41,8 +41,12 @@ class GitHubAppTokenProvider:
         self._client = client or httpx.AsyncClient(timeout=20)
         self._now = now or (lambda: datetime.now(UTC))
         self._refresh_skew = refresh_skew
+        # Sent verbatim as the `permissions` body of the access-token mint, and
+        # GitHub refuses any permission the App was never granted. So this set
+        # must stay a subset of the manifest's `default_permissions` in
+        # `api/platform_credentials.py` — an extra entry here does not widen the
+        # token, it makes every mint fail with a 422.
         self._permissions = permissions or {
-            "administration": "read",
             "checks": "read",
             "contents": "write",
             "pull_requests": "write",
