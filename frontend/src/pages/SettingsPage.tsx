@@ -59,7 +59,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-/** 九项检查的中文标签。后端返回的是机器名（`checks` 的键与 `next_actions` 的元素
+/** 检查项的中文标签。后端返回的是机器名（`checks` 的键与 `next_actions` 的元素
  *  同一套），这里只做措辞，**不判定通过与否**——`ready_for_project_creation` 由
  *  服务端算，前端重算一遍就是第二套判定。 */
 const CHECK_LABEL: Record<string, string> = {
@@ -68,7 +68,9 @@ const CHECK_LABEL: Record<string, string> = {
   agentteams: "AgentTeams",
   matrix: "Matrix 消息面",
   internal_auth: "内部凭据",
-  github_app: "GitHub App",
+  github_app: "GitHub App 凭证",
+  github_app_installed: "GitHub App 已安装",
+  github_app_active: "GitHub App 已生效",
   administrator: "管理员账号",
   agent_directory: "智能体花名册",
   repositories: "仓库 catalog",

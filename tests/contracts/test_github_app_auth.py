@@ -46,8 +46,9 @@ async def test_resolves_installation_and_caches_short_lived_token() -> None:
         assert claims["exp"] - claims["iat"] == 600
         if request.method == "GET":
             return httpx.Response(200, json={"id": 77})
+        # Must mirror the wizard manifest's default_permissions: GitHub 422s a
+        # mint that asks for a permission the App was never granted.
         assert json.loads(request.content)["permissions"] == {
-            "administration": "read",
             "checks": "read",
             "contents": "write",
             "pull_requests": "write",

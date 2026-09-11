@@ -12,6 +12,22 @@ from .bootstrap import (
     BootstrapUserInputRequired,
 )
 from .bootstrap_store import PostgresBootstrapOperationStore
+
+# Imported for their side effect as much as for the names: `tests/conftest.py`
+# builds its schema with `create_all_for_tests`, which only sees models already
+# registered on `Base.metadata`, and this package is what the container imports.
+from .github_app_store import (
+    CREATE_STATE_TTL_SECONDS,
+    INSTALL_STATE_TTL_SECONDS,
+    MANIFEST_STATE_CREATE,
+    MANIFEST_STATE_INSTALL,
+    GitHubAppManifestStateRecord,
+    GitHubAppRegistration,
+    GitHubAppRegistrationRecord,
+    ManifestState,
+    PostgresGitHubAppManifestStateStore,
+    PostgresGitHubAppRegistrationStore,
+)
 from .runtime_config import (
     RUNTIME_CONFIG_KEYS,
     RuntimeConfigError,
@@ -45,14 +61,24 @@ __all__ = [
     "BootstrapState",
     "BootstrapTransitionError",
     "BootstrapUserInputRequired",
+    "CREATE_STATE_TTL_SECONDS",
     "GITHUB_APP_ID",
     "GITHUB_PRIVATE_KEY",
     "GITHUB_WEBHOOK_SECRET",
+    "GitHubAppManifestStateRecord",
+    "GitHubAppRegistration",
+    "GitHubAppRegistrationRecord",
+    "INSTALL_STATE_TTL_SECONDS",
+    "MANIFEST_STATE_CREATE",
+    "MANIFEST_STATE_INSTALL",
     "MODEL_API_KEY",
     "MODEL_BASE_URL",
     "MODEL_NAME",
+    "ManifestState",
     "PostgresPlatformCredentialStore",
     "PostgresBootstrapOperationStore",
+    "PostgresGitHubAppManifestStateStore",
+    "PostgresGitHubAppRegistrationStore",
     "StoredCredential",
     "RUNTIME_CONFIG_KEYS",
     "RuntimeConfigError",

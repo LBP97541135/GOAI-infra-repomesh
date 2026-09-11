@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import asdict
 from uuid import UUID
 
@@ -23,6 +24,8 @@ from repomesh.modules.repository_intelligence.infrastructure.platform import (
 from repomesh.settings import get_settings
 
 router = APIRouter(prefix="/api/v1/setup", tags=["platform-setup"])
+
+logger = logging.getLogger(__name__)
 
 
 class OrganizationRepositoryOnboard(BaseModel):
@@ -156,9 +159,20 @@ async def setup_status(request: Request) -> dict:
     accounts = await container.local_account_service().list_accounts()
     agents = await container.agent_directory.list_views()
     repositories = await container.repository_catalog.list()
-    credentials = await container.platform_credential_store().get_many(
-        {MODEL_API_KEY, GITHUB_APP_ID, GITHUB_PRIVATE_KEY}
-    )
+    try:
+        credentials = await container.platform_credential_store().get_many(
+            {MODEL_API_KEY, GITHUB_APP_ID, GITHUB_PRIVATE_KEY}
+        )
+    except Exception:
+        # This is the wizard's only status endpoint, it takes no authentication
+        # and the frontend polls it. Rotating
+        # `REPOMESH_CREDENTIALS_ENCRYPTION_KEY` makes every row fail to decrypt,
+        # and a 500 here would leave the user with a console that cannot even
+        # tell them what is wrong. Degrade the affected checks to False instead
+        # — which is also the truth: those credentials are unusable.
+        logger.exception("reading platform credentials for /setup/status failed")
+        credentials = {}
+    registration = await container.github_app_registration_store().current()
     bootstrap_operation = await container.bootstrap_operation_store().latest()
     checks = {
         "model": bool(credentials.get(MODEL_API_KEY) or settings.deepseek_api_key),
@@ -179,6 +193,15 @@ async def setup_status(request: Request) -> dict:
         "administrator": bool(accounts),
         "agent_directory": bool(agents),
         "repositories": bool(repositories),
+        # Three separate facts, because the failure modes between them are
+        # exactly where this flow used to strand people. `github_app` says the
+        # credentials exist; `github_app_installed` says the App is actually on
+        # an account and can therefore see a repository; `github_app_active`
+        # says *this process* built a token provider out of them — false right
+        # after the credentials land, until the restart completes. Read from the
+        # plaintext registration table, and no live GitHub call happens here.
+        "github_app_installed": registration is not None and registration.installed,
+        "github_app_active": container.scm_token_provider is not None,
     }
     required = (
         "model",
@@ -281,6 +304,20 @@ async def setup_status(request: Request) -> dict:
             remediation="optional",
             required_for_project=False,
             message="optional unless GitHub delivery is enabled",
+        ),
+        dependency(
+            "github_app_installed",
+            owner="user",
+            remediation="optional",
+            required_for_project=False,
+            message="the GitHub App has to be installed on an account to see repositories",
+        ),
+        dependency(
+            "github_app_active",
+            owner="user",
+            remediation="optional",
+            required_for_project=False,
+            message="GitHub App credentials are picked up when the API restarts",
         ),
         dependency(
             "repositories",
