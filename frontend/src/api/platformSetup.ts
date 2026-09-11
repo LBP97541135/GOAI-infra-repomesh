@@ -20,6 +20,20 @@ export interface CredentialItemStatus {
   updated_at: string | null;
 }
 
+export interface GitHubAppRegistrationStatus {
+  app_id: number;
+  slug: string;
+  owner_login: string;
+  owner_type: string;
+  requested_owner_login: string | null;
+  /** 建好 ≠ 装好。私有 App 不装在账号上，一个仓库都看不见。 */
+  installed: boolean;
+  installation_id: number | null;
+  installation_account_login: string | null;
+  installed_at: string | null;
+  install_url: string;
+}
+
 export interface CredentialStatus {
   model: {
     api_key: CredentialItemStatus;
@@ -31,6 +45,9 @@ export interface CredentialStatus {
     private_key: CredentialItemStatus;
     webhook_secret: CredentialItemStatus;
   };
+  /** 明文表，与加密凭证并列而**不是** `github_app` 的下级：凭证在不在，
+   *  和 App 归谁、装没装，是两件会各自为政地出错的事。尚未建 App 时为 null。 */
+  github_app_registration: GitHubAppRegistrationStatus | null;
 }
 
 export interface CredentialSaveReceipt {
@@ -123,16 +140,50 @@ export function putGitHubAppCredential(payload: {
 export interface GitHubAppManifest {
   state: string;
   github_url: string;
+  /** 服务端生成并留了底的 App 名。GitHub 上 App 名全局唯一，前端自己编一个，
+   *  服务端就不知道究竟什么名字送了出去——而那正是交换失败时用户在自己的 App
+   *  列表里找到那个孤儿的唯一线索。 */
+  app_name: string;
+  owner_login: string | null;
   manifest: Record<string, unknown>;
 }
 
-export function createGitHubAppManifest(): Promise<GitHubAppManifest> {
+export function createGitHubAppManifest(payload?: {
+  displayName?: string;
+  ownerLogin?: string;
+  /** 重建会把 GitHub 上那个旧 App 变成孤儿，所以得显式说一声（后端 409）。 */
+  replace?: boolean;
+}): Promise<GitHubAppManifest> {
   return sessionRequest<GitHubAppManifest>("/setup/credentials/github-app/manifest", {
     method: "POST",
-    // The browser's own origin is authoritative for the GitHub callback URL:
-    // behind the nginx port mapping the Host header loses the external port.
-    body: JSON.stringify({ origin: window.location.origin }),
+    body: JSON.stringify({
+      // The browser's own origin is authoritative for the GitHub callback URL:
+      // behind the nginx port mapping the Host header loses the external port.
+      origin: window.location.origin,
+      display_name: payload?.displayName?.trim() || null,
+      owner_login: payload?.ownerLogin?.trim() || null,
+      replace: payload?.replace ?? false,
+    }),
   });
+}
+
+export interface GitHubAppInstallationCheck {
+  installed: boolean;
+  installation_id: number | null;
+  account: string | null;
+  restarting?: boolean;
+}
+
+/** 主动问 GitHub「这个 App 到底装在哪些账号上」。
+ *
+ *  不是锦上添花：GitHub 只在**安装那一刻**重定向到 `setup_url`，从 GitHub 自己
+ *  界面装的用户永远不会触发我们的回调；而 `setup_url` 是创建时冻结的 origin
+ *  化石，部署换了地址之后那条回调就永久死了。这是安装那半场唯一的可靠退路。 */
+export function verifyGitHubAppInstallation(): Promise<GitHubAppInstallationCheck> {
+  return sessionRequest<GitHubAppInstallationCheck>(
+    "/setup/credentials/github-app/verify-installation",
+    { method: "POST" },
+  );
 }
 
 export function onboardRepositories(payload: {
