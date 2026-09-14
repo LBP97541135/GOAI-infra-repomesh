@@ -6,7 +6,10 @@
     # postgres` enables the profile of a service it is told to start - and the
     # platform api keeps it as a dependency under the platform profile.
     profiles: ["dev", "platform"]
-    image: postgres:17-alpine
+    # pgvector build of PostgreSQL 17 — same major version as the existing
+    # repomesh-postgres volume, so the data dir carries over unchanged; the
+    # only delta is the shipped `vector` extension (decision-chain RAG).
+    image: pgvector/pgvector:pg17
     # Every service here carries restart: unless-stopped because a Docker
     # engine restart otherwise leaves the whole dependency chain down with
     # nothing to pull it back up — and depends_on/service_healthy only gates
@@ -265,7 +268,9 @@
   # and is mutually exclusive with scripts/dev-up.* (both use 8100).
   console-postgres:
     profiles: ["console"]
-    image: postgres:17-alpine
+    # Same pgvector build as the platform postgres: this stack's API migrates
+    # itself on start, so the engine must ship the `vector` extension.
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     environment:
       POSTGRES_DB: repomesh

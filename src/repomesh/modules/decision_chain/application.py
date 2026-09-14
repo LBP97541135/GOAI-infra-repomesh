@@ -386,20 +386,32 @@ class DecisionChainSemanticSearchService:
     sheet matches the probe. An explicit repository scope (the classification
     pipeline's candidate slugs) acts as a hard filter first — the hybrid mode
     — so a requirement is not offered a semantically close decision on
-    repositories it never touched. The corpus is small, so ranking runs in
-    Python over the store's organization slice — the same portable,
-    dialect-free pattern ``find_similar_structural`` uses.
+    repositories it never touched.
+
+    Two ranking backends, one ordering: when the store exposes ``nearest``
+    (``PgVectorDecisionEmbeddingStore`` with the ``vector`` extension
+    installed), the ANN cut runs SQL-side over the cosine HNSW index and the
+    score is ``1 - distance``; otherwise the store's organization slice loads
+    and ranks in Python (``_cosine``) — the same portable, dialect-free
+    pattern the in-memory twin and pre-migration JSONB environments use.
+    ``min_similarity`` floors the returned scores (post-collapse, pre-Top-K):
+    a retrieval with no close history says so instead of padding to ``top_k``.
     """
 
     def __init__(
         self,
         store: DecisionEmbeddingStore,
         archived: ArchivedIssueReader | None = None,
+        *,
+        probe_limit: int = 500,
     ) -> None:
         self._store = store
         # Same contract as the structural service: None degrades to
         # "nothing is archived", and archived projects never match.
         self._archived = archived
+        # ANN candidate cut: farthest sheets the SQL side may still return
+        # before the project collapse and scope filters run in Python.
+        self._probe_limit = max(0, probe_limit)
 
     async def find_similar(
         self,
@@ -409,19 +421,41 @@ class DecisionChainSemanticSearchService:
         query_embedding: list[float],
         top_k: int = 5,
         same_repository_ids: tuple[str, ...] = (),
+        min_similarity: float = 0.0,
     ) -> list[SemanticDecisionHit]:
-        candidates = await self._store.embedded_nodes(
-            organization_id=organization_id
-        )
+        floor = min(max(min_similarity, 0.0), 1.0)
+        nearest = getattr(self._store, "nearest", None)
+        distances: dict[UUID, float] | None = None
+        if nearest is not None:
+            ann = await nearest(
+                query_embedding,
+                organization_id=organization_id,
+                limit=self._probe_limit,
+            )
+            if ann is not None:
+                distances = {
+                    node.decision_id: distance for node, distance in ann
+                }
+                candidates = [
+                    EmbeddedDecision(node=node, embedding=[]) for node, _ in ann
+                ]
+            else:
+                candidates = await self._store.embedded_nodes(
+                    organization_id=organization_id
+                )
+        else:
+            candidates = await self._store.embedded_nodes(
+                organization_id=organization_id
+            )
         scope = set(same_repository_ids)
         archived = (
             frozenset()
             if self._archived is None
             else await self._archived.archived_issue_ids()
         )
-        # Per project keep the best-matching sheet (cosine), ties to the
-        # newest — the requirement is the retrieval unit, the sheet is only
-        # the evidence of why it matched.
+        # Per project keep the best-matching sheet (cosine or ANN distance),
+        # ties to the newest — the requirement is the retrieval unit, the
+        # sheet is only the evidence of why it matched.
         best: dict[UUID, tuple[float, EmbeddedDecision]] = {}
         for hit in candidates:
             if project_id is not None and hit.node.project_id == project_id:
@@ -430,7 +464,12 @@ class DecisionChainSemanticSearchService:
                 continue
             if scope and not (scope & set(hit.node.affected_repository_ids)):
                 continue
-            score = _cosine(query_embedding, hit.embedding)
+            if distances is not None:
+                # pgvector's <=> is cosine distance; scores stay on the same
+                # similarity scale as the Python path (higher = closer).
+                score = 1.0 - distances[hit.node.decision_id]
+            else:
+                score = _cosine(query_embedding, hit.embedding)
             previous = best.get(hit.node.project_id)
             if previous is None or (
                 score,
@@ -465,7 +504,7 @@ class DecisionChainSemanticSearchService:
             key=lambda result: result.score,
             reverse=True,
         )
-        return scored[: max(0, top_k)]
+        return [hit for hit in scored if hit.score >= floor][: max(0, top_k)]
 
 
 class DecisionEmbeddingRefresher:

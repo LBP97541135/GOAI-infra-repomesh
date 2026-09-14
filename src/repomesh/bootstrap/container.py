@@ -964,13 +964,18 @@ class ApplicationContainer:
         return DecisionHistoryFromChainStore(self.decision_chain_similarity_service())
 
     def decision_embedding_store(self):
-        """L3 ``decision_embeddings`` store on the ``decision_chain`` schema."""
+        """L3 ``decision_embeddings`` store on the ``decision_chain`` schema.
 
-        from repomesh.modules.decision_chain import (
-            PostgresDecisionEmbeddingStore,
+        The pgvector subclass probes ``pg_extension`` once and degrades to the
+        inherited JSONB behaviour without the extension, so one wiring covers
+        both schema states (pre/post migration 20260914_0056).
+        """
+
+        from repomesh.modules.decision_chain.infrastructure import (
+            PgVectorDecisionEmbeddingStore,
         )
 
-        return PostgresDecisionEmbeddingStore(self.database)
+        return PgVectorDecisionEmbeddingStore(self.database)
 
     def embedding_client(self):
         """L3 embedding service; ``None`` disables semantic retrieval.

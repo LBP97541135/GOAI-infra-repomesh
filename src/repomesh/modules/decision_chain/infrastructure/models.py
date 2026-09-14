@@ -69,12 +69,14 @@ class DecisionNodeRecord(Base):
 class DecisionEmbeddingRecord(Base):
     """L3 ``decision_embeddings``: one vector per decision sheet.
 
-    The vector is stored as a JSON document (JSONB on Postgres, JSON on the
-    SQLite test twin) rather than a pgvector column. The chain is small —
-    the same "JSON column + in-memory computation is fast enough" judgment
-    the AGE decision already made — and the portable type keeps one schema
-    for both databases. pgvector stays the documented upgrade path if the
-    corpus ever reaches the scale where SQL-side ANN matters.
+    Physically a ``vector(1024)`` column on Postgres since migration
+    ``20260914_0056`` (cosine HNSW) — the upgrade path this class's earlier
+    JSONB form documented. The ORM column stays ``JSON_DOCUMENT`` on purpose:
+    the SQLite twin keeps a JSON column and pre-migration Postgres keeps
+    JSONB, so no ORM statement may bind or decode the physical Postgres
+    column — ``PgVectorDecisionEmbeddingStore`` speaks explicit
+    ``CAST(... AS vector)`` SQL for it. A provider change (new dimension) is
+    a new migration plus a re-embed, never a silent mismatch.
     """
 
     __tablename__ = "decision_embeddings"

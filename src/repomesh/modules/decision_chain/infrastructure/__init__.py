@@ -7,6 +7,7 @@ from .memory_store import (
     InMemoryDecisionEventSource,
 )
 from .models import DecisionEmbeddingRecord, DecisionNodeRecord
+from .pgvector_store import PgVectorDecisionEmbeddingStore
 from .postgres_store import (
     PostgresDecisionChainStore,
     PostgresDecisionEventSource,
@@ -18,6 +19,7 @@ __all__ = [
     "InMemoryDecisionChainStore",
     "InMemoryDecisionEmbeddingStore",
     "InMemoryDecisionEventSource",
+    "PgVectorDecisionEmbeddingStore",
     "PostgresDecisionChainStore",
     "PostgresDecisionEmbeddingStore",
     "PostgresDecisionEventSource",
