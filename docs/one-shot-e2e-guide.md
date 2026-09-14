@@ -32,7 +32,7 @@ python scripts\seed_e2e_fixtures.py
 /runner-workspaces/fixtures/checkout-web
 ```
 
-原理：api 容器以 `git clone --mirror` 克隆该路径（与克隆远端完全同一条代码路径），工作区经 `./.repomesh-workspaces` 宿主目录绑定挂载共享给 runner 容器（挂载点重映射 `/runner-workspaces` → `/workspace`，worktree 的 `.git` 指针被改写为相对路径，一份树两个容器都能用）。
+原理：api 容器以 `git clone --mirror` 克隆该路径（与克隆远端完全同一条代码路径），工作区经宿主目录绑定挂载共享给 runner 容器。宿主目录默认落在 AgentTeams 宿主共享目录（`AGENTTEAMS_HOST_SHARE_DIR`，embedded 安装即用户主目录）之下；api 视角是 `/runner-workspaces`，runner 与所有 AgentTeams worker 容器（控制器把宿主共享目录绑在每个 worker 的 `/host-share`）视角一致地是 `/host-share/.repomesh-workspaces`——runner 的 `WORKSPACE_PATH_FROM/TO` 正是这两个视角的重映射。worktree 的 `.git` 指针被改写为相对路径，一份树所有容器都能用。
 
 ## 3. 一键启动完整平台（含 Runner）
 

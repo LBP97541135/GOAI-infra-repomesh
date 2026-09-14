@@ -55,6 +55,13 @@ implementation depends on it.
 - Runner local state is a lease and cache, never the only copy of a durable result.
 - Immutable context and artifacts use separate logical buckets or prefixes with URI and hash
   references in RepoMesh.
+- Runner workspaces are prepared under a host directory that lives **inside the AgentTeams host
+  share** (`AGENTTEAMS_HOST_SHARE_DIR`, embedded installs default to the user home). The controller
+  binds that directory into the Manager and every docker-mode Worker container at the fixed
+  `/host-share` mount point, so one prepared worktree is reachable at
+  `/host-share/.repomesh-workspaces/<run>` from the Runner and every Worker, while the api container
+  keeps its own `/runner-workspaces` view; the Runner's
+  `REPOMESH_RUNNER_WORKSPACE_PATH_FROM/TO` remaps between the two views.
 - Credentials are resolved from scoped references at runtime and never serialized into Runtime v1
   messages, context files, Matrix messages, or logs.
 

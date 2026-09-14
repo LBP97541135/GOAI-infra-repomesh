@@ -171,7 +171,7 @@ class RepositoryDiscoveryService:
                     repository_id=profile.id,
                     matched_terms=(),
                     score=0.0,
-                    rationale="User-specified entry point",
+                    rationale="用户指定的入口仓库",
                     is_entry_point=True,
                     low_signal=self._low_signal(profile),
                 )
@@ -226,7 +226,7 @@ class RepositoryDiscoveryService:
                     repository_id=profile.id,
                     matched_terms=(),
                     score=score,
-                    rationale=str(candidate.get("rationale", "LLM recommendation")),
+                    rationale=str(candidate.get("rationale", "模型推荐")),
                     low_signal=self._low_signal(profile),
                 )
             )
@@ -284,7 +284,7 @@ class RepositoryDiscoveryService:
                     repository_id=profile.id,
                     matched_terms=matched,
                     score=round(score, 4),
-                    rationale=f"Matched repository signals: {', '.join(matched)}",
+                    rationale=f"匹配到仓库信号：{', '.join(matched)}",
                     low_signal=self._low_signal(profile),
                 )
             )
@@ -310,7 +310,9 @@ def _build_discovery_prompt(
             "role": "system",
             "content": (
                 "Select repositories that may require code changes. Return only a JSON array "
-                "of objects with repository, confidence, and rationale fields. Prefer recall."
+                "of objects with repository, confidence, and rationale fields. "
+                "rationale 必须用中文说明该仓库入选/相关的理由（面向业务人员，不复述仓库名）。"
+                "Prefer recall."
             ),
         },
         {

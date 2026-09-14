@@ -85,6 +85,19 @@ export async function archiveIssue(issueId: string): Promise<void> {
   await defaultClient().archiveIssue(issueId);
 }
 
+export interface IssuePurgeReceipt {
+  snapshots: number;
+  decision_chain_nodes: number;
+  audit_events: number;
+}
+
+/** 彻底清除（2026-09-08 用户裁决）：**不可逆**——硬删除已归档 issue 的快照、
+ *  决策链与审计事件（保留一条 IssuePurged 审计）。仅对已归档 issue 可用
+ *  （后端 409 兜底）；replay 模式由调用方在页面层挡掉。 */
+export async function purgeIssue(issueId: string): Promise<IssuePurgeReceipt> {
+  return defaultClient().purgeIssue(issueId);
+}
+
 /** 需求文档真实上传（与 createIssue 同源鉴权）：把 .txt/.md/.docx/.pdf/.odt/.rtf
  *  解析成纯文本，由弹窗填入需求区继续编辑。回放模式同样可用——解析只读后端，
  *  不写任何数据，不篡改夹具世界。 */

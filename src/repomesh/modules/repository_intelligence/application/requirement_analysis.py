@@ -46,6 +46,12 @@ class RequirementAnalysis:
     missing_dimensions: list[str] = field(default_factory=list)
     questions: list[str] = field(default_factory=list)
     extracted_keywords: list[str] = field(default_factory=list)
+    #: 四维度（业务场景/行为描述/变更类型/技术约束）逐项判定：name/covered/note。
+    #: 旧快照与解析失败时为空列表——展开面板按缺失渲染，不编造。
+    dimensions: list[dict[str, object]] = field(default_factory=list)
+    #: 一句话提炼的核心需求（issue 列表的标题锚点）。空串 = 模型没给出，
+    #: 读模型退回截断方案——宁要诚实的截断，不要编造的总结。
+    suggested_title: str = field(default="")
 
 
 # ---------------------------------------------------------------------------
@@ -101,9 +107,18 @@ _SYSTEM_PROMPT = (
     "{\n"
     '  "sufficient": true 或 false,\n'
     '  "confidence": 0.0 到 1.0 的浮点数,\n'
+    '  "dimensions": [\n'
+    '    {"name": "业务场景", "covered": true, "note": "一句话判定依据或缺失原因"},\n'
+    '    {"name": "行为描述", "covered": true, "note": "……"},\n'
+    '    {"name": "变更类型", "covered": true, "note": "……"},\n'
+    '    {"name": "技术约束", "covered": false, "note": "未提及（可选维度，缺失不算不足）"}\n'
+    '  ],\n'
     '  "missing_dimensions": ["缺失的维度名称"],\n'
     '  "questions": ["用业务语言提问的追问，最多3个"],\n'
-    '  "extracted_keywords": ["从需求中提取的关键业务词"]\n'
+    '  "extracted_keywords": ["从需求中提取的关键业务词"],\n'
+    '  "suggested_title": "用一句话提炼这份需求的核心目标（20字以内，\n'
+    '     不带句号、不带「实现」「完成」这类空词）。需求可能是一篇长文档，\n'
+    '     你要从全文提炼，不要照抄开头"\n'
     "}"
 )
 
@@ -171,6 +186,16 @@ def _parse_analysis(
         str(d) for d in data.get("missing_dimensions", []) if isinstance(d, str)
     ]
 
+    dimensions = [
+        {
+            "name": str(item.get("name", "")).strip(),
+            "covered": bool(item.get("covered", False)),
+            "note": str(item.get("note", "")),
+        }
+        for item in data.get("dimensions", [])
+        if isinstance(item, dict) and str(item.get("name", "")).strip()
+    ]
+
     questions = [
         str(q) for q in data.get("questions", []) if isinstance(q, str)
     ]
@@ -179,10 +204,17 @@ def _parse_analysis(
         str(k) for k in data.get("extracted_keywords", []) if isinstance(k, str)
     ]
 
+    # 与 questions/keywords 同一规矩：非字符串直接丢弃。标题不是引文，
+    # 截到 60 字符防止模型把摘要当标题回传。
+    raw_title = data.get("suggested_title")
+    suggested_title = raw_title.strip()[:60] if isinstance(raw_title, str) else ""
+
     return RequirementAnalysis(
         sufficient=sufficient,
         confidence=round(confidence, 4),
         missing_dimensions=missing_dimensions,
         questions=questions[:3],  # Cap at 3.
         extracted_keywords=extracted_keywords,
+        dimensions=dimensions,
+        suggested_title=suggested_title,
     )

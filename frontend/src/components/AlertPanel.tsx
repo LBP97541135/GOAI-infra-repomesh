@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { BellRing, X } from "lucide-react";
 import { defaultClient } from "../api/client";
 import type {
   AlertEvent,
@@ -28,16 +29,19 @@ const OP_LABEL: Record<string, string> = { lt: "低于", gt: "高于" };
 const eventTimeFull = (iso: string) =>
   `${dayLabel(iso)} ${eventTime(iso)}`;
 
-/** 顶部横幅：正在 firing、未解决的告警。无告警时不渲染任何东西。 */
+/** 告警浮窗（2026-09-08 用户裁决：替换原大框横幅）：右下角轻量浮窗，
+ *  触发时弹出、8 秒自动淡出（同一批告警只弹一次，新告警会再弹）、
+ *  点击浮窗跳告警板块页看详情，✕ 手动关闭。无告警时不渲染。 */
 export function ActiveAlertBanner() {
   const [active, setActive] = useState<AlertEvent[]>([]);
+  const [dismissedSig, setDismissedSig] = useState<string | null>(null);
 
   const load = useCallback(() => {
     defaultClient()
       .activeAlerts()
       .then((res) => setActive(res.events))
       .catch(() => {
-        /* 轮询失败静默：横幅消失只是少一条提示，不打断页面 */
+        /* 轮询失败静默：浮窗消失只是少一条提示，不打断页面 */
       });
   }, []);
 
@@ -47,35 +51,44 @@ export function ActiveAlertBanner() {
     return () => window.clearInterval(t);
   }, [load]);
 
-  if (active.length === 0) return null;
+  const sig = active.map((e) => e.id).join(",");
+  const visible = active.length > 0 && dismissedSig !== sig;
+
+  // 8 秒自动淡出；同一签名只弹一次（ dismissed 记住的是「看过哪一批」）
+  useEffect(() => {
+    if (!visible) return;
+    const t = window.setTimeout(() => setDismissedSig(sig), 8000);
+    return () => window.clearTimeout(t);
+  }, [visible, sig]);
+
+  if (!visible) return null;
 
   return (
-    <div className="mt-4 rounded-hard border border-salmon/50 bg-salmon/10 px-4 py-3">
-      <div className="flex items-center gap-2">
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-salmon" />
-        <span className="eyebrow text-salmon">在线告警 · {active.length} 条未恢复</span>
+    <div
+      onClick={() => {
+        window.location.hash = "#/observe/alerts";
+      }}
+      title="点击查看告警详情"
+      className="fixed right-4 bottom-4 z-40 w-[260px] cursor-pointer rounded-[8px] border border-salmon/40 bg-panel px-3 py-2.5 shadow-[0_2px_10px_rgba(24,24,27,0.08)] transition-colors hover:border-salmon/60"
+    >
+      <div className="flex items-center gap-1.5">
+        <BellRing size={12} strokeWidth={1.5} className="flex-none animate-pulse text-salmon" />
+        <span className="text-[11.5px] font-semibold text-salmon">在线告警 · {active.length} 条未恢复</span>
         <button
-          onClick={() =>
-            defaultClient()
-              .evaluateAlerts()
-              .then((res) => setActive(res.events))
-              .catch(() => undefined)
-          }
-          className="ml-auto rounded border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:text-tx"
+          onClick={(e) => {
+            e.stopPropagation();
+            setDismissedSig(sig);
+          }}
+          title="关闭提醒"
+          className="ml-auto grid size-4 place-items-center rounded text-tx3 transition-colors hover:bg-side-active/60 hover:text-tx"
         >
-          立即评估
+          <X size={11} strokeWidth={1.5} />
         </button>
       </div>
-      <div className="mt-2 space-y-1">
-        {active.map((e) => (
-          <div key={e.id} className="flex items-baseline justify-between gap-3">
-            <span className="text-[12px] text-tx">{e.message}</span>
-            <span className="shrink-0 font-mono text-[10.5px] text-tx3">
-              {eventTimeFull(e.triggered_at)}
-            </span>
-          </div>
-        ))}
-      </div>
+      <p className="mt-1 truncate text-[11px] text-tx2" title={active[0]?.message}>
+        {active[0]?.message}
+        {active.length > 1 ? ` 等 ${active.length} 条` : ""}
+      </p>
     </div>
   );
 }

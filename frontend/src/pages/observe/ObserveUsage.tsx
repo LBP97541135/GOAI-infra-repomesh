@@ -35,7 +35,7 @@ const usd = (n: number) => (n >= 0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(6)}`)
 
 function MetricCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-hard border border-line bg-panel px-4 py-3">
+    <div className="rounded-[8px] border border-line bg-panel px-4 py-3">
       <div className="eyebrow text-tx2">{label}</div>
       <div className="mt-1 font-mono text-[18px] leading-tight text-cream" title={hint}>
         {value}

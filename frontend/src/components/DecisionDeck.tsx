@@ -1,4 +1,5 @@
 import type { Decision, DecisionKind } from "../types";
+import { ChevronDown, Rows3 } from "lucide-react";
 
 /** 决策夹：VARIADEX 档案柜隐喻。待决策事项是牛皮纸文件夹，堆叠收在输入框后方，
  *  彩色标签错位露头；点后排置顶、可整堆收起、处理完即消化移除。deck 末位为最前。 */
@@ -35,7 +36,7 @@ export function DecisionDeck({
       className={`inline-flex items-center gap-[7px] rounded-t-hard ${folderFace} border-b-0 ml-1 px-3.5 pt-[5px] pb-[9px] font-mono text-[12px] font-bold tracking-[0.04em] text-on-kraft hover:bg-kraft-hi`}
       onClick={onToggleHidden}
     >
-      <span>▤</span> {deck.length} 项待决策 <span className="font-medium text-on-kraft-dim">{hidden ? "▴" : "▾ 收起"}</span>
+      <Rows3 size={12} strokeWidth={1.5} /> {deck.length} 项待决策 <span className="font-medium text-on-kraft-dim">{hidden ? "展开" : "收起"}<ChevronDown size={11} strokeWidth={1.5} className={hidden ? "-rotate-90" : ""} /></span>
     </button>
   );
 

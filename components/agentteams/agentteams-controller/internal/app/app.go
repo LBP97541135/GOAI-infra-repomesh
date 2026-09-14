@@ -546,7 +546,7 @@ func (a *App) initReconcilers(_ context.Context) error {
 	if a.remoteClientCache != nil {
 		remoteDynamicClientProvider = a.remoteClientCache
 	}
-	if _, err := (&controller.WorkerReconciler{
+	workerReconciler := &controller.WorkerReconciler{
 		Client:                      a.mgr.GetClient(),
 		Provisioner:                 a.provisioner,
 		Deployer:                    a.deployer,
@@ -565,7 +565,14 @@ func (a *App) initReconcilers(_ context.Context) error {
 		WorkerDepsStorageEndpoint:   a.cfg.WorkerDepsStorageEndpoint,
 		MountAuthType:               a.cfg.WorkerDepsMountAuthType,
 		MountRoleName:               a.cfg.WorkerDepsMountRoleName,
-	}).SetupWithManager(a.mgr); err != nil {
+	}
+	// Embedded docker mode only: workers share the host directory at
+	// /host-share exactly like the Manager container does. In k8s mode this
+	// stays empty so no HostPath volume is ever created.
+	if a.cfg.KubeMode == "embedded" {
+		workerReconciler.DockerHostShareDir = a.cfg.HostShareDir
+	}
+	if _, err := workerReconciler.SetupWithManager(a.mgr); err != nil {
 		return fmt.Errorf("setup WorkerReconciler: %w", err)
 	}
 

@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID, uuid4
 
-from sqlalchemy import desc, select, update
+from sqlalchemy import delete, desc, select, update
 from sqlalchemy.exc import IntegrityError
 
 from repomesh.modules.repository_intelligence.contracts import (
@@ -243,6 +243,20 @@ class PlanSnapshotStore:
         """Get the next available plan_version for a project (starts at 1)."""
         latest = await self.get_latest(project_id)
         return (latest.plan_version + 1) if latest else 1
+
+    async def delete_for_project(self, project_id: UUID) -> int:
+        """彻底清除（2026-09-08 用户裁决）：硬删除该项目的全部计划快照。
+
+        Only the purge flow calls this — archive keeps snapshots by design,
+        so a non-zero count here means the data is gone for good."""
+
+        async with self._database.transaction() as session:
+            result = await session.execute(
+                delete(PlanSnapshotRecord).where(
+                    PlanSnapshotRecord.project_id == project_id
+                )
+            )
+        return int(result.rowcount or 0)
 
     async def link_execution_plan(
         self, snapshot_id: UUID, execution_plan_id: UUID

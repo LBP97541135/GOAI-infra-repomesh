@@ -172,6 +172,15 @@ export function createApiClient(config: ApiClientConfig) {
         `/issues/${encodeURIComponent(issueId)}/archive`,
       ),
 
+    /** 彻底清除（2026-09-08 用户裁决）：硬删除已归档 issue 的快照、决策链与
+     *  审计事件——只保留一条 IssuePurged 审计。不可逆；409 未归档。 */
+    purgeIssue: (issueId: string) =>
+      request<{ snapshots: number; decision_chain_nodes: number; audit_events: number }>(
+        config,
+        "POST",
+        `/issues/${encodeURIComponent(issueId)}/purge`,
+      ),
+
     /** 契约 v0.3 §1：创建 issue（= 首份虚拟草稿快照）。201 首建 / 200 幂等重放，
      *  响应都是 §2 单条投影；403 主体非活跃 Org Leader、404 主体不存在。 */
     createIssue: (payload: IssueIntakeRequest) =>

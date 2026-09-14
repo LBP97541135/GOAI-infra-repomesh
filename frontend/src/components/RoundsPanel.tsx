@@ -5,6 +5,7 @@ import type {
   IssueRoundView,
   RollbackScopeView,
 } from "../api/contract";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { Decision } from "../types";
 import {
   PHASE_SKIN,
@@ -162,7 +163,7 @@ export function RoundsPanel({
                   </button>
                 )}
                 <button className="flex-none font-mono text-[10.5px] text-tx2" onClick={() => onToggleRound(round)}>
-                  {open ? "▾ 收起" : "决策 ›"}
+                  {open ? "收起" : "决策"}{open ? <ChevronDown size={11} strokeWidth={1.5} /> : <ChevronRight size={11} strokeWidth={1.5} />}
                 </button>
               </div>
 

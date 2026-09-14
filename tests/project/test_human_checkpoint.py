@@ -17,7 +17,11 @@ from repomesh.modules.project.contracts import (
     HumanReviewStatus,
     ProjectAgentTopologyView,
 )
-from repomesh.modules.project.domain import ProjectTopologyError, ProjectTopologyViolation
+from repomesh.modules.project.domain import (
+    HumanReviewRequest,
+    ProjectTopologyError,
+    ProjectTopologyViolation,
+)
 from repomesh.modules.project.infrastructure import (
     InMemoryHumanReviewRequestStore,
     InMemoryProjectCheckpointDecisionStore,
@@ -229,3 +233,81 @@ async def test_review_request_can_only_be_decided_once() -> None:
     await service.record(command)
     with pytest.raises(ProjectTopologyError, match="already decided"):
         await service.record(command)
+
+
+def _drifted_auto_topology() -> ProjectAgentTopologyView:
+    """政策漂移后的档案：单据开立时卡点启用，其后项目重建为 auto、
+    卡点清空、授权人清空（2026-09-14 生产实证：26 张 pending 全部锁死）。"""
+    return ProjectAgentTopologyView(
+        id=uuid4(),
+        organization_id=uuid4(),
+        project_id=uuid4(),
+        organization_leader_id=uuid4(),
+        repository_teams=(),
+        execution_mode=ProjectExecutionMode.AUTO,
+        required_checkpoints=frozenset(),
+        human_grants=(),
+    )
+
+
+async def _stale_pending_request(service, project):
+    request = await service._reviews.ensure(
+        HumanReviewRequest(
+            project_id=project.project_id,
+            checkpoint=ProjectCheckpoint.EXCEPTION_ESCALATION,
+            evidence_version="esc-v1",
+            title="异常升级",
+            summary="Agent 已到达人工控制检查点，后续受控操作已暂停。",
+        )
+    )
+    return request
+
+
+@pytest.mark.asyncio
+async def test_stale_policy_request_is_resolvable_by_admin() -> None:
+    project = _drifted_auto_topology()
+    reviews = InMemoryHumanReviewRequestStore()
+    service = ProjectCheckpointService(
+        TopologyReader(project), InMemoryProjectCheckpointDecisionStore(), reviews
+    )
+    stale = await _stale_pending_request(service, project)
+    admin_id = uuid4()
+
+    decision = await service.record(
+        RecordCheckpointDecisionCommand(
+            project_id=project.project_id,
+            review_request_id=stale.id,
+            human_principal_id=admin_id,
+            decision=CheckpointDecisionKind.APPROVED,
+            reason="历史旁路清偿",
+            actor_is_admin=True,
+        )
+    )
+
+    assert decision.decision is CheckpointDecisionKind.APPROVED
+    resolved = await reviews.list_all(status=HumanReviewStatus.APPROVED)
+    assert len(resolved) == 1
+    assert resolved[0].resolved_by_human_id == admin_id
+
+
+@pytest.mark.asyncio
+async def test_stale_policy_request_stays_blocked_for_non_admin() -> None:
+    project = _drifted_auto_topology()
+    reviews = InMemoryHumanReviewRequestStore()
+    service = ProjectCheckpointService(
+        TopologyReader(project), InMemoryProjectCheckpointDecisionStore(), reviews
+    )
+    stale = await _stale_pending_request(service, project)
+
+    with pytest.raises(ProjectTopologyViolation, match="checkpoint is not enabled"):
+        await service.record(
+            RecordCheckpointDecisionCommand(
+                project_id=project.project_id,
+                review_request_id=stale.id,
+                human_principal_id=uuid4(),
+                decision=CheckpointDecisionKind.APPROVED,
+                reason="非管理员不应清偿漂移单据",
+                actor_is_admin=False,
+            )
+        )
+    assert await reviews.list_all(status=HumanReviewStatus.PENDING)

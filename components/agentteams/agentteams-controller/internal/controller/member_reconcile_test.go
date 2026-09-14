@@ -158,6 +158,90 @@ func TestCreateMemberContainerDoesNotAddDockerHostGatewayForK8s(t *testing.T) {
 	}
 }
 
+func TestCreateMemberContainerAddsDockerHostShare(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "docker"
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner:        mocks.NewMockProvisioner(),
+		EnvBuilder:         mocks.NewMockEnvBuilder(),
+		DockerHostShareDir: `C:\Users\PC`,
+	}, MemberContext{
+		Name: "alice",
+		Spec: v1beta1.WorkerSpec{Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	want := []backend.VolumeMount{{HostPath: `C:\Users\PC`, ContainerPath: "/host-share"}}
+	if len(req.Volumes) != 1 || req.Volumes[0] != want[0] {
+		t.Fatalf("Volumes=%v, want %v", req.Volumes, want)
+	}
+}
+
+func TestCreateMemberContainerOmitsHostShareWhenUnset(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "docker"
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner: mocks.NewMockProvisioner(),
+		EnvBuilder:  mocks.NewMockEnvBuilder(),
+	}, MemberContext{
+		Name: "alice",
+		Spec: v1beta1.WorkerSpec{Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	if len(req.Volumes) != 0 {
+		t.Fatalf("Volumes=%v, want empty when DockerHostShareDir is unset", req.Volumes)
+	}
+}
+
+func TestCreateMemberContainerDoesNotAddHostShareForK8s(t *testing.T) {
+	wb := mocks.NewMockWorkerBackend()
+	wb.NameOverride = "k8s"
+	state := &MemberState{
+		ProvResult: &service.WorkerProvisionResult{MatrixToken: "token"},
+	}
+
+	_, err := createMemberContainer(context.Background(), MemberDeps{
+		Provisioner:        mocks.NewMockProvisioner(),
+		EnvBuilder:         mocks.NewMockEnvBuilder(),
+		DockerHostShareDir: `C:\Users\PC`,
+	}, MemberContext{
+		Name: "alice",
+		Spec: v1beta1.WorkerSpec{Image: "img:latest"},
+	}, state, wb)
+	if err != nil {
+		t.Fatalf("createMemberContainer failed: %v", err)
+	}
+
+	req, ok := wb.LastCreateReq()
+	if !ok {
+		t.Fatal("expected backend Create to be called")
+	}
+	if len(req.Volumes) != 0 {
+		t.Fatalf("Volumes=%v, want empty for k8s backend", req.Volumes)
+	}
+}
+
 func TestReconcileMemberExposeSkipsUnsupportedGatewayProvider(t *testing.T) {
 	current := []v1beta1.ExposedPortStatus{{Port: 8088, Domain: "console.example.com"}}
 	prov := mocks.NewMockProvisioner()

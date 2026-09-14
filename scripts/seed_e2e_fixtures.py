@@ -3,11 +3,12 @@
 The compose stack's repositories are registered with URLs that are *paths
 inside the api container* (``/runner-workspaces/fixtures/<name>``): the
 platform's GitWorktreeManager clones them with ``git clone --mirror`` exactly
-as it would clone a remote, and the bind mount
-``./.repomesh-workspaces -> /runner-workspaces`` makes the same tree visible to
-the runner container at ``/workspace``. This script creates those fixture
-repositories on the host, idempotently: an existing repository with a ``main``
-branch is left untouched, so re-running a dev stack never rewrites history.
+as it would clone a remote, and the bind mount of the host workspace root into
+the stack makes the same tree visible to the runner and every worker container
+at the shared ``/host-share/.repomesh-workspaces`` view. This script creates
+those fixture repositories on the host, idempotently: an existing repository
+with a ``main`` branch is left untouched, so re-running a dev stack never
+rewrites history.
 
 Each fixture is a small real codebase — module plus passing tests — because the
 execution plane clones it, materializes a worktree, and runs the coding agent
@@ -17,6 +18,7 @@ inside it; an empty repository would make every step after the clone a no-op.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -110,8 +112,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--workspace-root",
-        default=".repomesh-workspaces",
-        help="Host workspace root bind-mounted into the stack (default: .repomesh-workspaces)",
+        default=os.environ.get("AGENTTEAMS_HOST_SHARE_DIR", ".") + "/.repomesh-workspaces",
+        help="Host workspace root bind-mounted into the stack "
+        "(default: $AGENTTEAMS_HOST_SHARE_DIR/.repomesh-workspaces, else ./.repomesh-workspaces)",
     )
     arguments = parser.parse_args()
     if sys.platform == "win32":

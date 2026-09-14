@@ -58,8 +58,54 @@ function tierOfMode(mode: ProjectExecutionMode): PolicyTier {
   return mode === "manual_controlled" ? "every_step" : "key_points";
 }
 
-/** 一份草稿的摘要。**卡片与物化弹窗共用这一个渲染**（§3.2 与 §3.3 是同一份策略的
- *  两次露出），两处各写一份就会出现「卡片说三个卡点、弹窗说两个」这种同屏矛盾。 */
+/** 卡点芯片（卡片与弹窗共用）：按流程先后定序 + 惰性/强制标注。 */
+function CheckpointChips({ ordered }: { ordered: readonly string[] }) {
+  return (
+    <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
+      {ordered.map((checkpoint) => {
+        // 「规格」当前没有可达的触发点（设计文档 §4.3.1 三环查证）。勾了也不会停
+        // ——把它和真会停的卡点画成同一个样子，就是在这张摘要上撒谎。
+        const inert = checkpoint === "specification";
+        const forced = checkpoint === "exception_escalation";
+        return (
+          <span
+            key={checkpoint}
+            className={`rounded-hard border px-2 py-px text-[11px] ${
+              inert ? "border-line text-tx3" : "border-amber text-amber"
+            }`}
+            title={checkpoint}
+          >
+            {checkpointLabel(checkpoint)}
+            {forced && <span className="text-tx3">（强制）</span>}
+            {inert && <span>（当前无触发点）</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** 卡片上的精简摘要（2026-09-14 用户裁决）：档位名 + 卡点数 + 芯片。
+ *  审核人明细只在弹窗（{@link PolicyDigest}）露出，卡片不再重复。 */
+export function PolicySlimDigest({ draft }: { draft: TopologyPolicyDraftView }) {
+  const ordered = orderCheckpoints(draft.required_checkpoints);
+  return (
+    <>
+      <p className="text-[12.5px] leading-[1.7] text-tx">
+        <b className="text-cream">{POLICY_TIER_TITLE[tierOfMode(draft.execution_mode)]}</b>
+        <span className="text-tx2">
+          {" · "}
+          {ordered.length === 0 ? "没有任何人工卡点" : `${ordered.length} 个人工卡点`}
+        </span>
+      </p>
+      {ordered.length > 0 && <CheckpointChips ordered={ordered} />}
+    </>
+  );
+}
+
+/** 一份草稿的摘要。**弹窗内**的完整版：档位 + 卡点芯片 + 审核人明细。
+ *  卡片上的精简版见 {@link PolicySlimDigest}（2026-09-14 用户裁决：审核人明细
+ *  只在弹窗露出，卡片不再重复——同一份策略两处两档粒度，粒度由消费场景定）。 */
 export function PolicyDigest({ draft }: { draft: TopologyPolicyDraftView }) {
   // ⚠ `required_checkpoints` 回来的是 **frozenset 的迭代顺序**（进程内哈希随机化，
   // 同一份草稿两次回读可以不一样）。渲染前一律过 `orderCheckpoints` 按流程先后定序，
@@ -77,30 +123,7 @@ export function PolicyDigest({ draft }: { draft: TopologyPolicyDraftView }) {
         </span>
       </p>
 
-      {ordered.length > 0 && (
-        <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
-          {ordered.map((checkpoint) => {
-            // 「规格」当前没有可达的触发点（设计文档 §4.3.1 三环查证：它的 evaluate 被
-            // 「非 TASK 规格」守着，而全仓唯一的发布方发的恒是 TASK 规格）。勾了也不会停
-            // ——把它和真会停的卡点画成同一个样子，就是在这张摘要上撒谎。
-            const inert = checkpoint === "specification";
-            const forced = checkpoint === "exception_escalation";
-            return (
-              <span
-                key={checkpoint}
-                className={`rounded-hard border px-2 py-px text-[11px] ${
-                  inert ? "border-line text-tx3" : "border-amber text-amber"
-                }`}
-                title={checkpoint}
-              >
-                {checkpointLabel(checkpoint)}
-                {forced && <span className="text-tx3">（强制）</span>}
-                {inert && <span>（当前无触发点）</span>}
-              </span>
-            );
-          })}
-        </div>
-      )}
+      {ordered.length > 0 && <CheckpointChips ordered={ordered} />}
 
       <div className="mt-1.5">
         {draft.human_grants.length === 0 ? (
@@ -179,19 +202,16 @@ export function SupervisionPolicyCard({
           {state.kind === "unset" && (
             <>
               {/* §3.2：这句话不是警告，是陈述——它就是不设时的真实后果。
-                  没有感叹号、没有告警色：全自动是默认值，不是故障。 */}
+                  没有感叹号、没有告警色：全自动是默认值，不是故障。
+                  2026-09-14 用户裁决：一句陈述即可，解释段落删掉——「为什么要在
+                  物化前设」属于弹窗内的上下文，不该常驻占两行。 */}
               <p className="text-[12.5px] leading-[1.75] text-tx">
                 本次将以 <b className="text-cream">全自动</b> 运行，没有任何人工卡点。
-                这个需求不会产生任何审核待办。
-              </p>
-              <p className="mt-1 text-[11px] leading-[1.7] text-tx3">
-                要设就在按「物化并开工」之前：首次物化时后端会按这里的设定建出项目档案，
-                而全仓没有任何更新档案的端点——过了那一步，这个需求的监管策略就定死了。
               </p>
             </>
           )}
 
-          {state.kind === "set" && <PolicyDigest draft={state.draft} />}
+          {state.kind === "set" && <PolicySlimDigest draft={state.draft} />}
 
           {state.kind === "unauthenticated" && (
             <p className="text-[11.5px] leading-[1.7] text-tx2">

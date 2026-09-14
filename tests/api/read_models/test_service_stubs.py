@@ -41,6 +41,7 @@ from repomesh.modules.delivery.contracts import (
     SCMObservationStatus,
     SCMObservationView,
 )
+from repomesh.modules.repository_intelligence.contracts import IssueArchiveView
 from repomesh.modules.task_orchestration.contracts import (
     DeliveryRefusalView,
     ExecutionPlanStatus,
@@ -117,6 +118,23 @@ class StubArchives:
         return None
 
 
+class StubIssueArchives:
+    """Issue-grain tombstones; an empty stub composes a store-less world."""
+
+    def __init__(self, *archived: UUID) -> None:
+        self.archived = {issue_id: NOW for issue_id in archived}
+
+    async def get(self, issue_id: UUID):
+        archived_at = self.archived.get(issue_id)
+        return IssueArchiveView(issue_id=issue_id, archived_at=archived_at) if archived_at else None
+
+    async def list_all(self):
+        return tuple(
+            IssueArchiveView(issue_id=issue_id, archived_at=archived_at)
+            for issue_id, archived_at in self.archived.items()
+        )
+
+
 class _Empty:
     async def for_project(self, project_id: UUID):
         return ()
@@ -170,6 +188,7 @@ def _service(
     tasks,
     change_sets,
     archives,
+    issue_archives=None,
     repositories=None,
     runner_events=None,
     messages=None,
@@ -188,6 +207,7 @@ def _service(
         tasks=tasks,
         change_sets=change_sets,
         archives=archives,
+        issue_archives=issue_archives,
         validations=empty,
         specifications=specifications if specifications is not None else empty,
         repositories=repositories if repositories is not None else empty,

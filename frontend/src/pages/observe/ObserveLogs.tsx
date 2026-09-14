@@ -204,11 +204,11 @@ export function ObserveLogs() {
           ) : groups === null ? (
             <LoadingLine text="日志分组加载中…" className="mt-3" />
           ) : groups.issues.length === 0 ? (
-            <p className="mt-4 rounded-hard border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
+            <p className="mt-4 rounded-[8px] border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
               暂无归因日志 · 日志在发现链上下文内产生后会按 issue 分组出现在这里
             </p>
           ) : (
-            <div className="mt-3 divide-y divide-line rounded-hard border border-line bg-panel">
+            <div className="mt-3 divide-y divide-line rounded-[8px] border border-line bg-panel">
               {groups.issues.map((g) => (
                 <button
                   key={g.issue_id}
@@ -236,7 +236,7 @@ export function ObserveLogs() {
       ) : (
         <>
           {/* 筛选区：级别下拉 + 来源/Issue 输入 + 全文检索 */}
-      <div className="mt-4 rounded-hard border border-line bg-panel px-3.5 py-3">
+      <div className="mt-4 rounded-[8px] border border-line bg-panel px-3.5 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <select
             value={level}
@@ -297,7 +297,7 @@ export function ObserveLogs() {
       ) : data === null ? (
         <LoadingLine text="日志加载中…" className="mt-3" />
       ) : data.logs.length === 0 ? (
-        <p className="mt-4 rounded-hard border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
+        <p className="mt-4 rounded-[8px] border border-line bg-panel px-4 py-8 text-center text-[11.5px] text-tx3">
           {hasFilters ? "该筛选下暂无日志" : "暂无日志 · 进程日志经采集管道落库后在此展示"}
         </p>
       ) : (
@@ -308,7 +308,7 @@ export function ObserveLogs() {
               {data.next_cursor ? " · 还有更多页" : ""}
             </span>
           </div>
-          <div className="mt-1.5 divide-y divide-line rounded-hard border border-line bg-panel px-3.5">
+          <div className="mt-1.5 divide-y divide-line rounded-[8px] border border-line bg-panel px-3.5">
             {data.logs.map((row) => (
               <div key={row.id} className="py-2.5">
                 <div className="flex min-w-0 items-center gap-2">

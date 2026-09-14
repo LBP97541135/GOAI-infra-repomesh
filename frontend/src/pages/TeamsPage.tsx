@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { MessagesSquare } from "lucide-react";
 import type { ConsoleTeamView } from "../api/contract";
 import { fetchConsoleRepositories, fetchConsoleTeams, gridSourceMode } from "../api/grid";
 import {
@@ -121,7 +122,7 @@ function TeamCard({
             className="font-mono text-[11px] text-tx2 hover:text-amber-hi"
             onClick={() => onOpenRoom(team.issue_id, team.team_room_id!)}
           >
-            ▤ teamRoom
+            teamRoom <MessagesSquare size={11} strokeWidth={1.5} className="inline" />
           </button>
         ) : (
           <span className="text-[11px] text-tx3">teamRoom 未建</span>
@@ -131,7 +132,7 @@ function TeamCard({
             className="font-mono text-[11px] text-tx2 hover:text-amber-hi"
             onClick={() => onOpenRoom(team.issue_id, team.leader_room_id!)}
           >
-            ▤ leaderDM
+            leaderDM <MessagesSquare size={11} strokeWidth={1.5} className="inline" />
           </button>
         ) : (
           <span className="text-[11px] text-tx3">leaderDM 未建</span>

@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { DeliveryAggregate, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
+import { ChevronLeft, ChevronRight, FileText, X } from "lucide-react";
+import type { DeliveryAggregate, IssueDetailView, IssueListItemView, IssueRepositoryRef } from "../../api/contract";
 import { parseRequirementDocument } from "../../api/issues";
 import { fetchIssueDetail, fetchRooms } from "../../api/rooms";
 import {
@@ -10,6 +11,7 @@ import {
   type GovernanceAgent,
 } from "../../api/decisions";
 import { resolveDataSourceMode } from "../../api/source";
+import { fetchConsoleRepositories } from "../../api/grid";
 import {
   fetchDiscovery,
   newIdempotencyKey,
@@ -19,20 +21,31 @@ import {
   triggerPlan,
 } from "../../api/discovery";
 import type { DiscoveryView } from "../../api/contract";
-import { DiscoveryPanel } from "../../components/DiscoveryPanel";
-import { EvidenceModal } from "../../components/EvidenceModal";
+import { AssistantFlow } from "./AssistantFlow";
+import { autoTrigger } from "./autoTrigger";
+import { policyGateOf, useIssueFlowState } from "./useIssueFlowState";
+import { PlanDagCapsule } from "../../components/PlanDagCapsule";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
+import { AIChatInput } from "../../components/ui/ai-chat-input";
 import { dayLabel, errText, shortId } from "../../display";
 import type { Decision, EvidenceView } from "../../types";
-import { approvalForDecision, evidenceFromAggregate } from "../../viewmodel";
+import type { RedispatchScope, RollbackScopeView } from "../../api/contract";
+import { RedispatchModal } from "../../components/RedispatchModal";
+import { RollbackModal } from "../../components/RollbackModal";
+import { archiveRound, redispatchRound } from "../../api/decisions";
+import { submitRollback } from "../../api/rollback";
+import { approvalForDecision, dagExecutionFromAggregate, evidenceFromAggregate } from "../../viewmodel";
 import {
   buildWorkStream,
+  composeRequirementText,
   newSessionStream,
+  typedRequirementText,
   workCardAnchor,
   type RoundTaskRow,
   type WorkCard,
 } from "./streamModel";
-import { policyGateOf, useIssueFlowState } from "./useIssueFlowState";
+import { EvidenceModal } from "../../components/EvidenceModal";
+import { Modal } from "../../components/Modal";
 import { RoomPanel } from "./RoomPanel";
 
 /** IDE 式工作台（期 1 骨架 + 期 2 卡片体系）。
@@ -54,13 +67,14 @@ import { RoomPanel } from "./RoomPanel";
 
 const DOC_ACCEPT = ".txt,.md,.docx,.pdf,.odt,.rtf";
 const POLL_MS = 5000;
-/** 发现链步号 → 触发端点的幂等键前缀（与 DiscoveryPanel 同一套键位）。 */
+/** 发现链步号 → 触发端点的幂等键前缀（与发现链四步触发同一套键位）。 */
 const STEP_KEY_BY_STEP = {
   1: "analysis",
   2: "candidates",
   3: "classification",
   4: "plan",
 } as const;
+
 
 interface ActiveDeck {
   roundId: string;
@@ -74,6 +88,7 @@ export function WorkbenchPage({
   workspaceName,
   onCreateIssue,
   onOpenRoom,
+  onBack,
   onToast,
 }: {
   /** null = 新会话；否则为既有 issue 的 id */
@@ -86,6 +101,8 @@ export function WorkbenchPage({
   ) => Promise<IssueListItemView>;
   /** 右栏「⤢ 放大」：跳转全页房间视图（外壳负责路由） */
   onOpenRoom: (roomId: string) => void;
+  /** 顶栏「‹ 议题列表」：回 issue 列表（外壳负责路由）。新会话态不渲染。 */
+  onBack?: () => void;
   onToast: (text: string) => void;
 }) {
   const isNew = issueId === null;
@@ -95,7 +112,6 @@ export function WorkbenchPage({
   const [loading, setLoading] = useState(!isNew);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
-  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
   /** 静默轮询与首载的界线：换 issue 才整页 loading，轮询只换数据不闪屏 */
   const loadedIssueRef = useRef<string | null>(null);
 
@@ -135,7 +151,6 @@ export function WorkbenchPage({
         setDetail(d);
         setRooms(r);
         setLoading(false);
-        setLastSyncAt(new Date());
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -180,12 +195,14 @@ export function WorkbenchPage({
   // 再叠 reload 会造成每轮双倍请求。
   }, [isNew, detail, activeRoundId, activeRoundIndex]);
 
-  // ── 各轮任务明细（轮次卡的 tick 行） ──
+  // ── 各轮任务明细 + 回滚范围（轮次卡的 tick 行与轮次操作的数据源） ──
   const [tasksByRound, setTasksByRound] = useState<Record<string, import("../../api/contract").DeliveryTaskView[]>>({});
+  const [rollbackByRound, setRollbackByRound] = useState<Record<string, import("../../api/contract").RollbackScopeView | null>>({});
   const historyEpoch = useRef(0);
   useEffect(() => {
     if (isNew || !detail || detail.rounds.length === 0) {
       setTasksByRound({});
+      setRollbackByRound({});
       return;
     }
     const epoch = ++historyEpoch.current;
@@ -195,12 +212,13 @@ export function WorkbenchPage({
           // A6 同款：换代后在途响应不落桶
           if (epoch !== historyEpoch.current) return;
           setTasksByRound((prev) => ({ ...prev, [round.round_id]: data.tasks }));
+          setRollbackByRound((prev) => ({ ...prev, [round.round_id]: data.rollback }));
         })
         .catch(() => {
           // replay 夹具未覆盖历史轮等：该轮没有明细就明说，不摆假进度
         });
     });
-  }, [isNew, detail]);
+  }, [isNew, detail, reload]);
 
   // ── 治理决策主体（流内批准的「谁在批」） ──
   const organizationId = detail?.organization_id ?? null;
@@ -248,30 +266,19 @@ export function WorkbenchPage({
     };
   }, [showDiscovery, detail, reload]);
 
-  const autoTriggeredRef = useRef<Record<string, string>>({});
-  /** 驱动器状态上屏：触发失败/主体缺失不再静默——用户看到的「没反应」要能自解释。 */
-  const [driver, setDriver] = useState<{ status: "idle" | "fired" | "error" | "no-principal"; detail: string }>({
-    status: "idle",
-    detail: "",
-  });
   useEffect(() => {
     if (resolveDataSourceMode() === "replay") return; // 回放里写入口一律如实拒绝，不空转
     if (!discovery) return;
-    if (discovery.step_state !== "idle") {
-      if (driver.status !== "idle") setDriver({ status: "idle", detail: "" });
-      return;
-    }
-    if (!principal) {
-      // 主体还没解析出来不算错，但解析完仍为 null 必须说出口
-      if (!principalResolving) setDriver({ status: "no-principal", detail: "决策主体未接入（花名册无活跃 Org Leader），无法自动推进" });
-      return;
-    }
+    if (discovery.step_state !== "idle") return;
+    // 读投影滞后保护：任务句柄还在，就是有一步在跑——不重发（409 的根源）
+    if (discovery.running_task_id !== null) return;
+    if (!principal) return; // 解析不出主体时步骤会停住，等花名册恢复
     const key = `${discovery.issue_id}:${discovery.step}`;
-    if (autoTriggeredRef.current[key]) return; // 本 visit 已触发过（失败由面板的重试入口接管，避免循环开火）
-    autoTriggeredRef.current[key] = newIdempotencyKey(STEP_KEY_BY_STEP[discovery.step]);
+    if (autoTrigger.has(key)) return; // 本 visit 已触发过（失败由 FailLine 的重试入口接管，避免循环开火）
+    autoTrigger.set(key, newIdempotencyKey(STEP_KEY_BY_STEP[discovery.step]));
     const payload = {
       created_by_agent_id: principal.agentId,
-      idempotency_key: autoTriggeredRef.current[key],
+      idempotency_key: autoTrigger.get(key)!,
     };
     const fire =
       discovery.step === 1
@@ -281,57 +288,130 @@ export function WorkbenchPage({
           : discovery.step === 3
             ? triggerClassification(discovery.issue_id, payload)
             : triggerPlan(discovery.issue_id, payload);
-    setDriver({ status: "fired", detail: `已发起第 ${discovery.step} 步` });
-    fire.catch((err: unknown) => {
-      // 触发失败上屏：409/422/网络错都原样给，不再让人对着「待开始」猜
-      setDriver({ status: "error", detail: `第 ${discovery.step} 步自动触发失败：${errText(err)}` });
+    fire.catch(() => {
+      // 失败后读模型会把步进器打成 failed（FailLine 给原因与重试入口）；
+      // 清掉记录让「重试」能用新键重跑
+      autoTrigger.delete(key);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [discovery, principal, principalResolving]);
+  }, [discovery, principal]);
 
-  const discoveryCard =
-    showDiscovery && detail ? (
-      <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card">
-        <div className="mb-1.5 flex items-baseline gap-2">
-          <span className="microlabel">处理员 · 自动推进</span>
-          <span className="text-[10.5px] text-tx2">
-            {discovery
-              ? discovery.step_state === "idle"
-                ? discovery.step === 3
-                  ? "等待分档审批"
-                  : "即将开始下一步"
-                : discovery.step_state === "running"
-                  ? "正在处理…"
-                  : discovery.step_state === "failed"
-                    ? "出错（见下方面板的重试入口）"
-                    : "已完成"
-              : "准备中…"}
-          </span>
-          {driver.status === "error" && (
-            <span className="min-w-0 truncate text-[10.5px] text-salmon" title={driver.detail}>
-              {driver.detail}
-            </span>
-          )}
-          {driver.status === "no-principal" && (
-            <span className="text-[10.5px] text-salmon">{driver.detail}</span>
-          )}
-        </div>
-        <DiscoveryPanel
-          issueId={detail.issue_id}
-          issueTitle={detail.title}
-          organizationId={detail.organization_id}
-          onToast={onToast}
-          onPlanGenerated={() => setReload((n) => n + 1)}
-          onCandidateAnchor={flow.handleCandidateAnchor}
-          materialize={flow.materialize}
-          policyGate={policyGateOf(flow.supervision)}
-          onMaterialized={() => {
-            setReload((n) => n + 1);
-            flow.reloadPlan();
-          }}
-        />
-      </div>
-    ) : null;
+  // ── 审批可见性：分档门上摆出每个仓库的地址 host，占位域名一眼可见 ──
+  const [repoHosts, setRepoHosts] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!showDiscovery) return;
+    let cancelled = false;
+    fetchConsoleRepositories()
+      .then((repos) => {
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const r of repos) {
+          try {
+            map[r.name] = new URL(r.url).host;
+          } catch {
+            map[r.name] = r.url;
+          }
+        }
+        setRepoHosts(map);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [showDiscovery]);
+
+  // ── 处理员对话组（纯对话式定稿：卡片与大面板均已退役）──
+  const clarifyPending =
+    !!discovery &&
+    discovery.analysis !== null &&
+    !discovery.analysis.sufficient &&
+    discovery.analysis.questions.length > 0;
+  const [clarifySending, setClarifySending] = useState(false);
+
+  // ── 顶部折叠 DAG 条（期 4）：计划 DAG 由悬浮胶囊承载（PlanDagCapsule，
+  //    2026-09-08 用户确认保留胶囊形态）──
+  /** 八相 → 四阶段进度点（规划/执行/审核/交付）。failed 不点亮进度，由 phase 标签自己说话。 */
+  const stageOfPhase = (phase: IssueDetailView["phase"]): number => {
+    switch (phase) {
+      case "contract":
+      case "plan":
+        return 0;
+      case "execute":
+        return 1;
+      case "validate":
+        return 2;
+      case "release":
+      case "delivered":
+        return 3;
+      default:
+        return -1;
+    }
+  };
+  const STAGES = ["规划", "执行", "审核", "交付"] as const;
+  /** 阶段点 → 对话流锚点：规划落在计划卡，其余落在当前轮次卡，交付落回阶段卡。 */
+  const stageAnchor = (stage: number): string => {
+    if (stage === 0) return "work-card-plan";
+    if (stage === 3) return "work-card-phase";
+    return `work-card-round-${Math.max(activeRoundIndex, 1)}`;
+  };
+  const scrollToCard = (anchorId: string) => {
+    document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  const handleRetryStep = (step: 1 | 2 | 3 | 4) => {
+    if (!detail) return;
+    if (resolveDataSourceMode() === "replay") {
+      onToast("回放模式不写后端：失败重试同样是一次真实触发，加 ?source=live 后可执行。");
+      return;
+    }
+    if (!principal) {
+      onToast("决策主体未接入，无法重试。");
+      return;
+    }
+    // 失败步的投影是 failed 不是 idle，而驱动器的第一道闸就是「非 idle 不开火」——
+    // 「清防重发表 + 刷新等驱动器重发」等的是一个永远不会来的信号（重试失灵的根源）。
+    // 这里换新幂等键**直接**重发：failed 态意味着没有在跑的任务，single-flight 不会拦；
+    // 先占住键，窗口期里投影即便短暂回到 idle，驱动器也会被防重发表挡住、不会双发。
+    const key = `${detail.issue_id}:${step}`;
+    autoTrigger.set(key, newIdempotencyKey(STEP_KEY_BY_STEP[step]));
+    const payload = {
+      created_by_agent_id: principal.agentId,
+      idempotency_key: autoTrigger.get(key)!,
+    };
+    const fire =
+      step === 1
+        ? triggerAnalysis(detail.issue_id, payload)
+        : step === 2
+          ? triggerCandidates(detail.issue_id, payload)
+          : step === 3
+            ? triggerClassification(detail.issue_id, payload)
+            : triggerPlan(detail.issue_id, payload);
+    fire
+      .then(() => setReload((n) => n + 1))
+      .catch((err: unknown) => {
+        autoTrigger.delete(key);
+        onToast(`重试失败：${errText(err)}`);
+      });
+  };
+  /** 追问回答走底部输入框：一条回答附到全部分析问题后（服务端拼接规则唯一实现） */
+  const handleClarifySubmit = (text: string) => {
+    if (!discovery || !principal || !detail || discovery.analysis === null) return;
+    autoTrigger.delete(`${detail.issue_id}:1`);
+    setClarifySending(true);
+    triggerAnalysis(detail.issue_id, {
+      created_by_agent_id: principal.agentId,
+      idempotency_key: newIdempotencyKey("analysis"),
+      answers: [{ question: discovery.analysis.questions.join(" ／ "), answer: text }],
+    })
+      .then(() => {
+        setDraft("");
+        idempotencyKey.current = crypto.randomUUID();
+        onToast("已回答，处理员继续分析");
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => onToast(`提交回答失败：${errText(err)}`))
+      .finally(() => setClarifySending(false));
+  };
 
   const cards: WorkCard[] = isNew
     ? newSessionStream(workspaceName)
@@ -344,7 +424,7 @@ export function WorkbenchPage({
   useEffect(() => {
     if (loading || error) return;
     if (nearBottomRef.current) scrollToBottom();
-  }, [loading, error, cards.length, lastSyncAt]);
+  }, [loading, error, cards.length]);
 
   // ── 右栏（期 3 接房间数据；本期先做壳与开合） ──
   const [panelRepo, setPanelRepo] = useState<(IssueRepositoryRef & { roomId: string | null }) | null>(null);
@@ -411,12 +491,134 @@ export function WorkbenchPage({
     setEvidenceOpen(true);
   };
 
+  // ── 轮次操作（期 5）：重新派工 / 归档 / 回滚 ──
+  const [redispatch, setRedispatch] = useState<{
+    open: boolean;
+    roundId: string | null;
+    roundLabel: string;
+    tasks: import("../../api/contract").DeliveryTaskView[];
+    scope: RedispatchScope;
+    submitting: boolean;
+    error: string | null;
+  }>({ open: false, roundId: null, roundLabel: "", tasks: [], scope: "unfinished", submitting: false, error: null });
+  const [rollback, setRollback] = useState<{
+    open: boolean;
+    roundId: string | null;
+    roundLabel: string;
+    scope: RollbackScopeView | null;
+    submitting: boolean;
+    error: string | null;
+  }>({ open: false, roundId: null, roundLabel: "", scope: null, submitting: false, error: null });
+  /** 归档两步确认（与旧容器同一交互）：第一步只点亮「确认？」，8s 无第二击自动复位 */
+  const [archiveConfirmId, setArchiveConfirmId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!archiveConfirmId) return;
+    const timer = window.setTimeout(() => setArchiveConfirmId(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [archiveConfirmId]);
+
+  const roundLabelOf = (index: number) => `第 ${index} 轮`;
+
+  const handleRedispatchOpen = (card: Extract<WorkCard, { kind: "round" }>) => {
+    setRedispatch({
+      open: true,
+      roundId: card.roundId,
+      roundLabel: roundLabelOf(card.index),
+      tasks: tasksByRound[card.roundId] ?? [],
+      scope: "unfinished",
+      submitting: false,
+      error: null,
+    });
+  };
+  const handleRedispatchConfirm = () => {
+    if (!redispatch.roundId) return;
+    setRedispatch((prev) => ({ ...prev, submitting: true, error: null }));
+    redispatchRound(redispatch.roundId, redispatch.scope)
+      .then((receipt) => {
+        setRedispatch((prev) => ({ ...prev, open: false }));
+        onToast(
+          `已重发 ${receipt.task_ids.length} 个任务的任务包与点名` +
+            (receipt.reopened_task_ids.length > 0 ? `，${receipt.reopened_task_ids.length} 个已完成任务被送回重做` : "") +
+            "；agent 是否响应看房间事件流。",
+        );
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409（本轮无可派任务）/503（执行面接不住）——原文留在弹窗里不飘走
+        setRedispatch((prev) => ({ ...prev, error: errText(err) }));
+      })
+      .finally(() => setRedispatch((prev) => ({ ...prev, submitting: false })));
+  };
+  const handleArchive = (card: Extract<WorkCard, { kind: "round" }>) => {
+    if (archiveConfirmId !== card.roundId) {
+      setArchiveConfirmId(card.roundId);
+      return;
+    }
+    if (resolveDataSourceMode() === "replay") {
+      setArchiveConfirmId(null);
+      onToast("已归档（回放演示，未写入后端）");
+      return;
+    }
+    setArchivingId(card.roundId);
+    archiveRound(card.roundId)
+      .then(() => {
+        setArchiveConfirmId(null);
+        onToast(`${roundLabelOf(card.index)}已归档（轮次级；issue 的开关状态仍由服务端派生）`);
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => {
+        // 409 = 活跃轮次拒绝归档等，原文上 toast 不静默
+        setArchiveConfirmId(null);
+        onToast(`归档失败：${errText(err)}`);
+      })
+      .finally(() => setArchivingId(null));
+  };
+  const handleRollbackOpen = (card: Extract<WorkCard, { kind: "round" }>) => {
+    const scope = rollbackByRound[card.roundId] ?? null;
+    if (!scope) {
+      onToast("回滚范围未取到（§4.6 投影缺失或该轮无可回滚项）");
+      return;
+    }
+    setRollback({ open: true, roundId: card.roundId, roundLabel: roundLabelOf(card.index), scope, submitting: false, error: null });
+  };
+  const handleRollbackConfirm = (reason: string) => {
+    if (!rollback.roundId || !rollback.scope) return;
+    if (resolveDataSourceMode() === "replay") {
+      setRollback((prev) => ({ ...prev, error: "回放模式不写后端：回滚会关 PR、开 revert PR、动 base 分支。加 ?source=live 后可真实执行。" }));
+      return;
+    }
+    if (!principal) {
+      setRollback((prev) => ({ ...prev, error: "决策主体未接入，无法提交。" }));
+      return;
+    }
+    setRollback((prev) => ({ ...prev, submitting: true, error: null }));
+    submitRollback(rollback.roundId, rollback.scope, reason, principal.agentId)
+      .then((receipt) => {
+        setRollback((prev) => ({ ...prev, open: false }));
+        onToast(
+          receipt.replayed
+            ? "同一份回滚请求已记录过，本次为重放（后端零写入）；执行进度看房间事件流。"
+            : "回滚决策已记录，merge gate 已堵死；执行由回滚 saga 接管（每 30s 一轮），进度看房间事件流。",
+        );
+        setReload((n) => n + 1);
+      })
+      .catch((err: unknown) => setRollback((prev) => ({ ...prev, error: errText(err) })))
+      .finally(() => setRollback((prev) => ({ ...prev, submitting: false })));
+  };
+
   // ── 输入框（新会话可用；既有会话按已知缺口置灰） ──
   const [draft, setDraft] = useState("");
-  const [documentFilename, setDocumentFilename] = useState<string | null>(null);
+  /** 附件（真上传形态）：文档解析文本**不进输入框**，挂在附件位上随消息发送。
+   *  requirement_text 携带解析文本（规划要读的就是它，parse 端点截断 20k），
+   *  聊天里只显示文件卡片——点开看全文。 */
+  const [attachment, setAttachment] = useState<{ filename: string; text: string } | null>(null);
+  /** 新会话欢迎区上传卡片的拖拽高亮 */
+  const [docDragging, setDocDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const idempotencyKey = useRef(crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragDepth = useRef(0);
 
   const handleDraftChange = (text: string) => {
     setDraft(text);
@@ -426,13 +628,26 @@ export function WorkbenchPage({
   };
 
   const handleSend = () => {
-    const text = draft.trim();
-    if (!text || sending) return;
+    const typed = draft.trim();
+    if (sending) return;
+    if (!isNew) {
+      // 追问待答时，输入框属于处理员的对话：发送即提交补充，不建新 issue
+      if (!clarifyPending || !typed) return;
+      handleClarifySubmit(typed);
+      return;
+    }
+    if (!typed && !attachment) return;
+    // 文档解析文本必须随 requirement_text 交给规划（契约没有独立的文档字段），
+    // 但对话流只展示用户自己的话——分界符由 streamModel 的展示侧拆开：
+    // 没打字时气泡只留文件卡，不擅自复述文档内容。
+    const text = attachment
+      ? composeRequirementText(typed, attachment.text)
+      : typed;
     setSending(true);
-    onCreateIssue(text, idempotencyKey.current, documentFilename)
+    onCreateIssue(text, idempotencyKey.current, attachment?.filename ?? null)
       .then(() => {
         setDraft("");
-        setDocumentFilename(null);
+        setAttachment(null);
         idempotencyKey.current = crypto.randomUUID();
       })
       .catch((err: unknown) => onToast(`创建失败：${errText(err)}`))
@@ -443,10 +658,9 @@ export function WorkbenchPage({
     if (!file) return;
     parseRequirementDocument(file)
       .then((parsed) => {
-        setDraft(parsed.text);
-        setDocumentFilename(parsed.filename);
+        setAttachment({ filename: parsed.filename, text: parsed.text });
         idempotencyKey.current = crypto.randomUUID();
-        if (parsed.truncated) onToast(`文档较长，已截断为前 ${parsed.chars} 字（可继续编辑）`);
+        if (parsed.truncated) onToast(`文档较长，已截断为前 ${parsed.chars} 字`);
       })
       .catch((err: unknown) => onToast(`文档解析失败：${errText(err)}`))
       .finally(() => {
@@ -454,34 +668,142 @@ export function WorkbenchPage({
       });
   };
 
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "上午好" : hour < 18 ? "下午好" : "晚上好";
+
   return (
     <div className="flex h-full min-w-0 flex-1">
       {/* ── 中央列 ── */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* 顶部折叠 DAG 条（期 1 占位：真实阶段条与展开图在期 4 接入） */}
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {isNew ? (
+          /* ── 新会话：极简欢迎式（2026-09-08 二次裁决）——时段问候 + 居中输入框；
+             上传收进回形针，整页也接受拖拽（松开即解析）；创建后路由切会话工作台 ── */
+          <div
+            className="relative flex min-h-0 flex-1 flex-col items-center justify-center gap-5 px-6 pb-24"
+            onDragEnter={(e) => {
+              e.preventDefault();
+              dragDepth.current += 1;
+              setDocDragging(true);
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            onDragLeave={() => {
+              dragDepth.current -= 1;
+              if (dragDepth.current <= 0) setDocDragging(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              dragDepth.current = 0;
+              setDocDragging(false);
+              handlePickDocument(e.dataTransfer.files?.[0]);
+            }}
+          >
+            {docDragging && (
+              <div className="absolute inset-4 z-10 grid place-items-center rounded-[12px] border-2 border-dashed border-amber bg-panel/80">
+                <p className="text-[13px] text-tx2">松开以解析需求文档</p>
+              </div>
+            )}
+            <div className="flex flex-col items-center gap-2 text-center">
+              <h1 className="text-[19px] font-medium text-cream">{greeting}，要规划什么需求？</h1>
+              <p className="text-[12px] text-tx2">发送即创建 issue 并开始规划</p>
+            </div>
+            <div className="w-full max-w-[720px]">
+              <AIChatInput
+                value={draft}
+                onValueChange={handleDraftChange}
+                onSend={handleSend}
+                sending={sending}
+                placeholder="输入需求 —— 发送即创建 issue 并开始规划（Ctrl ⏎ 发送）"
+                onAttach={() => fileInputRef.current?.click()}
+                attachTitle="上传需求文档 · 支持 .txt / .md / .docx / .pdf / .odt / .rtf"
+                sendDisabled={draft.trim() === "" && attachment === null}
+                attachment={
+                  attachment ? (
+                    <div className="flex items-center gap-2 border-t border-line px-3 py-1.5">
+                      <FileText size={13} className="flex-none text-tx2" />
+                      <span className="min-w-0 truncate font-mono text-[11px] text-tx2" title={attachment.filename}>
+                        {attachment.filename}
+                      </span>
+                      <button
+                        type="button"
+                        className="ml-auto flex-none text-[11px] text-tx3 hover:text-salmon"
+                        title="移除附件"
+                        onClick={() => setAttachment(null)}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : null
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <>
+        {/* 顶部折叠 DAG 条（期 4）：阶段点点击滚到对话流对应卡片；DAG 展开为计划图 */}
         <div className="flex-none border-b border-line bg-ink px-6">
           <div className="flex h-11 items-center gap-3">
+            {!isNew && onBack && (
+              <button
+                className="flex flex-none items-center gap-0.5 rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx2 hover:border-amber hover:text-amber-hi"
+                onClick={onBack}
+                title="返回会话列表"
+              >
+                <ChevronLeft size={12} strokeWidth={2} />
+                issue 列表
+              </button>
+            )}
             <span className="eyebrow">流程</span>
             {detail ? (
               <>
-                <span className="rounded-hard border border-line px-2 py-px font-mono text-[10.5px] text-tx2">
-                  {detail.phase}
-                </span>
-                <span className="truncate text-[11.5px] text-tx2">{detail.phase_note}</span>
-                <span className="ml-auto font-mono text-[10.5px] text-tx3">
-                  {detail.repositories.length} 仓 · {detail.round_count} 轮
-                </span>
+                {/* 阶段进度点：点一下滚到对话流里对应的卡片 */}
+                <div className="flex items-center gap-1">
+                  {STAGES.map((title, i) => {
+                    const currentStage = detail.phase === "failed" ? -1 : stageOfPhase(detail.phase);
+                    const done = i < currentStage;
+                    const now = i === currentStage && detail.phase !== "failed";
+                    return (
+                      <button
+                        key={title}
+                        className="flex items-center gap-1"
+                        title={`定位到「${title}」相关消息`}
+                        onClick={() => scrollToCard(stageAnchor(i))}
+                      >
+                        {i > 0 && <span className="mx-0.5 h-px w-3 bg-line-strong" />}
+                        <span
+                          className={`grid size-[15px] place-items-center rounded-full border-[1.5px] text-[8.5px] font-bold ${
+                            now
+                              ? "border-amber bg-amber text-on-amber"
+                              : done
+                                ? "border-olive bg-olive text-on-amber"
+                                : "border-line-strong text-tx3"
+                          }`}
+                        >
+                          {done ? "✓" : now ? "●" : i + 1}
+                        </span>
+                        <span className={`text-[10.5px] ${now ? "text-tx" : "text-tx3"}`}>{title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {detail.phase === "failed" && (
+                  <span className="rounded-hard border border-salmon px-1.5 py-px font-mono text-[10px] text-salmon">failed</span>
+                )}
               </>
             ) : (
-              <span className="text-[11.5px] text-tx3">{isNew ? "新会话 · 发送需求后开始规划" : "…"}</span>
+              <span className="text-[11.5px] text-tx3">{"…"}</span>
             )}
-            <button
-              className="ml-2 flex-none rounded-hard border border-line px-2 py-0.5 text-[10.5px] text-tx3"
-              disabled
-              title="期 4 接入：折叠 DAG 条与展开图"
-            >
-              DAG ▾
-            </button>
+            {/* 计划 DAG 胶囊（参照 ZCode 顶部任务胶囊）：钉在顶栏右侧，点开悬浮面板、
+                点外部或再点胶囊收起。批次图在展开面板里（PlanDagPanel）。 */}
+            <PlanDagCapsule
+              state={flow.planState}
+              execution={
+                activeDeck
+                  ? dagExecutionFromAggregate(activeDeck.aggregate, `第 ${activeDeck.roundIndex} 轮`)
+                  : null
+              }
+              onRetry={flow.reloadPlan}
+              resetKey={issueId ?? "new"}
+            />
           </div>
         </div>
 
@@ -511,90 +833,98 @@ export function WorkbenchPage({
                     principalResolving={principalResolving}
                     onApprove={handleApprove}
                     onEvidence={handleEvidence}
+                    roundOps={
+                      detail
+                        ? {
+                            redispatch: handleRedispatchOpen,
+                            archive: handleArchive,
+                            rollback: handleRollbackOpen,
+                          }
+                        : undefined
+                    }
+                    archiveConfirmId={archiveConfirmId}
+                    archivingId={archivingId}
                   />
-                  {card.anchor === "requirement" && discoveryCard}
+                  {card.anchor === "requirement" && showDiscovery && detail && (
+                    <AssistantFlow
+                      detail={detail}
+                      discovery={discovery}
+                      principal={principal}
+                      clarifySending={clarifySending}
+                      repoHosts={repoHosts}
+                      onAdvanced={() => setReload((n) => n + 1)}
+                      onRetryStep={handleRetryStep}
+                      onToast={onToast}
+                      planBatches={
+                        flow.planState.status === "ready"
+                          ? flow.planState.plan.execution_batches
+                          : null
+                      }
+                      policyGate={policyGateOf(flow.supervision)}
+                      onPolicySaved={flow.reloadSupervision}
+                    />
+                  )}
                 </Fragment>
               ))}
-            {!loading && !error && !isNew && detail && (
-              <p className="pt-1 text-center font-mono text-[10px] text-tx3">
-                每 5s 自动同步{lastSyncAt ? ` · 上次 ${lastSyncAt.toLocaleTimeString()}` : " · 首次同步中…"}
-              </p>
-            )}
           </div>
         </div>
 
-        {/* 吸底输入框 */}
-        <div className="flex-none border-t border-line bg-ink px-6 pb-4 pt-2.5">
+        {/* 吸底输入框（AIChatInput）：单行静态框、右侧仅发送；业务态（幂等键、
+            追问回答、附件解析）沿用原有回路 */}
+        <div className="flex-none bg-ink px-6 pb-4 pt-2.5">
           <div className="mx-auto max-w-[720px]">
-            <div className="rounded-[8px] border border-line-strong bg-panel focus-within:border-amber">
-              <textarea
-                className="block h-[46px] w-full resize-none bg-transparent px-3.5 pt-2.5 font-sans text-[12.5px] leading-[1.5] text-tx outline-none"
-                placeholder={
-                  isNew
-                    ? "输入需求 —— 发送即创建 issue 并开始规划（可先 📎 附文档；Ctrl ⏎ 发送）"
+            <AIChatInput
+              value={draft}
+              onValueChange={handleDraftChange}
+              onSend={handleSend}
+              sending={sending || clarifySending}
+              disabled={!isNew && !clarifyPending}
+              placeholder={
+                isNew
+                  ? "输入需求 —— 发送即创建 issue 并开始规划（Ctrl ⏎ 发送）"
+                  : clarifyPending
+                    ? "回答处理员的追问 —— 发送后它会带着你的补充继续分析（Ctrl ⏎ 发送）"
                     : "会话内补充说明待后端立项，暂不可发送（新建需求请回侧栏「＋ 新会话」）"
-                }
-                disabled={!isNew}
-                value={draft}
-                onChange={(e) => handleDraftChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-              />
-              <div className="flex items-center gap-1 px-2 pb-1.5 pl-2.5">
-                <span
-                  className="inline-flex items-center gap-1.5 rounded-full border border-line-strong px-2.5 py-[2.5px] font-mono text-[11px] text-tx2"
-                  title={
-                    isNew
-                      ? "需求归属当前工作区；未选工作区时由花名册唯一活跃 Org Leader 处理，交付范围由发现链确定"
-                      : "本会话的交付范围（由服务端派生）"
-                  }
-                >
-                  <span className="h-1.5 w-1.5 flex-none rounded-full bg-bluegray" />
-                  {isNew
-                    ? workspaceName ?? "全部工作区"
-                    : detail
-                      ? `${detail.repositories.length} 个仓库`
-                      : "…"}
-                </span>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept={DOC_ACCEPT}
-                  className="hidden"
-                  onChange={(e) => handlePickDocument(e.target.files?.[0])}
-                />
-                <button
-                  className="grid h-[27px] w-[27px] place-items-center rounded-hard text-[13px] text-tx3 hover:bg-panel-2 hover:text-tx disabled:opacity-40"
-                  title={isNew ? "上传需求文档（解析为文本继续编辑）" : "仅新会话可用"}
-                  disabled={!isNew}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  📎
-                </button>
-                <button
-                  className="grid h-[27px] w-[27px] place-items-center rounded-hard text-[13px] text-tx3 hover:bg-panel-2 hover:text-tx"
-                  disabled
-                  title="截图 / 粘贴图片（二期）"
-                >
-                  🖼
-                </button>
-                <button
-                  className="ml-auto grid h-7 w-7 place-items-center rounded-hard bg-amber text-[12px] text-on-amber hover:bg-amber-hi disabled:opacity-40"
-                  title={isNew ? "发送（Ctrl+Enter）" : "会话内补充说明待后端立项"}
-                  disabled={!isNew || sending || draft.trim() === ""}
-                  onClick={handleSend}
-                >
-                  {sending ? "…" : "➤"}
-                </button>
-              </div>
-            </div>
+              }
+              onAttach={() => fileInputRef.current?.click()}
+              attachDisabled={!isNew}
+              attachTitle={isNew ? "上传需求文档（作为附件随消息发送）" : "仅新会话可用"}
+              sendTitle={
+                isNew ? "发送（Ctrl+Enter）" : clarifyPending ? "发送回答（Ctrl+Enter）" : "会话内补充说明待后端立项"
+              }
+              sendDisabled={draft.trim() === "" && attachment === null}
+              attachment={
+                attachment ? (
+                  <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
+                    <FileText size={13} className="flex-none text-tx2" />
+                    <span className="min-w-0 truncate font-mono text-[11px] text-tx2" title={attachment.filename}>
+                      {attachment.filename}
+                    </span>
+                    <button
+                      type="button"
+                      className="ml-auto flex-none text-[11px] text-tx3 hover:text-salmon"
+                      title="移除附件"
+                      onClick={() => setAttachment(null)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : null
+              }
+            />
           </div>
         </div>
+          </>
+        )}
       </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={DOC_ACCEPT}
+        className="hidden"
+        onChange={(e) => handlePickDocument(e.target.files?.[0])}
+      />
 
       {/* ── 右栏：仓库房间面板（只读；写路径在 ⤢ 放大的全页房间） ── */}
       <aside
@@ -624,7 +954,7 @@ export function WorkbenchPage({
                   title="收起"
                   onClick={() => setPanelRepo(null)}
                 >
-                  ✕
+                  <X size={12} />
                 </button>
               </div>
             </div>
@@ -643,11 +973,100 @@ export function WorkbenchPage({
         evidence={evidence}
         onClose={() => setEvidenceOpen(false)}
       />
+
+      <RedispatchModal
+        open={redispatch.open}
+        roundLabel={redispatch.roundLabel}
+        tasks={redispatch.tasks}
+        scope={redispatch.scope}
+        submitting={redispatch.submitting}
+        errorText={redispatch.error}
+        onScopeChange={(scope) => setRedispatch((prev) => ({ ...prev, scope }))}
+        onCancel={() => setRedispatch((prev) => ({ ...prev, open: false }))}
+        onConfirm={handleRedispatchConfirm}
+      />
+      <RollbackModal
+        open={rollback.open}
+        roundLabel={rollback.roundLabel}
+        scope={rollback.scope}
+        principal={
+          resolveDataSourceMode() === "replay"
+            ? { state: "replay", label: "回放演示（不写后端）" }
+            : principalResolving
+              ? { state: "resolving", label: "解析中…" }
+              : principal
+                ? { state: "ready", label: `AGENT ${principal.label}` }
+                : { state: "missing", label: "决策主体未接入" }
+        }
+        submitting={rollback.submitting}
+        errorText={rollback.error}
+        onCancel={() => setRollback((prev) => ({ ...prev, open: false }))}
+        onConfirm={handleRollbackConfirm}
+      />
     </div>
   );
 }
 
 /** 任务 tick：display_status 原值决定符号与配色（前端不翻译状态，只挑皮肤）。 */
+/** 用户需求气泡：带附件时渲染成**文件卡片**（点开看全文预览），只展示**用户自己
+ *  打的字**——附件文档的解析全文是规划要读的，不是聊天气泡要复述的；用户没打字
+ *  就只留文件卡，一个字都不擅自替他说。无附件时照旧显示全文。 */
+function RequirementBubble({ card }: { card: Extract<WorkCard, { kind: "requirement" }> }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const typedText = typedRequirementText(card.text);
+
+  return (
+    <div className="flex justify-end" id={workCardAnchor(card)}>
+      <div className="max-w-[78%] rounded-[10px_10px_3px_10px] bg-amber px-3.5 py-2.5 text-on-amber">
+        {card.documentFilename ? (
+          <>
+            <button
+              className="flex w-full items-center gap-2.5 rounded-hard bg-black/15 px-2.5 py-2 text-left transition-colors hover:bg-black/25"
+              onClick={() => setPreviewOpen(true)}
+              title="点击查看文档内容"
+            >
+              <FileText size={17} className="flex-none text-tx2" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-[11.5px] font-bold">{card.documentFilename}</span>
+                <span className="block text-[10px] opacity-70">需求文档 · 点击查看内容</span>
+              </span>
+            </button>
+            {typedText && (
+              <div className="mt-1.5 whitespace-pre-wrap text-[11.5px] leading-[1.6] opacity-90">{typedText}</div>
+            )}
+          </>
+        ) : (
+          <div className="whitespace-pre-wrap text-[12.5px] leading-[1.65]">{card.text}</div>
+        )}
+      </div>
+
+      <Modal
+        open={previewOpen}
+        className="m-auto w-[min(640px,92vw)] rounded-[3px] border border-line-strong bg-panel p-0 text-tx shadow-pop"
+        onClose={() => setPreviewOpen(false)}
+      >
+        <div className="flex items-baseline gap-2 border-b border-line px-4 py-2.5">
+          <FileText size={14} className="flex-none text-tx2" />
+          <h2 className="min-w-0 truncate font-mono text-[13px] font-bold text-cream">
+            {card.documentFilename ?? "需求全文"}
+          </h2>
+          <button
+            className="ml-auto flex-none text-[12px] text-tx3 hover:text-tx"
+            onClick={() => setPreviewOpen(false)}
+          >
+            <X size={12} />
+          </button>
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+          <pre className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-[1.8] text-tx">
+            {card.text}
+          </pre>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
 function taskTick(status: string): { char: string; cls: string; spin: boolean } {
   switch (status) {
     case "succeeded":
@@ -675,6 +1094,9 @@ function WorkCardView({
   principalResolving,
   onApprove,
   onEvidence,
+  roundOps,
+  archiveConfirmId,
+  archivingId,
 }: {
   card: WorkCard;
   onOpenRepo: (repo: IssueRepositoryRef & { roomId: string | null }) => void;
@@ -685,25 +1107,18 @@ function WorkCardView({
   principalResolving: boolean;
   onApprove: (card: Extract<WorkCard, { kind: "decision" }>) => void;
   onEvidence: (card: Extract<WorkCard, { kind: "decision" }>) => void;
+  /** 轮次操作（期 5）：活跃轮=重派/回滚，非活跃轮=归档；由页面提供，缺省不渲染 */
+  roundOps?: {
+    redispatch: (card: Extract<WorkCard, { kind: "round" }>) => void;
+    archive: (card: Extract<WorkCard, { kind: "round" }>) => void;
+    rollback: (card: Extract<WorkCard, { kind: "round" }>) => void;
+  };
+  archiveConfirmId: string | null;
+  archivingId: string | null;
 }) {
   switch (card.kind) {
     case "requirement":
-      return (
-        <div className="flex justify-end" id={workCardAnchor(card)}>
-          <div className="max-w-[78%] rounded-[10px_10px_3px_10px] bg-amber px-3.5 py-2.5 text-on-amber">
-            <div className="mb-0.5 font-mono text-[10px] opacity-65">
-              你 · {dayLabel(card.openedAt)}
-              {card.openedByName ? ` · ${card.openedByName}` : ""}
-            </div>
-            <div className="whitespace-pre-wrap text-[12.5px] leading-[1.65]">{card.text}</div>
-            {card.documentFilename && (
-              <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-hard bg-white/10 px-2 py-0.5 font-mono text-[10.5px]">
-                📎 {card.documentFilename}
-              </div>
-            )}
-          </div>
-        </div>
-      );
+      return <RequirementBubble card={card} />;
     case "phase":
       return (
         <div className="rounded-hard border border-line bg-panel px-3.5 py-2.5 shadow-card" id={workCardAnchor(card)}>
@@ -725,7 +1140,7 @@ function WorkCardView({
             <span className="text-[12.5px] font-bold text-cream">plan v{card.planVersion} 已冻结</span>
             <span className="ml-auto font-mono text-[10px] text-tx3">{dayLabel(card.at)}</span>
           </div>
-          <p className="text-[11.5px] text-tx2">第 {card.roundIndex} 轮快照 · 任务级 DAG 在顶部「DAG」展开查看（期 4 接入）。</p>
+          <p className="text-[11.5px] text-tx2">第 {card.roundIndex} 轮快照 · 任务级 DAG 在顶部「DAG」展开查看。</p>
         </div>
       );
     case "teams":
@@ -758,7 +1173,7 @@ function WorkCardView({
               >
                 <span className={`h-[7px] w-[7px] rounded-full ${repo.team_id ? "bg-olive" : "bg-tx3"}`} />
                 {repo.name}
-                <span className="text-[9px] text-tx3">▸</span>
+                <ChevronRight size={9} className="text-tx3" />
               </button>
             ))}
           </div>
@@ -790,6 +1205,42 @@ function WorkCardView({
             </div>
           ) : (
             <p className="mt-1.5 text-[11px] text-tx3">本轮还没有任务（尚未派工或计划未生成）。</p>
+          )}
+          {roundOps && (
+            <div className="mt-2 flex gap-2 border-t border-dashed border-line pt-2">
+              {card.active ? (
+                <>
+                  <button
+                    className="rounded-hard border border-line-strong bg-panel px-2.5 py-1 text-[11px] text-tx hover:border-amber disabled:opacity-40"
+                    disabled={(card.tasks?.length ?? 0) === 0}
+                    title="重发这一轮未完成任务的包与点名"
+                    onClick={() => roundOps.redispatch(card)}
+                  >
+                    重新派工
+                  </button>
+                  <button
+                    className="rounded-hard border border-salmon/50 bg-panel px-2.5 py-1 text-[11px] text-salmon hover:bg-salmon/10 disabled:opacity-40"
+                    title="对这一轮发起回滚（范围见 §4.6 投影）"
+                    onClick={() => roundOps.rollback(card)}
+                  >
+                    回滚
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="rounded-hard border border-line-strong bg-panel px-2.5 py-1 text-[11px] text-tx2 hover:border-amber disabled:opacity-40"
+                  disabled={archivingId === card.roundId}
+                  title="轮次级归档；活跃轮次服务端会拒绝"
+                  onClick={() => roundOps.archive(card)}
+                >
+                  {archivingId === card.roundId
+                    ? "归档中…"
+                    : archiveConfirmId === card.roundId
+                      ? "确认归档？（8 秒内再点一次）"
+                      : "归档本轮"}
+                </button>
+              )}
+            </div>
           )}
         </div>
       );

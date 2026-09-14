@@ -117,3 +117,45 @@ class EmbeddingLookup(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """One embedding per input text, input order preserved."""
         ...
+
+
+class VectorRankedEmbeddingStore(Protocol):
+    """Optional ANN capability over the embedding store (pgvector mode).
+
+    Implemented by ``PgVectorDecisionEmbeddingStore`` when the Postgres
+    ``vector`` extension is installed (migration 20260914_0056). The JSONB
+    store and the in-memory twin do not carry it; the semantic search service
+    treats its absence — or a ``None`` answer — as "rank in Python". Distance
+    is pgvector's ``<=>`` (cosine distance, ``1 - cosine similarity``) over
+    the cosine HNSW index.
+    """
+
+    async def nearest(
+        self,
+        query_embedding: list[float],
+        *,
+        organization_id: UUID | None,
+        limit: int = 500,
+    ) -> list[tuple[DecisionNodeView, float]] | None:
+        """Sheets closest to the query, closest first (ANN cut).
+
+        ``None`` means the vector extension is absent: the caller falls back
+        to loading the slice and ranking in Python, never an error.
+        """
+        ...
+
+
+class ArchivedIssueReader(Protocol):
+    """Issue-grain archive tombstones, read through a port.
+
+    Archiving is list hygiene for the whole console, retrieval included: an
+    archived issue's decision sheets stop surfacing as "similar history" for
+    new requirements. The tombstones live in ``repository_intelligence``
+    (``issue_archives``); this module must not reach across, so the
+    composition root adapts its store to this protocol. Direct, per-issue
+    chain reads (``trace``) stay unfiltered — that path *is* the audit.
+    """
+
+    async def archived_issue_ids(self) -> frozenset[UUID]:
+        """Every archived issue id; an empty set when nothing is archived."""
+        ...

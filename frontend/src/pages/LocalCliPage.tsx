@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import type { ExternalMemberReadinessView } from "../api/contract";
 import { defaultClient } from "../api/client";
 import {
@@ -458,7 +459,7 @@ export function LocalCliPage({ embedded = false }: { embedded?: boolean }) {
           className="flex w-full items-baseline gap-2 text-left"
           onClick={() => setShowCommands((v) => !v)}
         >
-          <span className="eyebrow">命令行入口 {showCommands ? "▾" : "▸"}</span>
+          <span className="eyebrow">命令行入口 <ChevronDown size={11} strokeWidth={1.5} className={showCommands ? "" : "-rotate-90"} /></span>
           <span className="text-[10.5px] text-tx3">启动器不在时走这条</span>
         </button>
         {showCommands && (

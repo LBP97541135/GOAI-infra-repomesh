@@ -229,6 +229,48 @@ async def test_similarity_service_bounds_results_to_top_k() -> None:
     assert full[0].business_time >= full[-1].business_time, "默认返回全部命中（newest first）"
 
 
+class _ArchivedIssues:
+    """``ArchivedIssueReader`` twin over a fixed tombstone set."""
+
+    def __init__(self, *issue_ids: UUID) -> None:
+        self.ids = frozenset(issue_ids)
+
+    async def archived_issue_ids(self) -> frozenset[UUID]:
+        return self.ids
+
+
+async def test_similarity_service_excludes_archived_projects() -> None:
+    """归档是控制台级的列表卫生：墓碑项目的决策不再作为"相似历史"出现。
+
+    同一个 ``find_similar`` 同时喂审计面的相似历史与发现链的历史决策证据
+    （``DecisionHistoryFromChainStore`` 就包着本服务），在这里过滤，两处
+    一起收口；按 issue id 的定向链读取（trace）不受影响——那条路是审计。
+    """
+
+    org, leader = uuid4(), uuid4()
+    project_a, project_b, project_c = uuid4(), uuid4(), uuid4()
+    base = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
+    projection, store = _store_services(
+        _chain_events(org, project_a, leader)
+        + [
+            _classified(org, project_b, leader, repos=["ts-notify"], at=base),
+            _classified(
+                org, project_c, leader, repos=["ts-notify"], at=base + timedelta(hours=1)
+            ),
+        ]
+    )
+    await projection.drain()
+
+    service = DecisionChainSimilarityService(store, _ArchivedIssues(project_b))
+    hits = await service.find_similar(organization_id=org, project_id=project_a)
+    assert [hit.project_id for hit in hits] == [project_c], "已归档项目不进相似结果"
+
+    # 组合根没接墓碑存储时（None），行为与归档功能之前完全一致。
+    plain = DecisionChainSimilarityService(store)
+    everything = await plain.find_similar(organization_id=org, project_id=project_a)
+    assert [hit.project_id for hit in everything] == [project_c, project_b]
+
+
 async def test_similar_is_scoped_to_the_organization() -> None:
     org_a, org_b = uuid4(), uuid4()
     leader = uuid4()

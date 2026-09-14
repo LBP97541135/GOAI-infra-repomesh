@@ -53,3 +53,19 @@ async def test_publishes_agentteams_compatible_task_and_verifies_replay(tmp_path
     assert "Pricing tests pass" in (task_dir / "spec.md").read_text(encoding="utf-8")
     assert manifest["content_hash"] == first.content_hash
     assert replay == first
+
+
+async def test_the_spec_mandates_simplified_chinese_room_messages(tmp_path) -> None:
+    """任务书必须携带房间语言规约（2026-09-08 用户裁决）。"""
+
+    publisher = AgentTeamsTaskPublisher(tmp_path)
+    published = await publisher.publish(
+        task_view(),
+        team_name="pricing-team",
+        room_id="!pricing:matrix.local",
+        assignee_resource_name="pricing-worker",
+        idempotency_key="publish-pricing-zh",
+    )
+    spec = (tmp_path / published.task_path / "spec.md").read_text(encoding="utf-8")
+    assert "## Communication language" in spec
+    assert "简体中文" in spec

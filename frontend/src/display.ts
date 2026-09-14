@@ -385,20 +385,42 @@ export const ROLLBACK_UNAVAILABLE_LABEL: Record<"no_change_set" | "nothing_deliv
   nothing_delivered: "本轮的候选一个都还没发布（既没 merge，也没开过 PR）——没有可撤销的东西。",
 };
 
-/** ISO 时间戳 → MM-DD。取不到格式时原样回显，不猜。
+/** 后端全链 UTC（实现统一 `datetime.now(UTC).isoformat()`），界面按**浏览器时区**
+ *  呈现。此前两个格式化函数直接从 ISO 串截字段，等于把 UTC 原样当本地时间显示：
+ *  时区偏移非零的用户看到的每个时刻都慢一个偏移量，本地零点到偏移量之间发生的
+ *  事日期还会错一天。这里收口唯一的解析：带时区记号（Z / ±HH[:MM]）照原样交给
+ *  Date；无记号的裸串按契约补 Z（后端只发 UTC，不会发本地时间）；解析不动返回
+ *  null，调用方退回字符串截取的旧路。 */
+function utcToLocalDate(at: string): Date | null {
+  const zoned = /[Zz]$/.test(at) || /[+-]\d{2}:?\d{2}$/.test(at);
+  const d = new Date(zoned ? at : `${at}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** ISO 时间戳（UTC）→ 本地时区的 MM-DD。取不到格式时原样回显，不猜。
+ *  date-only 串（如用量日报的 `date`）是日历标签、没有时刻语义，跳过时区换算
+ *  直接取月日——过一遍 Date 反而会在西半球被挪去前一天。
  *  防御同 `eventTime`（A-4）：半执行轮次的 `updated_at` 实测为 null，此前直接
  *  `.match` 抛 TypeError 把整页打成白屏。空值渲染 "—"——**这是纯格式化层的兜底，
  *  不是降级文案**：调用方若知道这个 null 有含义，该在调用处如实说出来。 */
 export function dayLabel(at: string | null | undefined): string {
   if (!at) return "—";
+  const dateOnly = at.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return `${dateOnly[2]}-${dateOnly[3]}`;
+  const d = utcToLocalDate(at);
+  if (d) return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
   const m = at.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? `${m[2]}-${m[3]}` : at;
 }
 
-/** at：UTC ISO → HH:MM:SS；非 ISO 原样展示。
+/** at：UTC ISO → **本地时区**的 HH:MM:SS；非 ISO 原样展示。
  *  防御：联调发现后端 repair_timeline.at 可为 null（契约写 string，已报后端），空值渲染 "—"。 */
 export function eventTime(at: string | null | undefined): string {
   if (!at) return "—";
+  const d = utcToLocalDate(at);
+  if (d) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
   const m = at.match(/T(\d{2}:\d{2}:\d{2})/);
   return m ? m[1] : at;
 }

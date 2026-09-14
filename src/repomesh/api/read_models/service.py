@@ -57,6 +57,7 @@ from .sources import (
     ChangeSetSource,
     DiscoveryTaskProbe,
     ExecutionPlanSource,
+    IssueArchiveSource,
     MessageSource,
     ObservationSource,
     PlanSnapshotData,
@@ -175,6 +176,7 @@ class DeliveryReadModelService:
         tasks: TaskSource,
         change_sets: ChangeSetSource,
         archives: ArchiveSource,
+        issue_archives: IssueArchiveSource | None = None,
         validations: ValidationSource,
         specifications: SpecificationSource,
         repositories: RepositorySource,
@@ -194,6 +196,9 @@ class DeliveryReadModelService:
         self._tasks = tasks
         self._change_sets = change_sets
         self._archives = archives
+        # None where no issue-archive store is composed: every issue then
+        # reads as unarchived, the same honest-degrade rule as room_timeline.
+        self._issue_archives = issue_archives
         self._validations = validations
         self._specifications = specifications
         self._repositories = repositories
@@ -340,11 +345,12 @@ class DeliveryReadModelService:
             if not deliveries:
                 continue
             title_source = snapshots[0].requirement_text if snapshots else None
+            title_discovery = snapshots[0].discovery if snapshots else None
             projects.append(
                 {
                     "project_id": project_id,
                     "project_key": None,  # no project registry yet; frontend degrades
-                    "title": _title(title_source, project_id),
+                    "title": _title(title_source, project_id, title_discovery),
                     "deliveries": deliveries,
                 }
             )
@@ -381,9 +387,10 @@ class DeliveryReadModelService:
     async def _delivery_summary(self, plan, snapshot: PlanSnapshotData | None) -> dict:
         facts = await self._round_facts(plan, snapshot)
         title_source = snapshot.requirement_text if snapshot is not None else None
+        title_discovery = snapshot.discovery if snapshot is not None else None
         return {
             "delivery_id": plan.id,
-            "title": _title(title_source, plan.project_id),
+            "title": _title(title_source, plan.project_id, title_discovery),
             "phase": facts.phase.value,
             "phase_note": self._phase_note(facts.phase, plan, facts.change_set),
             "pending_decision_count": facts.pending_decision_count,
@@ -398,7 +405,7 @@ class DeliveryReadModelService:
             return None
         return {
             "delivery_id": None,
-            "title": _title(latest.requirement_text, latest.project_id),
+            "title": _title(latest.requirement_text, latest.project_id, latest.discovery),
             "phase": DeliveryPhase.PLAN.value,
             "phase_note": f"计划 v{latest.plan_version} 待物化",
             "pending_decision_count": 0,
@@ -530,6 +537,7 @@ class DeliveryReadModelService:
         organization_id: UUID | None = None,
         offset: int = 0,
         limit: int = 100,
+        include_archived: bool = False,
     ) -> dict:
         """Contract v0.2 §2: issue-grained listing (issue_id = project_id).
 
@@ -538,6 +546,11 @@ class DeliveryReadModelService:
         with neither (§2.1 rule 6) stay unreachable until a project registry
         lands; the rule is implemented so the write endpoint needs no change.
 
+        Archived issues (repository_intelligence tombstones) drop out of the
+        default listing *and* the two tab counts — both must answer the same
+        question, "what still needs someone" — and return with
+        ``include_archived=True``, carrying ``archived``/``archived_at``.
+
         open_count / closed_count are the workspace totals behind the two tabs:
         they honour organization_id but ignore `state` and the page window, so
         the tab the caller is not looking at still shows a true total.
@@ -545,27 +558,51 @@ class DeliveryReadModelService:
 
         plans_by_project = await self._plans_by_project()
         project_ids = set(plans_by_project) | set(await self._snapshots.project_ids())
+        archived_at_by_issue = await self._issue_archives_map()
 
         scoped = []
         for project_id in sorted(project_ids, key=str):
-            bundle = await self._issue_bundle(project_id, plans_by_project.get(project_id, ()))
+            bundle = await self._issue_bundle(
+                project_id,
+                plans_by_project.get(project_id, ()),
+                archived_at=archived_at_by_issue.get(project_id),
+            )
             issue = bundle.summary
             if organization_id is not None and issue["organization_id"] != organization_id:
                 continue
             scoped.append(issue)
 
-        open_count = sum(1 for issue in scoped if issue["state"] == IssueState.OPEN.value)
+        visible = [
+            issue for issue in scoped if include_archived or not issue["archived"]
+        ]
+        open_count = sum(1 for issue in visible if issue["state"] == IssueState.OPEN.value)
         issues = (
-            scoped if state == "all" else [issue for issue in scoped if issue["state"] == state]
+            visible if state == "all" else [issue for issue in visible if issue["state"] == state]
         )
         issues.sort(key=_issue_recency, reverse=True)
         page = issues[offset : offset + limit]
         return {
             "issues": page,
             "open_count": open_count,
-            "closed_count": len(scoped) - open_count,
+            "closed_count": len(visible) - open_count,
             "next_cursor": (str(offset + limit) if offset + limit < len(issues) else None),
         }
+
+    async def _issue_archives_map(self) -> dict[UUID, datetime]:
+        """One archive read per listing, not one per issue (N+1 guard)."""
+
+        if self._issue_archives is None:
+            return {}
+        return {
+            view.issue_id: view.archived_at
+            for view in await self._issue_archives.list_all()
+        }
+
+    async def _issue_archived_at(self, issue_id: UUID) -> datetime | None:
+        if self._issue_archives is None:
+            return None
+        view = await self._issue_archives.get(issue_id)
+        return view.archived_at if view is not None else None
 
     async def issue_summary(self, issue_id: UUID) -> dict | None:
         """Contract v0.2 §2 single-item shape for one issue.
@@ -579,7 +616,11 @@ class DeliveryReadModelService:
         snapshots = await self._snapshots.for_project(issue_id)
         if not plans and not snapshots:
             return None
-        return (await self._issue_bundle(issue_id, plans)).summary
+        return (
+            await self._issue_bundle(
+                issue_id, plans, archived_at=await self._issue_archived_at(issue_id)
+            )
+        ).summary
 
     async def get_issue(self, issue_id: UUID) -> dict | None:
         """Contract v0.2 §3: §2's fields plus the round index and chips.
@@ -599,7 +640,9 @@ class DeliveryReadModelService:
         if not plans and not snapshots:
             return None
 
-        bundle = await self._issue_bundle(issue_id, plans)
+        bundle = await self._issue_bundle(
+            issue_id, plans, archived_at=await self._issue_archived_at(issue_id)
+        )
         topology = bundle.topology
         catalog = await self._catalog()
         team_by_repository = (
@@ -686,7 +729,11 @@ class DeliveryReadModelService:
         return self._plans_memo
 
     async def _issue_bundle(
-        self, project_id: UUID, plans: list[ExecutionPlanView] | tuple
+        self,
+        project_id: UUID,
+        plans: list[ExecutionPlanView] | tuple,
+        *,
+        archived_at: datetime | None = None,
     ) -> _IssueBundle:
         snapshots = await self._snapshots.for_project(project_id)
         snapshot_by_plan = {
@@ -796,7 +843,9 @@ class DeliveryReadModelService:
             "issue_key": None,  # §0: no project registry, so no human-readable id
             "organization_id": organization_id,
             "title": _title(
-                earliest.requirement_text if earliest is not None else None, project_id
+                earliest.requirement_text if earliest is not None else None,
+                project_id,
+                earliest.discovery if earliest is not None else None,
             ),
             "requirement_text": (earliest.requirement_text if earliest is not None else None),
             "document_filename": (
@@ -825,6 +874,11 @@ class DeliveryReadModelService:
             "opened_by_name": opened_by_name,
             "opened_at": opened_at,
             "updated_at": max(timestamps) if timestamps else opened_at,
+            # Archive tombstone (repository_intelligence). The phase/state
+            # derivations above stay untouched — archived is list hygiene,
+            # not a ninth phase.
+            "archived": archived_at is not None,
+            "archived_at": archived_at.isoformat() if archived_at is not None else None,
         }
         return _IssueBundle(
             summary=summary,
@@ -1799,8 +1853,13 @@ class DeliveryReadModelService:
     async def _issue_bundles(self) -> list[_IssueBundle]:
         plans_by_project = await self._plans_by_project()
         project_ids = set(plans_by_project) | set(await self._snapshots.project_ids())
+        archived_at_by_issue = await self._issue_archives_map()
         return [
-            await self._issue_bundle(project_id, plans_by_project.get(project_id, ()))
+            await self._issue_bundle(
+                project_id,
+                plans_by_project.get(project_id, ()),
+                archived_at=archived_at_by_issue.get(project_id),
+            )
             for project_id in sorted(project_ids, key=str)
         ]
 
@@ -1855,7 +1914,9 @@ class DeliveryReadModelService:
                 "project_id": project_id,
                 "project_key": None,
                 "title": _title(
-                    snapshot.requirement_text if snapshot is not None else None, project_id
+                    snapshot.requirement_text if snapshot is not None else None,
+                    project_id,
+                    snapshot.discovery if snapshot is not None else None,
                 ),
                 "requirement_text": (snapshot.requirement_text if snapshot is not None else None),
                 "created_at": snapshots[-1].created_at if snapshots else None,
@@ -2376,7 +2437,23 @@ def _issue_recency(issue: dict) -> tuple:
     return (at is not None, at or _EPOCH)
 
 
-def _title(requirement_text: str | None, project_id: UUID) -> str:
+def _title(
+    requirement_text: str | None,
+    project_id: UUID,
+    discovery: dict | None = None,
+) -> str:
+    """Issue 列表/详情的标题锚点。
+
+    标题来自需求分析（发现链步 1）提炼的 ``suggested_title``——贴一整篇文档
+    当需求时，前 80 字符只是文档开头而不是标题（2026-09-08 用户裁决）。分析
+    尚未落块或没给出标题时，退回 80 字符截断：这是诚实的截断，不是编造。
+    """
+
+    analysis = (discovery or {}).get("analysis") or {}
+    raw_title = analysis.get("suggested_title")
+    distilled = raw_title.strip()[:80] if isinstance(raw_title, str) else ""
+    if distilled:
+        return distilled[:80]
     text = (requirement_text or "").strip()
     if text:
         return text if len(text) <= 80 else text[:77] + "..."
