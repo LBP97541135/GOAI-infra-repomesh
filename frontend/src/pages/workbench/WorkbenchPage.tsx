@@ -23,7 +23,7 @@ import {
 import type { DiscoveryView } from "../../api/contract";
 import { AssistantFlow } from "./AssistantFlow";
 import { autoTrigger } from "./autoTrigger";
-import { useIssueFlowState } from "./useIssueFlowState";
+import { policyGateOf, useIssueFlowState } from "./useIssueFlowState";
 import { PlanDagCapsule } from "../../components/PlanDagCapsule";
 import { ErrorPanel, LoadingLine } from "../../components/StatusBlocks";
 import { AIChatInput } from "../../components/ui/ai-chat-input";
@@ -860,6 +860,8 @@ export function WorkbenchPage({
                           ? flow.planState.plan.execution_batches
                           : null
                       }
+                      policyGate={policyGateOf(flow.supervision)}
+                      onPolicySaved={flow.reloadSupervision}
                     />
                   )}
                 </Fragment>

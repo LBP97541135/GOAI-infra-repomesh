@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Check, ChevronDown, Loader2, Sparkles, X } from "lucide-react";
 import type {
@@ -13,11 +13,16 @@ import {
   newIdempotencyKey,
   submitDiscoveryApproval,
 } from "../../api/discovery";
+import { fetchPolicyDraft } from "../../api/humanControl";
+import { AuthError } from "../../api/auth";
 import { resolveDataSourceMode } from "../../api/source";
 import type { GovernanceAgent } from "../../api/decisions";
 import { ShiningText } from "../../components/ui/shining-text";
+import { SupervisionPolicyCard, type PolicyDraftState } from "../../components/SupervisionPolicyCard";
+import { SupervisionPolicyDialog } from "../../components/SupervisionPolicyDialog";
 import { READINESS_LABEL, READINESS_SKIN, errText, shortId } from "../../display";
 import { autoTrigger } from "./autoTrigger";
+import type { PolicyGate } from "./useIssueFlowState";
 
 /** 处理员（期 2.5 重构定稿）：发现→计划全过程的**对话式**呈现。
  *
@@ -38,6 +43,8 @@ export function AssistantFlow({
   onRetryStep,
   onToast,
   planBatches,
+  policyGate,
+  onPolicySaved,
 }: {
   detail: IssueDetailView;
   /** 发现读投影（外层 2.5s 轮询）；null = 还没取到 */
@@ -54,6 +61,10 @@ export function AssistantFlow({
   onToast: (text: string) => void;
   /** 计划批次概览（仓库名按批次分组）——与顶部 DAG 胶囊同源（planState）；null = 尚未取到 */
   planBatches: string[][] | null;
+  /** 监督拓扑门（外层 useIssueFlowState 的 supervision 取数）：open = 草稿窗口还开着 */
+  policyGate: PolicyGate;
+  /** 策略保存/撤回后让外层重取拓扑（物化后拓扑就位 → 门自动封死） */
+  onPolicySaved: () => void;
 }) {
   const replay = resolveDataSourceMode() === "replay";
 
@@ -123,6 +134,56 @@ export function AssistantFlow({
       })
       .finally(() => setMBusy(false));
   };
+
+  // ── 监管策略窗口（迁移 5-1b 回归：旧 DiscoveryPanel 的入口。工作台改造退役了
+  //  宿主面板，替代卡片 SupervisionPolicyCard 造好却没挂上——2026-09-14 补挂。）
+  //  只在「物化窗口开着」时取数与出卡：物化后拓扑就位、策略定死，门封死即收卡。
+  //
+  //  **闪烁教训（2026-09-14 用户实测）**：本组件首版的取数 effect 把 5s 轮询派生的
+  //  门态列进依赖、每次重取都把内容打回 loading——卡片每 5 秒闪一次，按钮点不中。
+  //  与 DAG 面板当年「突然自动关闭然后恢复」同源。现为：**一次 visit 只取一次**
+  //  （ref 记账），重取（重试/保存后）保持已有内容静默刷新，绝不回 loading。 ──
+  const policyWindowOpen =
+    policyGate === "open" &&
+    discovery !== null &&
+    discovery.step === 4 &&
+    discovery.step_state === "done";
+  const [policy, setPolicy] = useState<PolicyDraftState>({ kind: "loading" });
+  const [policyDialogOpen, setPolicyDialogOpen] = useState(false);
+  const [policyReload, setPolicyReload] = useState(0);
+  const policyFetched = useRef("");
+  useEffect(() => {
+    if (!policyWindowOpen) return;
+    const key = `${detail.issue_id}:${policyReload}`;
+    if (policyFetched.current === key) return; // 本 visit 已取过（或重试键未变），静默
+    policyFetched.current = key;
+    // 已有可用内容时静默刷新：不把 set/unset 打回 loading
+    setPolicy((prev) =>
+      prev.kind === "set" || prev.kind === "unset" ? prev : { kind: "loading" },
+    );
+    let cancelled = false;
+    fetchPolicyDraft(detail.issue_id)
+      .then((draft) => !cancelled && setPolicy({ kind: "set", draft }))
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const status = err instanceof AuthError ? err.status : 0;
+        // 404 = 还没设过，是正常起点不是错误；401/403 各有各的下一步，不能并进
+        // error（那一态给重试按钮，而过期会话与非管理员重试多少次都一样）。
+        setPolicy((prev) => {
+          if (prev.kind === "set" || prev.kind === "unset") return prev;
+          return status === 404
+            ? { kind: "unset" }
+            : status === 401
+              ? { kind: "unauthenticated", detail: errText(err) }
+              : status === 403
+                ? { kind: "forbidden", detail: errText(err) }
+                : { kind: "error", message: errText(err) };
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [policyWindowOpen, policyReload, detail.issue_id]);
 
   return (
     <div className="flex gap-2">
@@ -329,6 +390,13 @@ export function AssistantFlow({
                         </div>
                       )}
                     </ExpandDone>
+                    {policyWindowOpen && (
+                      <SupervisionPolicyCard
+                        state={policy}
+                        onConfigure={() => setPolicyDialogOpen(true)}
+                        onRetry={() => setPolicyReload((n) => n + 1)}
+                      />
+                    )}
                     <div className="mt-1.5">
                       <button
                         className="rounded-hard bg-amber px-3.5 py-1.5 text-[11.5px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-40"
@@ -367,6 +435,23 @@ export function AssistantFlow({
                   <FailLine title="生成计划" error="执行失败" onRetry={() => onRetryStep(4)} />
                 )}
               </>
+            )}
+
+            {/* 配置弹窗：入口只有上面那张卡片的「配置/修改」按钮（与旧面板同一裁决——
+                同一件事不设第二个入口）。保存/撤回后外层重取拓扑，门态随之更新。 */}
+            {policyWindowOpen && (
+              <SupervisionPolicyDialog
+                open={policyDialogOpen}
+                projectId={detail.issue_id}
+                issueTitle={detail.title}
+                effectiveTiers={discovery.effective_tiers}
+                taskCount={discovery.integration?.task_dag_count ?? null}
+                onClose={() => setPolicyDialogOpen(false)}
+                onSaved={(draft) => {
+                  setPolicy(draft ? { kind: "set", draft } : { kind: "unset" });
+                  onPolicySaved();
+                }}
+              />
             )}
           </>
         )}
