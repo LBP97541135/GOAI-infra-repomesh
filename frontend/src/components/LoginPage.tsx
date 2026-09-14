@@ -37,7 +37,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (account: Acco
     <div className="grid h-screen place-items-center bg-ink px-6">
       <div className="w-full max-w-[560px]">
         <div className="mb-7 flex items-center gap-3">
-          <span className="grid size-[38px] flex-none place-items-center rounded-hard bg-amber font-mono text-[17px] font-extrabold text-[#16120a]">
+          <span className="grid size-[38px] flex-none place-items-center rounded-hard bg-amber font-mono text-[17px] font-extrabold text-on-amber">
             R
           </span>
           <div>
@@ -47,7 +47,7 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (account: Acco
         </div>
 
         <form
-          className="rounded-hard border border-line bg-panel px-7 pt-6 pb-7 shadow-[0_18px_48px_rgba(0,0,0,0.45)]"
+          className="rounded-hard border border-line bg-panel px-7 pt-6 pb-7 shadow-float"
           onSubmit={submit}
         >
           <h1 className="text-[15px] font-semibold text-cream">
@@ -97,13 +97,13 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (account: Acco
           </label>
 
           {error && (
-            <div className="mt-4 rounded-hard border border-[#7a4530] bg-[#2b1712] px-3 py-2 text-[12px] text-[#e8a184]">
+            <div className="mt-4 rounded-hard border border-salmon-deep bg-salmon-well px-3 py-2 text-[12px] text-salmon-hi">
               {error}
             </div>
           )}
 
           <button
-            className="mt-5 w-full rounded-hard bg-amber py-[9px] text-[13px] font-extrabold tracking-[0.04em] text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+            className="mt-5 w-full rounded-hard bg-amber py-[9px] text-[13px] font-extrabold tracking-[0.04em] text-on-amber hover:bg-amber-hi disabled:opacity-60"
             disabled={busy}
           >
             {busy ? "正在连接…" : setupMode ? "初始化并登录" : "登录"}

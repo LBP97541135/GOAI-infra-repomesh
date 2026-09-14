@@ -46,16 +46,37 @@
       REPOMESH_LOCAL_SESSION_TTL_SECONDS: ${REPOMESH_LOCAL_SESSION_TTL_SECONDS:-28800}
       REPOMESH_MODEL_API_KEY: ${REPOMESH_MODEL_API_KEY:-}
       REPOMESH_MODEL_BASE_URL: ${REPOMESH_MODEL_BASE_URL:-https://www.vibeapi.cn/v1}
-      REPOMESH_MODEL: ${REPOMESH_MODEL:-gpt-5.6-luna}
+      REPOMESH_MODEL: ${REPOMESH_MODEL:-gpt-5.4-mini}
       REPOMESH_DEEPSEEK_API_KEY: ${REPOMESH_DEEPSEEK_API_KEY:-${REPOMESH_MODEL_API_KEY:-}}
       REPOMESH_DEEPSEEK_BASE_URL: ${REPOMESH_DEEPSEEK_BASE_URL:-${REPOMESH_MODEL_BASE_URL:-https://www.vibeapi.cn/v1}}
-      REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-gpt-5.6-luna}}
+      REPOMESH_DEEPSEEK_MODEL: ${REPOMESH_DEEPSEEK_MODEL:-${REPOMESH_MODEL:-gpt-5.4-mini}}
+      # LLM 聊天读超时（默认 120s）：推理型模型/慢供应商需要更长窗口，从 .env 透传。
+      REPOMESH_LLM_TIMEOUT_SECONDS: ${REPOMESH_LLM_TIMEOUT_SECONDS:-120}
+      # Worker 执行预约的租约回收协调器：worker 掉线/取消会留下孤儿 preparing 预约，
+      # 不开它就永远没人回收（任务假 running、房间报错循环）。默认 False 是历史原因。
+      REPOMESH_WORKER_RECOVERY_ENABLED: ${REPOMESH_WORKER_RECOVERY_ENABLED:-true}
+      # 容器内 git（clone/fetch）走宿主机代理：绕过对 github git 协议的限速。
+      # host.docker.internal 由 Docker Desktop 转发到宿主回环上的代理端口。
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: http.https://github.com/.proxy
+      GIT_CONFIG_VALUE_0: http://host.docker.internal:10808
       # L3 semantic retrieval（decision-chain RAG）：从宿主机 .env 透传。
       # 留空 = 后端如实 503/structural 回退，语义检索不可用。
       REPOMESH_EMBEDDING_BASE_URL: ${REPOMESH_EMBEDDING_BASE_URL:-}
       REPOMESH_EMBEDDING_API_KEY: ${REPOMESH_EMBEDDING_API_KEY:-}
       REPOMESH_EMBEDDING_MODEL: ${REPOMESH_EMBEDDING_MODEL:-text-embedding-3-small}
       REPOMESH_EMBEDDING_TIMEOUT_SECONDS: ${REPOMESH_EMBEDDING_TIMEOUT_SECONDS:-30}
+      # AgentLoop（阿里云 ARMS）遥测上报：从宿主机 .env 透传。此前容器编排没映射
+      # 这组变量，容器化部署的上报实际恒关（只有宿主机直跑带 .env 才生效）；
+      # 留空 = setup_tracing(None) 如实关闭，不影响启动。观测门户的 AgentLoop
+      # 跳转地址也从同一组配置推导。
+      REPOMESH_OTLP_ENDPOINT: ${REPOMESH_OTLP_ENDPOINT:-}
+      REPOMESH_OTLP_SERVICE_NAME: ${REPOMESH_OTLP_SERVICE_NAME:-repomesh-api}
+      REPOMESH_OTLP_HEADERS: ${REPOMESH_OTLP_HEADERS:-}
+      REPOMESH_OTLP_METRICS_ENABLED: ${REPOMESH_OTLP_METRICS_ENABLED:-false}
+      REPOMESH_OTLP_LOGS_ENABLED: ${REPOMESH_OTLP_LOGS_ENABLED:-false}
+      REPOMESH_OTLP_LOG_LEVEL: ${REPOMESH_OTLP_LOG_LEVEL:-WARNING}
+      REPOMESH_AGENTLOOP_CONSOLE_URL: ${REPOMESH_AGENTLOOP_CONSOLE_URL:-}
       REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
       REPOMESH_AGENT_ACTION_TOKEN: ${REPOMESH_AGENT_ACTION_TOKEN:-}
       # 非空才会让 principal_registration.with_task_control 把 repomesh-task-control
@@ -85,7 +106,9 @@
       # start_assigned_task 未显式给 adapter 时的回退。本地一键栈的 Runner 镜像
       # 只装了校验用 mock 编码代理（repomesh-mock-agent），所以默认 mock；接入
       # 真实 CLI 的部署把它改成该 CLI 在 runner profile 目录里的 id。
-      REPOMESH_WORKER_DEFAULT_ADAPTER_ID: ${REPOMESH_WORKER_DEFAULT_ADAPTER_ID:-mock}
+      # 真实编码代理：runner 容器内的 codex CLI（app-server 模式）。
+      # 依赖两个绑定：宿主的 codex Linux 二进制 + ~/.codex 凭据目录。
+      REPOMESH_WORKER_DEFAULT_ADAPTER_ID: ${REPOMESH_WORKER_DEFAULT_ADAPTER_ID:-codex}
       # 告警触达风险边界时的自动姿态：none 只告警不动手；degrade_writes /
       # pause_intake 会让 OperationalGate 真正咬合（如 pause_intake 拒绝新建
       # issue）。部署自己声明愿意让告警联动多深，默认只观测不干预。
@@ -107,9 +130,18 @@
       REPOMESH_AGENTTEAMS_MANAGER_IMAGE: ${REPOMESH_AGENTTEAMS_MANAGER_IMAGE:-higress-registry.cn-hangzhou.cr.aliyuncs.com/agentteams/agentteams-manager-copaw:v1.2.0}
     ports:
       - "${REPOMESH_API_PORT:-8000}:8000"
+      # Worker 侧 MCP 直连口：agentteams-net 内的 worker 用 宿主IP:8001 调
+      # repomesh-task-control（compose 注释里有验证记录）。此前由一个 socat
+      # 桥容器承担，但它无重启策略、被 compose 收纳清理后就永久断链——
+      # 直接在 api 上多发布一个宿主端口，少一个会静默死掉的部件。
+      - "8001:8000"
     volumes:
       - ${REPOMESH_SECRETS_DIR:-./.secrets}:/app/.secrets:ro
-      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/runner-workspaces
+      # 工作区根目录默认落在 AgentTeams 宿主共享目录（AGENTTEAMS_HOST_SHARE_DIR，
+      # embedded 安装即用户主目录）之下：控制器给每个 worker 容器挂同样的 /host-share，
+      # 于是 api 视角的 /runner-workspaces/<run> 在 worker 侧恒为
+      # /host-share/.repomesh-workspaces/<run>，两侧视角经 runner 的 FROM/TO 对齐。
+      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-${AGENTTEAMS_HOST_SHARE_DIR:-.}/.repomesh-workspaces}:/runner-workspaces
       - agentteams-storage:/agentteams-data
     depends_on:
       postgres:
@@ -160,10 +192,11 @@
   # REPOMESH_WORKER_DEFAULT_ADAPTER_ID on the api to use one.
   #
   # The api prepares each workspace under /runner-workspaces and the task
-  # carries that path; the runner remaps it into its own /workspace mount of
-  # the same host directory (WORKSPACE_PATH_FROM/TO), and the worktree's .git
-  # pointer is written relative (git_worktree._make_gitdir_portable) so one
-  # tree serves both containers.
+  # carries that path; the runner remaps it into the shared /host-share view
+  # (WORKSPACE_PATH_FROM/TO) — the same path AgentTeams worker containers see,
+  # because the controller binds the host share directory into every worker at
+  # /host-share. The worktree's .git pointer is written relative
+  # (git_worktree._make_gitdir_portable) so one tree serves every container.
   runner:
     profiles: ["platform"]
     build:
@@ -174,10 +207,21 @@
       REPOMESH_RUNNER_TASK_SOURCE_URL: http://api:8000/api/v1/runtime/runner-tasks/next
       REPOMESH_RUNNER_EVENT_SINK_URL: http://api:8000/api/v1/runtime/runner-events
       REPOMESH_RUNNER_CONTROL_TOKEN: ${REPOMESH_RUNNER_CONTROL_TOKEN:-}
+      # /host-share/.repomesh-workspaces is the worker-container view of the
+      # same host directory the api mounts at /runner-workspaces; keeping the
+      # runner's own view identical to the worker's means every path the
+      # runner logs, reports or hands downstream is already valid where the
+      # worker runs. The image bakes WORKSPACE_ROOT=/workspace, so an explicit
+      # override is required — build_default_executor resolves worktrees
+      # against it.
       REPOMESH_RUNNER_WORKSPACE_PATH_FROM: /runner-workspaces
-      REPOMESH_RUNNER_WORKSPACE_PATH_TO: /workspace
+      REPOMESH_RUNNER_WORKSPACE_PATH_TO: /host-share/.repomesh-workspaces
+      REPOMESH_RUNNER_WORKSPACE_ROOT: /host-share/.repomesh-workspaces
     volumes:
-      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-./.repomesh-workspaces}:/workspace
+      - ${REPOMESH_RUNNER_WORKSPACE_ROOT:-${AGENTTEAMS_HOST_SHARE_DIR:-.}/.repomesh-workspaces}:/host-share/.repomesh-workspaces
+      # 真实编码代理：宿主的 codex Linux 二进制 + 凭据目录挂进 runner
+      - ${REPOMESH_CODEX_BIN_HOST_PATH:-./.repomesh-workspaces/bin/codex}:/usr/local/bin/codex:ro
+      - ${REPOMESH_CODEX_HOME:-C:\Users\PC\.codex}:/home/runner/.codex
     depends_on:
       api:
         condition: service_healthy

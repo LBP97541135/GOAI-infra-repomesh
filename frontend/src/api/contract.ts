@@ -82,6 +82,10 @@ export interface IssueListItemView {
   opened_at: string;
   /** §2.3：取不到时间源时回退 opened_at，不编造 */
   updated_at: string;
+  /** v0.5 归档墓碑：列表卫生，不改写 state/phase（八相不新增第九相） */
+  archived: boolean;
+  /** 未归档恒为 null */
+  archived_at: string | null;
 }
 
 /** §2.5：两个计数**不受 state 与分页影响**，但**受 organization_id 影响**
@@ -1008,10 +1012,21 @@ export interface DiscoveryForcedContinue {
 }
 
 /** §2.2 `requirement_analysis` 直投影（GUI 步 1 / 管线 Step 0）。 */
+/** §2.2 `analysis.dimensions[]` 单条：四维度（业务场景/行为描述/变更类型/技术约束）
+ *  逐项判定。旧快照（该字段上线前完成的分析）没有此数组，消费方按缺失渲染。 */
+export interface DiscoveryDimensionView {
+  name: string;
+  covered: boolean;
+  note: string;
+}
+
+/** §2.2 `requirement_analysis` 直投影（GUI 步 1 / 管线 Step 0）。 */
 export interface DiscoveryAnalysisBlock {
   sufficient: boolean;
   confidence: number;
   missing_dimensions: string[];
+  /** 四维度逐项判定；旧快照缺省（undefined），不编造 */
+  dimensions?: DiscoveryDimensionView[];
   questions: string[];
   extracted_keywords: string[];
   /** 上一次追问的回答；拼接规则唯一实现在服务端（§4.3，前端拼即第二事实源） */

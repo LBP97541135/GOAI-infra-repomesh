@@ -10,56 +10,158 @@ import type {
 import { fetchConsoleAgents, gridSourceMode } from "../api/grid";
 import { fetchCodingAgents, fetchSetupStatus } from "../api/platformSetup";
 import { LocalAccountsPanel } from "../components/LocalAccountsPanel";
+import { LocalCliPage } from "./LocalCliPage";
+import { Bot, Info, Server, Settings2, SquareTerminal, Users, type LucideIcon } from "lucide-react";
 import { errText } from "../display";
-import { browserApiToken } from "../runtimeConfig";
+import { applyTheme, readStoredTheme, type ThemeName } from "../theme";
 import { useRuntimeRows } from "./useRuntimeRows";
 
-/** 设置页（CONS-44）。
+/** 设置页（CONS-44 · 2026-09-04 Trae 式重设计）。
  *
- *  原型这一页画的是「claude-code · 已配置 · CLI v2.1 · 4 个 worker 在用」这样的
- *  适配器卡片。那句「没有一项有数据源」在 main 合并之前是对的；`/setup/coding-agents`
- *  与 `/setup/status` 进来之后**读**的那半有源了（装没装、认没认得上、九项就绪检查），
- *  故本页现在画适配器清单。**仍然无源的两项照旧不画**：CLI 版本号（Controller 不
- *  回报）与「N 个 worker 在用」（探测结果不含按适配器的占用数）。
+ *  布局为用户逐项确认的定稿：**左侧分类导航（lucide 图标 + 文字）+ 右侧紧凑 IDE
+ *  风内容区**，设置行「左标签+说明小字 / 右控件或状态」，主题用下拉，无搜索框。
+ *  六类：通用（主题·数据源）/ 账号与权限（新增账号表单按需展开）/ 平台（就绪+
+ *  连接健康）/ 智能体（Runtime+适配器）/ 本地 CLI（原独立子页收编，侧栏入口撤除）/
+ *  关于（运行信息；已知缺口清单按用户裁决移除）。
  *
- *  本页另外两件事沿用原样：
+ *  职责与红线沿袭旧版（这些不是样式，是契约）：
  *
- *   1. **连接健康**：三条链路各自的真实状态。AgentTeams Controller 那条由
- *      `/console/agents` 的探测结果派生（可达 / 不可达 / 无事实各多少条）——
- *      这是全站唯一能观测 Controller 的地方，正好落在设置页的职责上；
- *   2. **缺口清单**：写路径与观测缺口逐条写明补齐路径，而不是留白。
+ *   1. **诚实数据**：九项就绪检查「服务端判定，本页不重算」；探测原文（detail）
+ *      原样贴；「无法判定」不合并进「未授权」；版本号与「N 个 worker 在用」仍无
+ *      数据源，故不列。
+ *   2. **写路径唯一**：本页唯一的服务端写路径是「账号与权限」里的新增本地账号
+ *      （`components/LocalAccountsPanel.tsx`）；主题只写本机 localStorage。
+ *   3. **连接健康**是全站唯一能观测 AgentTeams Controller 的地方（由
+ *      `/console/agents` 探测结果派生），落在「平台」类。
+ *   4. **已知缺口**收进「关于」：它是「诚实数据」文化的一部分，不与可操作设置
+ *      混排，但不从控制台里消失。
  *
- *  运行时种类（`runtime_kind`）只在探测通时才有值，故按可得情况呈现，一条都没有
- *  就说「Controller 未回报」，不列一份看起来已配置好的假清单。
- *
- *  **本页曾自称「首版只读」，迁移 5-2 之后不再是**：「人员与权限」段能建本地账号
- *  （`components/LocalAccountsPanel.tsx`），这是整页唯一的写路径。顶部徽标据此改了
- *  措辞——留着「只读」比没有徽标更糟，它会让人以为这一页点不坏任何东西。
- *  账号管理落在设置页而不是新开一个导航项：它是低频管理动作，与平台就绪、适配器
- *  清单同类；为它单开一栏会让侧栏多一个常年没人点的入口。 */
+ *  取数不受分类切换影响：setup / 适配器探测 / 花名册在挂载时各取各的（一个失败
+ *  不把另一个也变成空白），切到哪个分类都即时呈现。 */
 
-function Row({ label, value, note }: { label: string; value: string; note?: string }) {
+type CategoryKey = "general" | "account" | "platform" | "agents" | "localcli" | "about";
+
+/** 分类图标（lucide）：Trae 同款「图标 + 文字」导航项。 */
+const CATEGORIES: { key: CategoryKey; label: string; icon: LucideIcon }[] = [
+  { key: "general", label: "通用", icon: Settings2 },
+  { key: "account", label: "账号与权限", icon: Users },
+  { key: "platform", label: "平台", icon: Server },
+  { key: "agents", label: "智能体", icon: Bot },
+  { key: "localcli", label: "本地 CLI", icon: SquareTerminal },
+  { key: "about", label: "关于", icon: Info },
+];
+
+/* ── Trae 式行与控件 ─────────────────────────────────────────────────────── */
+
+/** 设置行：左「标题 + 说明小字」，右「控件或状态」。细分隔线、紧凑密度。 */
+function SettingRow({
+  title,
+  note,
+  children,
+}: {
+  title: React.ReactNode;
+  note?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
   return (
-    <div className="flex items-baseline gap-3 border-b border-panel py-2">
-      <span className="w-[132px] flex-none text-[11.5px] text-tx2">{label}</span>
-      <span className="min-w-0 flex-1">
-        <span className="block font-mono text-[11.5px] text-tx">{value}</span>
-        {note && <span className="mt-px block text-[10.5px] text-tx3">{note}</span>}
-      </span>
+    <div className="flex items-center justify-between gap-6 border-b border-panel py-2.5 last:border-b-0">
+      <div className="min-w-0">
+        <p className="text-[12.5px] text-tx">{title}</p>
+        {note != null && (
+          <p className="mt-px max-w-[56ch] text-[11px] leading-relaxed text-tx3">{note}</p>
+        )}
+      </div>
+      {children != null && <div className="flex-none">{children}</div>}
     </div>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** 右侧状态：色点 + 文案。idle（灰）是「选检未过 / 未安装」这类不是故障的态。 */
+function StatusDot({ tone, label }: { tone: "ok" | "bad" | "idle" | "warn"; label: string }) {
+  const dot = { ok: "bg-olive", bad: "bg-salmon", idle: "bg-line", warn: "bg-amber" }[tone];
+  const text = { ok: "text-olive", bad: "text-salmon", idle: "text-tx3", warn: "text-amber" }[tone];
   return (
-    <section className="mt-5">
-      <div className="eyebrow mb-1.5">{title}</div>
-      {children}
-    </section>
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap text-[11.5px] ${text}`}>
+      <i className={`size-[7px] flex-none rounded-full not-italic ${dot}`} />
+      {label}
+    </span>
   );
 }
 
-/** 检查项的中文标签。后端返回的是机器名（`checks` 的键与 `next_actions` 的元素
+/** Trae 同款右侧下拉：圆角、细边、聚焦琥珀。 */
+function SelectControl({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="rounded-hard border border-line bg-well px-2.5 py-1.5 text-[12px] text-tx outline-none transition-colors hover:border-tx2 focus:border-amber"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** 内容区分类标题（右侧窗格顶部）。 */
+function CategoryTitle({ children }: { children: React.ReactNode }) {
+  return <h2 className="pb-1 text-[13.5px] font-semibold text-cream">{children}</h2>;
+}
+
+/** 右侧长值（连接健康的探测计数之类），右对齐等宽。 */
+function RowValue({ children }: { children: React.ReactNode }) {
+  return <span className="block text-right font-mono text-[11.5px] leading-relaxed text-tx">{children}</span>;
+}
+
+/* ── 通用 ────────────────────────────────────────────────────────────────── */
+
+const THEME_LABEL: Record<ThemeName, string> = {
+  dark: "深色（默认）",
+  light: "浅色",
+};
+
+/** 界面主题：唯一的非服务端设置，只写本机 localStorage（见 theme.ts），
+ *  所以它不是本页的「写路径」。控件按定稿用 Trae 式下拉。 */
+function GeneralCategory() {
+  const [theme, setTheme] = useState<ThemeName>(readStoredTheme);
+  const source = gridSourceMode();
+  return (
+    <>
+      <CategoryTitle>通用</CategoryTitle>
+      <SettingRow title="界面主题">
+        <SelectControl
+          value={theme}
+          onChange={(value) => {
+            const name = value as ThemeName;
+            setTheme(name);
+            applyTheme(name);
+          }}
+          options={(["dark", "light"] as const).map((name) => ({ value: name, label: THEME_LABEL[name] }))}
+        />
+      </SettingRow>
+      <SettingRow title="数据源">
+        <StatusDot
+          tone={source === "live" ? "ok" : "warn"}
+          label={source === "live" ? "live · 真实读模型" : "replay · 夹具回放"}
+        />
+      </SettingRow>
+    </>
+  );
+}
+
+/* ── 平台 ────────────────────────────────────────────────────────────────── */
+
+/** 就绪检查的中文标签。后端返回的是机器名（`checks` 的键与 `next_actions` 的元素
  *  同一套），这里只做措辞，**不判定通过与否**——`ready_for_project_creation` 由
  *  服务端算，前端重算一遍就是第二套判定。 */
 const CHECK_LABEL: Record<string, string> = {
@@ -76,6 +178,96 @@ const CHECK_LABEL: Record<string, string> = {
   repositories: "仓库 catalog",
 };
 
+function PlatformCategory({
+  setup,
+  setupError,
+  account,
+  base,
+  onConfigure,
+  controller,
+}: {
+  setup: SetupStatusView | null;
+  setupError: string | null;
+  account: Account;
+  base: string;
+  onConfigure: () => void;
+  controller: { value: string; note: string | null; loading: boolean };
+}) {
+  const requiredChecks = new Set(
+    setup?.dependencies.filter((dependency) => dependency.required).map((item) => item.id) ?? [],
+  );
+  const blocking = setup?.next_actions.filter((name) => requiredChecks.has(name)) ?? [];
+  return (
+    <>
+      <CategoryTitle>平台</CategoryTitle>
+      {setupError ? (
+        <p className="py-2 text-[11.5px] text-salmon">就绪检查取用失败：{setupError}</p>
+      ) : setup === null ? (
+        <p className="py-2 text-[11.5px] text-tx3">检查中…</p>
+      ) : (
+        <>
+          <SettingRow
+            title="可建项目"
+            note={
+              setup.ready_for_project_creation
+                ? "全部必检通过"
+                : // next_actions 混装必检与选检。照抄会把 GitHub App 这类
+                  // 「这套部署没走 GitHub 交付」说成拦路项，所以这里只报
+                  // 真正挡路的那几项。
+                  `必检未过：${blocking.map((name) => CHECK_LABEL[name] ?? name).join(" · ")}`
+            }
+          >
+            <StatusDot
+              tone={setup.ready_for_project_creation ? "ok" : "bad"}
+              label={setup.ready_for_project_creation ? "就绪" : "未就绪"}
+            />
+          </SettingRow>
+          {Object.entries(setup.checks).map(([name, passed]) => (
+            <SettingRow key={name} title={CHECK_LABEL[name] ?? name}>
+              {/* 未通过的选检项用灰而非红：github_app 没配不是故障，
+                  是这套部署没走 GitHub 交付。颜色区分必检与选检。 */}
+              <StatusDot
+                tone={passed ? "ok" : requiredChecks.has(name) ? "bad" : "idle"}
+                label={passed ? "已就绪" : requiredChecks.has(name) ? "必检未过" : "选检未过"}
+              />
+            </SettingRow>
+          ))}
+          <p className="pt-2 text-[11px] text-tx3">
+            账号 {setup.counts.accounts} · 智能体 {setup.counts.agents} · 仓库 {setup.counts.repositories}。
+          </p>
+          {Object.values(setup.checks).some((passed) => !passed) ? (
+            <button
+              className="mt-3 rounded-hard border border-amber px-3 py-1.5 text-[11.5px] text-amber hover:bg-amber/10"
+              onClick={onConfigure}
+            >
+              去配置
+            </button>
+          ) : null}
+        </>
+      )}
+
+      <h3 className="pb-1 pt-5 text-[11px] font-semibold tracking-widest text-tx3 uppercase">连接健康</h3>
+      <SettingRow title="AgentTeams Controller">
+        {controller.loading ? (
+          <span className="text-[11.5px] text-tx3">探测中…</span>
+        ) : (
+          <RowValue>{controller.value}</RowValue>
+        )}
+      </SettingRow>
+      <SettingRow title="读模型 API">
+        <RowValue>{base === "" ? "同源（经代理 /api）" : base}</RowValue>
+      </SettingRow>
+      <SettingRow title="本地身份服务">
+        <RowValue>
+          已登录 · {account.username} · {account.is_admin ? "管理员" : "本地账户"}
+        </RowValue>
+      </SettingRow>
+    </>
+  );
+}
+
+/* ── 智能体 ──────────────────────────────────────────────────────────────── */
+
 const AUTH_LABEL: Record<CodingAgentAdapterView["auth_status"], string> = {
   authorized: "已授权",
   unauthorized: "未授权",
@@ -85,30 +277,107 @@ const AUTH_LABEL: Record<CodingAgentAdapterView["auth_status"], string> = {
 
 function AdapterRow({ adapter }: { adapter: CodingAgentAdapterView }) {
   return (
-    <div className="flex items-baseline gap-2.5 border-b border-panel py-2">
-      <span className="w-[132px] flex-none text-[11.5px] text-tx">{adapter.display_name}</span>
-      <span className="min-w-0 flex-1">
-        <span className="block font-mono text-[11.5px] text-tx">
-          {adapter.installed ? adapter.executable ?? "已安装" : "未安装"}
-          {/* 未安装就没有「认没认上」这回事：auth 恒为 unknown，是
-              binary_not_found 的必然结果而不是第二个事实。两个都写会让
-              一份缺失读起来像两个问题。 */}
-          {adapter.installed && (
-            <span className="ml-2 text-tx2">· {AUTH_LABEL[adapter.auth_status]}</span>
-          )}
-        </span>
-        <span className="mt-px block text-[10.5px] text-tx3">
-          {/* detail 是探测原文（binary_not_found 这类），原样贴 */}
-          {adapter.detail ? `${adapter.detail} · ` : ""}
-          执行状态 {adapter.execution_status}
-          {adapter.runnable_by_verified_driver ? "（可由已验证驱动执行）" : ""}
-        </span>
-      </span>
-    </div>
+    <SettingRow title={adapter.display_name}>
+      {/* 未安装就没有「认没认上」这回事：auth 恒为 unknown，是
+          binary_not_found 的必然结果而不是第二个事实。 */}
+      <StatusDot
+        tone={!adapter.installed ? "idle" : adapter.auth_status === "authorized" ? "ok" : adapter.auth_status === "unauthorized" ? "bad" : "idle"}
+        label={adapter.installed ? AUTH_LABEL[adapter.auth_status] : "未安装"}
+      />
+    </SettingRow>
   );
 }
 
-export function SettingsPage({ account, onConfigure }: { account: Account; onConfigure: () => void }) {
+function AgentsCategory({
+  probe,
+  probeFailure,
+  kinds,
+  agentsPhase,
+  agentsError,
+}: {
+  probe: CodingAgentsProbe | null;
+  probeFailure: string | null;
+  kinds: RuntimeKind[];
+  agentsPhase: string;
+  agentsError: string | null;
+}) {
+  return (
+    <>
+      <CategoryTitle>智能体</CategoryTitle>
+      <SettingRow
+        title="运行时种类"
+        note={agentsPhase === "loading" ? "探测中…" : undefined}
+      >
+        {kinds.length > 0 ? (
+          <span className="flex flex-wrap justify-end gap-1.5">
+            {kinds.map((kind) => (
+              <span key={kind} className="rounded-hard border border-bluegray px-2 py-px font-mono text-[11px] text-bluegray">
+                {kind}
+              </span>
+            ))}
+          </span>
+        ) : (
+          <StatusDot tone="idle" label={agentsError ? "取用失败" : "无回报"} />
+        )}
+      </SettingRow>
+
+      <h3 className="pb-1 pt-5 text-[11px] font-semibold tracking-widest text-tx3 uppercase">
+        Coding Agent 适配器
+      </h3>
+      {probeFailure ? (
+        <p className="py-2 text-[11.5px] text-salmon">适配器探测取用失败：{probeFailure}</p>
+      ) : probe === null ? (
+        <p className="py-2 text-[11.5px] text-tx3">探测中…</p>
+      ) : probe.adapters.length === 0 ? (
+        <p className="py-2 text-[11.5px] text-tx3">注册表里没有适配器清单。</p>
+      ) : (
+        <>
+          {probe.adapters.map((adapter) => (
+            <AdapterRow key={adapter.adapter_id} adapter={adapter} />
+          ))}
+        </>
+      )}
+    </>
+  );
+}
+
+/* ── 关于 ────────────────────────────────────────────────────────────────── */
+
+function AboutCategory({ account, base }: { account: Account; base: string }) {
+  return (
+    <>
+      <CategoryTitle>关于</CategoryTitle>
+      <SettingRow title="版本">
+        <RowValue>{__APP_VERSION__}</RowValue>
+      </SettingRow>
+      <SettingRow title="数据源">
+        <RowValue>{gridSourceMode() === "live" ? "live（真实读模型）" : "replay（夹具回放）"}</RowValue>
+      </SettingRow>
+      <SettingRow title="API 地址">
+        <RowValue>{base === "" ? "同源（经代理 /api）" : base}</RowValue>
+      </SettingRow>
+      <SettingRow title="登录身份">
+        <RowValue>
+          {account.username} · {account.is_admin ? "管理员" : "本地账户"}
+        </RowValue>
+      </SettingRow>
+    </>
+  );
+}
+
+/* ── 页面骨架：左侧五类导航 + 右侧内容 ───────────────────────────────────── */
+
+export function SettingsPage({
+  account,
+  onConfigure,
+  initialCategory = "general",
+}: {
+  account: Account;
+  onConfigure: () => void;
+  /** 旧深链（#/settings/local-cli）落到对应分类；仅挂载时生效 */
+  initialCategory?: CategoryKey;
+}) {
+  const [category, setCategory] = useState<CategoryKey>(initialCategory);
   const fetcher = useCallback((withRuntime: boolean) => fetchConsoleAgents(withRuntime), []);
   const { rows, error, phase, probeError } = useRuntimeRows<ConsoleAgentView>(fetcher);
 
@@ -144,182 +413,90 @@ export function SettingsPage({ account, onConfigure }: { account: Account; onCon
     ),
   ];
 
-  const controllerValue =
-    phase === "loading"
-      ? "探测中…"
-      : error
-        ? "花名册取用失败，无法观测"
-        : phase === "failed"
-          ? "探测请求失败"
-          : `可达 ${reachable} · 不可达 ${unreachable} · 无事实 ${absent}`;
-
-  const controllerNote =
-    phase === "failed" && probeError
-      ? probeError.slice(0, 90)
-      : unreachable > 0
-        ? "不可达是契约规定的降级（HTTP 仍 200），持久化花名册不受影响，不等于团队故障"
-        : "「无事实」= AgentTeams 未配置，或 Controller 报告没有这个资源（404）";
-
   const base = import.meta.env.VITE_API_BASE ?? "";
-  const requiredChecks = new Set(
-    setup?.dependencies.filter((dependency) => dependency.required).map((item) => item.id) ?? [],
-  );
 
   return (
-    <div className="max-w-[860px]">
-      <div className="flex items-baseline gap-3 border-b border-line pb-3">
-        <h1 className="text-[16px] font-semibold text-cream">设置</h1>
-        <span className="microlabel">只读 · 唯一写路径：新增账号</span>
+    <div className="flex items-start gap-8">
+      {/* 左侧分类导航：滚动时钉在内容区顶部（Trae 的常驻导航栏） */}
+      <nav className="w-[176px] flex-none">
+        <div className="sticky top-5">
+          <h1 className="pb-1 text-[16px] font-semibold text-cream">设置</h1>
+          <ul className="grid gap-0.5 pt-2">
+            {CATEGORIES.map((item) => {
+              const Icon = item.icon;
+              return (
+                <li key={item.key}>
+                  <button
+                    type="button"
+                    aria-current={category === item.key ? "true" : undefined}
+                    onClick={() => setCategory(item.key)}
+                    className={`flex w-full items-center gap-2.5 rounded-hard border-l-2 px-2.5 py-1.5 text-left transition-colors ${
+                      category === item.key
+                        ? "border-amber bg-well text-tx"
+                        : "border-transparent text-tx2 hover:bg-well/60 hover:text-tx"
+                    }`}
+                  >
+                    <Icon
+                      className={`size-[15px] flex-none ${
+                        category === item.key ? "text-amber" : "text-tx3"
+                      }`}
+                    />
+                    <span className="text-[12.5px]">{item.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </nav>
+
+      {/* 右侧内容区：只渲染当前分类 */}
+      <div className="min-w-0 max-w-[720px] flex-1 pb-6">
+        {category === "general" && <GeneralCategory />}
+        {category === "account" && (
+          <>
+            <CategoryTitle>账号与权限</CategoryTitle>
+            <LocalAccountsPanel account={account} />
+          </>
+        )}
+        {category === "platform" && (
+          <PlatformCategory
+            setup={setup}
+            setupError={setupError}
+            account={account}
+            base={base}
+            onConfigure={onConfigure}
+            controller={{
+              loading: rows === null && !error,
+              value:
+                phase === "loading"
+                  ? "探测中…"
+                  : error
+                    ? "花名册取用失败，无法观测"
+                    : phase === "failed"
+                      ? "探测请求失败"
+                      : `可达 ${reachable} · 不可达 ${unreachable} · 无事实 ${absent}`,
+              note:
+                phase === "failed" && probeError
+                  ? probeError.slice(0, 90)
+                  : unreachable > 0
+                    ? "不可达是契约规定的降级（HTTP 仍 200），持久化花名册不受影响，不等于团队故障"
+                    : "「无事实」= AgentTeams 未配置，或 Controller 报告没有这个资源（404）",
+            }}
+          />
+        )}
+        {category === "agents" && (
+          <AgentsCategory
+            probe={probe}
+            probeFailure={probeFailure}
+            kinds={kinds}
+            agentsPhase={phase}
+            agentsError={error}
+          />
+        )}
+        {category === "localcli" && <LocalCliPage embedded />}
+        {category === "about" && <AboutCategory account={account} base={base} />}
       </div>
-
-      <Section title="平台就绪">
-        {setupError ? (
-          <p className="pt-1 text-[11.5px] text-salmon">就绪检查取用失败：{setupError}</p>
-        ) : setup === null ? (
-          <p className="pt-1 text-[11.5px] text-tx3">检查中…</p>
-        ) : (
-          <>
-            <Row
-              label="可建项目"
-              value={setup.ready_for_project_creation ? "是" : "否"}
-              note={
-                setup.ready_for_project_creation
-                  ? "全部必检通过（服务端判定，本页不重算）"
-                  : // next_actions 混装必检与选检。照抄会把 GitHub App 这类
-                    // 「这套部署没走 GitHub 交付」说成拦路项，所以这里只报
-                    // 真正挡路的那几项，其余在徽标里以灰色示意。
-                    `必检未过：${setup.next_actions
-                      .filter((name) => requiredChecks.has(name))
-                      .map((name) => CHECK_LABEL[name] ?? name)
-                      .join(" · ")}`
-              }
-            />
-            <div className="flex flex-wrap gap-1.5 pt-2">
-              {Object.entries(setup.checks).map(([name, passed]) => (
-                <span
-                  key={name}
-                  className={`rounded-hard border px-2 py-px text-[11px] ${
-                    passed
-                      ? "border-olive text-olive"
-                      : requiredChecks.has(name)
-                        ? "border-salmon text-salmon"
-                        : "border-line text-tx3"
-                  }`}
-                  title={
-                    requiredChecks.has(name)
-                      ? "必检项：不通过则无法建项目"
-                      : "选检项：不参与可建项目判定"
-                  }
-                >
-                  {CHECK_LABEL[name] ?? name}
-                </span>
-              ))}
-            </div>
-            <p className="pt-2 text-[11px] text-tx3">
-              {/* 未通过的选检项用灰色而非红色：github_app 没配不是故障，
-                  是这套部署没走 GitHub 交付。颜色区分必检与选检，措辞不喊错。 */}
-              红=必检未过 · 绿=已过 · 灰=选检未过（不挡建项目）。账号 {setup.counts.accounts}{" "}
-              · 智能体 {setup.counts.agents} · 仓库 {setup.counts.repositories}。
-            </p>
-            {Object.values(setup.checks).some((passed) => !passed) ? (
-              <button
-                className="mt-3 rounded-hard border border-amber px-3 py-1.5 text-[11.5px] text-amber hover:bg-amber/10"
-                onClick={onConfigure}
-              >
-                去配置
-              </button>
-            ) : null}
-          </>
-        )}
-      </Section>
-
-      {/* 紧挨平台就绪：那一段末尾报的「账号 N」正是这一段管的东西 */}
-      <Section title="人员与权限">
-        <LocalAccountsPanel account={account} />
-      </Section>
-
-      <Section title="连接健康">
-        <Row
-          label="AgentTeams Controller"
-          value={controllerValue}
-          note={rows === null && !error ? "等待花名册返回" : controllerNote}
-        />
-        <Row
-          label="读模型 API"
-          value={base === "" ? "同源（经 dev proxy /api）" : base}
-          note={`鉴权：${browserApiToken() ? "已配置 Bearer 动作 token" : "未配置 token"} · 当前数据源 ${gridSourceMode()}`}
-        />
-        <Row
-          label="本地身份服务"
-          value={`已登录 · ${account.username}`}
-          note={`${account.is_admin ? "管理员" : "本地账户"} · 会话是 httpOnly cookie，前端不持有 token`}
-        />
-      </Section>
-
-      <Section title="Agent Runtime">
-        {kinds.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {kinds.map((kind) => (
-              <span key={kind} className="rounded-hard border border-bluegray px-2 py-px font-mono text-[11px] text-bluegray">
-                {kind}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="text-[11.5px] text-tx3">
-            {phase === "loading"
-              ? "探测中…"
-              : "Controller 未回报任何 runtime_kind（探测不可达或未配置）。"}
-          </p>
-        )}
-      </Section>
-
-      <Section title="Coding Agent 适配器">
-        {probeFailure ? (
-          <p className="pt-1 text-[11.5px] text-salmon">适配器探测取用失败：{probeFailure}</p>
-        ) : probe === null ? (
-          <p className="pt-1 text-[11.5px] text-tx3">探测中…</p>
-        ) : probe.adapters.length === 0 ? (
-          <p className="pt-1 text-[11.5px] text-tx3">注册表里没有适配器清单。</p>
-        ) : (
-          <>
-            {probe.adapters.map((adapter) => (
-              <AdapterRow key={adapter.adapter_id} adapter={adapter} />
-            ))}
-            <p className="pt-2 text-[11px] text-tx3">
-              {/* note 是后端原话，不改写：它划定了这份探测的适用范围 */}
-              探测环境 {probe.environment}。{probe.note} 版本号与「N 个 worker 在用」
-              仍无源，故不列。
-            </p>
-          </>
-        )}
-      </Section>
-
-      <Section title="已知缺口">
-        <ul className="grid gap-1.5 pt-1 text-[11.5px] text-tx2">
-          <li>
-            · 适配器<b className="text-tx2">写</b>路径（配置 / 接入 runtime）——二期，API 未立项。
-            读已接入（见上方探测清单）。
-          </li>
-          <li>
-            · 智能体<b className="text-tx2">醒睡态与运行时长</b>无源：Controller 不回报启动时间戳，
-            期望态（DesiredRuntimeState）不是观测态。补齐路径在 AgentTeams 侧。
-          </li>
-          <li>· 房间刷新仍为轮询（5s）；SSE 推送需先定「哪些事实值得推」，另立项。</li>
-          <li>
-            · <b className="text-tx2">两套鉴权并存</b>：读模型 / 发现链 / 网格走共享动作 token，
-            human_control 面（建团、审核台）走本地登录会话。同一控制台里谁认哪一套是按端点定的，
-            尚未统一——统一到单一主体化凭据另立项。
-          </li>
-          <li>· 工作区（组织）删除与改名未接入；列表、切换与创建已接入（契约 v0.3 §2）。</li>
-          <li>
-            · 本地账号<b className="text-tx2">只能新建</b>：停用、改密、改显示名后端都没有端点
-            （/auth/accounts 只有 GET 与 POST），所以上面的「已停用」只读得到、改不了。
-            把账号<b className="text-tx2">授权成某个项目的审核人</b>是另一件事，落在项目拓扑的
-            human_grants 上，随监管策略入口一并迁入（迁移 5-1）。
-          </li>
-        </ul>
-      </Section>
     </div>
   );
 }

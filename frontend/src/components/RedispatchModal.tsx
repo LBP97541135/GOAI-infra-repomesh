@@ -53,7 +53,7 @@ export function RedispatchModal({
     <Modal
       open={open}
       onClose={onCancel}
-      className="m-auto w-[min(560px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+      className="m-auto w-[min(560px,92vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div>
@@ -92,7 +92,7 @@ export function RedispatchModal({
               <input
                 type="radio"
                 name="redispatch-scope"
-                className="mt-0.5 flex-none accent-[#c8952a]"
+                className="mt-0.5 flex-none accent-gold"
                 checked={scope === value}
                 disabled={value === "rerun" && rerunnable.length === 0}
                 onChange={() => onScopeChange(value)}
@@ -196,7 +196,7 @@ export function RedispatchModal({
         </div>
 
         {errorText && (
-          <div className="mt-3 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] break-words text-[#e8a184]">
+          <div className="mt-3 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] break-words text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">服务端拒绝</b>
             {errorText}
           </div>
@@ -211,7 +211,7 @@ export function RedispatchModal({
           取消
         </button>
         <button
-          className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
           disabled={submitting || live.length === 0}
           onClick={onConfirm}
         >

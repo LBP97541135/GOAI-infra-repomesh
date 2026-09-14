@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from repomesh.modules.repository_intelligence.application.requirement_analysis import (
+    _SYSTEM_PROMPT,
     RequirementAnalysis,
     RequirementAnalyzer,
     _parse_analysis,
@@ -36,18 +37,23 @@ def _make_response(
     missing_dimensions: list[str] | None = None,
     questions: list[str] | None = None,
     extracted_keywords: list[str] | None = None,
+    suggested_title: str | None = None,
 ) -> str:
-    """Build a JSON response string like the LLM would return."""
-    return json.dumps(
-        {
-            "sufficient": sufficient,
-            "confidence": confidence,
-            "missing_dimensions": missing_dimensions or [],
-            "questions": questions or [],
-            "extracted_keywords": extracted_keywords or [],
-        },
-        ensure_ascii=False,
-    )
+    """Build a JSON response string like the LLM would return.
+
+    ``suggested_title`` is omitted entirely when ``None`` so the "model did
+    not return the field" shape stays testable.
+    """
+    payload: dict = {
+        "sufficient": sufficient,
+        "confidence": confidence,
+        "missing_dimensions": missing_dimensions or [],
+        "questions": questions or [],
+        "extracted_keywords": extracted_keywords or [],
+    }
+    if suggested_title is not None:
+        payload["suggested_title"] = suggested_title
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +134,34 @@ class TestParseAnalysis:
         assert result.missing_dimensions == []
         assert result.questions == []
         assert result.extracted_keywords == []
+
+    def test_suggested_title_extracted(self) -> None:
+        raw = _make_response(suggested_title="订单服务接入操作审计日志")
+        result = _parse_analysis(raw)
+        assert result.suggested_title == "订单服务接入操作审计日志"
+
+    def test_suggested_title_missing_defaults_empty(self) -> None:
+        """模型没回这个字段（旧提示词/解析失败）时必须是空串，读模型才知道退回截断。"""
+        result = _parse_analysis(_make_response())
+        assert result.suggested_title == ""
+
+    def test_suggested_title_capped_at_sixty_chars(self) -> None:
+        raw = _make_response(suggested_title="长" * 100)
+        result = _parse_analysis(raw)
+        assert len(result.suggested_title) == 60
+
+    def test_suggested_title_non_string_ignored(self) -> None:
+        """与 questions/keywords 同一规矩：非字符串直接丢弃。"""
+        raw = json.dumps(
+            {"sufficient": True, "confidence": 0.9, "suggested_title": 12345}
+        )
+        result = _parse_analysis(raw)
+        assert result.suggested_title == ""
+
+    def test_system_prompt_asks_for_distilled_title(self) -> None:
+        """提示词必须要求「提炼」而非「截取」——这是标题质量契约的一部分。"""
+        assert "suggested_title" in _SYSTEM_PROMPT
+        assert "不要照抄开头" in _SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------

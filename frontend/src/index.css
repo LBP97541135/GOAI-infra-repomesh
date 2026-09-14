@@ -21,16 +21,140 @@
   --color-paper-ink: #221c10; /* 纸面正文 */
   --color-paper-dim: #6d6349;
 
+  /* 侧栏强调（2026-09-08 用户裁决终版）：配色改动**只发生在浅色模式**——
+     深色（默认）侧栏维持本项目原有琥珀配色原样（琥珀实底/ink-deep 栏底），
+     下面的 chalk/side-* 深色值即原琥珀系同值回退；浅色侧栏改低饱和中性
+     灰白：浅灰标签底、深灰选中文字（用户复核：炭灰实底太深，改浅）。 */
+  --color-chalk: #c99e52; /* 深色=琥珀原值（侧栏实底/选中竖条） */
+  --color-chalk-hi: #e3c078; /* 深色=琥珀亮（悬停/选中文字） */
+  --color-on-chalk: #191308; /* 实底上的墨字 */
+  --color-side-rail: #131009; /* 深色栏底=原 ink-deep */
+  --color-side-panel: #201b12; /* 深色浮层面板=原 panel */
+  --color-side-active: #251e10; /* 深色选中标签底=原 amber/10 洗底 */
+
+  /* —— 从写死色值收编的语义令牌（深色值 = 收编前的原字面量，
+        浅色值见下方 html[data-theme="light"] 整套覆盖）—— */
+  --color-on-amber: #191308; /* 琥珀/橄榄实底上的墨字 */
+  --color-salmon-well: #2b1712; /* 鲑红警示的凹陷底 */
+  --color-salmon-hi: #e8a184; /* 鲑红警示的亮文字 */
+  --color-salmon-deep: #7a4530; /* 鲑红深边 */
+  --color-line-strong: #4a4128; /* 弹窗等强描边 */
+  --color-well: #1c1710; /* 比面板更深一档的凹陷面 */
+  --color-well-2: #241c10; /* 凹陷面上的高亮档（当前轮次等） */
+  --color-well-strong: #17130a; /* 纸面卡片上的主按钮实底 */
+  --color-amber-well: #2a2110; /* 琥珀警示的凹陷底 */
+  --color-chip: #4a4130; /* 头像/徽标灰棕圆片 */
+  --color-gold: #c8952a; /* 高亮金（accent、倒计时） */
+  --color-paper: #e9dec2; /* 纸面底色。深色下与 cream 同值；浅色下 cream
+        转作强调文字色（随背景翻转），纸面必须保持浅——这是两者分家的原因 */
+  --color-kraft-deep: #8a7648; /* kraft 纸面的描边 */
+  --color-kraft-line: #b7a87e; /* kraft 纸面的浅描边 */
+  --color-kraft-hi: #e6d4a8; /* kraft 纸面的悬停档 */
+  --color-on-kraft: #3a2f18; /* kraft 纸面上的强文字 */
+  --color-on-kraft-body: #57492c; /* kraft 纸面上的正文 */
+  --color-on-kraft-dim: #7a6a42; /* kraft 纸面上的弱文字 */
+
+  /* 阴影令牌：深色用黑影，浅色换暖棕影（对应 shadow-pop/float/rail/card） */
+  --shadow-pop: 0 24px 70px rgba(0, 0, 0, 0.7);
+  --shadow-float: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --shadow-rail: 0 12px 30px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 6px 16px rgba(0, 0, 0, 0.3);
+
   --font-sans: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
 
   --radius-hard: 2px; /* 全局硬朗圆角 */
+
+  /* 新会话居中输入框（AIChatInput）：深色贴平不浮起 */
+  --chat-radius: 8px;
+  --chat-shadow: none;
+}
+
+/* —— 浅色主题「黑白灰」——2026-09-08 用户裁决：全站去暖棕/去橙调，
+   灰阶统一为带一丝冷调的中性灰（对齐 ZCode 观感），不再注入纸感暖调；
+   状态色红/绿/蓝保留语义，深色（默认）主题不受影响。 */
+html[data-theme="light"] {
+  --color-ink: #ffffff; /* 主背景：纯白 */
+  --color-ink-deep: #f7f7f8; /* 侧栏外其他深一档面板：中性 */
+  --color-panel: #ffffff;
+  --color-panel-2: #f4f4f5;
+  --color-line: #e4e4e7; /* 发丝线：中性冷灰 */
+  --color-amber: #34343a; /* 强调/主按钮/选中态：炭灰 */
+  --color-amber-hi: #48484f; /* 主按钮悬停：抬升一档 */
+  --color-cream: #26262b; /* 强调文字 */
+  --color-eyebrow: #7c7c85; /* 小节标签：中性灰 */
+  --color-kraft: #f4f4f5;
+  --color-salmon: #d1342f; /* 错误：亮红 */
+  --color-olive: #1a7f37; /* 成功：亮绿 */
+  --color-bluegray: #3d6a94; /* 信息：亮蓝 */
+  --color-tx: #333338;
+  --color-tx2: #71717a;
+  --color-tx3: #a1a1aa;
+  --color-paper-ink: #2e2e33; /* 纸面/实底上的深色，浅色下仍是深 */
+  --color-paper-dim: #909095;
+
+  --color-on-amber: #ffffff; /* 主按钮反白字 */
+  --color-salmon-well: #fdecea;
+  --color-salmon-hi: #a8271f;
+  --color-salmon-deep: #b3261e;
+  --color-line-strong: #d4d4d8;
+  --color-well: #f4f4f5; /* 凹陷面：中性浅灰 */
+  --color-well-2: #ffffff; /* 凹陷面上的当前项：白卡浮起 */
+  --color-well-strong: #34343a; /* 纸面卡片主按钮：炭灰底 */
+  --color-amber-well: #f4f4f5; /* 警示洗底：中性化（原暖黄相被用户否决） */
+  --color-chip: #e4e4e7;
+  --color-gold: #6e6e76; /* 倒计时等角标数字：中性灰 */
+
+  /* 侧栏强调（浅色）——2026-09-08 终版：直接取屏幕上 ZCode 浅色侧栏的
+     实测值。灰底 #ececee（带一丝冷调，不是暖灰）、选中/悬停 #e1e1e3、
+     实底钮低饱和白 #f8f8f8、文字 #262626，与内容区 #ffffff 拉开一档。 */
+  --color-chalk: #f8f8f8; /* 低饱和白：实底按钮/Logo 底（浮在灰栏上） */
+  --color-chalk-hi: #262626; /* 选中/悬停文字 */
+  --color-on-chalk: #26262b; /* 浅色实底上的墨字 */
+  --color-side-rail: #ececee; /* 侧栏栏底：ZCode 同款可见浅灰 */
+  --color-side-panel: #ffffff;
+  --color-side-active: #e1e1e3; /* 选中标签底：ZCode 次级灰 */
+  --color-paper: #fafafa;
+  --color-kraft-deep: #d4d4d8;
+  --color-kraft-line: #e4e4e7;
+  --color-kraft-hi: #ececee;
+  --color-on-kraft: #333338;
+  --color-on-kraft-body: #52525b;
+  --color-on-kraft-dim: #82828a;
+
+  --shadow-pop: 0 24px 60px rgba(24, 24, 27, 0.12);
+  --shadow-float: 0 16px 40px rgba(24, 24, 27, 0.1);
+  --shadow-rail: 0 12px 30px rgba(24, 24, 27, 0.08);
+  --shadow-card: 0 6px 16px rgba(24, 24, 27, 0.06);
+
+  /* 圆角只随浅色放软：深色保留 Variant D 的硬朗 2px，浅色 6px。
+     弹窗/文件夹标签的原生硬圆角已收编进 rounded-hard，跟随本值。 */
+  --radius-hard: 6px;
+
+  /* 新会话居中输入框：浅色大圆角 + 轻投影（用户选型） */
+  --chat-radius: 12px;
+  --chat-shadow: 0 8px 24px rgba(24, 24, 27, 0.07);
 }
 
 html,
 body,
 #root {
   height: 100%;
+}
+
+/* 全站隐藏滚动杆（2026-09-08 用户裁决）：滚轮/触控照常滚动，杆不再显示。
+   需要显式滚动指示的特例用 .scrollbar-visible 覆盖。 */
+* {
+  scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-visible {
+  scrollbar-width: thin;
+}
+.scrollbar-visible::-webkit-scrollbar {
+  display: block;
 }
 
 body {
@@ -48,13 +172,14 @@ button {
 }
 
 @layer components {
-  /* 微标签：等宽大写加字距 */
+  /* 微标签：等宽大写加字距。深色跟随琥珀金；浅色用 --color-eyebrow
+     （中性灰）——黑标签会和小节标题抢层级，见浅色块内的角色说明。 */
   .eyebrow {
     font-family: var(--font-mono);
     font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
-    color: var(--color-amber);
+    color: var(--color-eyebrow, var(--color-amber));
     text-transform: uppercase;
   }
 
@@ -65,6 +190,15 @@ button {
     letter-spacing: 0.16em;
     text-transform: uppercase;
     color: var(--color-tx2);
+  }
+
+  /* 隐藏滚动条但保留滚轮/触控滚动（2026-09-08 用户裁决：侧栏滚动杆难看）。
+     主要给侧栏栏体与近期会话列表用；别的长列表不跟。 */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -85,4 +219,19 @@ button {
 dialog::backdrop {
   background: rgba(10, 8, 4, 0.6);
   backdrop-filter: blur(2px);
+}
+
+html[data-theme="light"] dialog::backdrop {
+  background: rgba(15, 15, 20, 0.4);
+}
+
+/* —— DAG 执行态「进行中」的主题呈现值（浅色 DAG 重画，2026-09-08）——
+   深色：琥珀（--color-amber，与全站「琥珀 = 运行中」语义一致，不变）。
+   浅色：amber 已转作炭灰主操作色，和「等待」的暖灰拉不开距离，
+   进行中改读信息蓝（随 --color-bluegray 的浅色值走）。 */
+:root {
+  --color-status-running: var(--color-amber);
+}
+html[data-theme="light"] {
+  --color-status-running: var(--color-bluegray);
 }

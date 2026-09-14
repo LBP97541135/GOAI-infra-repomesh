@@ -14,6 +14,10 @@ function generatedActionToken(): string | null {
   return line?.slice("REPOMESH_AGENT_ACTION_TOKEN=".length).trim() || null;
 }
 
+const pkg = JSON.parse(
+  fs.readFileSync(path.resolve(import.meta.dirname, "package.json"), "utf8"),
+) as { version?: string };
+
 export default defineConfig(() => {
   const actionToken = generatedActionToken();
   return {
@@ -22,9 +26,12 @@ export default defineConfig(() => {
     // frontend tree. Inject it at transform time so the console and API always
     // share one credential without asking the operator to copy it. Container
     // builds do not carry this file and keep using VITE_API_TOKEN as before.
-    define: actionToken
-      ? { "import.meta.env.VITE_API_TOKEN": JSON.stringify(actionToken) }
-      : undefined,
+    define: {
+      __APP_VERSION__: JSON.stringify(pkg.version ?? "0.0.0"),
+      ...(actionToken
+        ? { "import.meta.env.VITE_API_TOKEN": JSON.stringify(actionToken) }
+        : {}),
+    },
     server: {
       host: "127.0.0.1",
       port: 5280,

@@ -150,15 +150,36 @@ export function createApiClient(config: ApiClientConfig) {
       organizationId?: string;
       cursor?: string;
       limit?: number;
+      /** v0.5：默认视图与两个计数都排除已归档 issue */
+      includeArchived?: boolean;
     }) => {
       const params = new URLSearchParams();
       if (opts?.state) params.set("state", opts.state);
       if (opts?.organizationId) params.set("organization_id", opts.organizationId);
       if (opts?.cursor) params.set("cursor", opts.cursor);
       if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts?.includeArchived) params.set("include_archived", "true");
       const q = params.toString();
       return request<IssueListResponse>(config, "GET", `/issues${q ? `?${q}` : ""}`);
     },
+
+    /** v0.5 §1：归档 issue（墓碑，不是删除；重复调用幂等返回同一 archived_at）。
+     *  404 无此 issue；409 有进行中轮次——detail 原文上抛，由调用方呈现。 */
+    archiveIssue: (issueId: string) =>
+      request<{ issue_id: string; archived_at: string }>(
+        config,
+        "POST",
+        `/issues/${encodeURIComponent(issueId)}/archive`,
+      ),
+
+    /** 彻底清除（2026-09-08 用户裁决）：硬删除已归档 issue 的快照、决策链与
+     *  审计事件——只保留一条 IssuePurged 审计。不可逆；409 未归档。 */
+    purgeIssue: (issueId: string) =>
+      request<{ snapshots: number; decision_chain_nodes: number; audit_events: number }>(
+        config,
+        "POST",
+        `/issues/${encodeURIComponent(issueId)}/purge`,
+      ),
 
     /** 契约 v0.3 §1：创建 issue（= 首份虚拟草稿快照）。201 首建 / 200 幂等重放，
      *  响应都是 §2 单条投影；403 主体非活跃 Org Leader、404 主体不存在。 */

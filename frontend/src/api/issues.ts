@@ -17,6 +17,8 @@ export interface IssuesQuery {
   /** Q2：工作区由前端持有并传参，服务端不猜。未选工作区时不传 = 全部。 */
   organizationId?: string;
   cursor?: string;
+  /** v0.5：默认视图（与两个计数）排除已归档 issue；开关打开时置 true。 */
+  includeArchived?: boolean;
 }
 
 function replayPage(q: IssuesQuery): IssueListResponse {
@@ -73,7 +75,27 @@ export async function fetchIssues(q: IssuesQuery): Promise<IssueListResponse> {
     organizationId: q.organizationId,
     cursor: q.cursor,
     limit: ISSUES_PAGE_LIMIT,
+    includeArchived: q.includeArchived,
   });
+}
+
+/** v0.5 §1：归档 issue（墓碑语义，不删除；幂等，重复归档返回同一 archived_at）。
+ *  replay 夹具不可篡改（createIssue 同一条红线），调用方在页面层挡掉。 */
+export async function archiveIssue(issueId: string): Promise<void> {
+  await defaultClient().archiveIssue(issueId);
+}
+
+export interface IssuePurgeReceipt {
+  snapshots: number;
+  decision_chain_nodes: number;
+  audit_events: number;
+}
+
+/** 彻底清除（2026-09-08 用户裁决）：**不可逆**——硬删除已归档 issue 的快照、
+ *  决策链与审计事件（保留一条 IssuePurged 审计）。仅对已归档 issue 可用
+ *  （后端 409 兜底）；replay 模式由调用方在页面层挡掉。 */
+export async function purgeIssue(issueId: string): Promise<IssuePurgeReceipt> {
+  return defaultClient().purgeIssue(issueId);
 }
 
 /** 需求文档真实上传（与 createIssue 同源鉴权）：把 .txt/.md/.docx/.pdf/.odt/.rtf

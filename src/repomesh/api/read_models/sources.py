@@ -23,6 +23,7 @@ from repomesh.modules.delivery.contracts import (
     SCMObservationView,
 )
 from repomesh.modules.project.contracts import ProjectAgentTopologyView
+from repomesh.modules.repository_intelligence.contracts import IssueArchiveView
 from repomesh.modules.review_validation.contracts import ValidationSnapshotView
 from repomesh.modules.task_orchestration.contracts import ExecutionPlanView, TaskView
 
@@ -126,6 +127,19 @@ class ChangeSetSource(Protocol):
 
 class ArchiveSource(Protocol):
     async def get(self, delivery_id: UUID) -> DeliveryArchiveView | None: ...
+
+
+class IssueArchiveSource(Protocol):
+    """Issue-grain tombstones (repository_intelligence.issue_archives).
+
+    ``None`` fields on the service mean "this composition knows no archive
+    store" — every issue then reads as unarchived, which is the honest answer
+    rather than a fabricated one.
+    """
+
+    async def get(self, issue_id: UUID) -> IssueArchiveView | None: ...
+
+    async def list_all(self) -> tuple[IssueArchiveView, ...]: ...
 
 
 class ValidationSource(Protocol):

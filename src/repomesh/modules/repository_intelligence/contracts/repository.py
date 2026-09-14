@@ -1,6 +1,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -44,6 +45,20 @@ class IssueIntakeReceipt:
 
 class CreateIssueIntake(Protocol):
     async def execute(self, command: IssueIntakeCommand) -> IssueIntakeReceipt: ...
+
+
+@dataclass(frozen=True, slots=True)
+class IssueArchiveView:
+    """A tombstone row: the issue stays, the default list stops showing it.
+
+    Mirrors delivery's ``DeliveryArchiveView``. Archiving is a marker, never a
+    delete — snapshots, decision-chain nodes, checkpoint decisions and the
+    audit trail all stay exactly where they are; the archive itself is the
+    only new fact (plus its ``IssueArchived`` audit event).
+    """
+
+    issue_id: UUID
+    archived_at: datetime
 
 
 # ---------------------------------------------------------------------------

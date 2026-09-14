@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { X } from "lucide-react";
 import type { ConsoleRepositoryView } from "../api/contract";
 import { defaultClient } from "../api/client";
 import { errText } from "../display";
@@ -52,7 +53,7 @@ export function RepositoryVerificationDialog({
           <h2 className="text-[14px] font-semibold text-cream">仓库验证配置</h2>
           <span className="font-mono text-[11.5px] text-tx2">{repo.name}</span>
           <button className="ml-auto text-[13px] text-tx2 hover:text-amber-hi" onClick={onClose}>
-            ✕
+            <X size={13} />
           </button>
         </div>
 
@@ -101,7 +102,7 @@ export function RepositoryVerificationDialog({
             取消
           </button>
           <button
-            className="rounded-hard bg-amber px-3.5 py-[6px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+            className="rounded-hard bg-amber px-3.5 py-[6px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
             disabled={saving}
             onClick={save}
           >

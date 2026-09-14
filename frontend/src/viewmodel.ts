@@ -30,7 +30,10 @@ export function agentReportsFromAggregate(
   agg: DeliveryAggregate,
   repositoryId?: string,
 ): TaskAgentReport[] {
-  return agg.tasks
+  // tasks 整体缺席（半物化轮次）与 evidence 缺席是同一类形状漂移，同一套兜底：
+  // 缺就是没有，不抛。
+  const tasks = Array.isArray(agg.tasks) ? agg.tasks : [];
+  return tasks
     // `!= null` 而非 `!== null` 是有意的（X6 运行时兜底）：本字段是【提案】，服务端
     // 尚未部署时 `evidence` 是 **undefined** 而不是 null。用严格比较会让 undefined
     // 通过筛选、随后在 `.verified` 上炸掉整页——把一个「后端还没跟上」渲染成白屏。
@@ -46,10 +49,11 @@ export function agentReportsFromAggregate(
       // 把同一件事说两遍，还会让真正需要注意的那一层（跑成了但没验证）失去分量。
       displayStatus: task.display_status,
       verified: task.evidence!.verified,
-      blockers: task.evidence!.blockers,
+      // evidence 的子字段同属【提案】族，也可能缺席——.length / .map 都会炸
+      blockers: task.evidence!.blockers ?? [],
       summaryText: task.evidence!.summary_text,
       testCommand: task.evidence!.test_command,
-      testResults: task.evidence!.test_results.map((r) => ({
+      testResults: (task.evidence!.test_results ?? []).map((r) => ({
         command: r.command,
         exitCode: r.exit_code,
         summary: r.summary,
@@ -173,8 +177,11 @@ export function repositoryEnvFromAggregate(agg: DeliveryAggregate, repositoryId:
  *  多条**态一致**时那就是该仓的态；**态不一致**时读模型并没有给出「这个仓整体算什么」
  *  这一事实，所以归成 `null` 让调用方如实留白，而不是挑一条充数。 */
 export function dagExecutionFromAggregate(agg: DeliveryAggregate, roundLabel: string): DagExecutionView {
+  // 半物化轮次的聚合可能连 tasks 都还没有（契约标了必填，但形状漂移有过前科）：
+  // 缺就是没任务，归出空聚合——本函数在 DAG 展开时逐轮渲染，抛一次就是整页白屏。
+  const tasks = Array.isArray(agg.tasks) ? agg.tasks : [];
   const seen = new Map<string, Set<TaskDisplayStatus>>();
-  for (const task of agg.tasks) {
+  for (const task of tasks) {
     const bucket = seen.get(task.repository_id) ?? new Set<TaskDisplayStatus>();
     bucket.add(task.display_status);
     seen.set(task.repository_id, bucket);
@@ -185,7 +192,7 @@ export function dagExecutionFromAggregate(agg: DeliveryAggregate, roundLabel: st
   for (const [repositoryId, statuses] of seen) {
     byRepository[repositoryId] = statuses.size === 1 ? [...statuses][0] : null;
   }
-  for (const task of agg.tasks) {
+  for (const task of tasks) {
     taskCountByRepository[task.repository_id] = (taskCountByRepository[task.repository_id] ?? 0) + 1;
   }
 

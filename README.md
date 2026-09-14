@@ -241,7 +241,7 @@ degradation notes, the seed script, and the data-source switch.
 - Parallel work plan: `docs/development/parallel-work-plan.md`
 - Public contracts: `docs/contracts/public-contracts-v0.1.md`
 - Delivery read model contract: `docs/contracts/delivery-read-model-v0.1.md`
-  (v0.2–v0.4 are increments, all in force)
+  (v0.2–v0.5 are increments, all in force)
 
 - Module owners and responsibilities: `docs/architecture/module-map.md`
 - Dependency rules: `docs/architecture/dependency-rules.md`

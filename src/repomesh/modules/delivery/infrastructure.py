@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     and_,
+    delete,
     or_,
     select,
 )
@@ -182,6 +183,21 @@ class PostgresDeliveryAuditLog:
     async def append(self, event: EventEnvelope) -> None:
         async with self._database.transaction() as session:
             session.add(AuditEventRecord.from_envelope(event))
+
+    async def purge_for_project(self, project_id: UUID, keep: EventEnvelope) -> int:
+        """彻底清除（2026-09-08 用户裁决）：硬删除该项目的全部审计事件（含
+        checkpoint 决策），随后**同一事务**写入 ``keep``（IssuePurged）——
+        删光而不留痕是被明确否决的语义：清除本身必须可追溯（谁、何时）。"""
+
+        async with self._database.transaction() as session:
+            result = await session.execute(
+                delete(AuditEventRecord).where(
+                    AuditEventRecord.project_id == project_id
+                )
+            )
+            removed = int(result.rowcount or 0)
+            session.add(AuditEventRecord.from_envelope(keep))
+        return removed
 
 
 class SCMObservationRecord(Base):

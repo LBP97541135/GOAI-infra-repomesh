@@ -74,7 +74,7 @@ export function ApprovalModal({
     <Modal
       open={open}
       onClose={onCancel}
-      className="m-auto w-[min(480px,92vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+      className="m-auto w-[min(480px,92vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div>
@@ -104,7 +104,7 @@ export function ApprovalModal({
         )}
 
         {principal.state === "missing" && (
-          <div className="mb-3 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] text-[#e8a184]">
+          <div className="mb-3 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">决策主体未接入</b>
             花名册里没有该组织可用的 organization_leader，也没有配置
             VITE_GOVERNANCE_AGENT_ID 覆盖。提交已禁用——治理决策必须记在一个真实主体名下。
@@ -112,7 +112,7 @@ export function ApprovalModal({
         )}
 
         {errorText && (
-          <div className="mb-3 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] text-[#e8a184]">
+          <div className="mb-3 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">授权失效</b>
             {errorText}
           </div>
@@ -125,7 +125,7 @@ export function ApprovalModal({
             不让人在没看见这段话的情况下按下去。措辞也一字不改：agent 说
             "Please re-run before merging."，界面就照抄，不翻译成「建议复核」。 */}
         {unverified.length > 0 && (
-          <div className="mb-3 rounded-hard border border-amber bg-[#2a2110] px-3 py-2.5">
+          <div className="mb-3 rounded-hard border border-amber bg-amber-well px-3 py-2.5">
             <div className="flex flex-wrap items-baseline gap-x-2 text-[12px] text-amber">
               <b className="font-mono tracking-[0.08em]">
                 {unverifiedMarkerLabel(unverified.reduce((n, r) => n + r.blockers.length, 0))}
@@ -177,7 +177,7 @@ export function ApprovalModal({
           拒绝 / 稍后处理
         </button>
         <button
-          className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!confirmed || submitting || blocked}
           onClick={() => onApprove(comment)}
         >

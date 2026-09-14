@@ -94,14 +94,12 @@ function AccountRow({ item, self }: { item: Account; self: boolean }) {
   );
 }
 
-const SOURCE_NOTE =
-  "数据源：live · GET /auth/accounts（human_control 面，认本地登录会话，不带 Authorization 头）；" +
-  "新增走 POST /auth/accounts。两者都要管理员。口令只随这一次提交发出，前端不保存、不回显。";
-
 export function LocalAccountsPanel({ account }: { account: Account }) {
   const [rows, setRows] = useState<Account[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ display_name: "", username: "", password: "", is_admin: false });
+  // 新增账号表单默认收起：建号是低频动作，恒驻的表单卡在 Trae 式清单里喧宾夺主
+  const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<{ text: string; status: number } | null>(null);
   const [created, setCreated] = useState<Account | null>(null);
@@ -152,57 +150,57 @@ export function LocalAccountsPanel({ account }: { account: Account }) {
     return (
       <>
         <p className="pt-1 text-[11.5px] leading-[1.7] text-tx2">
-          账号管理需要管理员权限。当前账号{" "}
-          <span className="font-mono text-tx">@{account.username}</span>{" "}
-          不是管理员，列出与新增两个端点都会被后端拒绝（403）。需要新账号时请管理员代建。
+          账号管理需要管理员权限，需要新账号时请联系管理员代建。
         </p>
-        <p className="pt-2 text-[11px] text-tx3">{SOURCE_NOTE}</p>
       </>
     );
   }
 
   return (
     <>
-      <p className="pt-1 text-[11.5px] leading-[1.7] text-tx2">
-        审核台的待办要落到具体的人身上，人得先在这里有账号。
-        <b className="text-tx">建号只给了登录身份</b>
-        ，不等于收得到待办——那要在项目拓扑的 human_grants 里把这个账号授权到具体项目，
-        该入口尚未迁入控制台。
-      </p>
+      <div className="mt-2.5 flex items-center justify-between border-b border-line pb-1.5">
+        <span className="microlabel">账号清单</span>
+        <button
+          type="button"
+          className="rounded-hard border border-line px-2.5 py-1 text-[11.5px] text-tx2 transition-colors hover:border-amber hover:text-amber-hi"
+          onClick={() => setFormOpen((v) => !v)}
+        >
+          {formOpen ? "收起表单" : "＋ 新增账号"}
+        </button>
+      </div>
 
-      <div className="mt-2.5 grid gap-4 md:grid-cols-[minmax(0,1fr)_268px]">
-        <div>
-          {/* rows === null 是「还没取到」，空数组是「真的一个都没有」，两态不合并 */}
-          {error ? (
-            <ErrorPanel title="账号清单加载失败" message={error} onRetry={load} className="" />
-          ) : rows === null ? (
-            <LoadingLine className="" />
-          ) : rows.length === 0 ? (
-            <p className="py-6 text-[11.5px] leading-[1.7] text-tx3">
-              清单里一个账号都没有。但你正以本地账号登录，二者相互矛盾——这更可能是取数
-              问题而不是事实，值得排查。
-            </p>
-          ) : (
-            rows.map((item) => (
-              <AccountRow key={item.id} item={item} self={item.id === account.id} />
-            ))
-          )}
-        </div>
+      <div>
+        {/* rows === null 是「还没取到」，空数组是「真的一个都没有」，两态不合并 */}
+        {error ? (
+          <ErrorPanel title="账号清单加载失败" message={error} onRetry={load} className="" />
+        ) : rows === null ? (
+          <LoadingLine className="" />
+        ) : rows.length === 0 ? (
+          <p className="py-6 text-[11.5px] leading-[1.7] text-tx3">
+            清单里一个账号都没有。但你正以本地账号登录，二者相互矛盾——这更可能是取数
+            问题而不是事实，值得排查。
+          </p>
+        ) : (
+          rows.map((item) => (
+            <AccountRow key={item.id} item={item} self={item.id === account.id} />
+          ))
+        )}
+      </div>
 
-        <form className="rounded-hard border border-line bg-panel-2 px-3 py-2.5" onSubmit={submit}>
+      {formOpen && (
+        <form className="mt-3 rounded-hard border border-line bg-well px-3 py-2.5" onSubmit={submit}>
           <div className="eyebrow">新增账号</div>
           <Field
             label="显示名称"
             value={form.display_name}
             onChange={(next) => setForm({ ...form, display_name: next })}
-            hint="审核台上署名用的就是它。"
           />
           <Field
             label="用户名"
             autoComplete="off"
             value={form.username}
             onChange={(next) => setForm({ ...form, username: next })}
-            hint="至少 3 字符，只允许字母数字与 . _ -；后端会转为小写。"
+            hint="至少 3 字符，字母数字与 . _ -"
           />
           <Field
             label="初始密码"
@@ -212,7 +210,7 @@ export function LocalAccountsPanel({ account }: { account: Account }) {
             autoComplete="new-password"
             value={form.password}
             onChange={(next) => setForm({ ...form, password: next })}
-            hint="至少 12 个字符（后端强制，不是界面自己加的规矩）。"
+            hint="至少 12 个字符"
           />
 
           <label className="mt-3 flex items-center gap-2">
@@ -224,12 +222,9 @@ export function LocalAccountsPanel({ account }: { account: Account }) {
             />
             <span className="text-[11.5px] text-tx2">设为管理员</span>
           </label>
-          <span className="mt-1 block text-[10.5px] leading-[1.6] text-tx3">
-            管理员能建账号、给仓库建团，并看得见全部审核待办；非管理员只看得见指派给自己的。
-          </span>
 
           <button
-            className="mt-3 w-full rounded-hard bg-amber px-3 py-[6px] text-[12px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+            className="mt-3 w-full rounded-hard bg-amber px-3 py-[6px] text-[12px] font-extrabold text-on-amber hover:bg-amber-hi disabled:opacity-60"
             disabled={busy}
           >
             {busy ? "创建中…" : "创建账号"}
@@ -238,7 +233,7 @@ export function LocalAccountsPanel({ account }: { account: Account }) {
           {created && (
             <p className="mt-2 rounded-hard border border-olive/60 bg-olive/10 px-2.5 py-1.5 text-[11.5px] leading-[1.7] text-olive">
               已创建 {created.display_name} · @{created.username}
-              {created.is_admin && "（管理员）"}。用户名以此处回显为准——后端会做归一。
+              {created.is_admin && "（管理员）"}
             </p>
           )}
 
@@ -252,9 +247,8 @@ export function LocalAccountsPanel({ account }: { account: Account }) {
             </div>
           )}
         </form>
-      </div>
+      )}
 
-      <p className="pt-2 text-[11px] text-tx3">{SOURCE_NOTE}</p>
     </>
   );
 }

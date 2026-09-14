@@ -2,19 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Toast } from "./components/Toast";
 import { AuthError, authApi, type Account } from "./api/auth";
 import { LoginPage } from "./components/LoginPage";
-import { NewIssueModal } from "./components/NewIssueModal";
 import { SidebarV2, type NavKey } from "./components/SidebarV2";
-import type { IssueListResponse, OrganizationView } from "./api/contract";
-import { createIssue, fetchIssues, issuesSourceMode } from "./api/issues";
+import { CommandPalette } from "./components/CommandPalette";
+import type { IssueListItemView, IssueListResponse, OrganizationView } from "./api/contract";
+import { archiveIssue, createIssue, fetchIssues, issuesSourceMode, purgeIssue } from "./api/issues";
 import { createWorkspace, fetchWorkspaces } from "./api/workspaces";
 import { errText, shortId } from "./display";
 import type { HumanReviewRequestView } from "./api/reviewDesk";
 import { fetchReviewRequests, subscribeReviewRequests } from "./api/reviewDesk";
 import { AgentsPage } from "./pages/AgentsPage";
 import { DecisionChainPage } from "./pages/DecisionChainPage";
-import { IssueDetailContainer } from "./pages/IssueDetailContainer";
 import { IssueListPage } from "./pages/IssueListPage";
-import { LocalCliPage } from "./pages/LocalCliPage";
 import { ObserveAlerts } from "./pages/observe/ObserveAlerts";
 import { ObserveHome } from "./pages/observe/ObserveHome";
 import { ObserveLogs } from "./pages/observe/ObserveLogs";
@@ -27,6 +25,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { SetupWizardPage } from "./pages/SetupWizardPage";
 import { fetchSetupStatus } from "./api/platformSetup";
 import { TeamsPage } from "./pages/TeamsPage";
+import { WorkbenchPage } from "./pages/workbench/WorkbenchPage";
 import { NAV_HASH, readRoute, type Route } from "./routes";
 
 /** v2 控制台外壳：身份门 → 侧栏导航 → 主区页面。
@@ -51,14 +50,29 @@ export default function ConsoleShell() {
   const [setupReady, setSetupReady] = useState<boolean | null>(null);
   const [setupRequested, setSetupRequested] = useState(false);
   const [route, setRoute] = useState<Route>(readRoute);
-  const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
+
+  // ⌘K/Ctrl+K 命令面板：状态与全局快捷键在外壳（数据源同侧栏的 issues 轮询）。
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // issue 列表：state 由服务端筛选（?state=），不做本地分 tab——分页下本地过滤
   // 等于拿部分结果冒充全量。工作区（organization_id）由前端持有，当前无组织读模型
   // （CONS-32）故不传 = 全部工作区。
   const [issueTab, setIssueTab] = useState<"open" | "closed">("open");
+  // v0.5：已归档开关走服务端过滤（include_archived），不做本地过滤——分页下本地
+  // 过滤等于拿部分结果冒充全量，与 tab 的裁决同一条。
+  const [showArchived, setShowArchived] = useState(false);
   const [issues, setIssues] = useState<IssueListResponse | null>(null);
   const [issuesLoading, setIssuesLoading] = useState(true);
   const [issuesMore, setIssuesMore] = useState(false);
@@ -153,7 +167,11 @@ export default function ConsoleShell() {
     issuesEpoch.current += 1;
     setIssuesLoading(true);
     setIssuesError(null);
-    fetchIssues({ state: issueTab, organizationId: workspaceId ?? undefined })
+    fetchIssues({
+      state: issueTab,
+      organizationId: workspaceId ?? undefined,
+      includeArchived: showArchived,
+    })
       .then((page) => {
         if (cancelled) return;
         setIssues(page);
@@ -167,7 +185,7 @@ export default function ConsoleShell() {
     return () => {
       cancelled = true;
     };
-  }, [authState, issueTab, issuesReload, workspaceId]);
+  }, [authState, issueTab, issuesReload, workspaceId, showArchived]);
 
   useEffect(() => {
     if (authState !== "authenticated") return;
@@ -201,7 +219,12 @@ export default function ConsoleShell() {
     if (!cursor || issuesMore) return;
     const epoch = issuesEpoch.current;
     setIssuesMore(true);
-    fetchIssues({ state: issueTab, cursor, organizationId: workspaceId ?? undefined })
+    fetchIssues({
+      state: issueTab,
+      cursor,
+      organizationId: workspaceId ?? undefined,
+      includeArchived: showArchived,
+    })
       .then((page) => {
         if (epoch !== issuesEpoch.current) return; // A3：已切 tab/工作区，丢弃
         // 续读只追加条目；计数是全量值，以最新一页为准即可
@@ -216,20 +239,16 @@ export default function ConsoleShell() {
     setRoute({ nav, issueId: null, roomId: null, observeSection: null, settingsSection: null });
   };
 
-  const openLocalCli = () => {
-    window.location.hash = "#/settings/local-cli";
-    setRoute({
-      nav: "settings",
-      issueId: null,
-      roomId: null,
-      observeSection: null,
-      settingsSection: "local-cli",
-    });
-  };
-
   const openIssue = (issueId: string) => {
     window.location.hash = `#/issues/${issueId}`;
     setRoute({ nav: "issues", issueId, roomId: null, observeSection: null, settingsSection: null });
+  };
+
+  /** 新建 issue = 主页对话框：#/issues/new 就是「空流 + 可用输入框」的新会话态，
+   *  发送即建 issue 并进入其对话视图（原 NewIssueModal 弹窗已按用户裁决退役）。 */
+  const openNewSession = () => {
+    window.location.hash = "#/issues/new";
+    setRoute({ nav: "issues", issueId: "new", roomId: null, observeSection: null, settingsSection: null });
   };
 
   const openRoom = (issueId: string, roomId: string) => {
@@ -239,17 +258,53 @@ export default function ConsoleShell() {
 
   /** B-1 创建回路：POST /issues（v0.3 §1）→ 刷新列表 → 跳新 issue 详情。
    *  处理者按当前工作区派生（选「全部」时 null = 花名册唯一活跃 Org Leader）；
-   *  幂等键由弹窗持有（A2）。 */
+   *  幂等键由弹窗/主页聊天框持有（A2：每次逻辑创建换键，重试沿用同键）。 */
   const handleCreateIssue = async (
     text: string,
     idempotencyKey: string,
     documentFilename: string | null,
   ) => {
     const issue = await createIssue(text, workspaceId, idempotencyKey, documentFilename);
-    setNewIssueOpen(false);
     showToast(`issue 已创建：#${shortId(issue.issue_id)}（虚拟草稿，等待规划）`);
     setIssuesReload((n) => n + 1);
     openIssue(issue.issue_id);
+    return issue;
+  };
+
+  /** v0.5 归档回路：POST /issues/{id}/archive（墓碑语义，不是删除）→ 刷新列表。
+   *  replay 夹具不可篡改（createIssue 同一条红线），入口在页面层已藏、这里兜底。
+   *  409（进行中）/其余失败：detail 原文上抛进 toast，不归并措辞。 */
+  const handleArchiveIssue = async (item: IssueListItemView) => {
+    if (issuesSourceMode() === "replay") {
+      showToast("回放模式 · 归档不适用于夹具数据");
+      return;
+    }
+    try {
+      await archiveIssue(item.issue_id);
+      showToast(`issue 已归档：#${shortId(item.issue_id)}（数据全部保留）`);
+      setIssuesReload((n) => n + 1);
+    } catch (err) {
+      showToast(`归档失败：${errText(err)}`);
+    }
+  };
+
+  /** 彻底清除回路（2026-09-08 用户裁决）：POST /issues/{id}/purge——不可逆的
+   *  硬删除（快照/决策链/审计，仅留一条清除审计）。回放模式同上兜底拒绝。 */
+  const handlePurgeIssue = async (item: IssueListItemView) => {
+    if (issuesSourceMode() === "replay") {
+      showToast("回放模式 · 彻底清除不适用于夹具数据");
+      return;
+    }
+    try {
+      const receipt = await purgeIssue(item.issue_id);
+      showToast(
+        `issue 已彻底清除：#${shortId(item.issue_id)}（快照 ${receipt.snapshots} · ` +
+          `决策链 ${receipt.decision_chain_nodes} · 审计 ${receipt.audit_events}）`,
+      );
+      setIssuesReload((n) => n + 1);
+    } catch (err) {
+      showToast(`清除失败：${errText(err)}`);
+    }
   };
 
   /** B-2 创建回路：建组织 + 登记 Org Leader → 刷新列表 → 选中新工作区。 */
@@ -319,6 +374,11 @@ export default function ConsoleShell() {
     );
   }
 
+  // 聊天工作台占主页新会话（无 hash/#/、#/issues/new）与每个 issue 的会话视图
+  // （点列表里的 issue 进来就是每轮对话记录，用户 2026-09-05 裁决；旧详情页已删）。
+  // 两者都是全高内滚布局；列表与房间页照旧带页边距。
+  const isWorkbenchRoute = route.nav === "issues" && route.issueId !== null && route.roomId === null;
+
   return (
     <div className="flex h-screen overflow-hidden bg-ink text-tx">
       <SidebarV2
@@ -332,14 +392,29 @@ export default function ConsoleShell() {
         onSelectWorkspace={setWorkspaceId}
         onCreateWorkspace={handleCreateWorkspace}
         onNavigate={navigate}
-        localCliActive={route.settingsSection === "local-cli"}
-        onOpenLocalCli={openLocalCli}
-        onNewIssue={() => setNewIssueOpen(true)}
+        onNewIssue={openNewSession}
         onLogout={handleLogout}
         onToast={showToast}
+        onOpenSearch={() => setPaletteOpen(true)}
       />
 
-      <main className="min-w-0 flex-1 overflow-y-auto px-8 pt-5 pb-10">
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        issues={issues?.issues ?? null}
+        onNavigate={navigate}
+        onOpenIssue={openIssue}
+        onNewIssue={openNewSession}
+      />
+
+      {/* 工作台自带内滚与吸底输入框：容器不给页边距，交给页面自己（其余页面照旧） */}
+      <main
+        className={
+          isWorkbenchRoute
+            ? "flex min-w-0 flex-1 overflow-hidden"
+            : "min-w-0 flex-1 overflow-y-auto px-8 pt-5 pb-10"
+        }
+      >
         {route.nav === "issues" &&
           (route.issueId === null ? (
             <IssueListPage
@@ -353,10 +428,25 @@ export default function ConsoleShell() {
                   ? "数据源：live · GET /issues（契约 v0.2 §2）"
                   : "数据源：replay 夹具 · 加 ?source=live 打真实读模型"
               }
+              showArchived={showArchived}
+              canArchive={issuesSourceMode() === "live"}
               onTab={setIssueTab}
+              onToggleArchived={() => setShowArchived((v) => !v)}
+              onArchive={handleArchiveIssue}
+              onPurge={handlePurgeIssue}
               onLoadMore={loadMoreIssues}
               onRetry={() => setIssuesReload((n) => n + 1)}
               onOpenIssue={(item) => openIssue(item.issue_id)}
+            />
+          ) : route.issueId === "new" ? (
+            <WorkbenchPage
+              issueId={null}
+              workspaceName={
+                workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? null
+              }
+              onCreateIssue={handleCreateIssue}
+              onOpenRoom={(roomId) => openRoom("new", roomId)}
+              onToast={showToast}
             />
           ) : route.roomId !== null ? (
             <RoomViewContainer
@@ -366,10 +456,14 @@ export default function ConsoleShell() {
               onToast={showToast}
             />
           ) : (
-            <IssueDetailContainer
+            <WorkbenchPage
               issueId={route.issueId}
+              workspaceName={
+                workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? null
+              }
+              onCreateIssue={handleCreateIssue}
+              onOpenRoom={(roomId) => openRoom(route.issueId!, roomId)}
               onBack={() => navigate("issues")}
-              onOpenRoom={(room) => openRoom(route.issueId!, room.room_id)}
               onToast={showToast}
             />
           ))}
@@ -406,25 +500,15 @@ export default function ConsoleShell() {
         {route.nav === "decision-chains" && (
           <DecisionChainPage organizationId={workspaceId} onToast={showToast} />
         )}
-        {route.nav === "settings" &&
-          (route.settingsSection === "local-cli" ? (
-            <LocalCliPage />
-          ) : (
-            <SettingsPage account={account} onConfigure={() => setSetupRequested(true)} />
-          ))}
+        {route.nav === "settings" && (
+          <SettingsPage
+            key={route.settingsSection ?? "general"}
+            account={account}
+            onConfigure={() => setSetupRequested(true)}
+            initialCategory={route.settingsSection === "local-cli" ? "localcli" : "general"}
+          />
+        )}
       </main>
-
-      <NewIssueModal
-        open={newIssueOpen}
-        workspaceLabel={
-          workspaces?.find((w) => w.organization_id === workspaceId)?.name ?? "全部工作区"
-        }
-        organizationId={workspaceId}
-        mode={issuesSourceMode()}
-        onClose={() => setNewIssueOpen(false)}
-        onToast={showToast}
-        onCreate={handleCreateIssue}
-      />
 
       {toast && <Toast text={toast} />}
     </div>

@@ -19,6 +19,7 @@
  *  replay 模式（?source=replay）渲染 data/decisionChain.ts 的演示剧本，进页面
  *  自动跑一次示范语义检索；live 模式打真实端点（Bearer agent_action_token）。
  *  数据源标注与其余页同款（?source=live 打真实读模型）。 */
+import { ChevronRight } from "lucide-react";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type {
   DecisionChainView,
@@ -201,7 +202,7 @@ function ClassificationBody({ p }: { p: Record<string, unknown> }) {
       {(maybe.length > 0 || excluded.length > 0) && (
         <details className="mt-2">
           <summary className="cursor-pointer select-none font-mono text-[11.5px] text-tx2 hover:text-tx">
-            待定 {maybe.length} · 不做 {excluded.length} ▸
+            待定 {maybe.length} · 不做 {excluded.length}<ChevronRight size={10} strokeWidth={1.5} className="inline" />
           </summary>
           <div className="mt-2 space-y-2.5">
             {maybe.length > 0 && (
@@ -732,7 +733,7 @@ function VersionHistory({ versions }: { versions: DecisionNodeView[] }) {
               {!isCurrent && (
                 <details className="mt-1">
                   <summary className="cursor-pointer select-none font-mono text-[11px] text-tx3 hover:text-tx2">
-                    v{node.version} 完整内容 ▸
+                    v{node.version} 完整内容<ChevronRight size={10} strokeWidth={1.5} className="inline" />
                   </summary>
                   <pre className="mt-1.5 whitespace-pre-wrap rounded-hard border border-line bg-ink-deep px-3 py-2.5 font-mono text-[11px] leading-[1.8] text-tx2">
                     {payloadDigest(node).join("\n")}

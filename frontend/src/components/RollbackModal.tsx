@@ -66,7 +66,7 @@ export function RollbackModal({
     <Modal
       open={open}
       onClose={onCancel}
-      className="m-auto w-[min(640px,94vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+      className="m-auto w-[min(640px,94vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div>
@@ -140,7 +140,7 @@ export function RollbackModal({
         </div>
 
         {scope?.recovery_in_progress && (
-          <div className="mt-2.5 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] text-[#e8a184]">
+          <div className="mt-2.5 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">已有恢复计划在执行</b>
             本 ChangeSet 上还有未完成的恢复计划。换一个理由再提交会被服务端以 409
             拒绝；重复提交同一份表单则是重放（后端零写入）。
@@ -166,7 +166,7 @@ export function RollbackModal({
         </div>
 
         {principal.state === "replay" && (
-          <div className="mt-2.5 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] text-[#e8a184]">
+          <div className="mt-2.5 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">回放模式</b>
             回滚会在真实世界里关 PR、开 revert PR、动 base 分支，回放夹具里没有可写的对象。
             提交已禁用——就地伪造一份「已回滚」刷新即消失。加 ?source=live 后可真实提交。
@@ -174,7 +174,7 @@ export function RollbackModal({
         )}
 
         {principal.state === "missing" && (
-          <div className="mt-2.5 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] text-[#e8a184]">
+          <div className="mt-2.5 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">决策主体未接入</b>
             花名册里没有该组织可用的 organization_leader，也没有配置 VITE_GOVERNANCE_AGENT_ID
             覆盖。提交已禁用——回滚必须记在一个真实主体名下。§4.6 还要求主体是
@@ -184,7 +184,7 @@ export function RollbackModal({
         )}
 
         {errorText && (
-          <div className="mt-2.5 border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] break-words text-[#e8a184]">
+          <div className="mt-2.5 border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] break-words text-salmon-hi">
             <b className="mr-1.5 font-mono tracking-[0.08em]">服务端拒绝</b>
             {errorText}
           </div>
@@ -212,7 +212,7 @@ export function RollbackModal({
           取消
         </button>
         <button
-          className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-[#191308] hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-hard bg-amber px-4 py-2 text-[12.5px] font-extrabold text-on-amber hover:bg-amber-hi disabled:cursor-not-allowed disabled:opacity-40"
           disabled={submitting || blocked}
           onClick={() => onConfirm(reason)}
         >

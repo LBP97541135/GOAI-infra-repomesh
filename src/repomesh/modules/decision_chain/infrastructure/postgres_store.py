@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from repomesh.modules.decision_chain.contracts import (
@@ -35,7 +35,10 @@ from repomesh.modules.decision_chain.infrastructure._links import (
     resolve_chain_links,
     summary,
 )
-from repomesh.modules.decision_chain.infrastructure.models import DecisionNodeRecord
+from repomesh.modules.decision_chain.infrastructure.models import (
+    DecisionEmbeddingRecord,
+    DecisionNodeRecord,
+)
 from repomesh.persistence import Database
 from repomesh.persistence.models import AuditEventRecord
 from repomesh.shared.events import ActorType, EventEnvelope
@@ -186,6 +189,30 @@ class PostgresDecisionChainStore:
             nodes=nodes,
             legacy_gaps=legacy_gaps(nodes),
         )
+
+    async def purge_for_project(self, project_id: UUID) -> int:
+        """彻底清除（2026-09-08 用户裁决）：硬删除该项目的全部决策链节点与向量。
+
+        Embeddings 没有 project_id（按 decision_id 引用节点），所以先按节点的
+        主键清向量、再删节点；两条 DELETE 同一事务，不留半删状态。归档按设计
+        保留全部节点——只有彻底清除流程会走到这里。"""
+
+        async with self._database.transaction() as session:
+            await session.execute(
+                delete(DecisionEmbeddingRecord).where(
+                    DecisionEmbeddingRecord.decision_id.in_(
+                        select(DecisionNodeRecord.decision_id).where(
+                            DecisionNodeRecord.project_id == project_id
+                        )
+                    )
+                )
+            )
+            result = await session.execute(
+                delete(DecisionNodeRecord).where(
+                    DecisionNodeRecord.project_id == project_id
+                )
+            )
+        return int(result.rowcount or 0)
 
     async def find_similar_structural(
         self,

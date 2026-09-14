@@ -2,17 +2,36 @@ import { useEffect, useRef, useState } from "react";
 import type { Account } from "../api/auth";
 import type { OrganizationView } from "../api/contract";
 import { errText } from "../display";
+import {
+  Activity,
+  Bot,
+  ChevronDown,
+  FileCheck,
+  FolderKanban,
+  History,
+  Inbox,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
+  Settings,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 
-/** v2 侧栏（CONS-40 → B-2 接线）：工作区切换器 → 新建 issue → 四导航 → 设置底锚 → 身份块。
- *  信息架构见 frontend-prototype/DESIGN-DECISION-V2.md §2、原型 redesign-issue-centric.html。
+/** v2 侧栏（CONS-40 → B-2 接线）＋ 2026-09-08 图标语言统一（用户三轮裁决）：
  *
- *  身份块：登录门于 2026-08-14 恢复（human_control 面认本地账号会话），故这里
- *  重新呈现真实账号——写死的「默认管理员」在有会话可读之后就成了冒充。
+ *  · 导航图标全量换 lucide 16px / 1.5 细线，自绘 SVG 退役；
+ *  · 选中态＝圆角块（side-active 底 + 字重加重），左竖条语言退役；
+ *  · 导航分「工作台 / 治理」两组（大写小节标题），历史决策与设置沉底；
+ *  · 计数改 badge 胶囊（只展示真实数据，null 不显示）；
+ *  · 侧栏可折叠成 64px 图标栏（悬停 tooltip）；
+ *  · 工作区切换器 prompt 式双行（品牌方块 + REPOMESH + 当前工作区）；
+ *  · 顶部搜索行接 ⌘K 命令面板（面板本体在 ConsoleShell）；
+ *  · 「近期会话」列表按用户裁决整体移除（2026-09-08），会话入口收敛到
+ *    issue 列表页与 ⌘K 搜索。
  *
- *  工作区 = Organization（契约 v0.3 §2 注册表）。`workspaces === null` 表示
- *  「数据源不适用或取用失败」（文案由 workspaceNote 说明），与空列表 []（注册表
- *  真的没有条目）是两个态，不合并。创建工作区 = 建组织 + 登记 Org Leader——
- *  leader 是期望态登记行，不是已拉起的运行时（§2.3 诚实边界）。 */
+ *  业务回路原样保留：工作区下拉/创建（A2 幂等键）、身份块、登出、
+ *  回放模式提示。计数的 null 语义 = 数据源未提供，不显示 0 不编造。 */
 
 export type NavKey =
   | "issues"
@@ -24,81 +43,34 @@ export type NavKey =
   | "decision-chains"
   | "settings";
 
-const NAV_ITEMS: Array<{ key: NavKey; label: string }> = [
-  { key: "issues", label: "issue" },
-  { key: "reviews", label: "审核" },
-  { key: "repositories", label: "仓库" },
-  { key: "teams", label: "团队" },
-  { key: "agents", label: "智能体" },
-  { key: "observe", label: "观测" },
-  { key: "decision-chains", label: "历史决策" },
+const NAV_ICON: Record<NavKey, LucideIcon> = {
+  issues: Inbox,
+  reviews: FileCheck,
+  repositories: FolderKanban,
+  teams: Users,
+  agents: Bot,
+  observe: Activity,
+  "decision-chains": History,
+  settings: Settings,
+};
+
+const NAV_LABEL: Record<NavKey, string> = {
+  issues: "issue",
+  reviews: "审核",
+  repositories: "仓库",
+  teams: "团队",
+  agents: "智能体",
+  observe: "观测",
+  "decision-chains": "历史决策",
+  settings: "设置",
+};
+
+/** 导航两组 + 底部区（历史决策/设置与身份块同区，prompt 的 bottom items 结构）。 */
+const NAV_GROUPS: Array<{ heading: string; keys: NavKey[] }> = [
+  { heading: "工作台", keys: ["issues", "reviews", "repositories"] },
+  { heading: "治理", keys: ["teams", "agents", "observe"] },
 ];
-
-function NavIcon({ nav }: { nav: NavKey }) {
-  const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round" as const };
-  if (nav === "issues")
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <circle cx="12" cy="12" r="9" />
-        <circle cx="12" cy="12" r="3" />
-      </svg>
-    );
-  if (nav === "reviews")
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <path d="M5 4h11l3 3v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" />
-        <path d="m8.5 12.5 2.5 2.5 4.5-5" />
-      </svg>
-    );
-  if (nav === "repositories")
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      </svg>
-    );
-  if (nav === "teams")
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <circle cx="8" cy="9" r="3" />
-        <circle cx="16" cy="9" r="3" />
-        <path d="M2 20v-1a5 5 0 0 1 6-4.9M22 20v-1a5 5 0 0 0-6-4.9" />
-      </svg>
-    );
-  if (nav === "agents")
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <rect x="4" y="7" width="16" height="12" rx="2" />
-        <path d="M12 4v3M9 12h.01M15 12h.01M9.5 16h5" />
-      </svg>
-    );
-  if (nav === "observe")
-    // 心跳/脉冲线：观测 = 系统在动、看得见。与其余导航同风格（stroke 线形）。
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <path d="M3 12h4l2.5-6 4 12L16 8l2 4h3" />
-      </svg>
-    );
-  if (nav === "decision-chains")
-    // 回退时钟/时间线：历史决策 = 往回看谁在何时定了什么。
-    return (
-      <svg viewBox="0 0 24 24" {...common}>
-        <circle cx="12" cy="12" r="8.5" />
-        <path d="M12 7.5V12l3.2 2" />
-        <path d="M3.8 7.5 6 4.5M20.2 7.5 18 4.5" />
-      </svg>
-    );
-  return (
-    <svg viewBox="0 0 24 24" {...common}>
-      <circle cx="12" cy="12" r="3.2" />
-      <path d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M17.9 6.1l-1.4 1.4M7.5 16.5l-1.4 1.4M17.9 17.9l-1.4-1.4M7.5 7.5L6.1 6.1" />
-    </svg>
-  );
-}
-
-/** 选中态的琥珀左竖条是 Variant D 的导航语言（原型 `.nav.active` 的
- *  `border-left:2px solid var(--amber)`）；未选中留同宽透明边框防位移。 */
-const navBase =
-  "flex w-full items-center gap-2.5 rounded-hard border-l-2 px-2.5 py-[7px] text-left text-[13px]";
+const NAV_BOTTOM: NavKey[] = ["decision-chains", "settings"];
 
 export function SidebarV2({
   account,
@@ -111,11 +83,10 @@ export function SidebarV2({
   onSelectWorkspace,
   onCreateWorkspace,
   onNavigate,
-  localCliActive,
-  onOpenLocalCli,
   onNewIssue,
   onLogout,
   onToast,
+  onOpenSearch,
 }: {
   account: Account;
   nav: NavKey;
@@ -133,14 +104,14 @@ export function SidebarV2({
    *  幂等键由本组件持有（A2：名称变化/成功才换键，重试沿用同键） */
   onCreateWorkspace: (name: string, idempotencyKey: string) => Promise<void>;
   onNavigate: (nav: NavKey) => void;
-  /** 设置下的本地 CLI 子页，不扩成一级导航。 */
-  localCliActive: boolean;
-  onOpenLocalCli: () => void;
   onNewIssue: () => void;
   onLogout: () => void;
   onToast: (text: string) => void;
+  /** 打开 ⌘K 命令面板（面板状态与快捷键监听在 ConsoleShell） */
+  onOpenSearch?: () => void;
 }) {
   const [dropOpen, setDropOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createSubmitting, setCreateSubmitting] = useState(false);
@@ -184,29 +155,84 @@ export function SidebarV2({
 
   const initial = (account.display_name || account.username).slice(0, 1);
 
+  const countOf = (key: NavKey): number | null =>
+    key === "issues" ? issueCount : key === "reviews" ? reviewCount : null;
+
+  const NavButton = ({ item }: { item: NavKey }) => {
+    const active = nav === item;
+    const Icon = NAV_ICON[item];
+    const count = countOf(item);
+    return (
+      <button
+        title={collapsed ? NAV_LABEL[item] : undefined}
+        className={`group flex w-full items-center gap-2.5 rounded-[6px] px-2.5 py-[7px] text-left text-[13px] select-none transition-colors ${
+          collapsed ? "justify-center px-0" : ""
+        } ${
+          active
+            ? "bg-side-active font-medium text-cream"
+            : "text-tx2 hover:bg-side-active/50 hover:text-tx"
+        }`}
+        onClick={() => onNavigate(item)}
+      >
+        <Icon size={16} strokeWidth={1.5} className="flex-none" />
+        {!collapsed && <span className="min-w-0 flex-1 truncate tracking-wide">{NAV_LABEL[item]}</span>}
+        {!collapsed && count !== null && (
+          <span className="flex h-5 min-w-[20px] flex-none items-center justify-center rounded-full bg-amber/10 px-1.5 font-mono text-[10px] font-medium text-amber-hi">
+            {count}
+          </span>
+        )}
+      </button>
+    );
+  };
+
+  const GroupHeading = ({ text }: { text: string }) =>
+    collapsed ? (
+      <div className="mx-auto my-2 h-px w-6 bg-line" />
+    ) : (
+      <div className="microlabel mb-1 mt-3 px-2.5 first:mt-0">{text}</div>
+    );
+
   return (
-    <aside className="relative flex w-[236px] flex-none flex-col overflow-y-auto border-r border-line bg-ink-deep px-3 pt-3.5 pb-3">
+    <aside
+      className={`scrollbar-none relative flex flex-none flex-col overflow-y-auto border-r border-line bg-side-rail px-3 pt-3.5 pb-3 transition-[width] duration-200 ${
+        collapsed ? "w-[64px]" : "w-[236px]"
+      }`}
+    >
       <div ref={dropRef} className="relative">
         <button
-          className="flex w-full items-center gap-2.5 rounded-hard px-1.5 py-1.5 text-left hover:bg-amber/5"
+          title={collapsed ? "REPOMESH · 工作区" : undefined}
+          className={`flex w-full items-center rounded-[8px] px-1.5 py-1.5 text-left transition-colors hover:bg-side-active/50 ${
+            collapsed ? "justify-center px-0" : "gap-2.5"
+          }`}
           onClick={(e) => {
             e.stopPropagation();
             setDropOpen((v) => !v);
           }}
         >
-          <span className="grid size-[30px] flex-none place-items-center rounded-hard bg-amber font-mono text-[14px] font-extrabold text-[#16120a]">
+          <span className="grid size-[32px] flex-none place-items-center rounded-[6px] bg-chalk font-mono text-[14px] font-semibold text-on-chalk">
             R
           </span>
-          <div className="min-w-0">
-            <strong className="block font-mono text-[12.5px] tracking-[0.14em] text-cream">REPOMESH</strong>
-            <small className="block truncate text-[11px] text-tx2">{switcherLabel} ▾</small>
-          </div>
+          {!collapsed && (
+            <span className="min-w-0 flex-1">
+              <span className="block font-mono text-[12.5px] font-medium leading-none tracking-[0.14em] text-tx">
+                REPOMESH
+              </span>
+              <span className="mt-1 block truncate text-[11px] leading-none text-tx2">{switcherLabel}</span>
+            </span>
+          )}
+          {!collapsed && (
+            <ChevronDown
+              size={14}
+              strokeWidth={1.5}
+              className={`flex-none text-tx3 transition-transform ${dropOpen ? "rotate-180" : ""}`}
+            />
+          )}
         </button>
 
         {dropOpen && (
-          <div className="absolute top-[52px] left-0 z-20 w-[218px] rounded-hard border border-line bg-panel py-1.5 shadow-[0_16px_40px_rgba(0,0,0,0.6)]">
+          <div className="absolute top-[52px] left-0 z-20 w-[218px] rounded-[8px] border border-line bg-side-panel py-1 shadow-float">
             <div className="flex items-center gap-2.5 px-2.5 pt-1 pb-2.5">
-              <span className="grid size-[30px] flex-none place-items-center rounded-hard bg-[#4a4130] text-[12px] font-extrabold text-cream">
+              <span className="grid size-[30px] flex-none place-items-center rounded-full bg-chip text-[12px] font-extrabold text-cream">
                 {initial}
               </span>
               <div className="min-w-0">
@@ -228,14 +254,16 @@ export function SidebarV2({
               <>
                 <button
                   className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] ${
-                    selectedWorkspaceId === null ? "text-amber-hi" : "text-tx2 hover:bg-amber/5 hover:text-tx"
+                    selectedWorkspaceId === null
+                      ? "bg-side-active/50 font-medium text-tx"
+                      : "text-tx2 hover:bg-side-active/50 hover:text-tx"
                   }`}
                   onClick={() => {
                     setDropOpen(false);
                     onSelectWorkspace(null);
                   }}
                 >
-                  ◎ 全部工作区
+                  全部工作区
                 </button>
                 {workspaces.length === 0 && (
                   <div className="px-2.5 pb-1.5 text-[11.5px] text-tx3">注册表暂无工作区</div>
@@ -245,8 +273,8 @@ export function SidebarV2({
                     key={workspace.organization_id}
                     className={`flex w-full items-baseline gap-2 px-2.5 py-1.5 text-left text-[12.5px] ${
                       workspace.organization_id === selectedWorkspaceId
-                        ? "text-amber-hi"
-                        : "text-tx hover:bg-amber/5"
+                        ? "bg-side-active/50 font-medium text-tx"
+                        : "text-tx hover:bg-side-active/50"
                     }`}
                     onClick={() => {
                       setDropOpen(false);
@@ -261,7 +289,7 @@ export function SidebarV2({
                 ))}
                 {!creating ? (
                   <button
-                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-tx2 hover:bg-amber/5 hover:text-tx"
+                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px] text-tx2 hover:bg-side-active/50 hover:text-tx"
                     onClick={() => setCreating(true)}
                   >
                     ＋ 创建工作区
@@ -285,7 +313,7 @@ export function SidebarV2({
                     />
                     <div className="mt-1 flex items-center gap-2">
                       <button
-                        className="rounded-hard bg-amber px-2 py-[3px] text-[11px] font-bold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+                        className="rounded-hard bg-amber px-2 py-[3px] text-[11px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-60"
                         disabled={createSubmitting}
                         onClick={submitCreate}
                       >
@@ -304,82 +332,84 @@ export function SidebarV2({
                 onLogout();
               }}
             >
-              ［→ 退出登录
+              退出登录
             </button>
           </div>
         )}
       </div>
 
-      <button
-        className="mt-3 mb-1 flex w-full items-center justify-center gap-1.5 rounded-hard bg-amber py-[7px] text-[12.5px] font-extrabold tracking-[0.04em] text-[#191308] hover:bg-amber-hi"
-        onClick={onNewIssue}
-      >
-        + 新建 issue
-      </button>
+      {/* ⌘K 搜索入口 + 新建 issue（折叠态各自变方块） */}
+      <div className={`mt-3 flex flex-col gap-1.5 ${collapsed ? "items-center" : ""}`}>
+        <button
+          title={collapsed ? "搜索（Ctrl+K）" : undefined}
+          className={`flex items-center gap-2 rounded-[6px] border border-line px-2 py-[6px] text-left text-tx3 transition-colors hover:border-tx3/40 hover:text-tx2 ${
+            collapsed ? "w-8 justify-center border-transparent px-0 hover:bg-side-active/50" : "w-full"
+          }`}
+          onClick={onOpenSearch}
+        >
+          <Search size={14} strokeWidth={1.5} className="flex-none" />
+          {!collapsed && <span className="flex-1 text-[12px]">搜索…</span>}
+          {!collapsed && (
+            <kbd className="rounded-[4px] border border-line bg-panel px-1 font-mono text-[9.5px] text-tx3">
+              Ctrl K
+            </kbd>
+          )}
+        </button>
+        <button
+          title={collapsed ? "新建 issue" : undefined}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-[8px] bg-amber py-[7px] text-[12.5px] font-extrabold tracking-[0.04em] text-on-amber transition-[filter] hover:brightness-105 ${
+            collapsed ? "w-8 text-[15px] leading-none" : ""
+          }`}
+          onClick={onNewIssue}
+        >
+          {collapsed ? "+" : "+ 新建 issue"}
+        </button>
+      </div>
 
-      <nav className="mt-2 grid gap-0.5">
-        {NAV_ITEMS.map((item) => {
-          const active = nav === item.key;
-          const count =
-            item.key === "issues" ? issueCount : item.key === "reviews" ? reviewCount : null;
-          return (
-            <button
-              key={item.key}
-              className={
-                active
-                  ? `${navBase} border-amber bg-amber/10 text-amber-hi`
-                  : `${navBase} border-transparent text-tx hover:bg-amber/5 hover:text-amber-hi`
-              }
-              onClick={() => onNavigate(item.key)}
-            >
-              <span className={`grid size-4 flex-none place-items-center ${active ? "text-amber-hi" : "text-amber"} [&_svg]:size-4`}>
-                <NavIcon nav={item.key} />
-              </span>
-              {item.label}
-              {count !== null && (
-                <span className="ml-auto rounded-hard bg-line px-1.5 font-mono text-[10.5px] text-tx2">{count}</span>
-              )}
-            </button>
-          );
-        })}
+      <nav className={`mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto scrollbar-none ${collapsed ? "mt-3 gap-2" : ""}`}>
+        {NAV_GROUPS.map((group) => (
+          <div key={group.heading} className="flex flex-col gap-0.5">
+            <GroupHeading text={group.heading} />
+            {group.keys.map((key) => (
+              <NavButton key={key} item={key} />
+            ))}
+          </div>
+        ))}
+
+        {/* 「近期会话」列表已按用户裁决（2026-09-08）整体移除：
+            会话入口收敛到 issue 列表页与 ⌘K 搜索，不在侧栏重复挂一份。 */}
       </nav>
 
       <div className="mt-auto grid gap-0.5 border-t border-line pt-2">
-        <button
-          className={
-            nav === "settings"
-              ? `${navBase} border-amber bg-amber/10 text-amber-hi`
-              : `${navBase} border-transparent text-tx hover:bg-amber/5 hover:text-amber-hi`
-          }
-          onClick={() => onNavigate("settings")}
-        >
-          <span className={`grid size-4 flex-none place-items-center ${nav === "settings" ? "text-amber-hi" : "text-amber"} [&_svg]:size-4`}>
-            <NavIcon nav="settings" />
-          </span>
-          设置
-        </button>
-        <button
-          className={`ml-5 flex items-center gap-2 rounded-hard border-l px-2 py-1 text-left font-mono text-[11px] ${
-            localCliActive
-              ? "border-amber text-amber-hi"
-              : "border-line text-tx2 hover:border-amber/60 hover:text-amber-hi"
-          }`}
-          onClick={onOpenLocalCli}
-        >
-          <span aria-hidden="true" className="text-amber">&gt;_</span>
-          本地 CLI
-        </button>
-        <div className="flex items-center gap-2 px-2 py-1.5">
-          <span className="grid size-7 flex-none place-items-center rounded-hard bg-[#4a4130] text-[12px] font-extrabold text-cream">
+        {collapsed && <div className="mx-auto mb-2 h-px w-6 bg-line" />}
+        {NAV_BOTTOM.map((key) => (
+          <NavButton key={key} item={key} />
+        ))}
+        <div className={`flex items-center gap-2 px-2 py-1.5 ${collapsed ? "flex-col px-0" : ""}`}>
+          <span
+            className="grid size-7 flex-none place-items-center rounded-full bg-chip text-[12px] font-extrabold text-cream"
+            title={collapsed ? account.display_name || account.username : undefined}
+          >
             {initial}
           </span>
-          <div className="min-w-0">
-            <b className="block truncate text-[12px] text-tx">{account.display_name || account.username}</b>
-            <small className="block truncate text-[10.5px] text-tx2">
-              {account.is_admin ? "管理员" : "本地账户"}
-            </small>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0">
+              <b className="block truncate text-[12px] text-tx">{account.display_name || account.username}</b>
+              <small className="block truncate text-[10.5px] text-tx2">
+                {account.is_admin ? "管理员" : "本地账户"}
+              </small>
+            </div>
+          )}
         </div>
+        <button
+          title={collapsed ? "展开侧栏" : "收起侧栏"}
+          className={`mt-0.5 grid h-7 place-items-center rounded-[6px] text-tx3 transition-colors hover:bg-side-active/50 hover:text-tx ${
+            collapsed ? "w-full" : "w-7"
+          }`}
+          onClick={() => setCollapsed((v) => !v)}
+        >
+          {collapsed ? <PanelLeftOpen size={15} strokeWidth={1.5} /> : <PanelLeftClose size={15} strokeWidth={1.5} />}
+        </button>
       </div>
     </aside>
   );

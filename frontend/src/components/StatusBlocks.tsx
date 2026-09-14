@@ -1,5 +1,6 @@
 import type { StalePidFileDetail } from "../api/launcher";
 import type { RuntimePhase } from "../display";
+import { ShiningText } from "./ui/shining-text";
 
 /** 取数三态的共用小块（C 组收尾）：失败面板 / 加载行 / 网格页脚的探测与数据源标注。
  *  此前七个页面各抄一份同样的 class 与结构——样式取 IssueListPage 那份逐字，
@@ -39,7 +40,11 @@ export function ErrorPanel({
 
 /** 居中加载行。默认「加载中…」；房间容器传自己的措辞。 */
 export function LoadingLine({ text = "加载中…", className = "" }: { text?: string; className?: string }) {
-  return <p className={`${className} py-8 text-center text-[12.5px] text-tx2`.trim()}>{text}</p>;
+  return (
+    <p className={`${className} py-8 text-center text-[12.5px]`.trim()}>
+      <ShiningText text={text} className="text-[12.5px]" />
+    </p>
+  );
 }
 
 /** 网格页脚的探测阶段 + 数据源标注（团队页/花名册页两段式取数的页脚两行 +
@@ -77,7 +82,7 @@ export function StalePidBlock({
 }) {
   return (
     <div
-      className={`${className} border-l-2 border-salmon bg-[#2b1712] px-3 py-2 text-[12px] leading-[1.7] text-[#e8a184]`.trim()}
+      className={`${className} border-l-2 border-salmon bg-salmon-well px-3 py-2 text-[12px] leading-[1.7] text-salmon-hi`.trim()}
     >
       <b className="mr-1.5 font-mono tracking-[0.08em]">PID 文件占位</b>
       {detail.message}

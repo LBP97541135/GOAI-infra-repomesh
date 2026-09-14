@@ -71,6 +71,12 @@ type WorkerReconciler struct {
 	// Sourced from AGENTTEAMS_WORKER_BACKEND_RUNTIME env var.
 	DefaultBackendRuntime string
 
+	// DockerHostShareDir is the host directory embedded (docker) deployments
+	// bind into every member container at the fixed /host-share mount point,
+	// mirroring the Manager container. Sourced from AGENTTEAMS_HOST_SHARE_DIR
+	// in embedded mode only; empty in k8s mode so no HostPath is ever created.
+	DockerHostShareDir string
+
 	// ControllerName identifies this controller instance. Stamped on every
 	// Pod/SA/Secret created under this reconciler via the
 	// agentteams.io/controller label so multiple controller instances sharing a
@@ -189,6 +195,7 @@ func (r *WorkerReconciler) reconcileNormal(ctx context.Context, w *v1beta1.Worke
 		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
 		MountAuthType:               r.MountAuthType,
 		MountRoleName:               r.MountRoleName,
+		DockerHostShareDir:          r.DockerHostShareDir,
 	}
 	effectiveSpec, resourceSpec, updateStrategy, err := r.effectiveWorkerSpec(ctx, w, false)
 	if err != nil {
@@ -340,6 +347,7 @@ func (r *WorkerReconciler) reconcileDelete(ctx context.Context, w *v1beta1.Worke
 		WorkerDepsStorageEndpoint:   r.WorkerDepsStorageEndpoint,
 		MountAuthType:               r.MountAuthType,
 		MountRoleName:               r.MountRoleName,
+		DockerHostShareDir:          r.DockerHostShareDir,
 	}
 	effectiveSpec, resourceSpec, updateStrategy, err := r.effectiveWorkerSpec(ctx, w, true)
 	if err != nil {

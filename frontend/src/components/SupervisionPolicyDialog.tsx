@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import { AuthError, authApi, type Account } from "../api/auth";
 import type { ConsoleRepositoryView, DiscoveryEffectiveTier } from "../api/contract";
 import { fetchConsoleRepositories } from "../api/grid";
@@ -586,7 +587,7 @@ export function SupervisionPolicyDialog({
     <Modal
       open={open}
       onClose={onClose}
-      className="m-auto w-[min(680px,94vw)] rounded-[3px] border border-[#4a4128] bg-panel p-0 text-tx shadow-[0_24px_70px_rgba(0,0,0,0.7)]"
+      className="m-auto w-[min(680px,94vw)] rounded-hard border border-line-strong bg-panel p-0 text-tx shadow-pop"
     >
       <div className="flex items-start justify-between border-b border-line px-[22px] pt-5 pb-3.5">
         <div className="pr-4">
@@ -672,14 +673,14 @@ export function SupervisionPolicyDialog({
                     <p className="mt-1 pl-[17px] text-[11.5px] text-tx3">
                       {item === "unattended" ? (
                         // 0 是精确的，不是估计：auto 时 requires_human_checkpoint 恒 false
-                        <>▸ 需要你点头 <b className="text-tx2">0 次</b>，这个需求不会产生任何审核待办</>
+                        <>· 需要你点头 <b className="text-tx2">0 次</b>，这个需求不会产生任何审核待办</>
                       ) : (
-                        <>▸ 估计需要你点头 <b className={item === "every_step" ? "text-amber" : "text-tx2"}>{preview}</b>{item === "every_step" ? "，且随任务数增长" : "，不随规模增长"}</>
+                        <>· 估计需要你点头 <b className={item === "every_step" ? "text-amber" : "text-tx2"}>{preview}</b>{item === "every_step" ? "，且随任务数增长" : "，不随规模增长"}</>
                       )}
                     </p>
                     {item === "key_points" && (
                       <p className="mt-0.5 pl-[17px] text-[11px] text-tx3">
-                        ▸ 异常升级始终启用（非全自动时后端强制，关不掉）
+                        · 异常升级始终启用（非全自动时后端强制，关不掉）
                       </p>
                     )}
                   </button>
@@ -813,7 +814,7 @@ export function SupervisionPolicyDialog({
                           aria-label="删除这条授权"
                           onClick={() => setGrants((prev) => prev.filter((item) => item.key !== row.key))}
                         >
-                          ✕
+                          <X size={12} />
                         </button>
                       </div>
 
@@ -1022,7 +1023,7 @@ export function SupervisionPolicyDialog({
           取消
         </button>
         <button
-          className="rounded-hard bg-amber px-3.5 py-1.5 text-[12.5px] font-bold text-[#191308] hover:bg-amber-hi disabled:opacity-60"
+          className="rounded-hard bg-amber px-3.5 py-1.5 text-[12.5px] font-bold text-on-amber hover:bg-amber-hi disabled:opacity-60"
           onClick={submit}
           disabled={
             busy ||
