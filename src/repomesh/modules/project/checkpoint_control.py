@@ -19,6 +19,7 @@ from repomesh.modules.project.domain import (
     ProjectTopologyViolation,
 )
 from repomesh.modules.project.human_control import (
+    HumanAuthorizationDecision,
     HumanAuthorizationRequest,
     authorize_human,
     requires_human_checkpoint,
@@ -36,6 +37,7 @@ class RecordCheckpointDecisionCommand:
     human_principal_id: UUID
     decision: CheckpointDecisionKind
     reason: str
+    actor_is_admin: bool = False
 
 
 class HumanDecisionNotifier(Protocol):
@@ -79,8 +81,6 @@ class ProjectCheckpointService:
             raise ProjectTopologyViolation("pending review request does not exist")
         if review.status is not HumanReviewStatus.PENDING:
             raise ProjectTopologyConflict("review request was already decided")
-        if not requires_human_checkpoint(topology, review.checkpoint):
-            raise ProjectTopologyViolation("checkpoint is not enabled for this project")
         action = (
             HumanControlAction.APPROVE_CHECKPOINT
             if command.decision is CheckpointDecisionKind.APPROVED
@@ -94,6 +94,19 @@ class ProjectCheckpointService:
                 repository_id=review.repository_id,
             ),
         )
+        if not authorization.allowed and not requires_human_checkpoint(
+            topology, review.checkpoint
+        ):
+            # 政策漂移缺口（2026-09-14 数据摸底实证）：单据开立时卡点启用，其后项目
+            # 重建为 auto / 卡点移除、授权人清空——若按当前政策复查，存量 pending 单
+            # 永远无法经正式入口决议（实证：26 张单全部锁死）。pending 单据本身就是
+            # 「开单时卡点启用过」的事实：档案里的授权人照常可决；授权人已不在时，
+            # 允许管理员兜底清偿，其余人维持原拒。
+            if not command.actor_is_admin:
+                raise ProjectTopologyViolation(
+                    "checkpoint is not enabled for this project"
+                )
+            authorization = HumanAuthorizationDecision(True, "stale_policy_admin")
         if not authorization.allowed:
             raise ProjectTopologyViolation(authorization.reason)
         decision = ProjectCheckpointDecision(
