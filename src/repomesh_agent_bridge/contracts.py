@@ -1673,7 +1673,7 @@ class RepositoryAssignmentPackage:
                     f"{task.assignee_worker_agent_id}, who is not on this team's roster"
                 )
             for allowed in task.allowed_paths:
-                if not allowed.startswith(roots):
+                if not _within_roots(allowed, roots):
                     return (
                         f"worker task {task.node_id!r} allows {allowed!r}, which is outside "
                         f"the safety envelope roots {', '.join(roots)}"
@@ -2403,3 +2403,22 @@ def leader_action_error_wire(code: str, message: str) -> dict[str, object]:
     """The structured error body for ``code``. The inverse of the reader above."""
 
     return {"detail": {"code": code, "message": message}}
+
+
+def _within_roots(path: str, roots: tuple[str, ...]) -> bool:
+    """Is this path under one of the envelope's roots?
+
+    The same rule the server applies (``task_orchestration.application
+    ._within_roots``): roots are the glob-ish strings ``derive_allowed_paths``
+    produces, so a trailing ``**`` / ``*`` is stripped before a plain prefix
+    comparison, and a bare ``**`` root admits everything. A pre-check that
+    compared the raw glob text refused every concrete path under ``**`` and
+    sent the leader a sentence the server would never have said.
+    """
+
+    candidate = path.strip().lstrip("./")
+    for root in roots:
+        normalised = root.strip().lstrip("./").removesuffix("**").removesuffix("*")
+        if not normalised or candidate.startswith(normalised):
+            return True
+    return False

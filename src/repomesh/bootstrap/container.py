@@ -54,6 +54,8 @@ from repomesh.modules.observability.infrastructure.usage_query import UsageQuery
 from repomesh.modules.observability.infrastructure.usage_recorder import QueuedUsageRecorder
 from repomesh.modules.platform_config import (
     PostgresBootstrapOperationStore,
+    PostgresGitHubAppManifestStateStore,
+    PostgresGitHubAppRegistrationStore,
     PostgresPlatformCredentialStore,
 )
 from repomesh.modules.project.contracts import (
@@ -443,6 +445,14 @@ class ApplicationContainer:
     @cached_service
     def bootstrap_operation_store(self) -> PostgresBootstrapOperationStore:
         return PostgresBootstrapOperationStore(self.database)
+
+    @cached_service
+    def github_app_manifest_state_store(self) -> PostgresGitHubAppManifestStateStore:
+        return PostgresGitHubAppManifestStateStore(self.database)
+
+    @cached_service
+    def github_app_registration_store(self) -> PostgresGitHubAppRegistrationStore:
+        return PostgresGitHubAppRegistrationStore(self.database)
 
     def project_topology_creator(self):
         from repomesh.modules.project import CreateProjectAgentTopology
