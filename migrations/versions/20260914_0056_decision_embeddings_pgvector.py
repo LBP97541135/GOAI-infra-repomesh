@@ -1,7 +1,7 @@
 """decision_embeddings onto the pgvector column (the documented upgrade path).
 
 Revision ID: 20260914_0056
-Revises: 20260911_0055
+Revises: 20260904_0055
 
 The JSONB storage from 20260901_0053 noted pgvector as the upgrade once the
 corpus justifies SQL-side ANN — this executes it. The column type and the
@@ -16,7 +16,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "20260914_0056"
-down_revision: str | None = "20260911_0055"
+down_revision: str | None = "20260904_0055"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
