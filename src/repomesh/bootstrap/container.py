@@ -978,7 +978,7 @@ class ApplicationContainer:
 
         The pgvector subclass probes ``pg_extension`` once and degrades to the
         inherited JSONB behaviour without the extension, so one wiring covers
-        both schema states (pre/post migration 20260914_0056).
+        both schema states (pre/post migration 20260915_0057).
         """
 
         from repomesh.modules.decision_chain.infrastructure import (

@@ -69,14 +69,15 @@ class DecisionNodeRecord(Base):
 class DecisionEmbeddingRecord(Base):
     """L3 ``decision_embeddings``: one vector per decision sheet.
 
-    Physically a ``vector(1024)`` column on Postgres since migration
-    ``20260914_0056`` (cosine HNSW) — the upgrade path this class's earlier
-    JSONB form documented. The ORM column stays ``JSON_DOCUMENT`` on purpose:
-    the SQLite twin keeps a JSON column and pre-migration Postgres keeps
-    JSONB, so no ORM statement may bind or decode the physical Postgres
-    column — ``PgVectorDecisionEmbeddingStore`` speaks explicit
-    ``CAST(... AS vector)`` SQL for it. A provider change (new dimension) is
-    a new migration plus a re-embed, never a silent mismatch.
+    Migration ``20260915_0057`` added the additive ``embedding_vec``
+    ``vector(1024)`` column (cosine HNSW) next to this JSONB ``embedding``
+    column — the JSONB copy remains the storage contract (the SQLite twin
+    keeps a JSON column, pre-migration Postgres keeps JSONB) and doubles as
+    the vector's fallback copy: ``PgVectorDecisionEmbeddingStore`` dual-writes
+    both on every upsert via explicit ``CAST(... AS vector)`` SQL, so no ORM
+    statement may ever bind or decode the physical Postgres vector column. A
+    provider change (new dimension) is a new migration plus a re-embed, never
+    a silent mismatch.
     """
 
     __tablename__ = "decision_embeddings"

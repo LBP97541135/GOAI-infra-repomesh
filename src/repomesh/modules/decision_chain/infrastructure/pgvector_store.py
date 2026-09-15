@@ -1,14 +1,18 @@
 """pgvector-backed embedding store: SQL-side ANN on ``decision_embeddings``.
 
-Since migration ``20260914_0056`` the Postgres column is ``vector(1024)``
-(cosine HNSW). This store subclasses the JSONB store and overrides every path
-that touches the embedding column:
+Since migration ``20260915_0057`` the Postgres table carries the additive
+``embedding_vec vector(1024)`` column (cosine HNSW) next to the JSONB
+``embedding`` contract column. This store subclasses the JSONB store and
+overrides every path that touches the vector:
 
-* ``nearest`` is the new capability — ``ORDER BY embedding <=> :query`` over
-  the HNSW index (the documented upgrade path, now executed);
-* ``upsert``/``embedded_nodes`` speak explicit ``CAST(... AS vector)`` SQL —
-  the ORM column stays declared ``JSON_DOCUMENT`` (the SQLite twin's type), so
-  no ORM statement may ever bind or decode the physical vector column.
+* ``nearest`` is the new capability — ``ORDER BY embedding_vec <=> :query``
+  over the HNSW index;
+* ``upsert`` dual-writes the vector column and the JSONB copy in one
+  statement, so the ANN column and the portable fallback copy never diverge;
+* ``embedded_nodes`` reads the JSONB copy (same values the vector holds);
+* the ORM column stays declared ``JSON_DOCUMENT`` (the SQLite twin's type),
+  so no ORM statement may ever bind or decode the physical vector column —
+  vector access is explicit ``CAST(... AS vector)`` SQL only.
 
 Every method probes ``pg_extension`` once; without the extension the class
 degrades to the inherited JSONB behaviour (pre-migration environments) and
@@ -37,7 +41,7 @@ from repomesh.modules.decision_chain.infrastructure.embedding_store import (
 )
 from repomesh.persistence import Database
 
-EMBEDDING_DIMENSION = 1024  # BAAI/bge-m3; keep in sync with migration 0056
+EMBEDDING_DIMENSION = 1024  # BAAI/bge-m3; keep in sync with migration 0057
 
 _NODE_COLUMNS = """
     n.decision_id, n.event_id, n.project_id, n.organization_id,
@@ -52,10 +56,19 @@ _PROBE_SQL = text(
 
 _UPSERT_SQL = text(
     """
-    INSERT INTO decision_chain.decision_embeddings (decision_id, embedding)
-    VALUES (CAST(:decision_id AS uuid), CAST(:embedding AS vector))
+    INSERT INTO decision_chain.decision_embeddings
+        (decision_id, embedding, embedding_vec, embedded_at)
+    VALUES (
+        CAST(:decision_id AS uuid),
+        CAST(:embedding AS jsonb),
+        CAST(:vector AS vector),
+        now()
+    )
     ON CONFLICT (decision_id)
-    DO UPDATE SET embedding = CAST(:embedding AS vector)
+    DO UPDATE SET
+        embedding = CAST(:embedding AS jsonb),
+        embedding_vec = CAST(:vector AS vector),
+        embedded_at = now()
     """
 )
 
@@ -72,7 +85,7 @@ _EMBEDDED_SQL = text(
 _NEAREST_SQL = text(
     f"""
     SELECT {_NODE_COLUMNS},
-           e.embedding <=> CAST(:query AS vector) AS distance
+           e.embedding_vec <=> CAST(:query AS vector) AS distance
     FROM decision_chain.decision_embeddings e
     JOIN decision_chain.decision_chain_nodes n ON n.decision_id = e.decision_id
     WHERE CAST(:organization_id AS uuid) IS NULL
@@ -147,7 +160,11 @@ class PgVectorDecisionEmbeddingStore(PostgresDecisionEmbeddingStore):
         async with self._database.transaction() as session:
             await session.execute(
                 _UPSERT_SQL,
-                {"decision_id": str(decision_id), "embedding": _to_db(embedding)},
+                {
+                    "decision_id": str(decision_id),
+                    "embedding": json.dumps(embedding),
+                    "vector": _to_db(embedding),
+                },
             )
 
     async def embedded_nodes(

@@ -136,7 +136,7 @@ def test_readiness_never_calls_missing_backup_a_pass() -> None:
 
 
 def test_repository_has_one_discoverable_migration_head() -> None:
-    assert discover_alembic_heads() == ("355278cd7ee4",)
+    assert discover_alembic_heads() == ("20260915_0057",)
 
 
 @pytest.mark.asyncio

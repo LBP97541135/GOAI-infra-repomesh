@@ -123,7 +123,7 @@ class VectorRankedEmbeddingStore(Protocol):
     """Optional ANN capability over the embedding store (pgvector mode).
 
     Implemented by ``PgVectorDecisionEmbeddingStore`` when the Postgres
-    ``vector`` extension is installed (migration 20260914_0056). The JSONB
+    ``vector`` extension is installed (migration 20260915_0057). The JSONB
     store and the in-memory twin do not carry it; the semantic search service
     treats its absence — or a ``None`` answer — as "rank in Python". Distance
     is pgvector's ``<=>`` (cosine distance, ``1 - cosine similarity``) over
