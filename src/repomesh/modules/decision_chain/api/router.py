@@ -56,6 +56,7 @@ async def semantic_search(
     query_text: str,
     organization_id: UUID | None = None,
     top_k: int = 5,
+    min_similarity: float = 0.0,
 ) -> SemanticSearchView:
     """Corpus-wide semantic probe: "search historical decisions by text".
 
@@ -66,7 +67,8 @@ async def semantic_search(
     fallback exists here — without a configured embedding endpoint this is a
     503 (honest configuration failure), and an embedding error surfaces as
     502 rather than silently returning structural results the caller did not
-    ask for.
+    ask for. ``min_similarity`` (0..1, clamped) floors the returned scores:
+    no close history means fewer hits, not padding.
     """
 
     container = _authorized_container(request)
@@ -86,6 +88,7 @@ async def semantic_search(
         project_id=None,
         query_embedding=vectors[0],
         top_k=top_k,
+        min_similarity=min_similarity,
     )
     views = [_semantic_sheet(hit) for hit in hits]
     await _attach_requirement_text(container, views)
@@ -146,6 +149,7 @@ async def similar_decisions(
     top_k: int = 5,
     mode: Literal["structural", "semantic"] = "structural",
     query_text: str | None = None,
+    min_similarity: float = 0.0,
 ) -> SimilarDecisionsView:
     """Contract decision-chain-v0.1 §6.5: similar decisions for one project.
 
@@ -173,6 +177,7 @@ async def similar_decisions(
             project_id=project_id,
             top_k=top_k,
             query_text=query_text,
+            min_similarity=min_similarity,
         )
         if served is not None:
             return served
@@ -198,6 +203,7 @@ async def _semantic_hits(
     project_id: UUID,
     top_k: int,
     query_text: str | None,
+    min_similarity: float = 0.0,
 ) -> SimilarDecisionsView | None:
     """L3 semantic ranking; ``None`` means "fall back to structural"."""
 
@@ -214,6 +220,7 @@ async def _semantic_hits(
             project_id=project_id,
             query_embedding=vectors[0],
             top_k=top_k,
+            min_similarity=min_similarity,
         )
     except Exception:
         _logger.exception("semantic similarity failed; falling back to structural")

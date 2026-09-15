@@ -36,6 +36,7 @@ from .infrastructure import (
     InMemoryDecisionChainStore,
     InMemoryDecisionEmbeddingStore,
     InMemoryDecisionEventSource,
+    PgVectorDecisionEmbeddingStore,
     PostgresDecisionChainStore,
     PostgresDecisionEmbeddingStore,
     PostgresDecisionEventSource,
@@ -47,6 +48,7 @@ from .ports import (
     DecisionEventSource,
     EmbeddingLookup,
     RequirementReader,
+    VectorRankedEmbeddingStore,
 )
 
 __all__ = [
@@ -76,10 +78,12 @@ __all__ = [
     "InMemoryDecisionEventSource",
     "NodeActor",
     "NodeSource",
+    "PgVectorDecisionEmbeddingStore",
     "PostgresDecisionChainStore",
     "PostgresDecisionEmbeddingStore",
     "PostgresDecisionEventSource",
     "RequirementReader",
     "RequirementView",
     "SemanticDecisionHit",
+    "VectorRankedEmbeddingStore",
 ]

@@ -730,6 +730,7 @@ async def record_checkpoint_decision(
                 human_principal_id=actor.id,
                 decision=body.decision,
                 reason=body.reason,
+                actor_is_admin=actor.is_admin,
             )
         )
     except ProjectTopologyConflict as error:
